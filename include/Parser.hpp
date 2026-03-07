@@ -292,7 +292,7 @@ private:
         return fnNode;
     }
 
-    std::vector<AstNode> parseBlock() {
+    std::vector<AstNode> parseBlock(AstNode* parentIf = nullptr) {
         std::vector<AstNode> stmts;
         while (pos_ < tokens_.size()) {
             const Token& t = peek();
@@ -301,6 +301,31 @@ private:
                 stmts.push_back(parseVariable());
             } else if (t.type == TokenType::If) {
                 stmts.push_back(parseIf());
+            } else if (t.type == TokenType::Else) {
+                AstNode* attachTo = nullptr;
+                if (!stmts.empty() && stmts.back().type == AstNode::Type::IfElse) {
+                    attachTo = &stmts.back();
+                } else if (stmts.empty() && parentIf && parentIf->type == AstNode::Type::IfElse) {
+                    attachTo = parentIf;
+                }
+                if (!attachTo) {
+                    throw std::runtime_error("else without matching if at line " + std::to_string(t.line));
+                }
+                advance();
+                if (peek().type == TokenType::If) {
+                    AstNode elseIfPart = parseIf();
+                    attachTo->children.push_back(elseIfPart);
+                } else {
+                    if (!match(TokenType::LBrace)) {
+                        throw std::runtime_error("Expected '{' after else at line " + std::to_string(peek().line));
+                    }
+                    AstNode elseBlock{AstNode::Type::Block, "", {}};
+                    elseBlock.children = parseBlock();
+                    attachTo->children.push_back(elseBlock);
+                    if (!match(TokenType::RBrace)) {
+                        throw std::runtime_error("Expected '}' at line " + std::to_string(peek().line));
+                    }
+                }
             } else if (t.type == TokenType::Switch) {
                 stmts.push_back(parseSwitch());
             } else if (t.type == TokenType::While) {
@@ -567,11 +592,12 @@ private:
             throw std::runtime_error("Expected '{' at line " + std::to_string(peek().line));
         }
         AstNode thenBlock{AstNode::Type::Block, "", {}};
-        thenBlock.children = parseBlock();
+        AstNode ifNode{AstNode::Type::IfElse, "", {cond, thenBlock}};
+        thenBlock.children = parseBlock(&ifNode);
+        ifNode.children[1] = thenBlock;
         if (!match(TokenType::RBrace)) {
             throw std::runtime_error("Expected '}' at line " + std::to_string(peek().line));
         }
-        AstNode ifNode{AstNode::Type::IfElse, "", {cond, thenBlock}};
         if (match(TokenType::Else)) {
             if (peek().type == TokenType::If) {
                 AstNode elseIfPart = parseIf();
@@ -664,6 +690,29 @@ private:
                 stmts.push_back(parseVariable());
             } else if (t.type == TokenType::If) {
                 stmts.push_back(parseIf());
+            } else if (t.type == TokenType::Else) {
+                AstNode* attachTo = nullptr;
+                if (!stmts.empty() && stmts.back().type == AstNode::Type::IfElse) {
+                    attachTo = &stmts.back();
+                }
+                if (!attachTo) {
+                    throw std::runtime_error("else without matching if at line " + std::to_string(t.line));
+                }
+                advance();
+                if (peek().type == TokenType::If) {
+                    AstNode elseIfPart = parseIf();
+                    attachTo->children.push_back(elseIfPart);
+                } else {
+                    if (!match(TokenType::LBrace)) {
+                        throw std::runtime_error("Expected '{' after else at line " + std::to_string(peek().line));
+                    }
+                    AstNode elseBlock{AstNode::Type::Block, "", {}};
+                    elseBlock.children = parseBlock();
+                    attachTo->children.push_back(elseBlock);
+                    if (!match(TokenType::RBrace)) {
+                        throw std::runtime_error("Expected '}' at line " + std::to_string(peek().line));
+                    }
+                }
             } else if (t.type == TokenType::Switch) {
                 stmts.push_back(parseSwitch());
             } else if (t.type == TokenType::While) {
