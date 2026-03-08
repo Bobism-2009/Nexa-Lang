@@ -32,6 +32,9 @@ public:
         std::function<void(const AstNode&)> checkNeedsString = [&](const AstNode& n) {
             if (n.type == AstNode::Type::Variable && (n.initUninitialized || n.initFromReadln || n.initFromFileRead || (!n.initIsInt && !n.initFromDllLoad && n.children.empty()))) needsString = true;
             if (n.type == AstNode::Type::Variable && !n.children.empty() && exprProducesString(n.children[0])) needsString = true;
+            if (n.type == AstNode::Type::Variable && !n.children.empty() && n.children[0].type == AstNode::Type::ExprArrayLiteral) {
+                for (const auto& c : n.children[0].children) { if (exprProducesString(c)) { needsString = true; break; } }
+            }
             if ((n.type == AstNode::Type::IoPrintln || n.type == AstNode::Type::IoPrint) && !n.children.empty() && exprProducesString(n.children[0])) needsString = true;
             if (n.type == AstNode::Type::OsSystem && !n.children.empty() && exprProducesString(n.children[0])) needsString = true;
             if (n.type == AstNode::Type::While && n.children.size() > 1) { for (const auto& c : n.children[1].children) checkNeedsString(c); }
@@ -48,6 +51,9 @@ public:
             }
             if (node.type == AstNode::Type::Variable && (node.declType == "string" || (node.initUninitialized && node.declType != "int") || node.initFromFileRead || (!node.initIsInt && !node.initFromDllLoad && node.children.empty()))) needsString = true;
             if (node.type == AstNode::Type::Variable && !node.children.empty() && exprProducesString(node.children[0])) needsString = true;
+            if (node.type == AstNode::Type::Variable && !node.children.empty() && node.children[0].type == AstNode::Type::ExprArrayLiteral) {
+                for (const auto& c : node.children[0].children) { if (exprProducesString(c)) { needsString = true; break; } }
+            }
         }
         bool needsVector = false;
         std::function<void(const AstNode&)> checkNeedsVector = [&](const AstNode& n) {
@@ -135,7 +141,8 @@ public:
             globalVarIsFloat[node.value] = (!node.declType.empty() && node.declType == "float") || node.initIsFloat;
             globalVarIsChar[node.value] = (!node.declType.empty() && node.declType == "char") || node.initIsChar;
             bool isArray = node.initFromArray || (!node.children.empty() && node.children[0].type == AstNode::Type::ExprArrayLiteral);
-            bool isStr = !node.declType.empty() ? (node.declType == "string") : (node.initUninitialized || (!node.initIsInt && !node.initIsBool && !node.initIsFloat && !node.initIsChar && !isArray && node.children.empty()) || (!node.children.empty() && exprProducesString(node.children[0])));
+            bool isStrArr = isArray && !node.children.empty() && arrayLiteralProducesString(node.children[0], globalVarIsString);
+            bool isStr = !node.declType.empty() ? (node.declType == "string") : (node.initUninitialized || (!node.initIsInt && !node.initIsBool && !node.initIsFloat && !node.initIsChar && !isArray && node.children.empty()) || (!node.children.empty() && (exprProducesString(node.children[0]) || isStrArr)));
             globalVarIsString[node.value] = isStr;
             globalVarIsArray[node.value] = isArray || node.isFixedArray;
             if (node.initUninitialized) {
@@ -156,7 +163,8 @@ public:
                 }
             } else if (isArray && !node.children.empty()) {
                 std::string c = node.isConst ? "const " : "";
-                out << c << "std::vector<int> " << vname << " = " << emitExpr(node.children[0], globalVarMap, fnName) << ";\n";
+                bool strArr = arrayLiteralProducesString(node.children[0], globalVarIsString);
+                out << c << (strArr ? "std::vector<std::string>" : "std::vector<int>") << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, fnName, &globalVarIsString) << ";\n";
             } else if (!node.children.empty()) {
                 std::string c = node.isConst ? "const " : "";
                 bool useBool = !node.declType.empty() ? (node.declType == "bool") : node.initIsBool;
@@ -292,8 +300,21 @@ private:
         return false;
     }
 
+    static bool arrayLiteralProducesString(const AstNode& arrNode, const std::map<std::string, bool>& varIsString) {
+        if (arrNode.type != AstNode::Type::ExprArrayLiteral) return false;
+        for (const auto& c : arrNode.children) {
+            if (exprProducesString(c)) return true;
+            if (exprIsString(c, varIsString)) return true;
+        }
+        return false;
+    }
+
     static bool exprIsString(const AstNode& e, const std::map<std::string, bool>& varIsString) {
         if (e.type == AstNode::Type::ExprVarRef) {
+            auto it = varIsString.find(e.value);
+            return it != varIsString.end() && it->second;
+        }
+        if (e.type == AstNode::Type::ExprArrayIndex) {
             auto it = varIsString.find(e.value);
             return it != varIsString.end() && it->second;
         }
@@ -349,9 +370,10 @@ private:
                 varIsFloat[child.value] = isFloat;
                 varIsChar[child.value] = isChar;
                 bool isArray = child.initFromArray || (!child.children.empty() && child.children[0].type == AstNode::Type::ExprArrayLiteral);
+                bool isStrArr = isArray && !child.children.empty() && arrayLiteralProducesString(child.children[0], varIsString);
                 bool isStr = !isArray && (!child.declType.empty() ? (child.declType == "string") : (child.initUninitialized || child.initFromReadln || child.initFromFileRead || (!child.initIsInt && !child.initIsBool && !child.initIsFloat && !child.initIsChar && !child.initFromDllLoad && child.children.empty()) ||
                     (!child.children.empty() && exprProducesString(child.children[0]))));
-                varIsString[child.value] = isStr;
+                varIsString[child.value] = isStr || isStrArr;
                 if (child.initFromReadln) {
                     out << indent << "char __nexa_buf[4096];\n";
                     out << indent << "if (fgets(__nexa_buf, sizeof(__nexa_buf), stdin)) { __nexa_buf[strcspn(__nexa_buf, \"\\n\")] = 0; }\n";
@@ -398,7 +420,8 @@ private:
                     out << indent << "}\n";
                 } else if (isArray && !child.children.empty()) {
                     std::string c = child.isConst ? "const " : "";
-                    out << indent << c << "std::vector<int> " << vname << " = " << emitExpr(child.children[0], varMap, fnName) << ";\n";
+                    bool strArr = arrayLiteralProducesString(child.children[0], varIsString);
+                    out << indent << c << (strArr ? "std::vector<std::string>" : "std::vector<int>") << " " << vname << " = " << emitExpr(child.children[0], varMap, fnName, &varIsString) << ";\n";
                 } else if (!child.children.empty()) {
                     std::string c = child.isConst ? "const " : "";
                     bool useBool = !child.declType.empty() ? (child.declType == "bool") : child.initIsBool;
@@ -763,7 +786,10 @@ private:
         }
     }
 
-    std::string emitExpr(const AstNode& e, const std::map<std::string, std::string>& varMap, const FnNameFn& fnName) {
+    std::string emitExpr(const AstNode& e, const std::map<std::string, std::string>& varMap, const FnNameFn& fnName,
+        const std::map<std::string, bool>* varIsString = nullptr) {
+        const std::map<std::string, bool> emptyStrMap;
+        const std::map<std::string, bool>& vIsStr = varIsString ? *varIsString : emptyStrMap;
         switch (e.type) {
             case AstNode::Type::ExprIntLiteral:
                 return e.value;
@@ -830,10 +856,11 @@ private:
                 return (it != varMap.end()) ? it->second : e.value;
             }
             case AstNode::Type::ExprArrayLiteral: {
-                std::string s = "std::vector<int>{";
+                bool isStrArr = arrayLiteralProducesString(e, vIsStr);
+                std::string s = isStrArr ? "std::vector<std::string>{" : "std::vector<int>{";
                 for (size_t i = 0; i < e.children.size(); i++) {
                     if (i > 0) s += ", ";
-                    s += emitExpr(e.children[i], varMap, fnName);
+                    s += emitExpr(e.children[i], varMap, fnName, varIsString);
                 }
                 s += "}";
                 return s;

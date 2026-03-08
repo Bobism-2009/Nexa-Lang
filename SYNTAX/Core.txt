@@ -51,6 +51,7 @@ VARIABLES
     - Char:       let c = 'A';  let nl = '\n';
     - String:     let s = "hi";
     - Array:      let arr = [1, 2, 3];  arr[i] = x;  (int elements)
+    - String array: let names = ["bob", "jessica"];  names[i] returns string
     - io.readln:  let s = io.readln();
     - file.read:  let s = file.read("path");  (requires std/file)
     - dll.load:   let h = dll.load("./lib.so");  (requires std/dll)
