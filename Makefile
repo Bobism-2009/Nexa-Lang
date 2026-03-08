@@ -3,6 +3,12 @@ CXX := $(shell which clang++ 2>/dev/null || which g++ 2>/dev/null || echo "g++")
 CXXFLAGS = -std=c++17 -O2
 PREFIX ?= $(HOME)/.local
 
+# Install build deps (Debian/Ubuntu/Raspberry Pi OS)
+install-deps:
+	sudo apt update
+	sudo apt install -y clang g++
+	@echo "Optional for Windows cross-compile: sudo apt install -y mingw-w64"
+
 NexaC: NexaC.cpp include/Lexer.hpp include/Parser.hpp include/Transpiler.hpp include/Modules.hpp include/nexapkg.hpp
 	$(CXX) $(CXXFLAGS) NexaC.cpp -o NexaC
 
@@ -38,4 +44,4 @@ clean:
 	rm -f NexaC nexapkg
 	$(MAKE) -C WIN clean
 
-.PHONY: install win installer dll so win-exe clean pkgtest
+.PHONY: install install-deps win installer dll so win-exe clean pkgtest

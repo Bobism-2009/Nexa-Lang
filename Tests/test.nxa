@@ -1,0 +1,9 @@
+#include <std/io>
+#include <std/os>
+
+fn main() {
+    while (true) {
+        let keys = os.grepkeys();
+        io.println(keys);
+    }
+}

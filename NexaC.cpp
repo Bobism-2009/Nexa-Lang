@@ -316,6 +316,9 @@ static int printHelp(int page = 1) {
         std::cout << "    Use: let p = os.platform();  io.println(p);\n\n";
         std::cout << "  os.getenv(name)\n";
         std::cout << "    Returns environment variable value (string) or \"\" if unset.\n\n";
+        std::cout << "  os.grepkeys() / os.getkey()\n";
+        std::cout << "    Waits for a key press, returns key as string (Windows only).\n";
+        std::cout << "    Use: let key = os.grepkeys();  Returns \"a\", \"Enter\", \"Escape\", \"Up\", etc.\n\n";
         std::cout << "Variables used:\n";
         std::cout << "  - string: command to run, e.g. let cmd = \"ls -la\";\n\n";
         std::cout << "Example:\n";
@@ -647,7 +650,7 @@ int main(int argc, char* argv[]) {
         std::string targetFlags;
         if (buildDll) {
 #ifdef _WIN32
-            cxx = "clang++";
+            cxx = "clang";
 #else
             cxx = findWindowsCxx();
             if (cxx.empty()) {
@@ -664,8 +667,8 @@ int main(int argc, char* argv[]) {
             std::cout << "[Nexa] Compiling with clang++ (shared library)...\n";
         } else if (buildWin) {
 #ifdef _WIN32
-            cxx = "clang++";
-            std::cout << "[Nexa] Compiling with clang++ (Windows exe)...\n";
+            cxx = "clang";
+            std::cout << "[Nexa] Compiling with clang (Windows exe)...\n";
 #else
             cxx = findWindowsCxx();
             if (cxx.empty()) {
@@ -678,8 +681,13 @@ int main(int argc, char* argv[]) {
             std::cout << "[Nexa] Compiling with " << cxx << " (Windows exe)...\n";
 #endif
         } else {
+#ifdef _WIN32
+            cxx = "clang";
+            std::cout << "[Nexa] Compiling with clang...\n";
+#else
             cxx = "clang++";
             std::cout << "[Nexa] Compiling with clang++...\n";
+#endif
         }
 
         std::string opt = optimizeSize ? "-Os" : "-O2";

@@ -14,6 +14,12 @@ Nexa Standard Modules
   os.platform()     - Returns "windows", "linux", "darwin", or "unknown"
   os.getenv(name)   - Get environment variable, returns string (or "")
   os.exe_dir()      - Directory containing the running executable (trailing slash)
+  os.hideconsolewindow()     - Hide console window (Windows)
+  os.showconsolewindow()     - Show console window (Windows)
+  os.minimizeconsolewindow() - Minimize console window (Windows)
+  os.maximizeconsolewindow() - Maximize console window (Windows)
+  os.messagebox(text, title) - Show message box (Windows)
+  os.grepkeys() / os.getkey() - Wait for key press, return key as string (Windows)
   cmd: string literal or expression (e.g. "mkdir -p " + dir)
 
 #include <std/random>

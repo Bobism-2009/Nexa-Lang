@@ -285,7 +285,7 @@ private:
     using FnNameFn = std::function<std::string(const std::string&)>;
 
     static bool exprProducesString(const AstNode& e) {
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::ExprStringLiteral) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::ExprStringLiteral) return true;
         if (e.type == AstNode::Type::ExprAdd && e.children.size() >= 2) {
             return exprProducesString(e.children[0]) || exprProducesString(e.children[1]);
         }
@@ -297,7 +297,7 @@ private:
             auto it = varIsString.find(e.value);
             return it != varIsString.end() && it->second;
         }
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln) return true;
         if (e.type == AstNode::Type::ExprAdd && e.children.size() >= 2) {
             return exprIsString(e.children[0], varIsString) || exprIsString(e.children[1], varIsString);
         }
@@ -371,6 +371,8 @@ private:
                     out << indent << "std::string " << vname << " = __nexa_os_platform();\n";
                 } else if (!child.children.empty() && child.children[0].type == AstNode::Type::OsExeDir) {
                     out << indent << "std::string " << vname << " = __nexa_exe_dir();\n";
+                } else if (!child.children.empty() && child.children[0].type == AstNode::Type::OsGrepKeys) {
+                    out << indent << "std::string " << vname << " = __nexa_os_grepkeys();\n";
                 } else if (child.initUninitialized) {
                     std::string c = child.isConst ? "const " : "";
                     if (child.isFixedArray) {
@@ -512,6 +514,22 @@ private:
                 } else {
                     out << indent << "std::system(\"" << escapeString(child.value) << "\");\n";
                 }
+            } else if (child.type == AstNode::Type::OsHideConsoleWindow) {
+                out << indent << "__nexa_os_hide_console_window();\n";
+            } else if (child.type == AstNode::Type::OsShowConsoleWindow) {
+                out << indent << "__nexa_os_show_console_window();\n";
+            } else if (child.type == AstNode::Type::OsMinimizeConsoleWindow) {
+                out << indent << "__nexa_os_minimize_console_window();\n";
+            } else if (child.type == AstNode::Type::OsMaximizeConsoleWindow) {
+                out << indent << "__nexa_os_maximize_console_window();\n";
+            } else if (child.type == AstNode::Type::OsMessageBox) {
+                std::string textExpr = emitExpr(child.children[0], varMap, fnName);
+                std::string titleExpr = emitExpr(child.children[1], varMap, fnName);
+                bool textIsStr = exprIsString(child.children[0], varIsString);
+                bool titleIsStr = exprIsString(child.children[1], varIsString);
+                std::string textArg = textIsStr ? textExpr : ("std::to_string(" + textExpr + ")");
+                std::string titleArg = titleIsStr ? titleExpr : ("std::to_string(" + titleExpr + ")");
+                out << indent << "__nexa_os_messagebox(" << textArg << ", " << titleArg << ");\n";
             } else if (child.type == AstNode::Type::FnCall) {
                 out << indent << fnName(child.value) << "(";
                 for (size_t i = 0; i < child.children.size(); i++) {
@@ -776,6 +794,8 @@ private:
             }
             case AstNode::Type::OsPlatform:
                 return "__nexa_os_platform()";
+            case AstNode::Type::OsGrepKeys:
+                return "__nexa_os_grepkeys()";
             case AstNode::Type::OsExeDir:
                 return "__nexa_exe_dir()";
             case AstNode::Type::IoReadln: {

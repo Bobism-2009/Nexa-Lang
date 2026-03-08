@@ -15,6 +15,8 @@ namespace nexa {
 // AST node types - simple structure for our minimal grammar
 struct AstNode {
     enum class Type { Include, IoPrint, IoPrintln, IoReadln, IoToInt, MainFunction, Function, FnCall, Variable, Assignment, OsSystem, OsGetenv, OsPlatform, OsExeDir,
+                      OsHideConsoleWindow, OsShowConsoleWindow, OsMinimizeConsoleWindow, OsMaximizeConsoleWindow,
+                      OsMessageBox, OsGrepKeys,
                       DllLoad, DllCall,
                       FileRead, FileWrite, FileAppend, FileExists,
                       RandomInt, RandomSeed,
@@ -106,7 +108,7 @@ private:
     const std::vector<std::string>* packagePaths_;
 
     static bool exprProducesString(const AstNode& e) {
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln) return true;
         if (e.type == AstNode::Type::ExprAdd && e.children.size() >= 2) {
             return exprProducesString(e.children[0]) || exprProducesString(e.children[1]);
         }
@@ -909,6 +911,7 @@ private:
             if (method == "getenv") return parseOsGetenv();
             if (method == "platform") return parseOsPlatform();
             if (method == "exe_dir") return parseOsExeDir();
+            if (method == "grepkeys" || method == "getkey") return parseOsGrepKeys();
         }
         if (peek().type == TokenType::Identifier && peek().value == "file" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
@@ -996,7 +999,7 @@ private:
     AstNode parseOsCall() {
         size_t line = peek().line;
         if (!modules_.hasOs()) {
-            throw std::runtime_error("os.system requires #include <std/os> at line " + std::to_string(line));
+            throw std::runtime_error("os.* requires #include <std/os> at line " + std::to_string(line));
         }
         if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "os") {
             throw std::runtime_error("Expected 'os' at line " + std::to_string(line));
@@ -1005,10 +1008,47 @@ private:
             throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
         }
         const Token& methodTok = peek();
-        if (methodTok.type != TokenType::Identifier || methodTok.value != "system") {
-            throw std::runtime_error("Expected 'system' at line " + std::to_string(methodTok.line));
+        if (methodTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected os method at line " + std::to_string(methodTok.line));
         }
+        std::string method = methodTok.value;
         advance();
+        if (method == "hideconsolewindow" || method == "showconsolewindow" ||
+            method == "minimizeconsolewindow" || method == "minimiseconsolewindow" ||
+            method == "maximizeconsolewindow" || method == "maximiseconsolewindow") {
+            if (!match(TokenType::LParen) || !match(TokenType::RParen)) {
+                throw std::runtime_error("Expected '()' after os." + method + " at line " + std::to_string(peek().line));
+            }
+            if (!match(TokenType::Semicolon)) {
+                throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
+            }
+            AstNode::Type nodeType = AstNode::Type::OsHideConsoleWindow;
+            if (method == "showconsolewindow") nodeType = AstNode::Type::OsShowConsoleWindow;
+            else if (method == "minimizeconsolewindow" || method == "minimiseconsolewindow") nodeType = AstNode::Type::OsMinimizeConsoleWindow;
+            else if (method == "maximizeconsolewindow" || method == "maximiseconsolewindow") nodeType = AstNode::Type::OsMaximizeConsoleWindow;
+            return {nodeType, "", {}};
+        }
+        if (method == "messagebox") {
+            if (!match(TokenType::LParen)) {
+                throw std::runtime_error("Expected '(' after os.messagebox at line " + std::to_string(peek().line));
+            }
+            AstNode textArg = parseExpression();
+            if (!match(TokenType::Comma)) {
+                throw std::runtime_error("Expected ',' in os.messagebox(text, title) at line " + std::to_string(peek().line));
+            }
+            AstNode titleArg = parseExpression();
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
+            }
+            if (!match(TokenType::Semicolon)) {
+                throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
+            }
+            AstNode node{AstNode::Type::OsMessageBox, "", {textArg, titleArg}};
+            return node;
+        }
+        if (method != "system") {
+            throw std::runtime_error("Unknown os method '" + method + "' at line " + std::to_string(methodTok.line));
+        }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
         }
@@ -1095,6 +1135,29 @@ private:
             throw std::runtime_error("Expected '()' after exe_dir at line " + std::to_string(peek().line));
         }
         return {AstNode::Type::OsExeDir, "", {}};
+    }
+
+    AstNode parseOsGrepKeys() {
+        if (!modules_.hasOs()) {
+            throw std::runtime_error("os.grepkeys requires #include <std/os> at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "os") {
+            throw std::runtime_error("Expected 'os' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier)) {
+            throw std::runtime_error("Expected 'grepkeys' or 'getkey' at line " + std::to_string(peek().line));
+        }
+        std::string method = tokens_[pos_ - 1].value;
+        if (method != "grepkeys" && method != "getkey") {
+            throw std::runtime_error("Expected 'grepkeys' or 'getkey' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::LParen) || !match(TokenType::RParen)) {
+            throw std::runtime_error("Expected '()' after os." + method + " at line " + std::to_string(peek().line));
+        }
+        return {AstNode::Type::OsGrepKeys, "", {}};
     }
 
     AstNode parseIoReadlnExpr() {
