@@ -303,6 +303,7 @@ private:
     static bool arrayLiteralProducesString(const AstNode& arrNode, const std::map<std::string, bool>& varIsString) {
         if (arrNode.type != AstNode::Type::ExprArrayLiteral) return false;
         for (const auto& c : arrNode.children) {
+            if (c.type == AstNode::Type::ExprStringLiteral) return true;
             if (exprProducesString(c)) return true;
             if (exprIsString(c, varIsString)) return true;
         }
