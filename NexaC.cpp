@@ -20,7 +20,7 @@
 #include <sys/wait.h>
 #endif
 
-#define NEXAC_VERSION "0.1.0"
+#define NEXAC_VERSION "0.1.2"
 
 static std::string getExePath() {
 #ifdef __linux__

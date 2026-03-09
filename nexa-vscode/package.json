@@ -2,7 +2,7 @@
   "name": "nexa",
   "displayName": "Nexa Language",
   "description": "Syntax highlighting for Nexa",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "publisher": "nexac",
   "engines": {
     "vscode": "^1.74.0"

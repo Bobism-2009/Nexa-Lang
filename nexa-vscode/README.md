@@ -7,7 +7,7 @@ VS Code / Cursor extension for Nexa language syntax highlighting.
 ### Option 1: Copy to extensions folder
 
 ```bash
-cp -r nexa-vscode ~/.vscode/extensions/nexa-0.1.0
+cp -r nexa-vscode ~/.vscode/extensions/nexa-0.1.2
 ```
 
 Restart VS Code/Cursor. `.nxa` files will get syntax highlighting.
