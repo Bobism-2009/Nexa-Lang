@@ -396,6 +396,8 @@ private:
                     out << indent << "std::string " << vname << " = __nexa_exe_dir();\n";
                 } else if (!child.children.empty() && child.children[0].type == AstNode::Type::OsGrepKeys) {
                     out << indent << "std::string " << vname << " = __nexa_os_grepkeys();\n";
+                } else if (!child.children.empty() && child.children[0].type == AstNode::Type::OsKeyPressed) {
+                    out << indent << "int " << vname << " = __nexa_os_keypressed();\n";
                 } else if (child.initUninitialized) {
                     std::string c = child.isConst ? "const " : "";
                     if (child.isFixedArray) {
@@ -823,6 +825,8 @@ private:
                 return "__nexa_os_platform()";
             case AstNode::Type::OsGrepKeys:
                 return "__nexa_os_grepkeys()";
+            case AstNode::Type::OsKeyPressed:
+                return "__nexa_os_keypressed()";
             case AstNode::Type::OsExeDir:
                 return "__nexa_exe_dir()";
             case AstNode::Type::IoReadln: {
@@ -839,6 +843,10 @@ private:
             case AstNode::Type::FileExists: {
                 std::string pathExpr = emitExpr(e.children[0], varMap, fnName);
                 return "(std::filesystem::exists(" + pathExpr + ") ? 1 : 0)";
+            }
+            case AstNode::Type::ExprLen: {
+                std::string s = emitExpr(e.children[0], varMap, fnName, varIsString);
+                return "(int)((" + s + ").size())";
             }
             case AstNode::Type::RandomInt: {
                 std::string minExpr = emitExpr(e.children[0], varMap, fnName);

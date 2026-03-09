@@ -1,9 +1,0 @@
-#include <std/io>
-
-fn main() {
-    let names = ["bob", "jessica", "alice"];
-    io.println(names[0]);
-    io.println(names[1]);
-    names[2] = "eve";
-    io.println(names[2]);
-}

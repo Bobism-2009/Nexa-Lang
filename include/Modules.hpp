@@ -118,6 +118,13 @@ public:
             out += "  return \"\";\n";
             out += "#endif\n";
             out += "}\n";
+            out += "static int __nexa_os_keypressed() {\n";
+            out += "#ifdef _WIN32\n";
+            out += "  return _kbhit() ? 1 : 0;\n";
+            out += "#else\n";
+            out += "  return 0;\n";
+            out += "#endif\n";
+            out += "}\n";
         }
         if (hasFile()) {
             out += "#include <fstream>\n";

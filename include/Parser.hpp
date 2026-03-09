@@ -16,7 +16,7 @@ namespace nexa {
 struct AstNode {
     enum class Type { Include, IoPrint, IoPrintln, IoReadln, IoToInt, MainFunction, Function, FnCall, Variable, Assignment, OsSystem, OsGetenv, OsPlatform, OsExeDir,
                       OsHideConsoleWindow, OsShowConsoleWindow, OsMinimizeConsoleWindow, OsMaximizeConsoleWindow,
-                      OsMessageBox, OsGrepKeys,
+                      OsMessageBox, OsGrepKeys, OsKeyPressed,
                       DllLoad, DllCall,
                       FileRead, FileWrite, FileAppend, FileExists,
                       RandomInt, RandomSeed,
@@ -42,6 +42,7 @@ struct AstNode {
                       CondEq, CondNe, CondLt, CondGt, CondLe, CondGe,
                       CondAnd, CondOr, CondNot,
                       ExprStringLiteral,
+                      ExprLen,
                       AssnIndex };
     Type type;
     std::string value;           // for Include path, string literal, or variable name
@@ -378,6 +379,20 @@ private:
             }
         }
         return stmts;
+    }
+
+    AstNode parseLenExpr() {
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "len") {
+            throw std::runtime_error("Expected 'len' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after len at line " + std::to_string(peek().line));
+        }
+        AstNode arg = parseExpression();
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' in len(...) at line " + std::to_string(peek().line));
+        }
+        return {AstNode::Type::ExprLen, "", {arg}};
     }
 
     AstNode parseFnCallExpr() {
@@ -912,6 +927,7 @@ private:
             if (method == "platform") return parseOsPlatform();
             if (method == "exe_dir") return parseOsExeDir();
             if (method == "grepkeys" || method == "getkey") return parseOsGrepKeys();
+            if (method == "keypressed") return parseOsKeyPressed();
         }
         if (peek().type == TokenType::Identifier && peek().value == "file" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
@@ -933,6 +949,10 @@ private:
         }
         if (peek().type == TokenType::Identifier && peek().value == "ui") {
             throw std::runtime_error("std/ui has been removed at line " + std::to_string(peek().line));
+        }
+        if (peek().type == TokenType::Identifier && peek().value == "len" && pos_ + 1 < tokens_.size() &&
+            tokens_[pos_ + 1].type == TokenType::LParen) {
+            return parseLenExpr();
         }
         if (peek().type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::LParen) {
@@ -1158,6 +1178,25 @@ private:
             throw std::runtime_error("Expected '()' after os." + method + " at line " + std::to_string(peek().line));
         }
         return {AstNode::Type::OsGrepKeys, "", {}};
+    }
+
+    AstNode parseOsKeyPressed() {
+        if (!modules_.hasOs()) {
+            throw std::runtime_error("os.keypressed requires #include <std/os> at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "os") {
+            throw std::runtime_error("Expected 'os' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "keypressed") {
+            throw std::runtime_error("Expected 'keypressed' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::LParen) || !match(TokenType::RParen)) {
+            throw std::runtime_error("Expected '()' after os.keypressed at line " + std::to_string(peek().line));
+        }
+        return {AstNode::Type::OsKeyPressed, "", {}};
     }
 
     AstNode parseIoReadlnExpr() {

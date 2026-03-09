@@ -6,6 +6,7 @@ Nexa Standard Modules
   io.println(arg)  - Print to stdout, add newline
   Strings support escapes: \n \t \r \\ \" \xHH (hex ASCII)
   s += "x";        - string concatenation (compound assign)
+  len(s)           - string or array length, returns int (built-in)
   io.readln()      - Read one line from stdin, returns string
   arg: string literal, int, or variable
 
@@ -20,6 +21,7 @@ Nexa Standard Modules
   os.maximizeconsolewindow() - Maximize console window (Windows)
   os.messagebox(text, title) - Show message box (Windows)
   os.grepkeys() / os.getkey() - Wait for key press, return key as string (Windows)
+  os.keypressed() - Non-blocking: returns 1 if key waiting, 0 otherwise (Windows)
   cmd: string literal or expression (e.g. "mkdir -p " + dir)
 
 #include <std/random>

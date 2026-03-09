@@ -125,6 +125,23 @@ fn main() {
     }
 }
 
+// On Windows native: find clang, g++, or gcc (MinGW/MSYS2). Returns compiler name or empty.
+static std::string findWindowsCxxNative() {
+#ifdef _WIN32
+    const char* candidates[] = {"clang", "clang++", "g++", "gcc"};
+    for (const char* cxx : candidates) {
+        std::string cmd = "where ";
+        cmd += cxx;
+        cmd += " >nul 2>&1";
+        if (std::system(cmd.c_str()) == 0)
+            return cxx;
+    }
+    return "";
+#else
+    return "";
+#endif
+}
+
 // Return mingw-g++ path for Windows cross-compile (skip clang). Used as fallback when clang fails.
 static std::string findMingwCxx() {
 #ifdef _WIN32
@@ -319,6 +336,9 @@ static int printHelp(int page = 1) {
         std::cout << "  os.grepkeys() / os.getkey()\n";
         std::cout << "    Waits for a key press, returns key as string (Windows only).\n";
         std::cout << "    Use: let key = os.grepkeys();  Returns \"a\", \"Enter\", \"Escape\", \"Up\", etc.\n\n";
+        std::cout << "  os.keypressed()\n";
+        std::cout << "    Non-blocking: returns 1 if a key is waiting, 0 otherwise (Windows).\n";
+        std::cout << "    Use: if (os.keypressed()) { let key = os.grepkeys(); }\n\n";
         std::cout << "Variables used:\n";
         std::cout << "  - string: command to run, e.g. let cmd = \"ls -la\";\n\n";
         std::cout << "Example:\n";
@@ -682,8 +702,14 @@ int main(int argc, char* argv[]) {
 #endif
         } else {
 #ifdef _WIN32
-            cxx = "clang";
-            std::cout << "[Nexa] Compiling with clang...\n";
+            cxx = findWindowsCxxNative();
+            if (cxx.empty()) {
+                std::cerr << "[Nexa] Error: No C++ compiler found. Install clang (LLVM) or MinGW (g++/gcc).\n";
+                std::cerr << "  - LLVM: https://releases.llvm.org/\n";
+                std::cerr << "  - MinGW: https://www.mingw-w64.org/ or use MSYS2: msys2.org\n";
+                return 1;
+            }
+            std::cout << "[Nexa] Compiling with " << cxx << "...\n";
 #else
             cxx = "clang++";
             std::cout << "[Nexa] Compiling with clang++...\n";
@@ -706,13 +732,28 @@ int main(int argc, char* argv[]) {
         cmd += " 2>&1";
         int ret = std::system(cmd.c_str());
 
-        if (ret != 0 && cxx.find("clang") != std::string::npos) {
+        if (ret != 0) {
             std::string fallback;
+#ifdef _WIN32
+            const char* next[] = {"clang", "clang++", "g++", "gcc"};
+            for (const char* n : next) {
+                if (std::string(n) != cxx) {
+                    std::string cmd = "where ";
+                    cmd += n;
+                    cmd += " >nul 2>&1";
+                    if (std::system(cmd.c_str()) == 0) {
+                        fallback = n;
+                        break;
+                    }
+                }
+            }
+            if (!fallback.empty()) std::cout << "[Nexa] " << cxx << " failed, retrying with " << fallback << "...\n";
+#else
             if (!targetFlags.empty()) {
                 fallback = findMingwCxx();
                 if (!fallback.empty()) std::cout << "[Nexa] clang++ failed, retrying with mingw-g++...\n";
             }
-            // Native builds (-o, --run): do not fall back to g++; prefer clang only
+#endif
             if (!fallback.empty()) {
                 cxx = fallback;
                 targetFlags = "";

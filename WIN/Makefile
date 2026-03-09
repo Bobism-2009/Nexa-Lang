@@ -11,8 +11,11 @@ ifdef MINGW_PREFIX
   FALLBACK_CXX =
   SUFFIX = .exe
 else ifeq ($(OS),Windows_NT)
-  CXX := $(shell which clang++ 2>/dev/null || which g++ 2>/dev/null || echo "g++")
-  FALLBACK_CXX := $(shell which g++ 2>/dev/null)
+  # Windows: which works in MSYS2/Git Bash; where works in cmd. Prefer clang, then g++.
+  CXX := $(shell which clang++ 2>/dev/null || which clang 2>/dev/null || which g++ 2>/dev/null || which gcc 2>/dev/null || echo g++)
+  CXX := $(firstword $(CXX))
+  FALLBACK_CXX := $(shell which g++ 2>/dev/null || which gcc 2>/dev/null)
+  FALLBACK_CXX := $(firstword $(FALLBACK_CXX))
   SUFFIX = .exe
 else
   CLANG := $(shell which clang++ 2>/dev/null)
