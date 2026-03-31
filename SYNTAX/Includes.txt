@@ -7,6 +7,8 @@ MODULE INCLUDES (angle brackets)
   #include <std/file>
   #include <std/random>
   #include <std/dll>
+  #include <std/time>
+  #include <std/inline>   - Enables inline_cpp! { ... } (raw C++ pasted into generated code; use sparingly)
   - Standard library modules
 
 PACKAGE INCLUDES (angle brackets, non-std)

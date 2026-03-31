@@ -1,0 +1,40 @@
+std/inline and inline_cpp!
+==========================
+
+The std/inline module enables embedding raw C++ inside Nexa source.
+
+Enable
+------
+  #include <std/inline>
+
+Without this include, inline_cpp! is rejected at parse time.
+
+Syntax
+------
+  inline_cpp! {
+    ... C++ statements ...
+  }
+
+The block is lexed with matched-brace depth. Inside a function, the inner text is
+emitted into the generated .cpp inside that function (wrapped in a compound
+statement). At file scope (after includes, alongside fn / let), the same form is
+emitted at translation-unit scope with no extra wrapping braces, so you can paste
+C++ functions, globals, or int main() as needed. The C++ compiler (Clang) must
+accept the pasted code.
+
+#include hoisting
+-----------------
+Any line in the block that starts with #include (after leading whitespace) is
+moved to the top of the generated .cpp file (deduplicated). This is required
+because C++ does not allow #include inside a function body.
+
+There is no automatic #include <iostream>; add the headers you need inside the
+block (they will be hoisted) or rely on headers already included by the runtime.
+
+CLI
+---
+  NexaC --help std/inline
+  NexaC --help --page8
+  NexaC --help inline
+
+See also: Includes.txt, Modules.txt, Core.txt

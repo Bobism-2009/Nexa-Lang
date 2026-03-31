@@ -36,14 +36,21 @@ struct AstNode {
                       AssnMul,
                       AssnDiv,
                       AssnMod,
+                      AssnBitAnd,
+                      AssnBitOr,
+                      AssnBitXor,
+                      AssnShl,
+                      AssnShr,
                       Block,
                       ExprIntLiteral, ExprFloatLiteral, ExprCharLiteral, ExprBoolLiteral, ExprVarRef, ExprAdd, ExprSub, ExprMul, ExprDiv, ExprMod,
+                      ExprBitAnd, ExprBitOr, ExprBitXor, ExprShl, ExprShr, ExprBitNot,
                       ExprArrayLiteral, ExprArrayIndex,
                       CondEq, CondNe, CondLt, CondGt, CondLe, CondGe,
                       CondAnd, CondOr, CondNot,
                       ExprStringLiteral,
                       ExprLen,
-                      AssnIndex };
+                      AssnIndex,
+                      InlineCpp };
     Type type;
     std::string value;           // for Include path, string literal, or variable name
     std::vector<AstNode> children;
@@ -93,6 +100,17 @@ public:
                 }
             } else if (t.type == TokenType::Let) {
                 ast.push_back(parseVariable());
+            } else if (t.type == TokenType::InlineCppBlock) {
+                if (!modules_.hasInlineCpp()) {
+                    throw std::runtime_error("inline_cpp! requires #include <std/inline> at line " + std::to_string(t.line));
+                }
+                const Token& tok = peek();
+                std::string body = tok.value;
+                advance();
+                AstNode node{AstNode::Type::InlineCpp, "", {}};
+                node.value = std::move(body);
+                ast.push_back(std::move(node));
+                if (peek().type == TokenType::Semicolon) advance();
             } else {
                 throw std::runtime_error("Unexpected token at line " + std::to_string(t.line));
             }
@@ -335,6 +353,17 @@ private:
                 stmts.push_back(parseWhile());
             } else if (t.type == TokenType::For) {
                 stmts.push_back(parseFor());
+            } else if (t.type == TokenType::InlineCppBlock) {
+                if (!modules_.hasInlineCpp()) {
+                    throw std::runtime_error("inline_cpp! requires #include <std/inline> at line " + std::to_string(t.line));
+                }
+                const Token& tok = peek();
+                std::string body = tok.value;
+                advance();
+                AstNode node{AstNode::Type::InlineCpp, "", {}};
+                node.value = std::move(body);
+                stmts.push_back(std::move(node));
+                if (peek().type == TokenType::Semicolon) advance();
             } else if (t.type == TokenType::Identifier && t.value == "io") {
                 stmts.push_back(parseIoCall());
             } else if (t.type == TokenType::Identifier && t.value == "os") {
@@ -361,7 +390,9 @@ private:
                 if (next == TokenType::LBracket) {
                     stmts.push_back(parseIndexedAssignment());
                 } else if (next == TokenType::Assign || next == TokenType::PlusAssign || next == TokenType::MinusAssign ||
-                    next == TokenType::StarAssign || next == TokenType::SlashAssign || next == TokenType::PercentAssign) {
+                    next == TokenType::StarAssign || next == TokenType::SlashAssign || next == TokenType::PercentAssign ||
+                    next == TokenType::BitAndAssign || next == TokenType::BitOrAssign || next == TokenType::BitXorAssign ||
+                    next == TokenType::ShlAssign || next == TokenType::ShrAssign) {
                     stmts.push_back(parseAssignment());
                 } else if (next == TokenType::PlusPlus || next == TokenType::MinusMinus) {
                     stmts.push_back(parseIncDec());
@@ -519,8 +550,18 @@ private:
             assnType = AstNode::Type::AssnDiv;
         } else if (match(TokenType::PercentAssign)) {
             assnType = AstNode::Type::AssnMod;
+        } else if (match(TokenType::BitAndAssign)) {
+            assnType = AstNode::Type::AssnBitAnd;
+        } else if (match(TokenType::BitOrAssign)) {
+            assnType = AstNode::Type::AssnBitOr;
+        } else if (match(TokenType::BitXorAssign)) {
+            assnType = AstNode::Type::AssnBitXor;
+        } else if (match(TokenType::ShlAssign)) {
+            assnType = AstNode::Type::AssnShl;
+        } else if (match(TokenType::ShrAssign)) {
+            assnType = AstNode::Type::AssnShr;
         } else {
-            throw std::runtime_error("Expected '=', '+=', '-=', '*=', '/=', or '%=' at line " + std::to_string(peek().line));
+            throw std::runtime_error("Expected '=', compound assignment (e.g. '+=', '&=', '<<=') at line " + std::to_string(peek().line));
         }
         AstNode expr = parseExpression();
         if (!match(TokenType::Semicolon)) {
@@ -736,6 +777,17 @@ private:
                 stmts.push_back(parseWhile());
             } else if (t.type == TokenType::For) {
                 stmts.push_back(parseFor());
+            } else if (t.type == TokenType::InlineCppBlock) {
+                if (!modules_.hasInlineCpp()) {
+                    throw std::runtime_error("inline_cpp! requires #include <std/inline> at line " + std::to_string(t.line));
+                }
+                const Token& tok = peek();
+                std::string body = tok.value;
+                advance();
+                AstNode node{AstNode::Type::InlineCpp, "", {}};
+                node.value = std::move(body);
+                stmts.push_back(std::move(node));
+                if (peek().type == TokenType::Semicolon) advance();
             } else if (t.type == TokenType::Identifier && t.value == "io") {
                 stmts.push_back(parseIoCall());
             } else if (t.type == TokenType::Identifier && t.value == "os") {
@@ -762,7 +814,9 @@ private:
                 if (next == TokenType::LBracket) {
                     stmts.push_back(parseIndexedAssignment());
                 } else if (next == TokenType::Assign || next == TokenType::PlusAssign || next == TokenType::MinusAssign ||
-                    next == TokenType::StarAssign || next == TokenType::SlashAssign || next == TokenType::PercentAssign) {
+                    next == TokenType::StarAssign || next == TokenType::SlashAssign || next == TokenType::PercentAssign ||
+                    next == TokenType::BitAndAssign || next == TokenType::BitOrAssign || next == TokenType::BitXorAssign ||
+                    next == TokenType::ShlAssign || next == TokenType::ShrAssign) {
                     stmts.push_back(parseAssignment());
                 } else if (next == TokenType::PlusPlus || next == TokenType::MinusMinus) {
                     stmts.push_back(parseIncDec());
@@ -841,6 +895,53 @@ private:
     }
 
     AstNode parseExpression() {
+        return parseBitOr();
+    }
+
+    AstNode parseBitOr() {
+        AstNode left = parseBitXor();
+        while (match(TokenType::BitOr)) {
+            AstNode n{AstNode::Type::ExprBitOr, "", {left, parseBitXor()}};
+            left = n;
+        }
+        return left;
+    }
+
+    AstNode parseBitXor() {
+        AstNode left = parseBitAnd();
+        while (match(TokenType::BitXor)) {
+            AstNode n{AstNode::Type::ExprBitXor, "", {left, parseBitAnd()}};
+            left = n;
+        }
+        return left;
+    }
+
+    AstNode parseBitAnd() {
+        AstNode left = parseShift();
+        while (match(TokenType::BitAnd)) {
+            AstNode n{AstNode::Type::ExprBitAnd, "", {left, parseShift()}};
+            left = n;
+        }
+        return left;
+    }
+
+    AstNode parseShift() {
+        AstNode left = parseAdditive();
+        while (true) {
+            if (match(TokenType::Shl)) {
+                AstNode n{AstNode::Type::ExprShl, "", {left, parseAdditive()}};
+                left = n;
+            } else if (match(TokenType::Shr)) {
+                AstNode n{AstNode::Type::ExprShr, "", {left, parseAdditive()}};
+                left = n;
+            } else {
+                break;
+            }
+        }
+        return left;
+    }
+
+    AstNode parseAdditive() {
         AstNode left = parseTerm();
         while (true) {
             if (match(TokenType::Plus)) {
@@ -857,22 +958,29 @@ private:
     }
 
     AstNode parseTerm() {
-        AstNode left = parseFactor();
+        AstNode left = parseUnary();
         while (true) {
             if (match(TokenType::Star)) {
-                AstNode n{AstNode::Type::ExprMul, "", {left, parseFactor()}};
+                AstNode n{AstNode::Type::ExprMul, "", {left, parseUnary()}};
                 left = n;
             } else if (match(TokenType::Slash)) {
-                AstNode n{AstNode::Type::ExprDiv, "", {left, parseFactor()}};
+                AstNode n{AstNode::Type::ExprDiv, "", {left, parseUnary()}};
                 left = n;
             } else if (match(TokenType::Percent)) {
-                AstNode n{AstNode::Type::ExprMod, "", {left, parseFactor()}};
+                AstNode n{AstNode::Type::ExprMod, "", {left, parseUnary()}};
                 left = n;
             } else {
                 break;
             }
         }
         return left;
+    }
+
+    AstNode parseUnary() {
+        if (match(TokenType::BitNot)) {
+            return {AstNode::Type::ExprBitNot, "", {parseUnary()}};
+        }
+        return parseFactor();
     }
 
     AstNode parseArrayLiteral() {

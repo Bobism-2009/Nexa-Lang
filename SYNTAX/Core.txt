@@ -1,6 +1,11 @@
 Nexa Core Syntax
 ================
 
+INLINE C++ (escape hatch; requires #include <std/inline>)
+  inline_cpp! {
+    // C++ statements; compiled by Clang, not parsed by Nexa
+  }
+
 ENTRY POINT
   fn main() {
     ...
@@ -62,9 +67,11 @@ VARIABLES
     x = expr;   (variable must be declared first; const variables cannot be reassigned)
     x++;  x--;  (increment/decrement by 1)
     x += n;  x -= n;  x *= n;  x /= n;  x %= n;  (compound assignment)
+    x &= n;  x |= n;  x ^= n;  x <<= n;  x >>= n;  (bitwise compound assignment)
     s += "x";  (string concatenation - += works for strings)
 
 ARITHMETIC
   + - * / %
-  Precedence: * / % before + -
+  Precedence (tightest first): * / % ; + - ; << >> ; & ; ^ ; |
+  Bitwise: & | ^  (binary),  ~  (unary NOT),  << >>  (shift)
   int and float (int + float promotes to float)

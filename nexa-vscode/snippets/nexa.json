@@ -1,0 +1,62 @@
+{
+  "Nexa: fn main": {
+    "prefix": "main",
+    "body": ["fn main() {", "\t$0", "}"],
+    "description": "Program entry with fn main()"
+  },
+  "Nexa: fn": {
+    "prefix": "fn",
+    "body": ["fn ${1:name}($2) {", "\t$0", "}"],
+    "description": "Function definition"
+  },
+  "Nexa: include std/io": {
+    "prefix": "incio",
+    "body": ["#include <std/io>"],
+    "description": "Standard I/O module"
+  },
+  "Nexa: include std/os": {
+    "prefix": "incos",
+    "body": ["#include <std/os>"],
+    "description": "OS module"
+  },
+  "Nexa: include std/dll": {
+    "prefix": "incdll",
+    "body": ["#include <std/dll>"],
+    "description": "Dynamic library module"
+  },
+  "Nexa: include std/file": {
+    "prefix": "incfile",
+    "body": ["#include <std/file>"],
+    "description": "File I/O module"
+  },
+  "Nexa: include std/random": {
+    "prefix": "incrnd",
+    "body": ["#include <std/random>"],
+    "description": "Random module"
+  },
+  "Nexa: println": {
+    "prefix": "println",
+    "body": ["io.println(${1:\"\"});"],
+    "description": "io.println"
+  },
+  "Nexa: let": {
+    "prefix": "let",
+    "body": ["let ${1:x} = $0;"],
+    "description": "let binding"
+  },
+  "Nexa: while": {
+    "prefix": "while",
+    "body": ["while (${1:condition}) {", "\t$0", "}"],
+    "description": "while loop"
+  },
+  "Nexa: if": {
+    "prefix": "if",
+    "body": ["if (${1:condition}) {", "\t$0", "}"],
+    "description": "if statement"
+  },
+  "Nexa: __init__": {
+    "prefix": "init",
+    "body": ["fn __init__() {", "\t$0", "}"],
+    "description": "Library init hook"
+  }
+}

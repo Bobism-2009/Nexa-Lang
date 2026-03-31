@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <cctype>
+#include <stdexcept>
 
 namespace nexa {
 
@@ -46,6 +47,11 @@ enum class TokenType {
     StarAssign,
     SlashAssign,
     PercentAssign,
+    BitAndAssign,
+    BitOrAssign,
+    BitXorAssign,
+    ShlAssign,
+    ShrAssign,
     Equals,
     NotEquals,
     And,
@@ -62,6 +68,14 @@ enum class TokenType {
     Star,
     Slash,
     Percent,
+    Shl,
+    Shr,
+    BitAnd,
+    BitOr,
+    BitXor,
+    BitNot,
+    InlineCpp,
+    InlineCppBlock,
     Eof
 };
 
@@ -104,7 +118,24 @@ public:
             } else if (std::isdigit(c) || (c == '-' && pos_ + 1 < source_.size() && std::isdigit(source_[pos_ + 1]))) {
                 tokens.push_back(scanNumber());
             } else if (std::isalpha(c) || c == '_') {
-                tokens.push_back(scanIdentifier());
+                Token id = scanIdentifier();
+                if (id.type == TokenType::InlineCpp) {
+                    size_t lineStart = id.line;
+                    skipWhitespace();
+                    if (pos_ >= source_.size() || source_[pos_] != '!') {
+                        throw std::runtime_error("Expected '!' after inline_cpp at line " + std::to_string(lineStart));
+                    }
+                    pos_++;
+                    skipWhitespace();
+                    if (pos_ >= source_.size() || source_[pos_] != '{') {
+                        throw std::runtime_error("Expected '{' after inline_cpp! at line " + std::to_string(lineStart));
+                    }
+                    pos_++;
+                    std::string body = scanInlineCppBody();
+                    tokens.push_back({TokenType::InlineCppBlock, body, lineStart});
+                } else {
+                    tokens.push_back(id);
+                }
             } else if (c == '(') {
                 tokens.push_back({TokenType::LParen, "(", line_});
                 pos_++;
@@ -152,8 +183,35 @@ public:
             } else if (c == '&' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '&') {
                 tokens.push_back({TokenType::And, "&&", line_});
                 pos_ += 2;
+            } else if (c == '&' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '=') {
+                tokens.push_back({TokenType::BitAndAssign, "&=", line_});
+                pos_ += 2;
+            } else if (c == '&') {
+                tokens.push_back({TokenType::BitAnd, "&", line_});
+                pos_++;
             } else if (c == '|' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '|') {
                 tokens.push_back({TokenType::Or, "||", line_});
+                pos_ += 2;
+            } else if (c == '|' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '=') {
+                tokens.push_back({TokenType::BitOrAssign, "|=", line_});
+                pos_ += 2;
+            } else if (c == '|') {
+                tokens.push_back({TokenType::BitOr, "|", line_});
+                pos_++;
+            } else if (c == '^' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '=') {
+                tokens.push_back({TokenType::BitXorAssign, "^=", line_});
+                pos_ += 2;
+            } else if (c == '^') {
+                tokens.push_back({TokenType::BitXor, "^", line_});
+                pos_++;
+            } else if (c == '~') {
+                tokens.push_back({TokenType::BitNot, "~", line_});
+                pos_++;
+            } else if (c == '<' && pos_ + 2 < source_.size() && source_[pos_ + 1] == '<' && source_[pos_ + 2] == '=') {
+                tokens.push_back({TokenType::ShlAssign, "<<=", line_});
+                pos_ += 3;
+            } else if (c == '<' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '<') {
+                tokens.push_back({TokenType::Shl, "<<", line_});
                 pos_ += 2;
             } else if (c == '<' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '=') {
                 tokens.push_back({TokenType::LessEq, "<=", line_});
@@ -161,6 +219,12 @@ public:
             } else if (c == '<') {
                 tokens.push_back({TokenType::Less, "<", line_});
                 pos_++;
+            } else if (c == '>' && pos_ + 2 < source_.size() && source_[pos_ + 1] == '>' && source_[pos_ + 2] == '=') {
+                tokens.push_back({TokenType::ShrAssign, ">>=", line_});
+                pos_ += 3;
+            } else if (c == '>' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '>') {
+                tokens.push_back({TokenType::Shr, ">>", line_});
+                pos_ += 2;
             } else if (c == '>' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '=') {
                 tokens.push_back({TokenType::GreaterEq, ">=", line_});
                 pos_ += 2;
@@ -334,8 +398,39 @@ private:
         else if (value == "default") type = TokenType::Default;
         else if (value == "true") type = TokenType::True;
         else if (value == "false") type = TokenType::False;
+        else if (value == "inline_cpp") type = TokenType::InlineCpp;
 
         return {type, value, startLine};
+    }
+
+    // Body inside inline_cpp! { ... }; brace depth only (strings/comments with } may need workarounds).
+    std::string scanInlineCppBody() {
+        int depth = 1;
+        std::string out;
+        while (pos_ < source_.size() && depth > 0) {
+            char c = source_[pos_];
+            if (c == '{') {
+                depth++;
+                out += c;
+                pos_++;
+            } else if (c == '}') {
+                depth--;
+                if (depth == 0) {
+                    pos_++;
+                    break;
+                }
+                out += c;
+                pos_++;
+            } else {
+                if (c == '\n') line_++;
+                out += c;
+                pos_++;
+            }
+        }
+        if (depth != 0) {
+            throw std::runtime_error("Unclosed inline_cpp! { ... } block");
+        }
+        return out;
     }
 
     Token scanNumber() {

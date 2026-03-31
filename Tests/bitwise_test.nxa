@@ -1,0 +1,21 @@
+#include <std/io>
+
+fn main() {
+    let a = 15 & 7;
+    let b = 255 | 1;
+    let c = 15 ^ 3;
+    let d = 1 << 4;
+    let e = 16 >> 2;
+    io.println(a);
+    io.println(b);
+    io.println(c);
+    io.println(d);
+    io.println(e);
+    let x = 7;
+    x &= 3;
+    x |= 8;
+    x ^= 2;
+    x <<= 1;
+    x >>= 2;
+    io.println(x);
+}

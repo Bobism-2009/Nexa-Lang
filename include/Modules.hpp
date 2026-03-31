@@ -36,6 +36,10 @@ public:
         return enabled_.count("std/time") > 0;
     }
 
+    bool hasInlineCpp() const {
+        return enabled_.count("std/inline") > 0;
+    }
+
     std::string getCppIncludes() const {
         std::string out;
         if (hasIo()) {

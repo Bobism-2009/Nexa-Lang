@@ -216,7 +216,59 @@ static std::string findWindowsCxx() {
 #endif
 }
 
-// Resolve topic/page string to page number (1-6). 0 = unknown.
+// Build the shell command for clang/g++/gcc. Windows (MSVC-target clang) cannot use -fPIC on DLLs
+// and needs an explicit subsystem for console executables; GNU flags (-Wl,--gc-sections, -s) are skipped there.
+static std::string nexaBuildCompileCmd(
+    const std::string& cxx,
+    const std::string& targetFlags,
+    const std::string& cppPath,
+    const std::string& exePath,
+    const std::string& opt,
+    bool buildDll,
+    bool buildShared,
+    bool buildWin,
+    bool modulesHasDll
+) {
+    // Windows cmd.exe: do not wrap the compiler name in quotes unless it contains spaces;
+    // "clang" combined with other quoted paths can confuse cmd's parser (error 123).
+#ifdef _WIN32
+    std::string cmd = cxx + targetFlags;
+#else
+    std::string cmd = "\"" + cxx + "\"" + targetFlags;
+#endif
+    cmd += " \"" + cppPath + "\" " + opt;
+#ifdef _WIN32
+    cmd += " -ffunction-sections -fdata-sections";
+    if (buildDll || buildShared) {
+        cmd += " -shared";
+    } else {
+        // Quoted for cmd.exe: unquoted /SUBSYSTEM is parsed as multiple invalid paths (error 123).
+        cmd += " -Xlinker \"/SUBSYSTEM:CONSOLE\"";
+    }
+#else
+    cmd += " -s -ffunction-sections -fdata-sections -Wl,--gc-sections";
+    if (buildDll || buildShared) {
+        cmd += " -shared -fPIC";
+    }
+#endif
+    if (buildWin && !buildDll && !buildShared) {
+#ifndef _WIN32
+        cmd += " -static -static-libgcc -static-libstdc++";
+#endif
+    }
+#ifdef _WIN32
+    // user32: std/os (MessageBoxA, GetConsoleWindow, …) and inline_cpp + windows.h. lld-link does not pull it implicitly.
+    cmd += " -luser32";
+#endif
+    cmd += " -o \"" + exePath + "\"";
+#ifndef _WIN32
+    if (modulesHasDll && buildShared) cmd += " -ldl";
+    cmd += " 2>&1";
+#endif
+    return cmd;
+}
+
+// Resolve topic/page string to page number (1-8). 0 = unknown.
 static int helpPageFromArg(const std::string& arg) {
     if (arg.empty() || arg == "1" || arg == "page1") return 1;
     if (arg == "2" || arg == "page2" || arg == "core" || arg == "lang" || arg == "language") return 2;
@@ -225,18 +277,19 @@ static int helpPageFromArg(const std::string& arg) {
     if (arg == "5" || arg == "page5" || arg == "std/dll") return 5;
     if (arg == "6" || arg == "page6" || arg == "std/file") return 6;
     if (arg == "7" || arg == "page7" || arg == "std/random") return 7;
+    if (arg == "8" || arg == "page8" || arg == "std/inline" || arg == "inline" || arg == "inline_cpp") return 8;
     if (arg.size() >= 6 && arg.substr(0, 6) == "--page") {
         int n = 0;
         for (size_t i = 6; i < arg.size() && std::isdigit(arg[i]); i++)
             n = n * 10 + (arg[i] - '0');
-        if (n >= 1 && n <= 7) return n;
+        if (n >= 1 && n <= 8) return n;
     }
     return 0;
 }
 
 static int printHelp(int page = 1) {
     if (page == 2) {
-        std::cout << "NexaC - Core language (page 2/4)\n\n";
+        std::cout << "NexaC - Core language (page 2/8)\n\n";
         std::cout << "Entry point:\n";
         std::cout << "  fn main() {\n";
         std::cout << "    ...\n";
@@ -277,7 +330,8 @@ static int printHelp(int page = 1) {
         std::cout << "  #include <std/os>   - system, platform, getenv\n";
         std::cout << "  #include <std/dll>  - load, call (dynamic libraries)\n";
         std::cout << "  #include <std/file> - read, write, append, exists\n";
-        std::cout << "  #include <std/random> - int, seed\n\n";
+        std::cout << "  #include <std/random> - int, seed\n";
+        std::cout << "  #include <std/inline> - inline_cpp! { ... } (embed C++)\n\n";
         std::cout << "  #include \"file.nxa\"  - include another .nxa file (path relative to current file)\n";
         std::cout << "    \"lib.nxa\" = same dir, \"../other.nxa\" = parent dir\n\n";
         std::cout << "Full example:\n";
@@ -289,12 +343,12 @@ static int printHelp(int page = 1) {
         std::cout << "    let x = add(2, 3);\n";
         std::cout << "    io.println(x);\n";
         std::cout << "  }\n\n";
-        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random\n";
+        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random | 8=std/inline\n";
         std::cout << "  NexaC --help --page3  NexaC --help std/io\n";
         return 0;
     }
     if (page == 3) {
-        std::cout << "NexaC - std/io module (page 3/7)\n\n";
+        std::cout << "NexaC - std/io module (page 3/8)\n\n";
         std::cout << "Input/output. Include with: #include <std/io>\n\n";
         std::cout << "Calls:\n\n";
         std::cout << "  io.print(arg)\n";
@@ -316,12 +370,12 @@ static int printHelp(int page = 1) {
         std::cout << "  io.println(name);\n";
         std::cout << "  let x = 42;\n";
         std::cout << "  io.println(x);\n\n";
-        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file\n";
+        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random | 8=std/inline\n";
         std::cout << "  NexaC --help --page4  NexaC --help std/os\n";
         return 0;
     }
     if (page == 4) {
-        std::cout << "NexaC - std/os module (page 4/6)\n\n";
+        std::cout << "NexaC - std/os module (page 4/8)\n\n";
         std::cout << "OS and system calls. Include with: #include <std/os>\n\n";
         std::cout << "Calls:\n\n";
         std::cout << "  os.system(cmd)\n";
@@ -345,12 +399,12 @@ static int printHelp(int page = 1) {
         std::cout << "  os.system(\"ls -la\");\n";
         std::cout << "  let cmd = \"echo hello\";\n";
         std::cout << "  os.system(cmd);\n\n";
-        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file\n";
+        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random | 8=std/inline\n";
         std::cout << "  NexaC --help --page5  NexaC --help std/dll\n";
         return 0;
     }
     if (page == 5) {
-        std::cout << "NexaC - std/dll module (page 5/6)\n\n";
+        std::cout << "NexaC - std/dll module (page 5/8)\n\n";
         std::cout << "Dynamic library loading. Include with: #include <std/dll>\n\n";
         std::cout << "Calls:\n\n";
         std::cout << "  dll.load(path)\n";
@@ -369,12 +423,12 @@ static int printHelp(int page = 1) {
         std::cout << "    let h = dll.load(\"./plugin.so\");\n";
         std::cout << "    dll.call(h, \"plugin_init\");\n";
         std::cout << "  }\n\n";
-        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file\n";
+        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random | 8=std/inline\n";
         std::cout << "  NexaC --help --page6  NexaC --help std/file\n";
         return 0;
     }
     if (page == 6) {
-        std::cout << "NexaC - std/file module (page 6/6)\n\n";
+        std::cout << "NexaC - std/file module (page 6/8)\n\n";
         std::cout << "File I/O. Include with: #include <std/file>\n\n";
         std::cout << "Calls:\n\n";
         std::cout << "  file.read(path)\n";
@@ -398,11 +452,12 @@ static int printHelp(int page = 1) {
         std::cout << "    let s = file.read(\"out.txt\");\n";
         std::cout << "    io.println(s);\n";
         std::cout << "  }\n\n";
-        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random \n";
+        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random | 8=std/inline\n";
+        std::cout << "  NexaC --help --page7  NexaC --help std/random\n";
         return 0;
     }
     if (page == 7) {
-        std::cout << "NexaC - std/random module (page 7/7)\n\n";
+        std::cout << "NexaC - std/random module (page 7/8)\n\n";
         std::cout << "Random numbers. Include with: #include <std/random>\n\n";
         std::cout << "Calls:\n\n";
         std::cout << "  random.int(min, max)\n";
@@ -418,11 +473,35 @@ static int printHelp(int page = 1) {
         std::cout << "    let d6 = random.int(1, 6);\n";
         std::cout << "    io.println(d6);\n";
         std::cout << "  }\n\n";
-        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random \n";
+        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random | 8=std/inline\n";
+        std::cout << "  NexaC --help --page8  NexaC --help std/inline\n";
+        return 0;
+    }
+    if (page == 8) {
+        std::cout << "NexaC - std/inline (inline_cpp!) (page 8/8)\n\n";
+        std::cout << "Embeds C++ in Nexa when the language has no API for your case.\n";
+        std::cout << "Enable with: #include <std/inline>\n\n";
+        std::cout << "Syntax:\n";
+        std::cout << "  inline_cpp! {\n";
+        std::cout << "    ... C++ statements ...\n";
+        std::cout << "  }\n\n";
+        std::cout << "The block body is pasted into generated C++ (Clang must parse it).\n";
+        std::cout << "Lines starting with #include are hoisted to the top of the .cpp (required for\n";
+        std::cout << "standard headers when they appear inside a function).\n\n";
+        std::cout << "Example:\n";
+        std::cout << "  #include <std/inline>\n\n";
+        std::cout << "  fn main() {\n";
+        std::cout << "    inline_cpp! {\n";
+        std::cout << "#include <iostream>\n";
+        std::cout << "      std::cout << \"Hello\\n\";\n";
+        std::cout << "    }\n";
+        std::cout << "  }\n\n";
+        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random | 8=std/inline\n";
+        std::cout << "  NexaC --help --page1\n";
         return 0;
     }
     // Page 1 (default): usage and options
-    std::cout << "NexaC - Nexa compiler (page 1/7)\n";
+    std::cout << "NexaC - Nexa compiler (page 1/8)\n";
     std::cout << "A general purpose, high-performance programming language.\n\n";
     std::cout << "Usage:\n";
     std::cout << "  NexaC init [dir]       Scaffold new project (current dir or dir/)\n";
@@ -440,7 +519,7 @@ static int printHelp(int page = 1) {
     std::cout << "  --win     Build Windows .exe (mingw-w64 from Linux; native on Windows)\n";
     std::cout << "  --help, -h    Show this help\n";
     std::cout << "  --version, --v, -v  Show version\n";
-    std::cout << "  --help <page>  Show page (2=core, 3=std/io, 4=std/os, 5=std/dll, 6=std/file, 7=std/random)\n";
+    std::cout << "  --help <page>  Show page (2=core ... 7=std/random, 8=std/inline)\n";
     std::cout << "  --help --pageN  Same (e.g. --page2, --page3)\n\n";
     std::cout << "Standard library modules:\n";
     std::cout << "  std/io        Input/output: print, println, readln\n";
@@ -448,11 +527,12 @@ static int printHelp(int page = 1) {
     std::cout << "  std/dll       Dynamic libraries: load, call\n";
     std::cout << "  std/file      File I/O: read, write, append, exists\n";
     std::cout << "  std/random   Random: int, seed\n";
+    std::cout << "  std/inline   inline_cpp! { ... } embed C++ (requires include)\n";
     std::cout << "  core          Core language: variables, types, fn main, functions\n\n";
     std::cout << "Example:\n";
     std::cout << "  NexaC program.nxa -o program\n";
     std::cout << "  NexaC --help --page2  NexaC --help std/io\n\n";
-    std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random \n";
+    std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random | 8=std/inline\n";
 	return 0;
 }
 
@@ -500,7 +580,7 @@ int main(int argc, char* argv[]) {
             int page = helpPageFromArg(nextArg);
             if (page == 0 && !nextArg.empty()) {
                 std::cerr << "Unknown help page/module: " << nextArg << "\n";
-                std::cerr << "Use 'NexaC --help' to list pages (1-7) and modules (std/io, std/os, std/dll, std/file, std/random, core).\n";
+                std::cerr << "Use 'NexaC --help' to list pages (1-8) and modules (std/io, std/os, std/dll, std/file, std/random, std/inline, core).\n";
                 return 1;
             }
             return printHelp(page);
@@ -716,20 +796,9 @@ int main(int argc, char* argv[]) {
 #endif
         }
 
+        std::cout.flush();  // ensure [Nexa] lines appear before child compiler output (e.g. when stdout is redirected)
         std::string opt = optimizeSize ? "-Os" : "-O2";
-        std::string cmd = "\"" + cxx + "\"" + targetFlags;
-        cmd += " \"" + cppPath + "\" " + opt + " -s -ffunction-sections -fdata-sections -Wl,--gc-sections";
-        if (buildDll || buildShared) {
-            cmd += " -shared -fPIC";
-        }
-        if (buildWin && !buildDll && !buildShared) {
-            cmd += " -static -static-libgcc -static-libstdc++";
-        }
-        cmd += " -o \"" + exePath + "\"";
-#ifndef _WIN32
-        if (modules.hasDll() && buildShared) cmd += " -ldl";
-#endif
-        cmd += " 2>&1";
+        std::string cmd = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll());
         int ret = std::system(cmd.c_str());
 
         if (ret != 0) {
@@ -757,15 +826,8 @@ int main(int argc, char* argv[]) {
             if (!fallback.empty()) {
                 cxx = fallback;
                 targetFlags = "";
-                std::string cmd2 = "\"" + cxx + "\"";
-                cmd2 += " \"" + cppPath + "\" " + opt + " -s -ffunction-sections -fdata-sections -Wl,--gc-sections";
-                if (buildDll || buildShared) cmd2 += " -shared -fPIC";
-                if (buildWin && !buildDll && !buildShared) cmd2 += " -static -static-libgcc -static-libstdc++";
-                cmd2 += " -o \"" + exePath + "\"";
-#ifndef _WIN32
-                if (modules.hasDll() && buildShared) cmd2 += " -ldl";
-#endif
-                cmd2 += " 2>&1";
+                std::cout.flush();
+                std::string cmd2 = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll());
                 ret = std::system(cmd2.c_str());
             }
         }

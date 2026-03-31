@@ -30,10 +30,14 @@ Nexa Standard Modules
   Use: let roll = random.int(1, 6);  random.seed(42);
 
 #include <std/time>
-  time.sleep(duration)      - Sleep for duration (milliseconds)
-  time.seconds(n)           - Returns n * 1000 (for sleep)
-  time.milliseconds(n)      - Returns n (for sleep)
-  Use: time.sleep(time.seconds(1));  time.sleep(time.milliseconds(250));
+  time.sleep(duration)      - Sleeps using std::chrono (ms, or seconds()/milliseconds() helpers)
+  time.seconds(n)           - Millisecond count via std::chrono::seconds(n) (same semantics as n*1000)
+  time.milliseconds(n)    - Millisecond count via std::chrono::milliseconds(n)
+  Use: time.sleep(time.seconds(1));  time.sleep(time.milliseconds(250));  time.sleep(40);
+
+#include <std/inline>
+  Enables inline_cpp! { ... } — paste C++ into the generated file. Lines starting with #include are hoisted to the top of the generated .cpp (no automatic iostream).
+  Use only when Nexa has no API for this; body is not parsed by Nexa (brace matching only; } in strings can break).
 
 #include <std/file>
   file.read(path)       - Read entire file, returns string

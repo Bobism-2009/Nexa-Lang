@@ -6,9 +6,45 @@
 #include <sstream>
 #include <cstdio>
 #include <map>
+#include <set>
 #include <functional>
+#include <cctype>
 
 namespace nexa {
+
+// Lines starting with #include in inline_cpp bodies are hoisted to file scope (C++ requires includes outside functions).
+inline void collectInlineCppIncludeLines(const std::string& body, std::vector<std::string>& order, std::set<std::string>& seen) {
+    std::istringstream ss(body);
+    std::string line;
+    while (std::getline(ss, line)) {
+        size_t start = 0;
+        while (start < line.size() && std::isspace(static_cast<unsigned char>(line[start]))) start++;
+        if (start + 8 <= line.size() && line.compare(start, 8, "#include") == 0) {
+            std::string inc = line.substr(start);
+            if (seen.insert(inc).second) order.push_back(inc);
+        }
+    }
+}
+
+inline std::string stripInlineCppIncludeLines(const std::string& body) {
+    std::ostringstream rest;
+    std::istringstream ss(body);
+    std::string line;
+    while (std::getline(ss, line)) {
+        size_t start = 0;
+        while (start < line.size() && std::isspace(static_cast<unsigned char>(line[start]))) start++;
+        if (start + 8 <= line.size() && line.compare(start, 8, "#include") == 0) continue;
+        rest << line << "\n";
+    }
+    std::string r = rest.str();
+    while (!r.empty() && (r.back() == '\n' || r.back() == '\r')) r.pop_back();
+    return r;
+}
+
+inline void walkAstForInlineCppIncludes(const AstNode& n, std::vector<std::string>& order, std::set<std::string>& seen) {
+    if (n.type == AstNode::Type::InlineCpp) collectInlineCppIncludeLines(n.value, order, seen);
+    for (const AstNode& c : n.children) walkAstForInlineCppIncludes(c, order, seen);
+}
 
 // Converts Nexa AST to C++ source code
 class Transpiler {
@@ -28,6 +64,10 @@ public:
             out << "#endif\n\n";
         }
         out << modules_.getCppIncludes();
+        std::vector<std::string> inlineCppHoisted;
+        std::set<std::string> inlineCppSeen;
+        for (const AstNode& node : ast_) walkAstForInlineCppIncludes(node, inlineCppHoisted, inlineCppSeen);
+        for (const std::string& inc : inlineCppHoisted) out << inc << "\n";
         bool needsString = false;
         std::function<void(const AstNode&)> checkNeedsString = [&](const AstNode& n) {
             if (n.type == AstNode::Type::Variable && (n.initUninitialized || n.initFromReadln || n.initFromFileRead || (!n.initIsInt && !n.initFromDllLoad && n.children.empty()))) needsString = true;
@@ -74,7 +114,7 @@ public:
         }
         if (needsString) out << "#include <string>\n";
         if (needsVector) out << "#include <vector>\n";
-        if (!modules_.getCppIncludes().empty() || needsString || needsVector) out << "\n";
+        if (!modules_.getCppIncludes().empty() || !inlineCppHoisted.empty() || needsString || needsVector) out << "\n";
 
         // Build function name map (for expressions in globals and functions)
         std::map<std::string, int> fnIndex;
@@ -92,7 +132,7 @@ public:
             return name;  // fallback (e.g. main)
         };
 
-        // Emit global variables
+        // Emit top-level items in source order: globals, file-scope inline_cpp!, functions, main
         std::map<std::string, std::string> globalVarMap;
         std::map<std::string, bool> globalVarIsString;
         std::map<std::string, bool> globalVarIsFloat;
@@ -100,8 +140,82 @@ public:
         std::map<std::string, bool> globalVarIsArray;
         std::map<std::string, bool> globalVarIsConst;
         int globalIdx = 0;
+        bool justEmittedGlobal = false;
+        bool wroteMain = false;
         for (const AstNode& node : ast_) {
-            if (node.type != AstNode::Type::Variable) continue;
+            if (node.type == AstNode::Type::Include) {
+                continue;
+            }
+            if (node.type != AstNode::Type::Variable) {
+                if (justEmittedGlobal) {
+                    out << "\n";
+                    justEmittedGlobal = false;
+                }
+            }
+            if (node.type != AstNode::Type::Variable && node.type != AstNode::Type::InlineCpp &&
+                node.type != AstNode::Type::Function && node.type != AstNode::Type::MainFunction) {
+                continue;
+            }
+            if (node.type == AstNode::Type::InlineCpp) {
+                emitInlineCppFileScope(out, stripInlineCppIncludeLines(node.value));
+                out << "\n";
+                continue;
+            }
+            if (node.type == AstNode::Type::Function) {
+                std::string cppName = fnName(node.value);
+                bool hasReturn = blockHasReturn(node.children);
+                std::string retType = hasReturn ? "int" : "void";
+                out << (buildDll_ ? "extern \"C\" NEXA_EXPORT " : "static ") << retType << " " << cppName << "(";
+                std::map<std::string, std::string> varMap = globalVarMap;
+                int varIdx = 0;
+                for (size_t i = 0; i < node.paramNames.size(); i++) {
+                    if (i > 0) out << ", ";
+                    std::string pname = preserveNames_ ? node.paramNames[i] : ("__nexa_param_" + std::to_string(i));
+                    std::string ptype = "int";
+                    if (i < node.paramTypes.size()) {
+                        if (node.paramTypes[i] == "string") ptype = "std::string";
+                        else if (node.paramTypes[i] == "bool") ptype = "bool";
+                        else if (node.paramTypes[i] == "float") ptype = "double";
+                        else if (node.paramTypes[i] == "char") ptype = "char";
+                    }
+                    out << ptype << " " << pname;
+                    varMap[node.paramNames[i]] = pname;
+                }
+                out << ") {\n";
+                varIdx = static_cast<int>(node.paramNames.size());
+                std::map<std::string, bool> varIsString = globalVarIsString;
+                std::map<std::string, bool> varIsConst = globalVarIsConst;
+                std::map<std::string, bool> varIsFloat = globalVarIsFloat;
+                std::map<std::string, bool> varIsChar = globalVarIsChar;
+                for (size_t i = 0; i < node.paramNames.size(); i++) {
+                    bool isStr = (i < node.paramTypes.size() && node.paramTypes[i] == "string");
+                    varIsString[node.paramNames[i]] = isStr;
+                    varIsFloat[node.paramNames[i]] = (i < node.paramTypes.size() && node.paramTypes[i] == "float");
+                    varIsChar[node.paramNames[i]] = (i < node.paramTypes.size() && node.paramTypes[i] == "char");
+                }
+                emitBlock(out, node.children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar);
+                if (hasReturn && (node.children.empty() || node.children.back().type != AstNode::Type::Return)) {
+                    out << "    return 0;\n";  // fallback if control reaches end
+                }
+                out << "}\n\n";
+                continue;
+            }
+            if (node.type == AstNode::Type::MainFunction) {
+                if (!buildDll_) {
+                    wroteMain = true;
+                    out << "int main() {\n";
+                    std::map<std::string, std::string> varMap = globalVarMap;
+                    int varIdx = 0;
+                    std::map<std::string, bool> varIsString = globalVarIsString;
+                    std::map<std::string, bool> varIsConst = globalVarIsConst;
+                    std::map<std::string, bool> varIsFloat = globalVarIsFloat;
+                    std::map<std::string, bool> varIsChar = globalVarIsChar;
+                    emitBlock(out, node.children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar);
+                    out << "    return 0;\n";
+                    out << "}\n";
+                }
+                continue;
+            }
             if (node.initFromReadln) {
                 throw std::runtime_error("Global variable cannot use io.readln()");
             }
@@ -120,6 +234,7 @@ public:
                 globalVarIsString[node.value] = true;
                 globalVarIsArray[node.value] = false;
                 globalIdx++;
+                justEmittedGlobal = true;
                 continue;
             }
             if (!node.children.empty() && node.children[0].type == AstNode::Type::OsPlatform) {
@@ -127,6 +242,7 @@ public:
                 globalVarMap[node.value] = vname;
                 globalVarIsString[node.value] = true;
                 globalVarIsArray[node.value] = false;
+                justEmittedGlobal = true;
                 continue;
             }
             if (!node.children.empty() && node.children[0].type == AstNode::Type::OsExeDir) {
@@ -134,6 +250,7 @@ public:
                 globalVarMap[node.value] = vname;
                 globalVarIsString[node.value] = true;
                 globalVarIsArray[node.value] = false;
+                justEmittedGlobal = true;
                 continue;
             }
             globalVarMap[node.value] = vname;
@@ -183,49 +300,7 @@ public:
                 std::string c = node.isConst ? "const " : "";
                 out << c << "std::string " << vname << " = \"" << escapeString(node.initValue) << "\";\n";
             }
-        }
-        if (!globalVarMap.empty()) out << "\n";
-
-        // Emit functions first (before main)
-        for (const AstNode& node : ast_) {
-            if (node.type == AstNode::Type::Function) {
-                std::string cppName = fnName(node.value);
-                bool hasReturn = blockHasReturn(node.children);
-                std::string retType = hasReturn ? "int" : "void";
-                out << (buildDll_ ? "extern \"C\" NEXA_EXPORT " : "static ") << retType << " " << cppName << "(";
-                std::map<std::string, std::string> varMap = globalVarMap;
-                int varIdx = 0;
-                for (size_t i = 0; i < node.paramNames.size(); i++) {
-                    if (i > 0) out << ", ";
-                    std::string pname = preserveNames_ ? node.paramNames[i] : ("__nexa_param_" + std::to_string(i));
-                    std::string ptype = "int";
-                    if (i < node.paramTypes.size()) {
-                        if (node.paramTypes[i] == "string") ptype = "std::string";
-                        else if (node.paramTypes[i] == "bool") ptype = "bool";
-                        else if (node.paramTypes[i] == "float") ptype = "double";
-                        else if (node.paramTypes[i] == "char") ptype = "char";
-                    }
-                    out << ptype << " " << pname;
-                    varMap[node.paramNames[i]] = pname;
-                }
-                out << ") {\n";
-                varIdx = static_cast<int>(node.paramNames.size());
-                std::map<std::string, bool> varIsString = globalVarIsString;
-                std::map<std::string, bool> varIsConst = globalVarIsConst;
-                std::map<std::string, bool> varIsFloat = globalVarIsFloat;
-                std::map<std::string, bool> varIsChar = globalVarIsChar;
-                for (size_t i = 0; i < node.paramNames.size(); i++) {
-                    bool isStr = (i < node.paramTypes.size() && node.paramTypes[i] == "string");
-                    varIsString[node.paramNames[i]] = isStr;
-                    varIsFloat[node.paramNames[i]] = (i < node.paramTypes.size() && node.paramTypes[i] == "float");
-                    varIsChar[node.paramNames[i]] = (i < node.paramTypes.size() && node.paramTypes[i] == "char");
-                }
-                emitBlock(out, node.children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar);
-                if (hasReturn && (node.children.empty() || node.children.back().type != AstNode::Type::Return)) {
-                    out << "    return 0;\n";  // fallback if control reaches end
-                }
-                out << "}\n\n";
-            }
+            justEmittedGlobal = true;
         }
 
         // Emit DLL/SO loader hook: auto-call __init__ when library is loaded
@@ -263,22 +338,23 @@ public:
             }
         }
 
-        // Emit main (skip for DLL)
+        // If no fn main() and no C++ main from file-scope inline, but fn __init__() exists (exe entry), call __init__ from main.
         if (!buildDll_) {
-        for (const AstNode& node : ast_) {
-            if (node.type == AstNode::Type::MainFunction) {
-                out << "int main() {\n";
-                std::map<std::string, std::string> varMap = globalVarMap;
-                int varIdx = 0;
-                std::map<std::string, bool> varIsString = globalVarIsString;
-                std::map<std::string, bool> varIsConst = globalVarIsConst;
-                std::map<std::string, bool> varIsFloat = globalVarIsFloat;
-                std::map<std::string, bool> varIsChar = globalVarIsChar;
-                emitBlock(out, node.children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar);
-                out << "    return 0;\n";
-                out << "}\n";
+            if (!wroteMain) {
+                bool hasInitOnly = false;
+                for (const AstNode& node : ast_) {
+                    if (node.type == AstNode::Type::Function && node.value == "__init__") {
+                        hasInitOnly = true;
+                        break;
+                    }
+                }
+                if (hasInitOnly) {
+                    out << "int main() {\n";
+                    out << "    " << fnName("__init__") << "();\n";
+                    out << "    return 0;\n";
+                    out << "}\n";
+                }
             }
-        }
         }
 
         return out.str();
@@ -333,9 +409,14 @@ private:
             return it != varIsFloat.end() && it->second;
         }
         if (e.type == AstNode::Type::ExprAdd || e.type == AstNode::Type::ExprSub || e.type == AstNode::Type::ExprMul ||
-            e.type == AstNode::Type::ExprDiv || e.type == AstNode::Type::ExprMod) {
+            e.type == AstNode::Type::ExprDiv || e.type == AstNode::Type::ExprMod ||
+            e.type == AstNode::Type::ExprBitAnd || e.type == AstNode::Type::ExprBitOr || e.type == AstNode::Type::ExprBitXor ||
+            e.type == AstNode::Type::ExprShl || e.type == AstNode::Type::ExprShr) {
             if (e.children.size() >= 2)
                 return exprIsFloat(e.children[0], varIsFloat) || exprIsFloat(e.children[1], varIsFloat);
+        }
+        if (e.type == AstNode::Type::ExprBitNot && e.children.size() >= 1) {
+            return exprIsFloat(e.children[0], varIsFloat);
         }
         return false;
     }
@@ -514,8 +595,17 @@ private:
                 std::string maxExpr = emitExpr(child.children[1], varMap, fnName);
                 out << indent << "(void)__nexa_random_int(" << minExpr << ", " << maxExpr << ");\n";
             } else if (child.type == AstNode::Type::TimeSleep) {
-                std::string msExpr = emitExpr(child.children[0], varMap, fnName);
-                out << indent << "std::this_thread::sleep_for(std::chrono::milliseconds(" << msExpr << "));\n";
+                const AstNode& dur = child.children[0];
+                if (dur.type == AstNode::Type::TimeSeconds && !dur.children.empty()) {
+                    out << indent << "std::this_thread::sleep_for(std::chrono::seconds("
+                        << emitExpr(dur.children[0], varMap, fnName) << "));\n";
+                } else if (dur.type == AstNode::Type::TimeMilliseconds && !dur.children.empty()) {
+                    out << indent << "std::this_thread::sleep_for(std::chrono::milliseconds("
+                        << emitExpr(dur.children[0], varMap, fnName) << "));\n";
+                } else {
+                    out << indent << "std::this_thread::sleep_for(std::chrono::milliseconds("
+                        << emitExpr(dur, varMap, fnName) << "));\n";
+                }
             } else if (child.type == AstNode::Type::DllCall) {
                 std::string h = preserveNames_ ? child.children[0].value : varMap.at(child.children[0].value);
 #ifdef _WIN32
@@ -607,6 +697,38 @@ private:
                 }
                 std::string v = preserveNames_ ? child.value : varMap.at(child.value);
                 out << indent << v << " = " << v << " % " << emitExpr(child.children[0], varMap, fnName) << ";\n";
+            } else if (child.type == AstNode::Type::AssnBitAnd) {
+                if (varIsConst.count(child.value) && varIsConst[child.value]) {
+                    throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
+                }
+                std::string v = preserveNames_ ? child.value : varMap.at(child.value);
+                out << indent << v << " = " << v << " & " << emitExpr(child.children[0], varMap, fnName) << ";\n";
+            } else if (child.type == AstNode::Type::AssnBitOr) {
+                if (varIsConst.count(child.value) && varIsConst[child.value]) {
+                    throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
+                }
+                std::string v = preserveNames_ ? child.value : varMap.at(child.value);
+                out << indent << v << " = " << v << " | " << emitExpr(child.children[0], varMap, fnName) << ";\n";
+            } else if (child.type == AstNode::Type::AssnBitXor) {
+                if (varIsConst.count(child.value) && varIsConst[child.value]) {
+                    throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
+                }
+                std::string v = preserveNames_ ? child.value : varMap.at(child.value);
+                out << indent << v << " = " << v << " ^ " << emitExpr(child.children[0], varMap, fnName) << ";\n";
+            } else if (child.type == AstNode::Type::AssnShl) {
+                if (varIsConst.count(child.value) && varIsConst[child.value]) {
+                    throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
+                }
+                std::string v = preserveNames_ ? child.value : varMap.at(child.value);
+                out << indent << v << " = " << v << " << " << emitExpr(child.children[0], varMap, fnName) << ";\n";
+            } else if (child.type == AstNode::Type::AssnShr) {
+                if (varIsConst.count(child.value) && varIsConst[child.value]) {
+                    throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
+                }
+                std::string v = preserveNames_ ? child.value : varMap.at(child.value);
+                out << indent << v << " = " << v << " >> " << emitExpr(child.children[0], varMap, fnName) << ";\n";
+            } else if (child.type == AstNode::Type::InlineCpp) {
+                emitInlineCppRaw(out, stripInlineCppIncludeLines(child.value), indent);
             } else if (child.type == AstNode::Type::IfElse) {
                 emitIfElse(out, child, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, indent, inStringSwitchCase);
             } else if (child.type == AstNode::Type::Switch) {
@@ -855,10 +977,11 @@ private:
             }
             case AstNode::Type::TimeSeconds: {
                 std::string n = emitExpr(e.children[0], varMap, fnName);
-                return "(" + n + " * 1000)";
+                return "static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::seconds(" + n + ")).count())";
             }
             case AstNode::Type::TimeMilliseconds: {
-                return emitExpr(e.children[0], varMap, fnName);
+                std::string n = emitExpr(e.children[0], varMap, fnName);
+                return "static_cast<int>(std::chrono::milliseconds(" + n + ").count())";
             }
             case AstNode::Type::ExprVarRef: {
                 auto it = varMap.find(e.value);
@@ -898,9 +1021,63 @@ private:
                 return "(" + emitExpr(e.children[0], varMap, fnName) + " / " + emitExpr(e.children[1], varMap, fnName) + ")";
             case AstNode::Type::ExprMod:
                 return "(" + emitExpr(e.children[0], varMap, fnName) + " % " + emitExpr(e.children[1], varMap, fnName) + ")";
+            case AstNode::Type::ExprBitAnd:
+                return "(" + emitExpr(e.children[0], varMap, fnName) + " & " + emitExpr(e.children[1], varMap, fnName) + ")";
+            case AstNode::Type::ExprBitOr:
+                return "(" + emitExpr(e.children[0], varMap, fnName) + " | " + emitExpr(e.children[1], varMap, fnName) + ")";
+            case AstNode::Type::ExprBitXor:
+                return "(" + emitExpr(e.children[0], varMap, fnName) + " ^ " + emitExpr(e.children[1], varMap, fnName) + ")";
+            case AstNode::Type::ExprShl:
+                return "(" + emitExpr(e.children[0], varMap, fnName) + " << " + emitExpr(e.children[1], varMap, fnName) + ")";
+            case AstNode::Type::ExprShr:
+                return "(" + emitExpr(e.children[0], varMap, fnName) + " >> " + emitExpr(e.children[1], varMap, fnName) + ")";
+            case AstNode::Type::ExprBitNot:
+                return "(~" + emitExpr(e.children[0], varMap, fnName) + ")";
             default:
                 return "0";
         }
+    }
+
+    // File-scope / namespace-scope C++ (no wrapping braces); required for top-level inline_cpp! with functions or main().
+    void emitInlineCppFileScope(std::ostringstream& out, const std::string& body) {
+        if (body.empty()) return;
+        size_t start = 0;
+        while (start < body.size()) {
+            size_t nl = body.find('\n', start);
+            if (nl == std::string::npos) {
+                std::string line = body.substr(start);
+                while (!line.empty() && line.back() == '\r') line.pop_back();
+                out << line << "\n";
+                break;
+            }
+            std::string line = body.substr(start, nl - start);
+            while (!line.empty() && line.back() == '\r') line.pop_back();
+            out << line << "\n";
+            start = nl + 1;
+        }
+    }
+
+    void emitInlineCppRaw(std::ostringstream& out, const std::string& body, const std::string& indent) {
+        out << indent << "{\n";
+        if (body.empty()) {
+            out << indent << "}\n";
+            return;
+        }
+        size_t start = 0;
+        while (start < body.size()) {
+            size_t nl = body.find('\n', start);
+            if (nl == std::string::npos) {
+                std::string line = body.substr(start);
+                while (!line.empty() && line.back() == '\r') line.pop_back();
+                out << indent << "    " << line << "\n";
+                break;
+            }
+            std::string line = body.substr(start, nl - start);
+            while (!line.empty() && line.back() == '\r') line.pop_back();
+            out << indent << "    " << line << "\n";
+            start = nl + 1;
+        }
+        out << indent << "}\n";
     }
 
     std::string escapeStringForPrintf(const std::string& s) {
