@@ -34,6 +34,11 @@
     "body": ["#include <std/random>"],
     "description": "Random module"
   },
+  "Nexa: include std/thread": {
+    "prefix": "incthread",
+    "body": ["#include <std/thread>"],
+    "description": "Threading module"
+  },
   "Nexa: println": {
     "prefix": "println",
     "body": ["io.println(${1:\"\"});"],

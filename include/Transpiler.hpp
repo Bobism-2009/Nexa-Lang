@@ -82,6 +82,8 @@ public:
                 case AstNode::Type::TimeSleep:
                 case AstNode::Type::TimeSeconds:
                 case AstNode::Type::TimeMilliseconds: cppUsage.time = true; break;
+                case AstNode::Type::ThreadSpawn:
+                case AstNode::Type::ThreadJoin: cppUsage.thread = true; break;
                 case AstNode::Type::DllLoad:
                 case AstNode::Type::DllCall: cppUsage.dll = true; break;
                 default: break;
@@ -965,6 +967,9 @@ private:
                     out << indent << "std::this_thread::sleep_for(std::chrono::milliseconds("
                         << emitExpr(dur, varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << "));\n";
                 }
+            } else if (child.type == AstNode::Type::ThreadJoin) {
+                std::string idxExpr = emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                out << indent << "__nexa_thread_join(" << idxExpr << ");\n";
             } else if (child.type == AstNode::Type::DllCall) {
                 std::string h = preserveNames_ ? child.children[0].value : varMap.at(child.children[0].value);
 #ifdef _WIN32
@@ -1405,6 +1410,9 @@ private:
             case AstNode::Type::TimeMilliseconds: {
                 std::string n = emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool);
                 return "static_cast<int>(std::chrono::milliseconds(" + n + ").count())";
+            }
+            case AstNode::Type::ThreadSpawn: {
+                return "__nexa_thread_spawn(&" + fnName(e.value) + ")";
             }
             case AstNode::Type::ExprVarRef: {
                 auto it = varMap.find(e.value);

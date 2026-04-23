@@ -36,6 +36,15 @@
     "preprocessor": {
       "patterns": [
         {
+          "name": "meta.preprocessor.include.std.nexa",
+          "match": "^\\s*(#include)\\s+<(std/(io|os|dll|file|random|time|thread|inline))>",
+          "captures": {
+            "1": { "name": "keyword.control.import.nexa" },
+            "2": { "name": "support.constant.module.nexa" },
+            "3": { "name": "entity.name.namespace.nexa" }
+          }
+        },
+        {
           "name": "meta.preprocessor.include.nexa",
           "match": "^\\s*(#include)\\s+(<[^>\\r\\n]+>|\"[^\"\\r\\n]*\")",
           "captures": {
@@ -176,7 +185,7 @@
       "patterns": [
         {
           "name": "support.function.module.nexa",
-          "match": "\\b(io|os|dll|file|random|time)\\.([a-zA-Z_][a-zA-Z0-9_]*)",
+          "match": "\\b(io|os|dll|file|random|time|thread)\\.([a-zA-Z_][a-zA-Z0-9_]*)",
           "captures": {
             "1": { "name": "entity.name.namespace.nexa" },
             "2": { "name": "entity.name.function.member.nexa" }

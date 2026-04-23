@@ -22,6 +22,7 @@ struct AstNode {
                       FileRead, FileWrite, FileAppend, FileExists,
                       RandomInt, RandomSeed,
                       TimeSleep, TimeSeconds, TimeMilliseconds,
+                      ThreadSpawn, ThreadJoin,
                       IfElse,
                       Switch,
                       SwitchCase,
@@ -582,6 +583,8 @@ private:
                 stmts.push_back(parseDllCall());
             } else if (t.type == TokenType::Identifier && t.value == "file") {
                 stmts.push_back(parseFileCall());
+            } else if (t.type == TokenType::Identifier && t.value == "thread") {
+                stmts.push_back(parseThreadCall());
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
                        tokens_[pos_ + 1].type == TokenType::Dot) {
                 const Token& id2 = tokens_[pos_ + 2];
@@ -1029,6 +1032,8 @@ private:
                 stmts.push_back(parseDllCall());
             } else if (t.type == TokenType::Identifier && t.value == "file") {
                 stmts.push_back(parseFileCall());
+            } else if (t.type == TokenType::Identifier && t.value == "thread") {
+                stmts.push_back(parseThreadCall());
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
                        tokens_[pos_ + 1].type == TokenType::Dot) {
                 const Token& id2 = tokens_[pos_ + 2];
@@ -1293,6 +1298,11 @@ private:
             std::string method = tokens_[pos_ + 2].value;
             if (method == "seconds") return parseTimeSeconds();
             if (method == "milliseconds") return parseTimeMilliseconds();
+        }
+        if (peek().type == TokenType::Identifier && peek().value == "thread" && pos_ + 2 < tokens_.size() &&
+            tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier &&
+            tokens_[pos_ + 2].value == "spawn") {
+            return parseThreadSpawnExpr();
         }
         if (peek().type == TokenType::Identifier && peek().value == "ui") {
             throw std::runtime_error("std/ui has been removed at line " + std::to_string(peek().line));
@@ -1885,6 +1895,63 @@ private:
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
         }
         return {AstNode::Type::TimeMilliseconds, "", {arg}};
+    }
+
+    AstNode parseThreadSpawnExpr() {
+        size_t line = peek().line;
+        if (!modules_.hasThread()) {
+            throw std::runtime_error("thread.spawn requires #include <std/thread> at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "thread") {
+            throw std::runtime_error("Expected 'thread' at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "spawn") {
+            throw std::runtime_error("Expected thread.spawn at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
+        }
+        const Token& fnTok = peek();
+        if (fnTok.type != TokenType::Identifier) {
+            throw std::runtime_error("thread.spawn expects a function name at line " + std::to_string(fnTok.line));
+        }
+        advance();
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
+        }
+        return {AstNode::Type::ThreadSpawn, fnTok.value, {}};
+    }
+
+    AstNode parseThreadCall() {
+        size_t line = peek().line;
+        if (!modules_.hasThread()) {
+            throw std::runtime_error("thread.* requires #include <std/thread> at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "thread") {
+            throw std::runtime_error("Expected 'thread' at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        const Token& methodTok = peek();
+        if (methodTok.type != TokenType::Identifier || methodTok.value != "join") {
+            throw std::runtime_error("Expected thread.join at line " + std::to_string(methodTok.line));
+        }
+        advance();
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
+        }
+        AstNode handleArg = parseExpression();
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Semicolon)) {
+            throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
+        }
+        return {AstNode::Type::ThreadJoin, "", {handleArg}};
     }
 
     AstNode parseVariable() {

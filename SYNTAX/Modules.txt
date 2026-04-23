@@ -37,6 +37,12 @@ Nexa Standard Modules
   time.milliseconds(n)    - Millisecond count via std::chrono::milliseconds(n)
   Use: time.sleep(time.seconds(1));  time.sleep(time.milliseconds(250));  time.sleep(40);
 
+#include <std/thread>
+  thread.spawn(fn_name)   - Start a new OS thread running fn_name(), returns thread handle (int)
+  thread.join(handle)     - Join a spawned thread by handle
+  Use: let t = thread.spawn(worker); thread.join(t);
+  Notes: spawn supports only zero-argument functions (fn worker() { ... }).
+
 #include <std/inline>
   Enables inline_cpp! { ... } — paste C++ into the generated file. Lines starting with #include are hoisted to the top of the generated .cpp (no automatic iostream).
   Use only when Nexa has no API for this; body is not parsed by Nexa (brace matching only; } in strings can break).

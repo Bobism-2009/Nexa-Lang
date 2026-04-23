@@ -1,0 +1,11 @@
+#include <std/io>
+#include <std/thread>
+
+fn worker() {
+    io.println("worker");
+}
+
+fn main() {
+    let t = thread.spawn(worker);
+    thread.join(t);
+}

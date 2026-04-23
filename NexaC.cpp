@@ -276,7 +276,7 @@ static std::string nexaBuildCompileCmd(
     return cmd;
 }
 
-// Resolve topic/page string to page number (1-8). 0 = unknown.
+// Resolve topic/page string to page number (1-9). 0 = unknown.
 static int helpPageFromArg(const std::string& arg) {
     if (arg.empty() || arg == "1" || arg == "page1") return 1;
     if (arg == "2" || arg == "page2" || arg == "core" || arg == "lang" || arg == "language") return 2;
@@ -285,19 +285,20 @@ static int helpPageFromArg(const std::string& arg) {
     if (arg == "5" || arg == "page5" || arg == "std/dll") return 5;
     if (arg == "6" || arg == "page6" || arg == "std/file") return 6;
     if (arg == "7" || arg == "page7" || arg == "std/random") return 7;
-    if (arg == "8" || arg == "page8" || arg == "std/inline" || arg == "inline" || arg == "inline_cpp") return 8;
+    if (arg == "8" || arg == "page8" || arg == "std/thread") return 8;
+    if (arg == "9" || arg == "page9" || arg == "std/inline" || arg == "inline" || arg == "inline_cpp") return 9;
     if (arg.size() >= 6 && arg.substr(0, 6) == "--page") {
         int n = 0;
         for (size_t i = 6; i < arg.size() && std::isdigit(arg[i]); i++)
             n = n * 10 + (arg[i] - '0');
-        if (n >= 1 && n <= 8) return n;
+        if (n >= 1 && n <= 9) return n;
     }
     return 0;
 }
 
 static int printHelp(int page = 1) {
     if (page == 2) {
-        std::cout << "NexaC - Core language (page 2/8)\n\n";
+        std::cout << "NexaC - Core language (page 2/9)\n\n";
         std::cout << "Entry point:\n";
         std::cout << "  fn main() {\n";
         std::cout << "    ...\n";
@@ -339,6 +340,7 @@ static int printHelp(int page = 1) {
         std::cout << "  #include <std/dll>  - load, call (dynamic libraries)\n";
         std::cout << "  #include <std/file> - read, write, append, exists\n";
         std::cout << "  #include <std/random> - int, seed\n";
+        std::cout << "  #include <std/thread> - spawn, join\n";
         std::cout << "  #include <std/inline> - inline_cpp! { ... } (embed C++)\n\n";
         std::cout << "  #include \"file.nxa\"  - include another .nxa file (path relative to current file)\n";
         std::cout << "  #include \"file.h\" / .hpp / .hxx / .hh  - pass C/C++ header into generated .cpp (quoted: absolute path)\n";
@@ -353,12 +355,12 @@ static int printHelp(int page = 1) {
         std::cout << "    let x = add(2, 3);\n";
         std::cout << "    io.println(x);\n";
         std::cout << "  }\n\n";
-        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random | 8=std/inline\n";
+        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random | 8=std/thread | 9=std/inline\n";
         std::cout << "  NexaC --help --page3  NexaC --help std/io\n";
         return 0;
     }
     if (page == 3) {
-        std::cout << "NexaC - std/io module (page 3/8)\n\n";
+        std::cout << "NexaC - std/io module (page 3/9)\n\n";
         std::cout << "Input/output. Include with: #include <std/io>\n\n";
         std::cout << "Calls:\n\n";
         std::cout << "  io.print(arg)\n";
@@ -380,12 +382,12 @@ static int printHelp(int page = 1) {
         std::cout << "  io.println(name);\n";
         std::cout << "  let x = 42;\n";
         std::cout << "  io.println(x);\n\n";
-        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random | 8=std/inline\n";
+        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random | 8=std/thread | 9=std/inline\n";
         std::cout << "  NexaC --help --page4  NexaC --help std/os\n";
         return 0;
     }
     if (page == 4) {
-        std::cout << "NexaC - std/os module (page 4/8)\n\n";
+        std::cout << "NexaC - std/os module (page 4/9)\n\n";
         std::cout << "OS and system calls. Include with: #include <std/os>\n\n";
         std::cout << "Calls:\n\n";
         std::cout << "  os.system(cmd)\n";
@@ -409,12 +411,12 @@ static int printHelp(int page = 1) {
         std::cout << "  os.system(\"ls -la\");\n";
         std::cout << "  let cmd = \"echo hello\";\n";
         std::cout << "  os.system(cmd);\n\n";
-        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random | 8=std/inline\n";
+        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random | 8=std/thread | 9=std/inline\n";
         std::cout << "  NexaC --help --page5  NexaC --help std/dll\n";
         return 0;
     }
     if (page == 5) {
-        std::cout << "NexaC - std/dll module (page 5/8)\n\n";
+        std::cout << "NexaC - std/dll module (page 5/9)\n\n";
         std::cout << "Dynamic library loading. Include with: #include <std/dll>\n\n";
         std::cout << "Calls:\n\n";
         std::cout << "  dll.load(path)\n";
@@ -433,12 +435,12 @@ static int printHelp(int page = 1) {
         std::cout << "    let h = dll.load(\"./plugin.so\");\n";
         std::cout << "    dll.call(h, \"plugin_init\");\n";
         std::cout << "  }\n\n";
-        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random | 8=std/inline\n";
+        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random | 8=std/thread | 9=std/inline\n";
         std::cout << "  NexaC --help --page6  NexaC --help std/file\n";
         return 0;
     }
     if (page == 6) {
-        std::cout << "NexaC - std/file module (page 6/8)\n\n";
+        std::cout << "NexaC - std/file module (page 6/9)\n\n";
         std::cout << "File I/O. Include with: #include <std/file>\n\n";
         std::cout << "Calls:\n\n";
         std::cout << "  file.read(path)\n";
@@ -462,12 +464,12 @@ static int printHelp(int page = 1) {
         std::cout << "    let s = file.read(\"out.txt\");\n";
         std::cout << "    io.println(s);\n";
         std::cout << "  }\n\n";
-        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random | 8=std/inline\n";
+        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random | 8=std/thread | 9=std/inline\n";
         std::cout << "  NexaC --help --page7  NexaC --help std/random\n";
         return 0;
     }
     if (page == 7) {
-        std::cout << "NexaC - std/random module (page 7/8)\n\n";
+        std::cout << "NexaC - std/random module (page 7/9)\n\n";
         std::cout << "Random numbers. Include with: #include <std/random>\n\n";
         std::cout << "Calls:\n\n";
         std::cout << "  random.int(min, max)\n";
@@ -483,12 +485,36 @@ static int printHelp(int page = 1) {
         std::cout << "    let d6 = random.int(1, 6);\n";
         std::cout << "    io.println(d6);\n";
         std::cout << "  }\n\n";
-        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random | 8=std/inline\n";
-        std::cout << "  NexaC --help --page8  NexaC --help std/inline\n";
+        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random | 8=std/thread | 9=std/inline\n";
+        std::cout << "  NexaC --help --page8  NexaC --help std/thread\n";
         return 0;
     }
     if (page == 8) {
-        std::cout << "NexaC - std/inline (inline_cpp!) (page 8/8)\n\n";
+        std::cout << "NexaC - std/thread module (page 8/9)\n\n";
+        std::cout << "Threading. Include with: #include <std/thread>\n\n";
+        std::cout << "Calls:\n\n";
+        std::cout << "  thread.spawn(fn_name)\n";
+        std::cout << "    Starts fn_name() on a new OS thread.\n";
+        std::cout << "    Returns: thread handle (int)\n";
+        std::cout << "    fn_name must be a zero-argument function.\n\n";
+        std::cout << "  thread.join(handle)\n";
+        std::cout << "    Waits for a previously spawned thread to finish.\n\n";
+        std::cout << "Example:\n";
+        std::cout << "  #include <std/io>\n";
+        std::cout << "  #include <std/thread>\n\n";
+        std::cout << "  fn worker() {\n";
+        std::cout << "    io.println(\"worker running\");\n";
+        std::cout << "  }\n\n";
+        std::cout << "  fn main() {\n";
+        std::cout << "    let t = thread.spawn(worker);\n";
+        std::cout << "    thread.join(t);\n";
+        std::cout << "  }\n\n";
+        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random | 8=std/thread | 9=std/inline\n";
+        std::cout << "  NexaC --help --page9  NexaC --help std/inline\n";
+        return 0;
+    }
+    if (page == 9) {
+        std::cout << "NexaC - std/inline (inline_cpp!) (page 9/9)\n\n";
         std::cout << "Embeds C++ in Nexa when the language has no API for your case.\n";
         std::cout << "Enable with: #include <std/inline>\n\n";
         std::cout << "Syntax:\n";
@@ -506,12 +532,12 @@ static int printHelp(int page = 1) {
         std::cout << "      std::cout << \"Hello\\n\";\n";
         std::cout << "    }\n";
         std::cout << "  }\n\n";
-        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random | 8=std/inline\n";
+        std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random | 8=std/thread | 9=std/inline\n";
         std::cout << "  NexaC --help --page1\n";
         return 0;
     }
     // Page 1 (default): usage and options
-    std::cout << "NexaC - Nexa compiler (page 1/8)\n";
+    std::cout << "NexaC - Nexa compiler (page 1/9)\n";
     std::cout << "A general purpose, high-performance programming language.\n\n";
     std::cout << "Usage:\n";
     std::cout << "  NexaC init [dir]       Scaffold new project (current dir or dir/)\n";
@@ -529,7 +555,7 @@ static int printHelp(int page = 1) {
     std::cout << "  --win     Build Windows .exe (mingw-w64 from Linux; native on Windows)\n";
     std::cout << "  --help, -h    Show this help\n";
     std::cout << "  --version, --v, -v  Show version\n";
-    std::cout << "  --help <page>  Show page (2=core ... 7=std/random, 8=std/inline)\n";
+    std::cout << "  --help <page>  Show page (2=core ... 8=std/thread, 9=std/inline)\n";
     std::cout << "  --help --pageN  Same (e.g. --page2, --page3)\n\n";
     std::cout << "Standard library modules:\n";
     std::cout << "  std/io        Input/output: print, println, readln\n";
@@ -537,12 +563,13 @@ static int printHelp(int page = 1) {
     std::cout << "  std/dll       Dynamic libraries: load, call\n";
     std::cout << "  std/file      File I/O: read, write, append, exists\n";
     std::cout << "  std/random   Random: int, seed\n";
+    std::cout << "  std/thread   Threads: spawn, join\n";
     std::cout << "  std/inline   inline_cpp! { ... } embed C++ (requires include)\n";
     std::cout << "  core          Core language: variables, types, fn main, functions\n\n";
     std::cout << "Example:\n";
     std::cout << "  NexaC program.nxa -o program\n";
     std::cout << "  NexaC --help --page2  NexaC --help std/io\n\n";
-    std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random | 8=std/inline\n";
+    std::cout << "Pages: 1=usage | 2=core | 3=std/io | 4=std/os | 5=std/dll | 6=std/file | 7=std/random | 8=std/thread | 9=std/inline\n";
 	return 0;
 }
 
@@ -591,7 +618,7 @@ int main(int argc, char* argv[]) {
             int page = helpPageFromArg(nextArg);
             if (page == 0 && !nextArg.empty()) {
                 std::cerr << "Unknown help page/module: " << nextArg << "\n";
-                std::cerr << "Use 'NexaC --help' to list pages (1-8) and modules (std/io, std/os, std/dll, std/file, std/random, std/inline, core).\n";
+                std::cerr << "Use 'NexaC --help' to list pages (1-9) and modules (std/io, std/os, std/dll, std/file, std/random, std/thread, std/inline, core).\n";
                 return 1;
             }
             return printHelp(page);
@@ -654,6 +681,17 @@ int main(int argc, char* argv[]) {
             std::cerr << "       NexaC <file.nxa> --source <output.cpp>\n";
             std::cerr << "       NexaC <file.nxa> --run  |  NexaC --run (in project dir)\n";
             std::cerr << "Example: NexaC init  |  NexaC build  |  NexaC --run\n";
+            return 1;
+        }
+    }
+
+    {
+        std::filesystem::path inPath(inputPath);
+        std::string ext = inPath.extension().string();
+        for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (ext != ".nxa") {
+            std::cerr << "[Nexa] Error: Input must be a .nxa file (got: " << inputPath << ")\n";
+            std::cerr << "[Nexa] Tip: Rename your source to .nxa, then run: NexaC <file.nxa> [options]\n";
             return 1;
         }
     }

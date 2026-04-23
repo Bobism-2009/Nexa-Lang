@@ -24,6 +24,7 @@ public:
         bool file = false;
         bool random = false;
         bool time = false;
+        bool thread = false;
         bool dll = false;
     };
 
@@ -57,6 +58,10 @@ public:
 
     bool hasInlineCpp() const {
         return enabled_.count("std/inline") > 0;
+    }
+
+    bool hasThread() const {
+        return enabled_.count("std/thread") > 0;
     }
 
     std::string getCppIncludes(const CppUsage& usage) const {
@@ -188,6 +193,20 @@ public:
             out += "#include <thread>\n";
             out += "#include <chrono>\n";
         }
+        if (hasThread() && usage.thread) {
+            out += "#include <thread>\n";
+            out += "#include <vector>\n";
+            out += "static std::vector<std::thread> __nexa_threads;\n";
+            out += "static int __nexa_thread_spawn(void (*fn)()) {\n";
+            out += "  __nexa_threads.emplace_back(fn);\n";
+            out += "  return static_cast<int>(__nexa_threads.size()) - 1;\n";
+            out += "}\n";
+            out += "static void __nexa_thread_join(int idx) {\n";
+            out += "  if (idx >= 0 && static_cast<size_t>(idx) < __nexa_threads.size() && __nexa_threads[idx].joinable()) {\n";
+            out += "    __nexa_threads[idx].join();\n";
+            out += "  }\n";
+            out += "}\n";
+        }
         if (hasDll() && usage.dll) {
             out += "#include <vector>\n";
 #ifdef _WIN32
@@ -217,7 +236,7 @@ public:
         all.ioPrint = all.ioReadln = all.ioToInt = true;
         all.osSystem = all.osGetenv = all.osPlatform = all.osExeDir = true;
         all.osWindowControl = all.osMessageBox = all.osGrepKeys = all.osKeyPressed = true;
-        all.file = all.random = all.time = all.dll = true;
+        all.file = all.random = all.time = all.thread = all.dll = true;
         return getCppIncludes(all);
     }
 

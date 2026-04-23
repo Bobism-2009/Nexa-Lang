@@ -9,14 +9,14 @@ VS Code / Cursor extension for Nexa language syntax highlighting.
 **Windows (PowerShell):**
 
 ```powershell
-Copy-Item -Recurse nexa-vscode "$env:USERPROFILE\.cursor\extensions\nexac.nexa-0.1.3"
+Copy-Item -Recurse nexa-vscode "$env:USERPROFILE\.cursor\extensions\nexac.nexa-0.1.4"
 ```
 
 **macOS / Linux:**
 
 ```bash
-cp -r nexa-vscode ~/.cursor/extensions/nexac.nexa-0.1.3
-# or: ~/.vscode/extensions/nexac.nexa-0.1.3
+cp -r nexa-vscode ~/.cursor/extensions/nexac.nexa-0.1.4
+# or: ~/.vscode/extensions/nexac.nexa-0.1.4
 ```
 
 Restart VS Code/Cursor (or **Developer: Reload Window**). `.nxa` files use the Nexa grammar.
@@ -39,7 +39,7 @@ Then install the generated `.vsix` file via **Extensions: Install from VSIX...**
 
 ## Features
 
-- Syntax highlighting: keywords, `fn` / function names, `io.*` / `dll.*` / std modules, types, `#include`, strings, char literals, floats
+- Syntax highlighting: keywords, `fn` / function names, `io.*` / `os.*` / `dll.*` / `file.*` / `random.*` / `time.*` / `thread.*`, std module includes (`#include <std/...>`), types, `#include`, strings, char literals, floats
 - Snippets: `main`, `fn`, `incio`, `println`, `while`, `init`, etc.
 - Comments: `//` and `/* */`
 - Bracket matching, auto-closing, basic brace indentation
