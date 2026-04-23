@@ -16,6 +16,15 @@ PACKAGE INCLUDES (angle brackets, non-std)
   - Resolved from .nexa/packages/ (project) and ~/.nexa/packages/ (global)
   - Use nexapkg add <pkg> && nexapkg install to install packages
 
+C/C++ HEADERS (.h, .hpp, .hxx, .hh)
+  #include "local.hpp"
+  #include <vendor/header.h>
+
+  - Recognized by extension. Quoted headers are opened and re-emitted as #include \"<absolute/path>\"
+    so the C++ compiler finds them when Nexa builds from a temp .cpp file.
+  - Angle form is copied into the generated .cpp as written (use for SDK/install headers on -I paths).
+  - Does not apply to std/* (those stay Nexa modules) or to package includes without a header extension.
+
 FILE INCLUDES (quotes)
   #include "file.nxa"
   #include "lib/utils.nxa"

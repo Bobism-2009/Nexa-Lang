@@ -8,7 +8,9 @@ Nexa Standard Modules
   s += "x";        - string concatenation (compound assign)
   len(s)           - string or array length, returns int (built-in)
   io.readln()      - Read one line from stdin, returns string
-  arg: string literal, int, or variable
+  arg: one expression (literal, variable, or + chain). If any operand is string-typed or a string
+       literal, + builds text: int/float/bool/char are converted (e.g. io.println("n=" + n);).
+       Pure int/float + without string stays numeric (arithmetic).
 
 #include <std/os>
   os.system(cmd)    - Run shell command, blocks until complete

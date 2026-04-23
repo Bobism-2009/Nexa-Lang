@@ -25,6 +25,8 @@ enum class TokenType {
     Break,
     Continue,
     Switch,
+    Struct,
+    Enum,
     Case,
     Default,
     True,
@@ -394,6 +396,8 @@ private:
         else if (value == "break") type = TokenType::Break;
         else if (value == "continue") type = TokenType::Continue;
         else if (value == "switch") type = TokenType::Switch;
+        else if (value == "struct") type = TokenType::Struct;
+        else if (value == "enum") type = TokenType::Enum;
         else if (value == "case") type = TokenType::Case;
         else if (value == "default") type = TokenType::Default;
         else if (value == "true") type = TokenType::True;

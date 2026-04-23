@@ -237,6 +237,10 @@ static std::string nexaBuildCompileCmd(
     std::string cmd = "\"" + cxx + "\"" + targetFlags;
 #endif
     cmd += " \"" + cppPath + "\" " + opt;
+    if (const char* nexaCxx = std::getenv("NEXA_CXXFLAGS")) {
+        cmd += " ";
+        cmd += nexaCxx;
+    }
 #ifdef _WIN32
     cmd += " -ffunction-sections -fdata-sections";
     if (buildDll || buildShared) {
@@ -260,6 +264,10 @@ static std::string nexaBuildCompileCmd(
     // user32: std/os (MessageBoxA, GetConsoleWindow, …) and inline_cpp + windows.h. lld-link does not pull it implicitly.
     cmd += " -luser32";
 #endif
+    if (const char* nexaLd = std::getenv("NEXA_LDFLAGS")) {
+        cmd += " ";
+        cmd += nexaLd;
+    }
     cmd += " -o \"" + exePath + "\"";
 #ifndef _WIN32
     if (modulesHasDll && buildShared) cmd += " -ldl";
@@ -333,6 +341,8 @@ static int printHelp(int page = 1) {
         std::cout << "  #include <std/random> - int, seed\n";
         std::cout << "  #include <std/inline> - inline_cpp! { ... } (embed C++)\n\n";
         std::cout << "  #include \"file.nxa\"  - include another .nxa file (path relative to current file)\n";
+        std::cout << "  #include \"file.h\" / .hpp / .hxx / .hh  - pass C/C++ header into generated .cpp (quoted: absolute path)\n";
+        std::cout << "  #include <path.hpp>  - same for angle form when extension is .h, .hpp, .hxx, or .hh (verbatim line)\n";
         std::cout << "    \"lib.nxa\" = same dir, \"../other.nxa\" = parent dir\n\n";
         std::cout << "Full example:\n";
         std::cout << "  #include <std/io>\n\n";
@@ -511,7 +521,7 @@ static int printHelp(int page = 1) {
     std::cout << "  NexaC --help [page|module]\n\n";
     std::cout << "Options:\n";
     std::cout << "  -o <name>     Output executable name\n";
-    std::cout << "  --source <f>  Emit C++ only, do not compile\n";
+    std::cout << "  --source [opts...] <f>  Emit C++ only (e.g. --source --p Out.cpp)\n";
     std::cout << "  --preserve-names, --p  Keep function names in generated C++ (default: mangle)\n";
     std::cout << "  --small       Optimize for smaller executable (-Os)\n";
     std::cout << "  --dll     Build Windows .dll (uses mingw-w64 cross-compiler)\n";
@@ -568,6 +578,7 @@ int main(int argc, char* argv[]) {
     bool buildShared = false;  // clang++ -> .so
     bool buildWin = false;   // mingw -> .exe (cross-compile from Linux)
     bool runAfterBuild = false;
+    bool pendingSourceOut = false;
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -599,16 +610,12 @@ int main(int argc, char* argv[]) {
                     (outPath.size() >= 5 && outPath.substr(outPath.size() - 5) == ".cxx")) {
                 sourceCpp = outPath;
                 sourceOnly = true;
+                pendingSourceOut = false;
             } else {
                 outputExe = outPath;
             }
         } else if (arg == "--source") {
-            if (i + 1 >= argc) {
-                std::cerr << "[Nexa] Error: --source requires a filename\n";
-                return 1;
-            }
-            sourceCpp = argv[++i];
-            sourceOnly = true;
+            pendingSourceOut = true;
         } else if (arg == "--preserve-names" || arg == "--p" || arg == "-p") {
             preserveNames = true;
         } else if (arg == "--small") {
@@ -622,8 +629,19 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--run" || arg == "-r") {
             runAfterBuild = true;
         } else if (arg[0] != '-') {
-            inputPath = arg;
+            if (pendingSourceOut) {
+                sourceCpp = arg;
+                sourceOnly = true;
+                pendingSourceOut = false;
+            } else {
+                inputPath = arg;
+            }
         }
+    }
+
+    if (pendingSourceOut) {
+        std::cerr << "[Nexa] Error: --source requires an output .cpp path (options like --p may go before the path)\n";
+        return 1;
     }
 
     if (inputPath.empty()) {
@@ -692,6 +710,11 @@ int main(int argc, char* argv[]) {
             if (buildWin && (exePath.size() < 4 || exePath.substr(exePath.size() - 4) != ".exe")) {
                 exePath += ".exe";
             }
+#ifdef _WIN32
+            else if (!buildDll && !buildShared && (exePath.size() < 4 || exePath.substr(exePath.size() - 4) != ".exe")) {
+                exePath += ".exe";
+            }
+#endif
         }
     }
 

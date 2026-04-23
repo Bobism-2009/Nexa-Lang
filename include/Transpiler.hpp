@@ -68,7 +68,44 @@ public:
         std::set<std::string> inlineCppSeen;
         for (const AstNode& node : ast_) walkAstForInlineCppIncludes(node, inlineCppHoisted, inlineCppSeen);
         for (const std::string& inc : inlineCppHoisted) out << inc << "\n";
+        structFields_.clear();
+        structCppNames_.clear();
+        enumCppNames_.clear();
+        enumVariants_.clear();
+        enumFirstVariant_.clear();
+        std::set<std::string> typeNames;
+        int structId = 0;
+        int enumId = 0;
+        for (const AstNode& node : ast_) {
+            if (node.type == AstNode::Type::StructDef) {
+                if (!typeNames.insert(node.value).second) {
+                    throw std::runtime_error("Duplicate type name '" + node.value + "'");
+                }
+                for (size_t i = 0; i < node.paramNames.size(); i++) {
+                    structFields_[node.value][node.paramNames[i]] = node.paramTypes[i];
+                }
+                structCppNames_[node.value] = preserveNames_ ? node.value : ("__nexa_S" + std::to_string(structId++));
+            } else if (node.type == AstNode::Type::EnumDef) {
+                if (!typeNames.insert(node.value).second) {
+                    throw std::runtime_error("Duplicate type name '" + node.value + "'");
+                }
+                for (const std::string& v : node.paramNames) {
+                    enumVariants_[node.value].insert(v);
+                }
+                enumFirstVariant_[node.value] = node.paramNames[0];
+                enumCppNames_[node.value] = preserveNames_ ? node.value : ("__nexa_E" + std::to_string(enumId++));
+            }
+        }
         bool needsString = false;
+        for (const auto& sn : structFields_) {
+            for (const auto& fn : sn.second) {
+                if (fn.second == "string") {
+                    needsString = true;
+                    break;
+                }
+            }
+            if (needsString) break;
+        }
         std::function<void(const AstNode&)> checkNeedsString = [&](const AstNode& n) {
             if (n.type == AstNode::Type::Variable && (n.initUninitialized || n.initFromReadln || n.initFromFileRead || (!n.initIsInt && !n.initFromDllLoad && n.children.empty()))) needsString = true;
             if (n.type == AstNode::Type::Variable && !n.children.empty() && exprProducesString(n.children[0])) needsString = true;
@@ -116,6 +153,45 @@ public:
         if (needsVector) out << "#include <vector>\n";
         if (!modules_.getCppIncludes().empty() || !inlineCppHoisted.empty() || needsString || needsVector) out << "\n";
 
+        bool wroteUserCppHeaders = false;
+        for (const AstNode& node : ast_) {
+            if (node.type == AstNode::Type::CppHeaderInclude) {
+                out << node.value << "\n";
+                wroteUserCppHeaders = true;
+            }
+        }
+        if (wroteUserCppHeaders) out << "\n";
+
+        for (const AstNode& node : ast_) {
+            if (node.type == AstNode::Type::StructDef) {
+                const std::string& nexaName = node.value;
+                std::string cppName = structCppNames_.at(nexaName);
+                out << "struct " << cppName << " {\n";
+                for (size_t i = 0; i < node.paramNames.size(); i++) {
+                    out << "    " << nexaTypeToCpp(node.paramTypes[i]) << " " << node.paramNames[i] << ";\n";
+                }
+                out << "};\n\n";
+            } else if (node.type == AstNode::Type::EnumDef) {
+                const std::string& nexaName = node.value;
+                std::string cppName = enumCppNames_.at(nexaName);
+                out << "enum class " << cppName << " : int {\n";
+                for (size_t i = 0; i < node.paramNames.size(); i++) {
+                    out << "    " << node.paramNames[i];
+                    if (i + 1 < node.paramNames.size()) out << ",";
+                    out << "\n";
+                }
+                out << "};\n\n";
+            }
+        }
+
+        varStructScopes_.clear();
+        varStructScopes_.push_back({});
+        for (const AstNode& node : ast_) {
+            if (node.type == AstNode::Type::Variable && isStructDeclType(node.declType)) {
+                varStructScopes_[0][node.value] = structNameFromDecl(node.declType);
+            }
+        }
+
         // Build function name map (for expressions in globals and functions)
         std::map<std::string, int> fnIndex;
         int idx = 0;
@@ -137,13 +213,15 @@ public:
         std::map<std::string, bool> globalVarIsString;
         std::map<std::string, bool> globalVarIsFloat;
         std::map<std::string, bool> globalVarIsChar;
+        std::map<std::string, bool> globalVarIsBool;
+        std::map<std::string, bool> globalVarIsEnum;
         std::map<std::string, bool> globalVarIsArray;
         std::map<std::string, bool> globalVarIsConst;
         int globalIdx = 0;
         bool justEmittedGlobal = false;
         bool wroteMain = false;
         for (const AstNode& node : ast_) {
-            if (node.type == AstNode::Type::Include) {
+            if (node.type == AstNode::Type::Include || node.type == AstNode::Type::CppHeaderInclude) {
                 continue;
             }
             if (node.type != AstNode::Type::Variable) {
@@ -153,7 +231,11 @@ public:
                 }
             }
             if (node.type != AstNode::Type::Variable && node.type != AstNode::Type::InlineCpp &&
-                node.type != AstNode::Type::Function && node.type != AstNode::Type::MainFunction) {
+                node.type != AstNode::Type::Function && node.type != AstNode::Type::MainFunction &&
+                node.type != AstNode::Type::StructDef && node.type != AstNode::Type::EnumDef) {
+                continue;
+            }
+            if (node.type == AstNode::Type::StructDef || node.type == AstNode::Type::EnumDef) {
                 continue;
             }
             if (node.type == AstNode::Type::InlineCpp) {
@@ -163,8 +245,12 @@ public:
             }
             if (node.type == AstNode::Type::Function) {
                 std::string cppName = fnName(node.value);
-                bool hasReturn = blockHasReturn(node.children);
-                std::string retType = hasReturn ? "int" : "void";
+                bool hasValRet = false, hasVoidRet = false;
+                stmtsClassifyReturns(node.children, hasValRet, hasVoidRet);
+                if (hasValRet && hasVoidRet) {
+                    throw std::runtime_error("function '" + node.value + "' mixes 'return;' and 'return expr;'");
+                }
+                std::string retType = hasValRet ? "int" : "void";
                 out << (buildDll_ ? "extern \"C\" NEXA_EXPORT " : "static ") << retType << " " << cppName << "(";
                 std::map<std::string, std::string> varMap = globalVarMap;
                 int varIdx = 0;
@@ -177,6 +263,11 @@ public:
                         else if (node.paramTypes[i] == "bool") ptype = "bool";
                         else if (node.paramTypes[i] == "float") ptype = "double";
                         else if (node.paramTypes[i] == "char") ptype = "char";
+                        else if (isStructDeclType(node.paramTypes[i])) {
+                            ptype = structCppNames_.at(structNameFromDecl(node.paramTypes[i]));
+                        } else if (isEnumDeclType(node.paramTypes[i])) {
+                            ptype = enumCppNames_.at(enumNameFromDecl(node.paramTypes[i]));
+                        }
                     }
                     out << ptype << " " << pname;
                     varMap[node.paramNames[i]] = pname;
@@ -187,15 +278,28 @@ public:
                 std::map<std::string, bool> varIsConst = globalVarIsConst;
                 std::map<std::string, bool> varIsFloat = globalVarIsFloat;
                 std::map<std::string, bool> varIsChar = globalVarIsChar;
+                std::map<std::string, bool> varIsBool = globalVarIsBool;
+                std::map<std::string, bool> varIsEnum = globalVarIsEnum;
                 for (size_t i = 0; i < node.paramNames.size(); i++) {
                     bool isStr = (i < node.paramTypes.size() && node.paramTypes[i] == "string");
                     varIsString[node.paramNames[i]] = isStr;
                     varIsFloat[node.paramNames[i]] = (i < node.paramTypes.size() && node.paramTypes[i] == "float");
                     varIsChar[node.paramNames[i]] = (i < node.paramTypes.size() && node.paramTypes[i] == "char");
+                    varIsBool[node.paramNames[i]] = (i < node.paramTypes.size() && node.paramTypes[i] == "bool");
+                    varIsEnum[node.paramNames[i]] = (i < node.paramTypes.size() && isEnumDeclType(node.paramTypes[i]));
                 }
-                emitBlock(out, node.children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar);
-                if (hasReturn && (node.children.empty() || node.children.back().type != AstNode::Type::Return)) {
-                    out << "    return 0;\n";  // fallback if control reaches end
+                varStructPush();
+                for (size_t i = 0; i < node.paramNames.size(); i++) {
+                    if (i < node.paramTypes.size() && isStructDeclType(node.paramTypes[i])) {
+                        varStructDeclare(node.paramNames[i], structNameFromDecl(node.paramTypes[i]));
+                    }
+                }
+                emitFnRet_ = hasValRet ? EmitFnRet::IntFn : EmitFnRet::VoidFn;
+                emitBlockStatements(out, node.children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum);
+                emitFnRet_ = EmitFnRet::Main;
+                varStructPop();
+                if (hasValRet && !stmtsEndWithReturn(node.children)) {
+                    out << "    return 0;\n";
                 }
                 out << "}\n\n";
                 continue;
@@ -210,8 +314,21 @@ public:
                     std::map<std::string, bool> varIsConst = globalVarIsConst;
                     std::map<std::string, bool> varIsFloat = globalVarIsFloat;
                     std::map<std::string, bool> varIsChar = globalVarIsChar;
-                    emitBlock(out, node.children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar);
-                    out << "    return 0;\n";
+                    std::map<std::string, bool> varIsBool = globalVarIsBool;
+                    std::map<std::string, bool> varIsEnum = globalVarIsEnum;
+                    bool mainValRet = false, mainVoidRet = false;
+                    stmtsClassifyReturns(node.children, mainValRet, mainVoidRet);
+                    if (mainValRet && mainVoidRet) {
+                        throw std::runtime_error("main mixes 'return;' and 'return expr;'");
+                    }
+                    varStructPush();
+                    emitFnRet_ = EmitFnRet::Main;
+                    emitBlockStatements(out, node.children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum);
+                    emitFnRet_ = EmitFnRet::Main;
+                    varStructPop();
+                    if (!stmtsEndWithReturn(node.children)) {
+                        out << "    return 0;\n";
+                    }
                     out << "}\n";
                 }
                 continue;
@@ -257,9 +374,11 @@ public:
             globalVarIsConst[node.value] = node.isConst;
             globalVarIsFloat[node.value] = (!node.declType.empty() && node.declType == "float") || node.initIsFloat;
             globalVarIsChar[node.value] = (!node.declType.empty() && node.declType == "char") || node.initIsChar;
+            globalVarIsBool[node.value] = (!node.declType.empty() && node.declType == "bool") || node.initIsBool;
+            globalVarIsEnum[node.value] = !node.declType.empty() && isEnumDeclType(node.declType);
             bool isArray = node.initFromArray || (!node.children.empty() && node.children[0].type == AstNode::Type::ExprArrayLiteral);
             bool isStrArr = isArray && !node.children.empty() && arrayLiteralProducesString(node.children[0], globalVarIsString);
-            bool isStr = !node.declType.empty() ? (node.declType == "string") : (node.initUninitialized || (!node.initIsInt && !node.initIsBool && !node.initIsFloat && !node.initIsChar && !isArray && node.children.empty()) || (!node.children.empty() && (exprProducesString(node.children[0]) || isStrArr)));
+            bool isStr = !isStructDeclType(node.declType) && !isEnumDeclType(node.declType) && (!node.declType.empty() ? (node.declType == "string") : (node.initUninitialized || (!node.initIsInt && !node.initIsBool && !node.initIsFloat && !node.initIsChar && !isArray && node.children.empty()) || (!node.children.empty() && (exprProducesString(node.children[0]) || isStrArr))));
             globalVarIsString[node.value] = isStr;
             globalVarIsArray[node.value] = isArray || node.isFixedArray;
             if (node.initUninitialized) {
@@ -275,21 +394,36 @@ public:
                     out << c << "double " << vname << " = 0.0;\n";
                 } else if (!node.declType.empty() && node.declType == "char") {
                     out << c << "char " << vname << " = '\\0';\n";
+                } else if (!node.declType.empty() && isStructDeclType(node.declType)) {
+                    std::string sn = structNameFromDecl(node.declType);
+                    out << c << structCppNames_.at(sn) << " " << vname << "{};\n";
+                } else if (!node.declType.empty() && isEnumDeclType(node.declType)) {
+                    std::string en = enumNameFromDecl(node.declType);
+                    std::string cpp = enumCppNames_.at(en);
+                    out << c << cpp << " " << vname << " = " << cpp << "::" << enumFirstVariant_.at(en) << ";\n";
                 } else {
                     out << c << "std::string " << vname << ";\n";
                 }
             } else if (isArray && !node.children.empty()) {
                 std::string c = node.isConst ? "const " : "";
                 bool strArr = arrayLiteralProducesString(node.children[0], globalVarIsString);
-                out << c << (strArr ? "std::vector<std::string>" : "std::vector<int>") << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, fnName, &globalVarIsString) << ";\n";
+                out << c << (strArr ? "std::vector<std::string>" : "std::vector<int>") << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, fnName, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
             } else if (!node.children.empty()) {
                 std::string c = node.isConst ? "const " : "";
-                bool useBool = !node.declType.empty() ? (node.declType == "bool") : node.initIsBool;
-                bool useInt = !node.declType.empty() ? (node.declType == "int") : node.initIsInt;
-                bool useFloat = !node.declType.empty() ? (node.declType == "float") : node.initIsFloat;
-                bool useChar = !node.declType.empty() ? (node.declType == "char") : node.initIsChar;
-                std::string cppType = c + (useBool ? "bool " : useFloat ? "double " : useChar ? "char " : (useInt ? "int " : "std::string "));
-                out << cppType << vname << " = " << emitExpr(node.children[0], globalVarMap, fnName) << ";\n";
+                if (!node.declType.empty() && isEnumDeclType(node.declType)) {
+                    std::string en = enumNameFromDecl(node.declType);
+                    out << c << enumCppNames_.at(en) << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, fnName, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
+                } else if (!node.declType.empty() && isStructDeclType(node.declType)) {
+                    std::string sn = structNameFromDecl(node.declType);
+                    out << c << structCppNames_.at(sn) << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, fnName, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
+                } else {
+                    bool useBool = !node.declType.empty() ? (node.declType == "bool") : node.initIsBool;
+                    bool useInt = !node.declType.empty() ? (node.declType == "int") : node.initIsInt;
+                    bool useFloat = !node.declType.empty() ? (node.declType == "float") : node.initIsFloat;
+                    bool useChar = !node.declType.empty() ? (node.declType == "char") : node.initIsChar;
+                    std::string cppType = c + (useBool ? "bool " : useFloat ? "double " : useChar ? "char " : (useInt ? "int " : "std::string "));
+                    out << cppType << vname << " = " << emitExpr(node.children[0], globalVarMap, fnName, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
+                }
             } else if (node.initIsBool || (!node.declType.empty() && node.declType == "bool")) {
                 std::string c = node.isConst ? "const " : "";
                 out << c << "bool " << vname << " = " << (node.initValue == "true" ? "true" : "false") << ";\n";
@@ -365,8 +499,116 @@ private:
     const Modules& modules_;
     bool preserveNames_;
     bool buildDll_;
+    // While emitting a function or main body: how bare `return;` / value returns are interpreted
+    enum class EmitFnRet { Main, IntFn, VoidFn };
+    mutable EmitFnRet emitFnRet_ = EmitFnRet::Main;
+    std::map<std::string, std::map<std::string, std::string>> structFields_;
+    std::map<std::string, std::string> structCppNames_;
+    std::map<std::string, std::string> enumCppNames_;
+    std::map<std::string, std::set<std::string>> enumVariants_;
+    std::map<std::string, std::string> enumFirstVariant_;
+    mutable std::vector<std::map<std::string, std::string>> varStructScopes_;
 
     using FnNameFn = std::function<std::string(const std::string&)>;
+
+    static bool isStructDeclType(const std::string& declType) {
+        return declType.size() >= 7 && declType.compare(0, 7, "struct:") == 0;
+    }
+    static bool isEnumDeclType(const std::string& declType) {
+        return declType.size() >= 5 && declType.compare(0, 5, "enum:") == 0;
+    }
+    static std::string structNameFromDecl(const std::string& declType) {
+        return declType.substr(7);
+    }
+    static std::string enumNameFromDecl(const std::string& declType) {
+        return declType.substr(5);
+    }
+    std::string nexaTypeToCpp(const std::string& t) const {
+        if (t == "int") return "int";
+        if (t == "string") return "std::string";
+        if (t == "bool") return "bool";
+        if (t == "float") return "double";
+        if (t == "char") return "char";
+        if (t == "unsigned char") return "unsigned char";
+        if (t.size() >= 7 && t.compare(0, 7, "struct:") == 0) {
+            std::string n = t.substr(7);
+            auto it = structCppNames_.find(n);
+            if (it == structCppNames_.end()) throw std::runtime_error("Unknown struct type: " + n);
+            return it->second;
+        }
+        if (t.size() >= 5 && t.compare(0, 5, "enum:") == 0) {
+            std::string n = t.substr(5);
+            auto it = enumCppNames_.find(n);
+            if (it == enumCppNames_.end()) throw std::runtime_error("Unknown enum type: " + n);
+            return it->second;
+        }
+        throw std::runtime_error("Unknown type in struct: " + t);
+    }
+
+    bool exprIsEnumLike(const AstNode& e, const std::map<std::string, std::string>& varMap,
+                        const std::map<std::string, bool>& varIsEnum) const {
+        if (e.type == AstNode::Type::ExprVarRef) {
+            auto it = varIsEnum.find(e.value);
+            return it != varIsEnum.end() && it->second;
+        }
+        if (e.type == AstNode::Type::ExprMember && !e.children.empty() && e.children[0].type == AstNode::Type::ExprVarRef) {
+            const std::string& base = e.children[0].value;
+            if (varMap.find(base) != varMap.end()) return false;
+            auto en = enumCppNames_.find(base);
+            if (en == enumCppNames_.end()) return false;
+            auto ev = enumVariants_.find(base);
+            if (ev == enumVariants_.end()) return false;
+            return ev->second.count(e.value) != 0;
+        }
+        return false;
+    }
+
+    std::string wrapExprForPrintf(const AstNode& e, const std::string& expr,
+                                  const std::map<std::string, std::string>& varMap,
+                                  const std::map<std::string, bool>& varIsEnum) const {
+        if (exprIsEnumLike(e, varMap, varIsEnum)) return "static_cast<int>(" + expr + ")";
+        return expr;
+    }
+
+    void varStructPush() const { varStructScopes_.emplace_back(); }
+    void varStructPop() const {
+        if (!varStructScopes_.empty()) varStructScopes_.pop_back();
+    }
+    void varStructDeclare(const std::string& nexaVar, const std::string& nexaStructName) const {
+        if (!varStructScopes_.empty()) varStructScopes_.back()[nexaVar] = nexaStructName;
+    }
+    std::string varStructLookup(const std::string& nexaVar) const {
+        for (auto it = varStructScopes_.rbegin(); it != varStructScopes_.rend(); ++it) {
+            auto j = it->find(nexaVar);
+            if (j != it->end()) return j->second;
+        }
+        return "";
+    }
+    std::string structTypeOfExprValue(const AstNode& e) const {
+        if (e.type == AstNode::Type::ExprVarRef) return varStructLookup(e.value);
+        if (e.type == AstNode::Type::ExprMember && !e.children.empty()) {
+            std::string inner = structTypeOfExprValue(e.children[0]);
+            if (inner.empty()) return "";
+            auto sit = structFields_.find(inner);
+            if (sit == structFields_.end()) return "";
+            auto fit = sit->second.find(e.value);
+            if (fit == sit->second.end()) return "";
+            const std::string& ft = fit->second;
+            if (ft.size() >= 7 && ft.compare(0, 7, "struct:") == 0) return ft.substr(7);
+            return "";
+        }
+        return "";
+    }
+    std::string fieldTypeOfMemberExpr(const AstNode& e) const {
+        if (e.type != AstNode::Type::ExprMember || e.children.empty()) return "";
+        std::string st = structTypeOfExprValue(e.children[0]);
+        if (st.empty()) return "";
+        auto sit = structFields_.find(st);
+        if (sit == structFields_.end()) return "";
+        auto fit = sit->second.find(e.value);
+        if (fit == sit->second.end()) return "";
+        return fit->second;
+    }
 
     static bool exprProducesString(const AstNode& e) {
         if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::ExprStringLiteral) return true;
@@ -376,7 +618,7 @@ private:
         return false;
     }
 
-    static bool arrayLiteralProducesString(const AstNode& arrNode, const std::map<std::string, bool>& varIsString) {
+    bool arrayLiteralProducesString(const AstNode& arrNode, const std::map<std::string, bool>& varIsString) const {
         if (arrNode.type != AstNode::Type::ExprArrayLiteral) return false;
         for (const auto& c : arrNode.children) {
             if (c.type == AstNode::Type::ExprStringLiteral) return true;
@@ -386,7 +628,11 @@ private:
         return false;
     }
 
-    static bool exprIsString(const AstNode& e, const std::map<std::string, bool>& varIsString) {
+    bool exprIsString(const AstNode& e, const std::map<std::string, bool>& varIsString) const {
+        if (e.type == AstNode::Type::ExprMember && !e.children.empty()) {
+            std::string ft = fieldTypeOfMemberExpr(e);
+            return ft == "string";
+        }
         if (e.type == AstNode::Type::ExprVarRef) {
             auto it = varIsString.find(e.value);
             return it != varIsString.end() && it->second;
@@ -402,7 +648,11 @@ private:
         return false;
     }
 
-    static bool exprIsFloat(const AstNode& e, const std::map<std::string, bool>& varIsFloat) {
+    bool exprIsFloat(const AstNode& e, const std::map<std::string, bool>& varIsFloat) const {
+        if (e.type == AstNode::Type::ExprMember && !e.children.empty()) {
+            std::string ft = fieldTypeOfMemberExpr(e);
+            return ft == "float";
+        }
         if (e.type == AstNode::Type::ExprFloatLiteral) return true;
         if (e.type == AstNode::Type::ExprVarRef) {
             auto it = varIsFloat.find(e.value);
@@ -421,7 +671,11 @@ private:
         return false;
     }
 
-    static bool exprIsChar(const AstNode& e, const std::map<std::string, bool>& varIsChar) {
+    bool exprIsChar(const AstNode& e, const std::map<std::string, bool>& varIsChar) const {
+        if (e.type == AstNode::Type::ExprMember && !e.children.empty()) {
+            std::string ft = fieldTypeOfMemberExpr(e);
+            return ft == "char";
+        }
         if (e.type == AstNode::Type::ExprCharLiteral) return true;
         if (e.type == AstNode::Type::ExprVarRef) {
             auto it = varIsChar.find(e.value);
@@ -430,17 +684,49 @@ private:
         return false;
     }
 
-    static bool blockHasReturn(const std::vector<AstNode>& children) {
-        for (const AstNode& c : children) {
-            if (c.type == AstNode::Type::Return) return true;
+    bool exprIsBool(const AstNode& e, const std::map<std::string, bool>& varIsBool) const {
+        if (e.type == AstNode::Type::ExprBoolLiteral) return true;
+        if (e.type == AstNode::Type::ExprVarRef) {
+            auto it = varIsBool.find(e.value);
+            return it != varIsBool.end() && it->second;
+        }
+        if (e.type == AstNode::Type::ExprMember && !e.children.empty()) {
+            return fieldTypeOfMemberExpr(e) == "bool";
         }
         return false;
+    }
+
+    static void astClassifyReturns(const AstNode& n, bool& hasValueReturn, bool& hasVoidReturn) {
+        if (n.type == AstNode::Type::Return) {
+            if (n.children.empty()) hasVoidReturn = true;
+            else hasValueReturn = true;
+            return;
+        }
+        for (const AstNode& c : n.children) astClassifyReturns(c, hasValueReturn, hasVoidReturn);
+    }
+    static void stmtsClassifyReturns(const std::vector<AstNode>& stmts, bool& hasValueReturn, bool& hasVoidReturn) {
+        for (const AstNode& s : stmts) astClassifyReturns(s, hasValueReturn, hasVoidReturn);
+    }
+    static bool stmtsEndWithReturn(const std::vector<AstNode>& stmts) {
+        return !stmts.empty() && stmts.back().type == AstNode::Type::Return;
     }
 
     void emitBlock(std::ostringstream& out, const std::vector<AstNode>& children, const FnNameFn& fnName,
                    std::map<std::string, std::string>& varMap, int& varIdx,
                    std::map<std::string, bool>& varIsString, std::map<std::string, bool>& varIsConst,
                    std::map<std::string, bool>& varIsFloat, std::map<std::string, bool>& varIsChar,
+                   std::map<std::string, bool>& varIsBool, std::map<std::string, bool>& varIsEnum,
+                   const std::string& indent = "    ", bool inStringSwitchCase = false) {
+        varStructPush();
+        emitBlockStatements(out, children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent, inStringSwitchCase);
+        varStructPop();
+    }
+
+    void emitBlockStatements(std::ostringstream& out, const std::vector<AstNode>& children, const FnNameFn& fnName,
+                   std::map<std::string, std::string>& varMap, int& varIdx,
+                   std::map<std::string, bool>& varIsString, std::map<std::string, bool>& varIsConst,
+                   std::map<std::string, bool>& varIsFloat, std::map<std::string, bool>& varIsChar,
+                   std::map<std::string, bool>& varIsBool, std::map<std::string, bool>& varIsEnum,
                    const std::string& indent = "    ", bool inStringSwitchCase = false) {
         for (const AstNode& child : children) {
             if (child.type == AstNode::Type::Variable) {
@@ -449,13 +735,19 @@ private:
                 varIsConst[child.value] = child.isConst;
                 bool isFloat = (!child.declType.empty() && child.declType == "float") || child.initIsFloat;
                 bool isChar = (!child.declType.empty() && child.declType == "char") || child.initIsChar;
+                bool isBool = (!child.declType.empty() && child.declType == "bool") || child.initIsBool;
                 varIsFloat[child.value] = isFloat;
                 varIsChar[child.value] = isChar;
+                varIsBool[child.value] = isBool;
+                varIsEnum[child.value] = !child.declType.empty() && isEnumDeclType(child.declType);
                 bool isArray = child.initFromArray || (!child.children.empty() && child.children[0].type == AstNode::Type::ExprArrayLiteral);
                 bool isStrArr = isArray && !child.children.empty() && arrayLiteralProducesString(child.children[0], varIsString);
-                bool isStr = !isArray && (!child.declType.empty() ? (child.declType == "string") : (child.initUninitialized || child.initFromReadln || child.initFromFileRead || (!child.initIsInt && !child.initIsBool && !child.initIsFloat && !child.initIsChar && !child.initFromDllLoad && child.children.empty()) ||
+                bool isStr = !isArray && !isStructDeclType(child.declType) && !isEnumDeclType(child.declType) && (!child.declType.empty() ? (child.declType == "string") : (child.initUninitialized || child.initFromReadln || child.initFromFileRead || (!child.initIsInt && !child.initIsBool && !child.initIsFloat && !child.initIsChar && !child.initFromDllLoad && child.children.empty()) ||
                     (!child.children.empty() && exprProducesString(child.children[0]))));
                 varIsString[child.value] = isStr || isStrArr;
+                if (!child.declType.empty() && isStructDeclType(child.declType)) {
+                    varStructDeclare(child.value, structNameFromDecl(child.declType));
+                }
                 if (child.initFromReadln) {
                     out << indent << "char __nexa_buf[4096];\n";
                     out << indent << "if (fgets(__nexa_buf, sizeof(__nexa_buf), stdin)) { __nexa_buf[strcspn(__nexa_buf, \"\\n\")] = 0; }\n";
@@ -492,11 +784,18 @@ private:
                         out << indent << c << "double " << vname << " = 0.0;\n";
                     } else if (!child.declType.empty() && child.declType == "char") {
                         out << indent << c << "char " << vname << " = '\\0';\n";
+                    } else if (!child.declType.empty() && isStructDeclType(child.declType)) {
+                        std::string sn = structNameFromDecl(child.declType);
+                        out << indent << c << structCppNames_.at(sn) << " " << vname << "{};\n";
+                    } else if (!child.declType.empty() && isEnumDeclType(child.declType)) {
+                        std::string en = enumNameFromDecl(child.declType);
+                        std::string cpp = enumCppNames_.at(en);
+                        out << indent << c << cpp << " " << vname << " = " << cpp << "::" << enumFirstVariant_.at(en) << ";\n";
                     } else {
                         out << indent << c << "std::string " << vname << ";\n";
                     }
                 } else if (child.initFromFileRead && !child.children.empty()) {
-                    std::string pathExpr = emitExpr(child.children[0], varMap, fnName);
+                    std::string pathExpr = emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                     out << indent << "std::string " << vname << ";\n";
                     out << indent << "{\n";
                     out << indent << "    std::ifstream __f(" << pathExpr << ");\n";
@@ -505,15 +804,23 @@ private:
                 } else if (isArray && !child.children.empty()) {
                     std::string c = child.isConst ? "const " : "";
                     bool strArr = arrayLiteralProducesString(child.children[0], varIsString);
-                    out << indent << c << (strArr ? "std::vector<std::string>" : "std::vector<int>") << " " << vname << " = " << emitExpr(child.children[0], varMap, fnName, &varIsString) << ";\n";
+                    out << indent << c << (strArr ? "std::vector<std::string>" : "std::vector<int>") << " " << vname << " = " << emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
                 } else if (!child.children.empty()) {
                     std::string c = child.isConst ? "const " : "";
-                    bool useBool = !child.declType.empty() ? (child.declType == "bool") : child.initIsBool;
-                    bool useInt = !child.declType.empty() ? (child.declType == "int") : child.initIsInt;
-                    bool useFloat = !child.declType.empty() ? (child.declType == "float") : child.initIsFloat;
-                    bool useChar = !child.declType.empty() ? (child.declType == "char") : child.initIsChar;
-                    std::string cppType = c + (useBool ? "bool " : useFloat ? "double " : useChar ? "char " : (useInt ? "int " : "std::string "));
-                    out << indent << cppType << vname << " = " << emitExpr(child.children[0], varMap, fnName) << ";\n";
+                    if (!child.declType.empty() && isEnumDeclType(child.declType)) {
+                        std::string en = enumNameFromDecl(child.declType);
+                        out << indent << c << enumCppNames_.at(en) << " " << vname << " = " << emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
+                    } else if (!child.declType.empty() && isStructDeclType(child.declType)) {
+                        std::string sn = structNameFromDecl(child.declType);
+                        out << indent << c << structCppNames_.at(sn) << " " << vname << " = " << emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
+                    } else {
+                        bool useBool = !child.declType.empty() ? (child.declType == "bool") : child.initIsBool;
+                        bool useInt = !child.declType.empty() ? (child.declType == "int") : child.initIsInt;
+                        bool useFloat = !child.declType.empty() ? (child.declType == "float") : child.initIsFloat;
+                        bool useChar = !child.declType.empty() ? (child.declType == "char") : child.initIsChar;
+                        std::string cppType = c + (useBool ? "bool " : useFloat ? "double " : useChar ? "char " : (useInt ? "int " : "std::string "));
+                        out << indent << cppType << vname << " = " << emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
+                    }
                 } else if (child.initIsBool || (!child.declType.empty() && child.declType == "bool")) {
                     std::string c = child.isConst ? "const " : "";
                     out << indent << c << "bool " << vname << " = " << (child.initValue == "true" ? "true" : "false") << ";\n";
@@ -529,7 +836,8 @@ private:
                     bool exprIsStr = exprIsString(child.children[0], varIsString);
                     bool exprIsF = exprIsFloat(child.children[0], varIsFloat);
                     bool exprIsC = exprIsChar(child.children[0], varIsChar);
-                    std::string expr = emitExpr(child.children[0], varMap, fnName);
+                    std::string expr = emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                    expr = wrapExprForPrintf(child.children[0], expr, varMap, varIsEnum);
                     std::string fmt = exprIsStr ? "%s" : exprIsF ? "%g" : exprIsC ? "%c" : "%d";
                     std::string arg = exprIsStr ? expr + ".c_str()" : expr;
                     out << indent << "printf(\"" << fmt << "\\n\", " << arg << ");\n";
@@ -538,8 +846,9 @@ private:
                     bool isStr = varIsString.count(child.value) && varIsString.at(child.value);
                     bool isF = varIsFloat.count(child.value) && varIsFloat.at(child.value);
                     bool isC = varIsChar.count(child.value) && varIsChar.at(child.value);
+                    bool isEn = varIsEnum.count(child.value) && varIsEnum.at(child.value);
                     std::string fmt = isStr ? "%s" : isF ? "%g" : isC ? "%c" : "%d";
-                    std::string arg = isStr ? v + ".c_str()" : v;
+                    std::string arg = isStr ? v + ".c_str()" : (isEn ? ("static_cast<int>(" + v + ")") : v);
                     out << indent << "printf(\"" << fmt << "\\n\", " << arg << ");\n";
                 } else {
                     out << indent << "printf(\"" << escapeStringForPrintf(child.value) << "\\n\");\n";
@@ -549,7 +858,8 @@ private:
                     bool exprIsStr = exprIsString(child.children[0], varIsString);
                     bool exprIsF = exprIsFloat(child.children[0], varIsFloat);
                     bool exprIsC = exprIsChar(child.children[0], varIsChar);
-                    std::string expr = emitExpr(child.children[0], varMap, fnName);
+                    std::string expr = emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                    expr = wrapExprForPrintf(child.children[0], expr, varMap, varIsEnum);
                     std::string fmt = exprIsStr ? "%s" : exprIsF ? "%g" : exprIsC ? "%c" : "%d";
                     std::string arg = exprIsStr ? expr + ".c_str()" : expr;
                     out << indent << "printf(\"" << fmt << "\", " << arg << ");\n";
@@ -558,53 +868,54 @@ private:
                     bool isStr = varIsString.count(child.value) && varIsString.at(child.value);
                     bool isF = varIsFloat.count(child.value) && varIsFloat.at(child.value);
                     bool isC = varIsChar.count(child.value) && varIsChar.at(child.value);
+                    bool isEn = varIsEnum.count(child.value) && varIsEnum.at(child.value);
                     std::string fmt = isStr ? "%s" : isF ? "%g" : isC ? "%c" : "%d";
-                    std::string arg = isStr ? v + ".c_str()" : v;
+                    std::string arg = isStr ? v + ".c_str()" : (isEn ? ("static_cast<int>(" + v + ")") : v);
                     out << indent << "printf(\"" << fmt << "\", " << arg << ");\n";
                 } else {
                     out << indent << "printf(\"" << escapeStringForPrintf(child.value) << "\");\n";
                 }
             } else if (child.type == AstNode::Type::FileRead) {
-                std::string pathExpr = emitExpr(child.children[0], varMap, fnName);
+                std::string pathExpr = emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 out << indent << "{\n";
                 out << indent << "    std::ifstream __f(" << pathExpr << ");\n";
                 out << indent << "    std::stringstream __ss; __ss << __f.rdbuf();\n";
                 out << indent << "}\n";
             } else if (child.type == AstNode::Type::FileWrite) {
-                std::string pathExpr = emitExpr(child.children[0], varMap, fnName);
-                std::string contentExpr = emitExpr(child.children[1], varMap, fnName);
+                std::string pathExpr = emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                std::string contentExpr = emitExpr(child.children[1], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 out << indent << "{\n";
                 out << indent << "    std::ofstream __f(" << pathExpr << ");\n";
                 out << indent << "    __f << " << contentExpr << ";\n";
                 out << indent << "}\n";
             } else if (child.type == AstNode::Type::FileAppend) {
-                std::string pathExpr = emitExpr(child.children[0], varMap, fnName);
-                std::string contentExpr = emitExpr(child.children[1], varMap, fnName);
+                std::string pathExpr = emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                std::string contentExpr = emitExpr(child.children[1], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 out << indent << "{\n";
                 out << indent << "    std::ofstream __f(" << pathExpr << ", std::ios::app);\n";
                 out << indent << "    __f << " << contentExpr << ";\n";
                 out << indent << "}\n";
             } else if (child.type == AstNode::Type::FileExists) {
-                std::string pathExpr = emitExpr(child.children[0], varMap, fnName);
+                std::string pathExpr = emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 out << indent << "(void)(std::filesystem::exists(" << pathExpr << ") ? 1 : 0);\n";
             } else if (child.type == AstNode::Type::RandomSeed) {
-                std::string seedExpr = emitExpr(child.children[0], varMap, fnName);
+                std::string seedExpr = emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 out << indent << "__nexa_random_seed(" << seedExpr << ");\n";
             } else if (child.type == AstNode::Type::RandomInt) {
-                std::string minExpr = emitExpr(child.children[0], varMap, fnName);
-                std::string maxExpr = emitExpr(child.children[1], varMap, fnName);
+                std::string minExpr = emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                std::string maxExpr = emitExpr(child.children[1], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 out << indent << "(void)__nexa_random_int(" << minExpr << ", " << maxExpr << ");\n";
             } else if (child.type == AstNode::Type::TimeSleep) {
                 const AstNode& dur = child.children[0];
                 if (dur.type == AstNode::Type::TimeSeconds && !dur.children.empty()) {
                     out << indent << "std::this_thread::sleep_for(std::chrono::seconds("
-                        << emitExpr(dur.children[0], varMap, fnName) << "));\n";
+                        << emitExpr(dur.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << "));\n";
                 } else if (dur.type == AstNode::Type::TimeMilliseconds && !dur.children.empty()) {
                     out << indent << "std::this_thread::sleep_for(std::chrono::milliseconds("
-                        << emitExpr(dur.children[0], varMap, fnName) << "));\n";
+                        << emitExpr(dur.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << "));\n";
                 } else {
                     out << indent << "std::this_thread::sleep_for(std::chrono::milliseconds("
-                        << emitExpr(dur, varMap, fnName) << "));\n";
+                        << emitExpr(dur, varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << "));\n";
                 }
             } else if (child.type == AstNode::Type::DllCall) {
                 std::string h = preserveNames_ ? child.children[0].value : varMap.at(child.children[0].value);
@@ -622,7 +933,7 @@ private:
             } else if (child.type == AstNode::Type::OsSystem) {
                 if (!child.children.empty()) {
                     bool exprIsStr = exprIsString(child.children[0], varIsString);
-                    std::string expr = emitExpr(child.children[0], varMap, fnName);
+                    std::string expr = emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                     out << indent << "std::system(" << (exprIsStr ? expr + ".c_str()" : expr) << ");\n";
                 } else if (child.isVarRef) {
                     std::string v = preserveNames_ ? child.value : varMap.at(child.value);
@@ -639,8 +950,8 @@ private:
             } else if (child.type == AstNode::Type::OsMaximizeConsoleWindow) {
                 out << indent << "__nexa_os_maximize_console_window();\n";
             } else if (child.type == AstNode::Type::OsMessageBox) {
-                std::string textExpr = emitExpr(child.children[0], varMap, fnName);
-                std::string titleExpr = emitExpr(child.children[1], varMap, fnName);
+                std::string textExpr = emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                std::string titleExpr = emitExpr(child.children[1], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 bool textIsStr = exprIsString(child.children[0], varIsString);
                 bool titleIsStr = exprIsString(child.children[1], varIsString);
                 std::string textArg = textIsStr ? textExpr : ("std::to_string(" + textExpr + ")");
@@ -650,93 +961,120 @@ private:
                 out << indent << fnName(child.value) << "(";
                 for (size_t i = 0; i < child.children.size(); i++) {
                     if (i > 0) out << ", ";
-                    out << emitExpr(child.children[i], varMap, fnName);
+                    out << emitExpr(child.children[i], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 }
                 out << ");\n";
+            } else if (child.type == AstNode::Type::AssnMember) {
+                std::string lhs = emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                std::string rhs = emitExpr(child.children[1], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                const std::string& op = child.value;
+                if (op == "=") out << indent << lhs << " = " << rhs << ";\n";
+                else if (op == "+=") {
+                    if (child.children[0].type == AstNode::Type::ExprMember && !child.children[0].children.empty() &&
+                        fieldTypeOfMemberExpr(child.children[0]) == "string") {
+                        out << indent << lhs << " += " << emitConcatOperand(child.children[1], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) << ";\n";
+                    } else {
+                        out << indent << lhs << " += " << rhs << ";\n";
+                    }
+                }
+                else if (op == "-=") out << indent << lhs << " -= " << rhs << ";\n";
+                else if (op == "*=") out << indent << lhs << " *= " << rhs << ";\n";
+                else if (op == "/=") out << indent << lhs << " /= " << rhs << ";\n";
+                else if (op == "%=") out << indent << lhs << " %= " << rhs << ";\n";
+                else if (op == "&=") out << indent << lhs << " &= " << rhs << ";\n";
+                else if (op == "|=") out << indent << lhs << " |= " << rhs << ";\n";
+                else if (op == "^=") out << indent << lhs << " ^= " << rhs << ";\n";
+                else if (op == "<<=") out << indent << lhs << " <<= " << rhs << ";\n";
+                else if (op == ">>=") out << indent << lhs << " >>= " << rhs << ";\n";
+                else out << indent << lhs << " = " << rhs << ";\n";
             } else if (child.type == AstNode::Type::Assignment) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
                 std::string v = preserveNames_ ? child.value : varMap.at(child.value);
-                out << indent << v << " = " << emitExpr(child.children[0], varMap, fnName) << ";\n";
+                out << indent << v << " = " << emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::AssnIndex) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
                 std::string v = preserveNames_ ? child.value : varMap.at(child.value);
-                std::string idx = emitExpr(child.children[0], varMap, fnName);
-                std::string val = emitExpr(child.children[1], varMap, fnName);
+                std::string idx = emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                std::string val = emitExpr(child.children[1], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 out << indent << v << "[" << idx << "] = " << val << ";\n";
             } else if (child.type == AstNode::Type::AssnAdd) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
                 std::string v = preserveNames_ ? child.value : varMap.at(child.value);
-                out << indent << v << " = " << v << " + " << emitExpr(child.children[0], varMap, fnName) << ";\n";
+                if (varIsString.count(child.value) && varIsString.at(child.value)) {
+                    out << indent << v << " = " << v << " + " << emitConcatOperand(child.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) << ";\n";
+                } else {
+                    out << indent << v << " = " << v << " + " << emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
+                }
             } else if (child.type == AstNode::Type::AssnSub) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
                 std::string v = preserveNames_ ? child.value : varMap.at(child.value);
-                out << indent << v << " = " << v << " - " << emitExpr(child.children[0], varMap, fnName) << ";\n";
+                out << indent << v << " = " << v << " - " << emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::AssnMul) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
                 std::string v = preserveNames_ ? child.value : varMap.at(child.value);
-                out << indent << v << " = " << v << " * " << emitExpr(child.children[0], varMap, fnName) << ";\n";
+                out << indent << v << " = " << v << " * " << emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::AssnDiv) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
                 std::string v = preserveNames_ ? child.value : varMap.at(child.value);
-                out << indent << v << " = " << v << " / " << emitExpr(child.children[0], varMap, fnName) << ";\n";
+                out << indent << v << " = " << v << " / " << emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::AssnMod) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
                 std::string v = preserveNames_ ? child.value : varMap.at(child.value);
-                out << indent << v << " = " << v << " % " << emitExpr(child.children[0], varMap, fnName) << ";\n";
+                out << indent << v << " = " << v << " % " << emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::AssnBitAnd) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
                 std::string v = preserveNames_ ? child.value : varMap.at(child.value);
-                out << indent << v << " = " << v << " & " << emitExpr(child.children[0], varMap, fnName) << ";\n";
+                out << indent << v << " = " << v << " & " << emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::AssnBitOr) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
                 std::string v = preserveNames_ ? child.value : varMap.at(child.value);
-                out << indent << v << " = " << v << " | " << emitExpr(child.children[0], varMap, fnName) << ";\n";
+                out << indent << v << " = " << v << " | " << emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::AssnBitXor) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
                 std::string v = preserveNames_ ? child.value : varMap.at(child.value);
-                out << indent << v << " = " << v << " ^ " << emitExpr(child.children[0], varMap, fnName) << ";\n";
+                out << indent << v << " = " << v << " ^ " << emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::AssnShl) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
                 std::string v = preserveNames_ ? child.value : varMap.at(child.value);
-                out << indent << v << " = " << v << " << " << emitExpr(child.children[0], varMap, fnName) << ";\n";
+                out << indent << v << " = " << v << " << " << emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::AssnShr) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
                 std::string v = preserveNames_ ? child.value : varMap.at(child.value);
-                out << indent << v << " = " << v << " >> " << emitExpr(child.children[0], varMap, fnName) << ";\n";
+                out << indent << v << " = " << v << " >> " << emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::InlineCpp) {
                 emitInlineCppRaw(out, stripInlineCppIncludeLines(child.value), indent);
             } else if (child.type == AstNode::Type::IfElse) {
-                emitIfElse(out, child, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, indent, inStringSwitchCase);
+                emitIfElse(out, child, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent, inStringSwitchCase);
             } else if (child.type == AstNode::Type::Switch) {
-                emitSwitch(out, child, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, indent, inStringSwitchCase);
+                emitSwitch(out, child, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent, inStringSwitchCase);
             } else if (child.type == AstNode::Type::While) {
-                std::string cond = emitCond(child.children[0], varMap, fnName);
+                std::string cond = emitCond(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 out << indent << "while (" << cond << ") {\n";
-                emitBlock(out, child.children[1].children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, indent + "    ", inStringSwitchCase);
+                emitBlock(out, child.children[1].children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "    ", inStringSwitchCase);
                 out << indent << "}\n";
             } else if (child.type == AstNode::Type::For) {
                 std::string loopVar = preserveNames_ ? child.value : ("__nexa_for_" + std::to_string(varIdx++));
@@ -746,19 +1084,36 @@ private:
                 bool prevConst = varIsConst.count(child.value) ? varIsConst[child.value] : false;
                 bool prevFloat = varIsFloat.count(child.value) ? varIsFloat[child.value] : false;
                 bool prevChar = varIsChar.count(child.value) ? varIsChar[child.value] : false;
+                bool prevBool = varIsBool.count(child.value) ? varIsBool[child.value] : false;
+                bool prevEnum = varIsEnum.count(child.value) ? varIsEnum[child.value] : false;
                 varMap[child.value] = loopVar;
                 varIsString[child.value] = false;
                 varIsConst[child.value] = false;
                 varIsFloat[child.value] = false;
                 varIsChar[child.value] = false;
-                std::string countExpr = emitExpr(child.children[0], varMap, fnName);
+                varIsBool[child.value] = false;
+                varIsEnum[child.value] = false;
+                std::string countExpr = emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 out << indent << "for (int " << loopVar << " = 0; " << loopVar << " < " << countExpr << "; " << loopVar << "++) {\n";
-                emitBlock(out, child.children[1].children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, indent + "    ", inStringSwitchCase);
+                emitBlock(out, child.children[1].children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "    ", inStringSwitchCase);
                 out << indent << "}\n";
-                if (!prevVal.empty()) { varMap[child.value] = prevVal; varIsString[child.value] = prevStr; varIsConst[child.value] = prevConst; varIsFloat[child.value] = prevFloat; varIsChar[child.value] = prevChar; }
-                else { varMap.erase(child.value); varIsString.erase(child.value); varIsConst.erase(child.value); varIsFloat.erase(child.value); varIsChar.erase(child.value); }
+                if (!prevVal.empty()) { varMap[child.value] = prevVal; varIsString[child.value] = prevStr; varIsConst[child.value] = prevConst; varIsFloat[child.value] = prevFloat; varIsChar[child.value] = prevChar; varIsBool[child.value] = prevBool; varIsEnum[child.value] = prevEnum; }
+                else { varMap.erase(child.value); varIsString.erase(child.value); varIsConst.erase(child.value); varIsFloat.erase(child.value); varIsChar.erase(child.value); varIsBool.erase(child.value); varIsEnum.erase(child.value); }
             } else if (child.type == AstNode::Type::Return) {
-                out << indent << "return " << emitExpr(child.children[0], varMap, fnName) << ";\n";
+                if (child.children.empty()) {
+                    if (emitFnRet_ == EmitFnRet::Main) {
+                        out << indent << "return 0;\n";
+                    } else if (emitFnRet_ == EmitFnRet::VoidFn) {
+                        out << indent << "return;\n";
+                    } else {
+                        throw std::runtime_error("return with no value in function that returns a value");
+                    }
+                } else {
+                    if (emitFnRet_ == EmitFnRet::VoidFn) {
+                        throw std::runtime_error("cannot return a value from void function");
+                    }
+                    out << indent << "return " << emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
+                }
             } else if (child.type == AstNode::Type::Break) {
                 if (!inStringSwitchCase) out << indent << "break;\n";
             } else if (child.type == AstNode::Type::Continue) {
@@ -783,23 +1138,24 @@ private:
                    std::map<std::string, std::string>& varMap, int& varIdx,
                    std::map<std::string, bool>& varIsString, std::map<std::string, bool>& varIsConst,
                    std::map<std::string, bool>& varIsFloat, std::map<std::string, bool>& varIsChar,
+                   std::map<std::string, bool>& varIsBool, std::map<std::string, bool>& varIsEnum,
                    const std::string& indent, bool inStringSwitchCase = false) {
-        std::string cond = emitCond(node.children[0], varMap, fnName);
+        std::string cond = emitCond(node.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
         out << indent << "if (" << cond << ") {\n";
-        emitBlock(out, node.children[1].children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, indent + "    ", inStringSwitchCase);
+        emitBlock(out, node.children[1].children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "    ", inStringSwitchCase);
         out << indent << "}";
         if (node.children.size() > 2) {
             const AstNode& elsePart = node.children[2];
             if (elsePart.type == AstNode::Type::IfElse) {
-                out << " else if (" << emitCond(elsePart.children[0], varMap, fnName) << ") {\n";
-                emitBlock(out, elsePart.children[1].children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, indent + "    ", inStringSwitchCase);
+                out << " else if (" << emitCond(elsePart.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ") {\n";
+                emitBlock(out, elsePart.children[1].children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "    ", inStringSwitchCase);
                 out << indent << "}";
                 if (elsePart.children.size() > 2) {
-                    emitIfElseTail(out, elsePart.children[2], fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, indent, inStringSwitchCase);
+                    emitIfElseTail(out, elsePart.children[2], fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent, inStringSwitchCase);
                 }
             } else {
                 out << " else {\n";
-                emitBlock(out, elsePart.children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, indent + "    ", inStringSwitchCase);
+                emitBlock(out, elsePart.children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "    ", inStringSwitchCase);
                 out << indent << "}";
             }
         }
@@ -810,8 +1166,9 @@ private:
                    std::map<std::string, std::string>& varMap, int& varIdx,
                    std::map<std::string, bool>& varIsString, std::map<std::string, bool>& varIsConst,
                    std::map<std::string, bool>& varIsFloat, std::map<std::string, bool>& varIsChar,
+                   std::map<std::string, bool>& varIsBool, std::map<std::string, bool>& varIsEnum,
                    const std::string& indent, bool inStringSwitchCase = false) {
-        std::string expr = emitExpr(node.children[0], varMap, fnName);
+        std::string expr = emitExpr(node.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
         bool useStringSwitch = false;
         for (size_t i = 1; i < node.children.size(); i++) {
             if (node.children[i].type == AstNode::Type::SwitchCase && node.children[i].caseIsString) {
@@ -831,13 +1188,13 @@ private:
             for (const AstNode* c : cases) {
                 out << indent << (first ? "" : "else ") << "if (" << expr << " == std::string(\"" << escapeString(c->initValue) << "\")) {\n";
                 first = false;
-                emitBlock(out, c->children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, indent + "    ", true);
+                emitBlock(out, c->children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "    ", true);
                 out << indent << "}\n";
             }
             for (const AstNode* c : defaults) {
                 out << indent << (first ? "" : "else ") << "{\n";
                 first = false;
-                emitBlock(out, c->children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, indent + "    ", true);
+                emitBlock(out, c->children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "    ", true);
                 out << indent << "}\n";
             }
         } else {
@@ -847,10 +1204,20 @@ private:
                 if (c.type != AstNode::Type::SwitchCase) continue;
                 if (c.value == "default") {
                     out << indent << "default:\n";
+                } else if (c.caseIsEnum) {
+                    auto enIt = enumCppNames_.find(c.value);
+                    if (enIt == enumCppNames_.end()) {
+                        throw std::runtime_error("Unknown enum '" + c.value + "' in switch case");
+                    }
+                    auto vsIt = enumVariants_.find(c.value);
+                    if (vsIt == enumVariants_.end() || !vsIt->second.count(c.initValue)) {
+                        throw std::runtime_error("Unknown enum variant '" + c.initValue + "' for '" + c.value + "'");
+                    }
+                    out << indent << "case " << enIt->second << "::" << c.initValue << ":\n";
                 } else {
                     out << indent << "case " << c.value << ":\n";
                 }
-                emitBlock(out, c.children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, indent + "    ");
+                emitBlock(out, c.children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "    ");
             }
             out << indent << "}\n";
         }
@@ -860,50 +1227,55 @@ private:
                        std::map<std::string, std::string>& varMap, int& varIdx,
                        std::map<std::string, bool>& varIsString, std::map<std::string, bool>& varIsConst,
                        std::map<std::string, bool>& varIsFloat, std::map<std::string, bool>& varIsChar,
+                       std::map<std::string, bool>& varIsBool, std::map<std::string, bool>& varIsEnum,
                        const std::string& indent, bool inStringSwitchCase = false) {
         if (part.type == AstNode::Type::IfElse) {
-            out << " else if (" << emitCond(part.children[0], varMap, fnName) << ") {\n";
-            emitBlock(out, part.children[1].children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, indent + "    ", inStringSwitchCase);
+            out << " else if (" << emitCond(part.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ") {\n";
+            emitBlock(out, part.children[1].children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "    ", inStringSwitchCase);
             out << indent << "}";
             if (part.children.size() > 2) {
-                emitIfElseTail(out, part.children[2], fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, indent, inStringSwitchCase);
+                emitIfElseTail(out, part.children[2], fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent, inStringSwitchCase);
             }
         } else {
             out << " else {\n";
-            emitBlock(out, part.children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, indent + "    ", inStringSwitchCase);
+            emitBlock(out, part.children, fnName, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "    ", inStringSwitchCase);
             out << indent << "}";
         }
     }
 
-    std::string emitCond(const AstNode& c, const std::map<std::string, std::string>& varMap, const FnNameFn& fnName) {
+    std::string emitCond(const AstNode& c, const std::map<std::string, std::string>& varMap, const FnNameFn& fnName,
+                         const std::map<std::string, bool>* varIsString = nullptr,
+                         const std::map<std::string, bool>* varIsFloat = nullptr,
+                         const std::map<std::string, bool>* varIsChar = nullptr,
+                         const std::map<std::string, bool>* varIsBool = nullptr) {
         switch (c.type) {
             case AstNode::Type::CondEq:
-                return "(" + emitExpr(c.children[0], varMap, fnName) + " == " + emitExpr(c.children[1], varMap, fnName) + ")";
+                return "(" + emitExpr(c.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + " == " + emitExpr(c.children[1], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::CondNe:
-                return "(" + emitExpr(c.children[0], varMap, fnName) + " != " + emitExpr(c.children[1], varMap, fnName) + ")";
+                return "(" + emitExpr(c.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + " != " + emitExpr(c.children[1], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::CondLt:
-                return "(" + emitExpr(c.children[0], varMap, fnName) + " < " + emitExpr(c.children[1], varMap, fnName) + ")";
+                return "(" + emitExpr(c.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + " < " + emitExpr(c.children[1], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::CondLe:
-                return "(" + emitExpr(c.children[0], varMap, fnName) + " <= " + emitExpr(c.children[1], varMap, fnName) + ")";
+                return "(" + emitExpr(c.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + " <= " + emitExpr(c.children[1], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::CondGt:
-                return "(" + emitExpr(c.children[0], varMap, fnName) + " > " + emitExpr(c.children[1], varMap, fnName) + ")";
+                return "(" + emitExpr(c.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + " > " + emitExpr(c.children[1], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::CondGe:
-                return "(" + emitExpr(c.children[0], varMap, fnName) + " >= " + emitExpr(c.children[1], varMap, fnName) + ")";
+                return "(" + emitExpr(c.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + " >= " + emitExpr(c.children[1], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::CondAnd:
-                return "(" + emitCond(c.children[0], varMap, fnName) + " && " + emitCond(c.children[1], varMap, fnName) + ")";
+                return "(" + emitCond(c.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + " && " + emitCond(c.children[1], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::CondOr:
-                return "(" + emitCond(c.children[0], varMap, fnName) + " || " + emitCond(c.children[1], varMap, fnName) + ")";
+                return "(" + emitCond(c.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + " || " + emitCond(c.children[1], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::CondNot:
-                return "!(" + emitCond(c.children[0], varMap, fnName) + ")";
+                return "!(" + emitCond(c.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::ExprBoolLiteral:
                 return c.value;
             case AstNode::Type::ExprIntLiteral:
             case AstNode::Type::ExprFloatLiteral:
             case AstNode::Type::ExprCharLiteral:
             case AstNode::Type::ExprVarRef:
-                return emitExpr(c, varMap, fnName);
+                return emitExpr(c, varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::FileExists: {
-                std::string pathExpr = emitExpr(c.children[0], varMap, fnName);
+                std::string pathExpr = emitExpr(c.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool);
                 return "std::filesystem::exists(" + pathExpr + ")";
             }
             default:
@@ -912,9 +1284,12 @@ private:
     }
 
     std::string emitExpr(const AstNode& e, const std::map<std::string, std::string>& varMap, const FnNameFn& fnName,
-        const std::map<std::string, bool>* varIsString = nullptr) {
-        const std::map<std::string, bool> emptyStrMap;
-        const std::map<std::string, bool>& vIsStr = varIsString ? *varIsString : emptyStrMap;
+        const std::map<std::string, bool>* varIsString = nullptr,
+        const std::map<std::string, bool>* varIsFloat = nullptr,
+        const std::map<std::string, bool>* varIsChar = nullptr,
+        const std::map<std::string, bool>* varIsBool = nullptr) {
+        static const std::map<std::string, bool> kEmptyTypeMap;
+        const std::map<std::string, bool>& vIsStr = varIsString ? *varIsString : kEmptyTypeMap;
         switch (e.type) {
             case AstNode::Type::ExprIntLiteral:
                 return e.value;
@@ -955,32 +1330,32 @@ private:
                 return "([]{ char __b[4096]; if (fgets(__b, sizeof(__b), stdin)) __b[strcspn(__b, \"\\n\")] = 0; return std::string(__b); }())";
             }
             case AstNode::Type::IoToInt: {
-                std::string s = emitExpr(e.children[0], varMap, fnName);
+                std::string s = emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool);
                 return "__nexa_to_int(" + s + ")";
             }
             case AstNode::Type::FileRead: {
-                std::string pathExpr = emitExpr(e.children[0], varMap, fnName);
+                std::string pathExpr = emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool);
                 return "([]{ std::ifstream __f(" + pathExpr + "); std::stringstream __ss; __ss << __f.rdbuf(); return __ss.str(); }())";
             }
             case AstNode::Type::FileExists: {
-                std::string pathExpr = emitExpr(e.children[0], varMap, fnName);
+                std::string pathExpr = emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool);
                 return "(std::filesystem::exists(" + pathExpr + ") ? 1 : 0)";
             }
             case AstNode::Type::ExprLen: {
-                std::string s = emitExpr(e.children[0], varMap, fnName, varIsString);
+                std::string s = emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool);
                 return "(int)((" + s + ").size())";
             }
             case AstNode::Type::RandomInt: {
-                std::string minExpr = emitExpr(e.children[0], varMap, fnName);
-                std::string maxExpr = emitExpr(e.children[1], varMap, fnName);
+                std::string minExpr = emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool);
+                std::string maxExpr = emitExpr(e.children[1], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool);
                 return "__nexa_random_int(" + minExpr + ", " + maxExpr + ")";
             }
             case AstNode::Type::TimeSeconds: {
-                std::string n = emitExpr(e.children[0], varMap, fnName);
+                std::string n = emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool);
                 return "static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::seconds(" + n + ")).count())";
             }
             case AstNode::Type::TimeMilliseconds: {
-                std::string n = emitExpr(e.children[0], varMap, fnName);
+                std::string n = emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool);
                 return "static_cast<int>(std::chrono::milliseconds(" + n + ").count())";
             }
             case AstNode::Type::ExprVarRef: {
@@ -992,7 +1367,7 @@ private:
                 std::string s = isStrArr ? "std::vector<std::string>{" : "std::vector<int>{";
                 for (size_t i = 0; i < e.children.size(); i++) {
                     if (i > 0) s += ", ";
-                    s += emitExpr(e.children[i], varMap, fnName, varIsString);
+                    s += emitExpr(e.children[i], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool);
                 }
                 s += "}";
                 return s;
@@ -1000,42 +1375,100 @@ private:
             case AstNode::Type::ExprArrayIndex: {
                 auto it = varMap.find(e.value);
                 std::string v = (it != varMap.end()) ? it->second : e.value;
-                return v + "[" + emitExpr(e.children[0], varMap, fnName) + "]";
+                return v + "[" + emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + "]";
+            }
+            case AstNode::Type::ExprMember: {
+                if (e.children.empty()) return e.value;
+                if (!e.children.empty() && e.children[0].type == AstNode::Type::ExprVarRef) {
+                    const std::string& base = e.children[0].value;
+                    if (varMap.find(base) == varMap.end()) {
+                        auto enIt = enumCppNames_.find(base);
+                        if (enIt != enumCppNames_.end()) {
+                            auto evIt = enumVariants_.find(base);
+                            if (evIt != enumVariants_.end() && evIt->second.count(e.value)) {
+                                return enIt->second + "::" + e.value;
+                            }
+                            throw std::runtime_error("Unknown enum variant '" + e.value + "' for '" + base + "'");
+                        }
+                    }
+                }
+                return emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + "." + e.value;
             }
             case AstNode::Type::FnCall: {
                 std::string s = fnName(e.value) + "(";
                 for (size_t i = 0; i < e.children.size(); i++) {
                     if (i > 0) s += ", ";
-                    s += emitExpr(e.children[i], varMap, fnName);
+                    s += emitExpr(e.children[i], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool);
                 }
                 s += ")";
                 return s;
             }
             case AstNode::Type::ExprAdd:
-                return "(" + emitExpr(e.children[0], varMap, fnName) + " + " + emitExpr(e.children[1], varMap, fnName) + ")";
+                if (exprIsString(e, vIsStr)) {
+                    const std::map<std::string, bool>& vFl = varIsFloat ? *varIsFloat : kEmptyTypeMap;
+                    const std::map<std::string, bool>& vCh = varIsChar ? *varIsChar : kEmptyTypeMap;
+                    const std::map<std::string, bool>& vBo = varIsBool ? *varIsBool : kEmptyTypeMap;
+                    return "(" + emitConcatOperand(e.children[0], varMap, fnName, vIsStr, vFl, vCh, vBo) + " + "
+                        + emitConcatOperand(e.children[1], varMap, fnName, vIsStr, vFl, vCh, vBo) + ")";
+                }
+                return "(" + emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + " + "
+                    + emitExpr(e.children[1], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::ExprSub:
-                return "(" + emitExpr(e.children[0], varMap, fnName) + " - " + emitExpr(e.children[1], varMap, fnName) + ")";
+                return "(" + emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + " - " + emitExpr(e.children[1], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::ExprMul:
-                return "(" + emitExpr(e.children[0], varMap, fnName) + " * " + emitExpr(e.children[1], varMap, fnName) + ")";
+                return "(" + emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + " * " + emitExpr(e.children[1], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::ExprDiv:
-                return "(" + emitExpr(e.children[0], varMap, fnName) + " / " + emitExpr(e.children[1], varMap, fnName) + ")";
+                return "(" + emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + " / " + emitExpr(e.children[1], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::ExprMod:
-                return "(" + emitExpr(e.children[0], varMap, fnName) + " % " + emitExpr(e.children[1], varMap, fnName) + ")";
+                return "(" + emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + " % " + emitExpr(e.children[1], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::ExprBitAnd:
-                return "(" + emitExpr(e.children[0], varMap, fnName) + " & " + emitExpr(e.children[1], varMap, fnName) + ")";
+                return "(" + emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + " & " + emitExpr(e.children[1], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::ExprBitOr:
-                return "(" + emitExpr(e.children[0], varMap, fnName) + " | " + emitExpr(e.children[1], varMap, fnName) + ")";
+                return "(" + emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + " | " + emitExpr(e.children[1], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::ExprBitXor:
-                return "(" + emitExpr(e.children[0], varMap, fnName) + " ^ " + emitExpr(e.children[1], varMap, fnName) + ")";
+                return "(" + emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + " ^ " + emitExpr(e.children[1], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::ExprShl:
-                return "(" + emitExpr(e.children[0], varMap, fnName) + " << " + emitExpr(e.children[1], varMap, fnName) + ")";
+                return "(" + emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + " << " + emitExpr(e.children[1], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::ExprShr:
-                return "(" + emitExpr(e.children[0], varMap, fnName) + " >> " + emitExpr(e.children[1], varMap, fnName) + ")";
+                return "(" + emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + " >> " + emitExpr(e.children[1], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::ExprBitNot:
-                return "(~" + emitExpr(e.children[0], varMap, fnName) + ")";
+                return "(~" + emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             default:
                 return "0";
         }
+    }
+
+    std::string emitConcatOperand(const AstNode& child,
+                                  const std::map<std::string, std::string>& varMap, const FnNameFn& fnName,
+                                  const std::map<std::string, bool>& varIsString,
+                                  const std::map<std::string, bool>& varIsFloat,
+                                  const std::map<std::string, bool>& varIsChar,
+                                  const std::map<std::string, bool>& varIsBool) {
+        const std::map<std::string, bool>* pStr = &varIsString;
+        const std::map<std::string, bool>* pFl = &varIsFloat;
+        const std::map<std::string, bool>* pCh = &varIsChar;
+        const std::map<std::string, bool>* pBo = &varIsBool;
+        if (child.type == AstNode::Type::ExprAdd && exprIsString(child, varIsString)) {
+            return "(" + emitConcatOperand(child.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + " + "
+                + emitConcatOperand(child.children[1], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
+        }
+        if (child.type == AstNode::Type::ExprAdd) {
+            return "std::to_string(" + emitExpr(child, varMap, fnName, pStr, pFl, pCh, pBo) + ")";
+        }
+        if (exprIsString(child, varIsString) || exprProducesString(child)) {
+            return emitExpr(child, varMap, fnName, pStr, pFl, pCh, pBo);
+        }
+        if (exprIsFloat(child, varIsFloat)) {
+            return "std::to_string(" + emitExpr(child, varMap, fnName, pStr, pFl, pCh, pBo) + ")";
+        }
+        if (exprIsChar(child, varIsChar)) {
+            return "std::string(1, " + emitExpr(child, varMap, fnName, pStr, pFl, pCh, pBo) + ")";
+        }
+        if (exprIsBool(child, varIsBool)) {
+            std::string v = emitExpr(child, varMap, fnName, pStr, pFl, pCh, pBo);
+            return "std::string(" + v + " ? \"true\" : \"false\")";
+        }
+        return "std::to_string(" + emitExpr(child, varMap, fnName, pStr, pFl, pCh, pBo) + ")";
     }
 
     // File-scope / namespace-scope C++ (no wrapping braces); required for top-level inline_cpp! with functions or main().

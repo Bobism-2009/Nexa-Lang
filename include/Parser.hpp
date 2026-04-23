@@ -9,12 +9,13 @@
 #include <sstream>
 #include <filesystem>
 #include <stdexcept>
+#include <cctype>
 
 namespace nexa {
 
 // AST node types - simple structure for our minimal grammar
 struct AstNode {
-    enum class Type { Include, IoPrint, IoPrintln, IoReadln, IoToInt, MainFunction, Function, FnCall, Variable, Assignment, OsSystem, OsGetenv, OsPlatform, OsExeDir,
+    enum class Type { Include, CppHeaderInclude, IoPrint, IoPrintln, IoReadln, IoToInt, MainFunction, Function, FnCall, Variable, Assignment, OsSystem, OsGetenv, OsPlatform, OsExeDir,
                       OsHideConsoleWindow, OsShowConsoleWindow, OsMinimizeConsoleWindow, OsMaximizeConsoleWindow,
                       OsMessageBox, OsGrepKeys, OsKeyPressed,
                       DllLoad, DllCall,
@@ -50,9 +51,13 @@ struct AstNode {
                       ExprStringLiteral,
                       ExprLen,
                       AssnIndex,
+                      StructDef,
+                      EnumDef,
+                      ExprMember,
+                      AssnMember,
                       InlineCpp };
     Type type;
-    std::string value;           // for Include path, string literal, or variable name
+    std::string value;           // for Include path, CppHeaderInclude line, string literal, or variable name
     std::vector<AstNode> children;
     std::vector<std::string> paramNames;   // for Function: parameter names
     std::vector<std::string> paramTypes;   // for Function: "int", "string", or "" (default int)
@@ -69,6 +74,7 @@ struct AstNode {
     std::string declType = "";  // for Variable: "int", "string", "bool", "float", "char", "unsigned char", or "" (inferred)
     bool isVarRef = false;      // for IoPrint/IoPrintln: true = print variable, false = print string
     bool caseIsString = false;  // for SwitchCase: true = case "str", false = case 42
+    bool caseIsEnum = false;    // for SwitchCase: Enum.variant; value = enum name, initValue = variant
     bool isConst = false;       // for Variable: true = let const x = ...
     bool isFixedArray = false;  // for Variable: true = let x: type[size]; (fixed-size buffer)
     std::string arraySize = ""; // for Variable: size for fixed array, e.g. "4080"
@@ -98,6 +104,10 @@ public:
                 } else {
                     ast.push_back(parseFunction());
                 }
+            } else if (t.type == TokenType::Struct) {
+                ast.push_back(parseStruct());
+            } else if (t.type == TokenType::Enum) {
+                ast.push_back(parseEnum());
             } else if (t.type == TokenType::Let) {
                 ast.push_back(parseVariable());
             } else if (t.type == TokenType::InlineCppBlock) {
@@ -152,6 +162,200 @@ private:
         return false;
     }
 
+    static std::string trimIncludeRaw(std::string s) {
+        while (!s.empty() && (s.back() == '\r' || s.back() == ' ' || s.back() == '\t')) s.pop_back();
+        size_t i = 0;
+        while (i < s.size() && (s[i] == ' ' || s[i] == '\t')) i++;
+        return s.substr(i);
+    }
+
+    static bool isCppHeaderIncludePath(const std::string& path) {
+        size_t dot = path.rfind('.');
+        if (dot == std::string::npos || dot + 1 >= path.size()) return false;
+        std::string ext = path.substr(dot);
+        for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return ext == ".h" || ext == ".hpp" || ext == ".hxx" || ext == ".hh";
+    }
+
+    static bool astHasMemberAccess(const AstNode& e) {
+        if (e.type == AstNode::Type::ExprMember) return true;
+        for (const AstNode& c : e.children) {
+            if (astHasMemberAccess(c)) return true;
+        }
+        return false;
+    }
+
+    std::string parseTypeName() {
+        if (match(TokenType::Enum)) {
+            const Token& t = peek();
+            if (t.type != TokenType::Identifier) {
+                throw std::runtime_error("Expected enum name at line " + std::to_string(t.line));
+            }
+            advance();
+            return "enum:" + t.value;
+        }
+        const Token& t = peek();
+        if (t.type == TokenType::Identifier && t.value == "unsigned") {
+            advance();
+            const Token& t2 = peek();
+            if (t2.type != TokenType::Identifier || t2.value != "char") {
+                throw std::runtime_error("Expected 'char' after 'unsigned' at line " + std::to_string(t2.line));
+            }
+            advance();
+            return "unsigned char";
+        }
+        if (t.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected type name at line " + std::to_string(t.line));
+        }
+        std::string v = t.value;
+        advance();
+        if (v == "int") return "int";
+        if (v == "string") return "string";
+        if (v == "bool") return "bool";
+        if (v == "float") return "float";
+        if (v == "char") return "char";
+        return "struct:" + v;
+    }
+
+    AstNode parseStruct() {
+        size_t line = peek().line;
+        if (!match(TokenType::Struct)) {
+            throw std::runtime_error("Expected 'struct' at line " + std::to_string(line));
+        }
+        const Token& nameTok = peek();
+        if (nameTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected struct name at line " + std::to_string(nameTok.line));
+        }
+        advance();
+        std::string sname = nameTok.value;
+        if (sname == "main") {
+            throw std::runtime_error("Invalid struct name 'main' at line " + std::to_string(line));
+        }
+        if (!match(TokenType::LBrace)) {
+            throw std::runtime_error("Expected '{' at line " + std::to_string(peek().line));
+        }
+        AstNode node{AstNode::Type::StructDef, sname, {}};
+        while (peek().type != TokenType::RBrace) {
+            if (peek().type == TokenType::Eof) {
+                throw std::runtime_error("Unclosed struct body starting at line " + std::to_string(line));
+            }
+            const Token& fieldTok = peek();
+            if (fieldTok.type != TokenType::Identifier) {
+                throw std::runtime_error("Expected field name at line " + std::to_string(fieldTok.line));
+            }
+            advance();
+            node.paramNames.push_back(fieldTok.value);
+            if (!match(TokenType::Colon)) {
+                throw std::runtime_error("Expected ':' after field name at line " + std::to_string(peek().line));
+            }
+            node.paramTypes.push_back(parseTypeName());
+            if (!match(TokenType::Semicolon)) {
+                throw std::runtime_error("Expected ';' after struct field at line " + std::to_string(peek().line));
+            }
+        }
+        if (!match(TokenType::RBrace)) {
+            throw std::runtime_error("Expected '}' at end of struct at line " + std::to_string(peek().line));
+        }
+        match(TokenType::Semicolon);
+        return node;
+    }
+
+    AstNode parseEnum() {
+        size_t line = peek().line;
+        if (!match(TokenType::Enum)) {
+            throw std::runtime_error("Expected 'enum' at line " + std::to_string(line));
+        }
+        const Token& nameTok = peek();
+        if (nameTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected enum name at line " + std::to_string(nameTok.line));
+        }
+        advance();
+        std::string ename = nameTok.value;
+        if (ename == "main") {
+            throw std::runtime_error("Invalid enum name 'main' at line " + std::to_string(line));
+        }
+        if (!match(TokenType::LBrace)) {
+            throw std::runtime_error("Expected '{' at line " + std::to_string(peek().line));
+        }
+        AstNode node{AstNode::Type::EnumDef, ename, {}};
+        while (peek().type != TokenType::RBrace) {
+            if (peek().type == TokenType::Eof) {
+                throw std::runtime_error("Unclosed enum body starting at line " + std::to_string(line));
+            }
+            const Token& vTok = peek();
+            if (vTok.type != TokenType::Identifier) {
+                throw std::runtime_error("Expected variant name at line " + std::to_string(vTok.line));
+            }
+            advance();
+            node.paramNames.push_back(vTok.value);
+            if (!match(TokenType::Semicolon)) {
+                throw std::runtime_error("Expected ';' after enum variant at line " + std::to_string(peek().line));
+            }
+        }
+        if (node.paramNames.empty()) {
+            throw std::runtime_error("Enum must have at least one variant at line " + std::to_string(line));
+        }
+        if (!match(TokenType::RBrace)) {
+            throw std::runtime_error("Expected '}' at end of enum at line " + std::to_string(peek().line));
+        }
+        match(TokenType::Semicolon);
+        return node;
+    }
+
+    AstNode parseMemberAssignment() {
+        size_t line = peek().line;
+        const Token& nameTok = peek();
+        if (nameTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected variable name at line " + std::to_string(line));
+        }
+        advance();
+        AstNode cur{AstNode::Type::ExprVarRef, nameTok.value, {}};
+        while (match(TokenType::Dot)) {
+            const Token& ftok = peek();
+            if (ftok.type != TokenType::Identifier) {
+                throw std::runtime_error("Expected field name after '.' at line " + std::to_string(ftok.line));
+            }
+            advance();
+            AstNode mem{AstNode::Type::ExprMember, ftok.value, {std::move(cur)}};
+            cur = std::move(mem);
+        }
+        if (cur.type != AstNode::Type::ExprMember) {
+            throw std::runtime_error("Expected member assignment (e.g. obj.field = ...) at line " + std::to_string(line));
+        }
+        std::string op = "=";
+        if (match(TokenType::Assign)) {
+            op = "=";
+        } else if (match(TokenType::PlusAssign)) {
+            op = "+=";
+        } else if (match(TokenType::MinusAssign)) {
+            op = "-=";
+        } else if (match(TokenType::StarAssign)) {
+            op = "*=";
+        } else if (match(TokenType::SlashAssign)) {
+            op = "/=";
+        } else if (match(TokenType::PercentAssign)) {
+            op = "%=";
+        } else if (match(TokenType::BitAndAssign)) {
+            op = "&=";
+        } else if (match(TokenType::BitOrAssign)) {
+            op = "|=";
+        } else if (match(TokenType::BitXorAssign)) {
+            op = "^=";
+        } else if (match(TokenType::ShlAssign)) {
+            op = "<<=";
+        } else if (match(TokenType::ShrAssign)) {
+            op = ">>=";
+        } else {
+            throw std::runtime_error("Expected '=' or compound assignment at line " + std::to_string(peek().line));
+        }
+        AstNode expr = parseExpression();
+        if (!match(TokenType::Semicolon)) {
+            throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
+        }
+        AstNode node{AstNode::Type::AssnMember, op, {std::move(cur), std::move(expr)}};
+        return node;
+    }
+
     std::vector<AstNode> parseInclude() {
         const Token& t = advance();
         std::string raw = t.value;
@@ -169,6 +373,9 @@ private:
                 // #include <std/io> - built-in module
                 modules_.enable(path);
                 return {{AstNode::Type::Include, path, {}}};
+            }
+            if (isCppHeaderIncludePath(path)) {
+                return {{AstNode::Type::CppHeaderInclude, trimIncludeRaw(raw), {}}};
             }
             // #include <pkg/module> - package
             std::string pkgPath = path;
@@ -206,6 +413,19 @@ private:
                 resolved = (base / relPath).lexically_normal();
             }
             std::string absPath = std::filesystem::absolute(resolved).string();
+            if (isCppHeaderIncludePath(relPath)) {
+                std::ifstream in(absPath);
+                if (!in) {
+                    throw std::runtime_error("Cannot open header: " + absPath);
+                }
+                in.close();
+                if (includedFiles_) {
+                    if (includedFiles_->count(absPath)) return {};
+                    includedFiles_->insert(absPath);
+                }
+                std::string gen = std::string("#include \"") + std::filesystem::path(absPath).generic_string() + "\"";
+                return {{AstNode::Type::CppHeaderInclude, gen, {}}};
+            }
             if (includedFiles_) {
                 if (includedFiles_->count(absPath)) return {};  // already included, skip
                 includedFiles_->insert(absPath);
@@ -281,17 +501,7 @@ private:
                 advance();
                 std::string ptype = "int";  // default
                 if (match(TokenType::Colon)) {
-                    const Token& t = peek();
-                    if (t.type != TokenType::Identifier) {
-                        throw std::runtime_error("Expected parameter type (int, string, or bool) at line " + std::to_string(t.line));
-                    }
-                    if (t.value == "int") ptype = "int";
-                    else if (t.value == "string") ptype = "string";
-                    else if (t.value == "bool") ptype = "bool";
-                    else if (t.value == "float") ptype = "float";
-                    else if (t.value == "char") ptype = "char";
-                    else throw std::runtime_error("Parameter type must be int, string, bool, float, or char at line " + std::to_string(t.line));
-                    advance();
+                    ptype = parseTypeName();
                 }
                 types.push_back(ptype);
                 if (!match(TokenType::Comma)) break;
@@ -372,10 +582,16 @@ private:
                 stmts.push_back(parseDllCall());
             } else if (t.type == TokenType::Identifier && t.value == "file") {
                 stmts.push_back(parseFileCall());
-            } else if (t.type == TokenType::Identifier && pos_ + 3 < tokens_.size() &&
-                       tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier &&
-                       (tokens_[pos_ + 2].value == "Write" || tokens_[pos_ + 2].value == "Append")) {
-                stmts.push_back(parsePathVarFileCall());
+            } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
+                       tokens_[pos_ + 1].type == TokenType::Dot) {
+                const Token& id2 = tokens_[pos_ + 2];
+                bool isPathFile = id2.type == TokenType::Identifier && (id2.value == "Write" || id2.value == "Append") &&
+                    pos_ + 3 < tokens_.size() && tokens_[pos_ + 3].type == TokenType::LParen;
+                if (isPathFile) {
+                    stmts.push_back(parsePathVarFileCall());
+                } else {
+                    stmts.push_back(parseMemberAssignment());
+                }
             } else if (t.type == TokenType::Identifier && t.value == "random") {
                 stmts.push_back(parseRandomCall());
             } else if (t.type == TokenType::Identifier && t.value == "time") {
@@ -452,6 +668,9 @@ private:
         size_t line = peek().line;
         if (!match(TokenType::Return)) {
             throw std::runtime_error("Expected 'return' at line " + std::to_string(line));
+        }
+        if (match(TokenType::Semicolon)) {
+            return {AstNode::Type::Return, "", {}};
         }
         AstNode expr = parseExpression();
         if (!match(TokenType::Semicolon)) {
@@ -694,6 +913,7 @@ private:
         bool hasDefault = false;
         bool hasIntCase = false;
         bool hasStringCase = false;
+        bool hasEnumCase = false;
         while (pos_ < tokens_.size() && peek().type != TokenType::RBrace) {
             if (match(TokenType::Case)) {
                 const Token& valTok = peek();
@@ -707,6 +927,16 @@ private:
                     caseNode.caseIsString = true;
                     hasStringCase = true;
                     advance();
+                } else if (valTok.type == TokenType::Identifier) {
+                    AstNode fac = parseFactor();
+                    if (fac.type != AstNode::Type::ExprMember || fac.children.empty() ||
+                        fac.children[0].type != AstNode::Type::ExprVarRef) {
+                        throw std::runtime_error("case value must be an integer, string literal, or Enum.variant at line " + std::to_string(valTok.line));
+                    }
+                    caseNode.caseIsEnum = true;
+                    caseNode.value = fac.children[0].value;
+                    caseNode.initValue = fac.value;
+                    hasEnumCase = true;
                 } else {
                     throw std::runtime_error("case value must be an integer or string literal at line " + std::to_string(valTok.line));
                 }
@@ -735,6 +965,9 @@ private:
         }
         if (hasIntCase && hasStringCase) {
             throw std::runtime_error("switch cannot mix int and string cases at line " + std::to_string(line));
+        }
+        if (hasEnumCase && (hasIntCase || hasStringCase)) {
+            throw std::runtime_error("switch cannot mix enum cases with int or string cases at line " + std::to_string(line));
         }
         return switchNode;
     }
@@ -796,10 +1029,16 @@ private:
                 stmts.push_back(parseDllCall());
             } else if (t.type == TokenType::Identifier && t.value == "file") {
                 stmts.push_back(parseFileCall());
-            } else if (t.type == TokenType::Identifier && pos_ + 3 < tokens_.size() &&
-                       tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier &&
-                       (tokens_[pos_ + 2].value == "Write" || tokens_[pos_ + 2].value == "Append")) {
-                stmts.push_back(parsePathVarFileCall());
+            } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
+                       tokens_[pos_ + 1].type == TokenType::Dot) {
+                const Token& id2 = tokens_[pos_ + 2];
+                bool isPathFile = id2.type == TokenType::Identifier && (id2.value == "Write" || id2.value == "Append") &&
+                    pos_ + 3 < tokens_.size() && tokens_[pos_ + 3].type == TokenType::LParen;
+                if (isPathFile) {
+                    stmts.push_back(parsePathVarFileCall());
+                } else {
+                    stmts.push_back(parseMemberAssignment());
+                }
             } else if (t.type == TokenType::Identifier && t.value == "random") {
                 stmts.push_back(parseRandomCall());
             } else if (t.type == TokenType::Identifier && t.value == "time") {
@@ -1068,14 +1307,28 @@ private:
         }
         if (match(TokenType::Identifier)) {
             std::string name = tokens_[pos_ - 1].value;
+            AstNode cur{AstNode::Type::ExprVarRef, name, {}};
+            while (peek().type == TokenType::Dot) {
+                advance();
+                const Token& ftok = peek();
+                if (ftok.type != TokenType::Identifier) {
+                    throw std::runtime_error("Expected field name after '.' at line " + std::to_string(ftok.line));
+                }
+                advance();
+                AstNode mem{AstNode::Type::ExprMember, ftok.value, {std::move(cur)}};
+                cur = std::move(mem);
+            }
             if (match(TokenType::LBracket)) {
+                if (cur.type != AstNode::Type::ExprVarRef) {
+                    throw std::runtime_error("Only simple arrays support [] indexing at line " + std::to_string(peek().line));
+                }
                 AstNode idx = parseExpression();
                 if (!match(TokenType::RBracket)) {
                     throw std::runtime_error("Expected ']' at line " + std::to_string(peek().line));
                 }
-                return {AstNode::Type::ExprArrayIndex, name, {idx}};
+                return {AstNode::Type::ExprArrayIndex, cur.value, {idx}};
             }
-            return {AstNode::Type::ExprVarRef, name, {}};
+            return cur;
         }
         if (match(TokenType::LParen)) {
             AstNode e = parseExpression();
@@ -1650,24 +1903,7 @@ private:
         bool isFixedArray = false;
         std::string arraySize = "";
         if (match(TokenType::Colon)) {
-            const Token& t = peek();
-            if (t.type != TokenType::Identifier) {
-                throw std::runtime_error("Expected variable type at line " + std::to_string(t.line));
-            }
-            if (t.value == "unsigned") {
-                advance();
-                const Token& t2 = peek();
-                if (t2.type != TokenType::Identifier || t2.value != "char") {
-                    throw std::runtime_error("Expected 'char' after 'unsigned' at line " + std::to_string(t2.line));
-                }
-                advance();
-                declType = "unsigned char";
-            } else if (t.value == "int") { advance(); declType = "int"; }
-            else if (t.value == "string") { advance(); declType = "string"; }
-            else if (t.value == "bool") { advance(); declType = "bool"; }
-            else if (t.value == "float") { advance(); declType = "float"; }
-            else if (t.value == "char") { advance(); declType = "char"; }
-            else throw std::runtime_error("Variable type must be int, string, bool, float, char, or unsigned char at line " + std::to_string(t.line));
+            declType = parseTypeName();
             if (match(TokenType::LBracket)) {
                 const Token& sizeTok = peek();
                 if (sizeTok.type != TokenType::Number) {
@@ -1679,8 +1915,10 @@ private:
                     throw std::runtime_error("Expected ']' after array size at line " + std::to_string(peek().line));
                 }
                 isFixedArray = true;
-                if (declType == "string" || declType == "bool" || declType == "float") {
-                    throw std::runtime_error("Fixed array only supports int, char, or unsigned char at line " + std::to_string(t.line));
+                if (declType == "string" || declType == "bool" || declType == "float" ||
+                    (declType.size() >= 7 && declType.compare(0, 7, "struct:") == 0) ||
+                    (declType.size() >= 5 && declType.compare(0, 5, "enum:") == 0)) {
+                    throw std::runtime_error("Fixed array only supports int, char, or unsigned char at line " + std::to_string(peek().line));
                 }
             }
         }
@@ -1700,6 +1938,18 @@ private:
             node.initIsChar = (declType == "char");
             node.isFixedArray = isFixedArray;
             node.arraySize = arraySize;
+            if (declType.size() >= 7 && declType.compare(0, 7, "struct:") == 0) {
+                node.initIsInt = false;
+                node.initIsBool = false;
+                node.initIsFloat = false;
+                node.initIsChar = false;
+            }
+            if (declType.size() >= 5 && declType.compare(0, 5, "enum:") == 0) {
+                node.initIsInt = false;
+                node.initIsBool = false;
+                node.initIsFloat = false;
+                node.initIsChar = false;
+            }
             return node;
         }
         if (isFixedArray) {
@@ -1786,12 +2036,27 @@ private:
         } else {
             throw std::runtime_error("Expected number, string, expression, io.readln(), or array at line " + std::to_string(initTok.line));
         }
+        if (declType.empty() && !node.children.empty() && astHasMemberAccess(node.children.back())) {
+            throw std::runtime_error("let with '.' access requires an explicit type (e.g. let x: int = s.field or let x: enum E = E.A) at line " + std::to_string(line));
+        }
         if (!declType.empty()) {
             node.declType = declType;
             node.initIsInt = (declType == "int");
             node.initIsBool = (declType == "bool");
             node.initIsFloat = (declType == "float");
             node.initIsChar = (declType == "char");
+            if (declType.size() >= 7 && declType.compare(0, 7, "struct:") == 0) {
+                node.initIsInt = false;
+                node.initIsBool = false;
+                node.initIsFloat = false;
+                node.initIsChar = false;
+            }
+            if (declType.size() >= 5 && declType.compare(0, 5, "enum:") == 0) {
+                node.initIsInt = false;
+                node.initIsBool = false;
+                node.initIsFloat = false;
+                node.initIsChar = false;
+            }
         }
         if (!match(TokenType::Semicolon)) {
             throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
