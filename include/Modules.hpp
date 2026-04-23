@@ -2,12 +2,31 @@
 
 #include <string>
 #include <set>
+#include <sstream>
 
 namespace nexa {
 
 // Tracks which standard library modules are enabled by #include directives
 class Modules {
 public:
+    struct CppUsage {
+        bool ioPrint = false;
+        bool ioReadln = false;
+        bool ioToInt = false;
+        bool osSystem = false;
+        bool osGetenv = false;
+        bool osPlatform = false;
+        bool osExeDir = false;
+        bool osWindowControl = false;
+        bool osMessageBox = false;
+        bool osGrepKeys = false;
+        bool osKeyPressed = false;
+        bool file = false;
+        bool random = false;
+        bool time = false;
+        bool dll = false;
+    };
+
     void enable(const std::string& path) {
         enabled_.insert(path);
     }
@@ -40,22 +59,36 @@ public:
         return enabled_.count("std/inline") > 0;
     }
 
-    std::string getCppIncludes() const {
+    std::string getCppIncludes(const CppUsage& usage) const {
         std::string out;
-        if (hasIo()) {
+        if (hasIo() && (usage.ioPrint || usage.ioReadln)) {
             out += "#include <cstdio>\n";
+        }
+        if (hasIo() && usage.ioReadln) {
             out += "#include <cstring>\n";
-            out += "#include <cstdlib>\n";
+            out += "#include <string>\n";
+        }
+        if (hasIo() && usage.ioToInt) {
             out += "#include <string>\n";
             out += "static int __nexa_to_int(const std::string& s) { try { return std::stoi(s); } catch(...) { return 0; } }\n";
         }
-        if (hasOs()) {
+        if (hasOs() && (usage.osSystem || usage.osGetenv)) {
             out += "#include <cstdlib>\n";
-            out += "#include <cstdio>\n";
+        }
+        if (hasOs() && (usage.osGetenv || usage.osPlatform || usage.osExeDir || usage.osMessageBox || usage.osGrepKeys)) {
             out += "#include <string>\n";
+        }
+        if (hasOs() && usage.osExeDir) {
             out += "#ifdef __linux__\n#include <unistd.h>\n#endif\n";
-            out += "#ifdef _WIN32\n#include <windows.h>\n#include <conio.h>\n#endif\n";
             out += "#ifdef __APPLE__\n#include <mach-o/dyld.h>\n#endif\n";
+        }
+        if (hasOs() && (usage.osWindowControl || usage.osMessageBox || usage.osExeDir)) {
+            out += "#ifdef _WIN32\n#include <windows.h>\n#endif\n";
+        }
+        if (hasOs() && (usage.osGrepKeys || usage.osKeyPressed)) {
+            out += "#ifdef _WIN32\n#include <conio.h>\n#endif\n";
+        }
+        if (hasOs() && usage.osPlatform) {
             out += "static std::string __nexa_os_platform() {\n";
             out += "#ifdef _WIN32\n";
             out += "  return \"windows\";\n";
@@ -67,6 +100,8 @@ public:
             out += "  return \"unknown\";\n";
             out += "#endif\n";
             out += "}\n";
+        }
+        if (hasOs() && usage.osExeDir) {
             out += "static std::string __nexa_exe_dir() {\n";
             out += "#ifdef __linux__\n";
             out += "  char buf[4096]; ssize_t n = readlink(\"/proc/self/exe\", buf, sizeof(buf)-1);\n";
@@ -80,6 +115,8 @@ public:
             out += "#endif\n";
             out += "  return \"./\";\n";
             out += "}\n";
+        }
+        if (hasOs() && usage.osWindowControl) {
             out += "static void __nexa_os_hide_console_window() {\n";
             out += "#ifdef _WIN32\n";
             out += "  HWND h = GetConsoleWindow(); if (h) ShowWindow(h, SW_HIDE);\n";
@@ -100,11 +137,15 @@ public:
             out += "  HWND h = GetConsoleWindow(); if (h) ShowWindow(h, SW_MAXIMIZE);\n";
             out += "#endif\n";
             out += "}\n";
+        }
+        if (hasOs() && usage.osMessageBox) {
             out += "static void __nexa_os_messagebox(const std::string& text, const std::string& title) {\n";
             out += "#ifdef _WIN32\n";
             out += "  MessageBoxA(NULL, text.c_str(), title.c_str(), MB_OK);\n";
             out += "#endif\n";
             out += "}\n";
+        }
+        if (hasOs() && usage.osGrepKeys) {
             out += "static std::string __nexa_os_grepkeys() {\n";
             out += "#ifdef _WIN32\n";
             out += "  int c = _getch();\n";
@@ -122,6 +163,8 @@ public:
             out += "  return \"\";\n";
             out += "#endif\n";
             out += "}\n";
+        }
+        if (hasOs() && usage.osKeyPressed) {
             out += "static int __nexa_os_keypressed() {\n";
             out += "#ifdef _WIN32\n";
             out += "  return _kbhit() ? 1 : 0;\n";
@@ -130,22 +173,22 @@ public:
             out += "#endif\n";
             out += "}\n";
         }
-        if (hasFile()) {
+        if (hasFile() && usage.file) {
             out += "#include <fstream>\n";
             out += "#include <sstream>\n";
             out += "#include <filesystem>\n";
         }
-        if (hasRandom()) {
+        if (hasRandom() && usage.random) {
             out += "#include <random>\n";
             out += "static std::mt19937& __nexa_rng() { static std::mt19937 gen(std::random_device{}()); return gen; }\n";
             out += "static void __nexa_random_seed(int s) { __nexa_rng().seed(static_cast<unsigned>(s)); }\n";
             out += "static int __nexa_random_int(int a, int b) { return std::uniform_int_distribution<int>(a, b)(__nexa_rng()); }\n";
         }
-        if (hasTime()) {
+        if (hasTime() && usage.time) {
             out += "#include <thread>\n";
             out += "#include <chrono>\n";
         }
-        if (hasDll()) {
+        if (hasDll() && usage.dll) {
             out += "#include <vector>\n";
 #ifdef _WIN32
             out += "#include <windows.h>\n";
@@ -154,7 +197,28 @@ public:
 #endif
             out += "static std::vector<void*> __nexa_dll_handles;\n";
         }
-        return out;
+        std::set<std::string> seenIncludeLines;
+        std::ostringstream filtered;
+        std::istringstream in(out);
+        std::string line;
+        while (std::getline(in, line)) {
+            std::string key = line;
+            while (!key.empty() && key.back() == '\r') key.pop_back();
+            if (key.rfind("#include <", 0) == 0) {
+                if (!seenIncludeLines.insert(key).second) continue;
+            }
+            filtered << key << "\n";
+        }
+        return filtered.str();
+    }
+
+    std::string getCppIncludes() const {
+        CppUsage all;
+        all.ioPrint = all.ioReadln = all.ioToInt = true;
+        all.osSystem = all.osGetenv = all.osPlatform = all.osExeDir = true;
+        all.osWindowControl = all.osMessageBox = all.osGrepKeys = all.osKeyPressed = true;
+        all.file = all.random = all.time = all.dll = true;
+        return getCppIncludes(all);
     }
 
 private:

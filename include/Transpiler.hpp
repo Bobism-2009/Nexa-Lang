@@ -55,6 +55,41 @@ public:
     std::string transpile() {
         std::ostringstream out;
 
+        Modules::CppUsage cppUsage;
+        std::function<void(const AstNode&)> detectCppUsage = [&](const AstNode& n) {
+            switch (n.type) {
+                case AstNode::Type::IoPrint:
+                case AstNode::Type::IoPrintln: cppUsage.ioPrint = true; break;
+                case AstNode::Type::IoReadln: cppUsage.ioReadln = true; break;
+                case AstNode::Type::IoToInt: cppUsage.ioToInt = true; break;
+                case AstNode::Type::OsSystem: cppUsage.osSystem = true; break;
+                case AstNode::Type::OsGetenv: cppUsage.osGetenv = true; break;
+                case AstNode::Type::OsPlatform: cppUsage.osPlatform = true; break;
+                case AstNode::Type::OsExeDir: cppUsage.osExeDir = true; break;
+                case AstNode::Type::OsHideConsoleWindow:
+                case AstNode::Type::OsShowConsoleWindow:
+                case AstNode::Type::OsMinimizeConsoleWindow:
+                case AstNode::Type::OsMaximizeConsoleWindow: cppUsage.osWindowControl = true; break;
+                case AstNode::Type::OsMessageBox: cppUsage.osMessageBox = true; break;
+                case AstNode::Type::OsGrepKeys: cppUsage.osGrepKeys = true; break;
+                case AstNode::Type::OsKeyPressed: cppUsage.osKeyPressed = true; break;
+                case AstNode::Type::FileRead:
+                case AstNode::Type::FileWrite:
+                case AstNode::Type::FileAppend:
+                case AstNode::Type::FileExists: cppUsage.file = true; break;
+                case AstNode::Type::RandomInt:
+                case AstNode::Type::RandomSeed: cppUsage.random = true; break;
+                case AstNode::Type::TimeSleep:
+                case AstNode::Type::TimeSeconds:
+                case AstNode::Type::TimeMilliseconds: cppUsage.time = true; break;
+                case AstNode::Type::DllLoad:
+                case AstNode::Type::DllCall: cppUsage.dll = true; break;
+                default: break;
+            }
+            for (const AstNode& c : n.children) detectCppUsage(c);
+        };
+        for (const AstNode& node : ast_) detectCppUsage(node);
+
         // C++ includes from enabled modules
         if (buildDll_) {
             out << "#ifdef _WIN32\n";
@@ -63,7 +98,8 @@ public:
             out << "#define NEXA_EXPORT __attribute__((visibility(\"default\")))\n";
             out << "#endif\n\n";
         }
-        out << modules_.getCppIncludes();
+        std::string moduleCppIncludes = modules_.getCppIncludes(cppUsage);
+        out << moduleCppIncludes;
         std::vector<std::string> inlineCppHoisted;
         std::set<std::string> inlineCppSeen;
         for (const AstNode& node : ast_) walkAstForInlineCppIncludes(node, inlineCppHoisted, inlineCppSeen);
@@ -149,9 +185,9 @@ public:
             if (node.type == AstNode::Type::Variable && node.initFromArray) needsVector = true;
             if (node.type == AstNode::Type::Variable && !node.children.empty() && node.children[0].type == AstNode::Type::ExprArrayLiteral) needsVector = true;
         }
-        if (needsString) out << "#include <string>\n";
-        if (needsVector) out << "#include <vector>\n";
-        if (!modules_.getCppIncludes().empty() || !inlineCppHoisted.empty() || needsString || needsVector) out << "\n";
+        if (needsString && moduleCppIncludes.find("#include <string>\n") == std::string::npos) out << "#include <string>\n";
+        if (needsVector && moduleCppIncludes.find("#include <vector>\n") == std::string::npos) out << "#include <vector>\n";
+        if (!moduleCppIncludes.empty() || !inlineCppHoisted.empty() || needsString || needsVector) out << "\n";
 
         bool wroteUserCppHeaders = false;
         for (const AstNode& node : ast_) {
@@ -491,7 +527,19 @@ public:
             }
         }
 
-        return out.str();
+        std::set<std::string> seenIncludeLines;
+        std::ostringstream filtered;
+        std::istringstream in(out.str());
+        std::string line;
+        while (std::getline(in, line)) {
+            std::string key = line;
+            while (!key.empty() && key.back() == '\r') key.pop_back();
+            if (key.rfind("#include <", 0) == 0) {
+                if (!seenIncludeLines.insert(key).second) continue;
+            }
+            filtered << key << "\n";
+        }
+        return filtered.str();
     }
 
 private:
