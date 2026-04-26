@@ -177,7 +177,7 @@
       "patterns": [
         {
           "name": "support.function.builtin.nexa",
-          "match": "\\blen(?=\\s*\\()"
+          "match": "\\b(len|trim)(?=\\s*\\()"
         }
       ]
     },

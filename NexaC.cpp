@@ -384,6 +384,8 @@ static int printHelp(int page = 1) {
         std::cout << "    - number literal: let x = 42;\n";
         std::cout << "    - string literal: let s = \"hi\";\n";
         std::cout << "    - io.readln():    let s = io.readln();\n";
+        std::cout << "    - io.getline(s[, n]): get line n (default 1) from string buffer s\n";
+        std::cout << "    - trim(s[, prefix]): strip whitespace; optional prefix removed from start after (built-in)\n";
         std::cout << "    - dll.load():     let h = dll.load(\"./lib.so\");  (requires std/dll)\n";
         std::cout << "    - expression:     let sum = a + b; let x = add(2, 3);\n\n";
         std::cout << "  Arithmetic: + - * / % (int only, * / % before + and -)\n";
@@ -400,7 +402,7 @@ static int printHelp(int page = 1) {
         std::cout << "  // line comment\n";
         std::cout << "  /* block comment */\n\n";
         std::cout << "Modules:\n";
-        std::cout << "  #include <std/io>   - print, println, readln\n";
+        std::cout << "  #include <std/io>   - print, println, readln, getline, trim, to_int\n";
         std::cout << "  #include <std/os>   - system, platform, getenv\n";
         std::cout << "  #include <std/dll>  - load, call (dynamic libraries)\n";
         std::cout << "  #include <std/file> - read, write, append, exists\n";
@@ -438,12 +440,19 @@ static int printHelp(int page = 1) {
         std::cout << "    Reads one line from stdin.\n";
         std::cout << "    Returns: string\n";
         std::cout << "    Use with: let var = io.readln();\n\n";
+        std::cout << "  io.getline(text[, lineNo])\n";
+        std::cout << "    Returns line lineNo (1-based, default 1) from string buffer text.\n";
+        std::cout << "    Use with: let l = io.getline(file.read(\"data.txt\"), 2);\n\n";
+        std::cout << "  io.trim(s[, prefix])\n";
+        std::cout << "    Same as trim(s[, prefix]): trims ASCII whitespace; if prefix is set, strips it once from the\n";
+        std::cout << "    start after trimming (e.g. io.trim(io.getline(buf, \"x\"), \"x:\") for value 5 from line \"x:5\").\n\n";
         std::cout << "Variables used:\n";
-        std::cout << "  - string: from \"literal\" or io.readln()\n";
+        std::cout << "  - string: from \"literal\", io.readln(), io.getline(...), trim/io.trim(...)\n";
         std::cout << "  - int: from 42, -10, etc.\n\n";
         std::cout << "Example:\n";
         std::cout << "  io.print(\"Name: \");\n";
         std::cout << "  let name = io.readln();\n";
+        std::cout << "  let second = io.getline(\"a\\nb\\nc\", 2);\n";
         std::cout << "  io.println(name);\n";
         std::cout << "  let x = 42;\n";
         std::cout << "  io.println(x);\n\n";
@@ -627,7 +636,7 @@ static int printHelp(int page = 1) {
     std::cout << "  --help <page>  Show page (2=core ... 8=std/thread, 9=std/inline)\n";
     std::cout << "  --help --pageN  Same (e.g. --page2, --page3)\n\n";
     std::cout << "Standard library modules:\n";
-    std::cout << "  std/io        Input/output: print, println, readln\n";
+    std::cout << "  std/io        Input/output: print, println, readln, getline, trim, to_int\n";
     std::cout << "  std/os        System calls: system\n";
     std::cout << "  std/dll       Dynamic libraries: load, call\n";
     std::cout << "  std/file      File I/O: read, write, append, exists\n";

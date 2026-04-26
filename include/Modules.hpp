@@ -12,6 +12,7 @@ public:
     struct CppUsage {
         bool ioPrint = false;
         bool ioReadln = false;
+        bool ioGetline = false;
         bool ioToInt = false;
         bool osSystem = false;
         bool osGetenv = false;
@@ -73,6 +74,45 @@ public:
         if (hasIo() && usage.ioReadln) {
             out += "#include <cstring>\n";
             out += "#include <string>\n";
+        }
+        if (hasIo() && usage.ioGetline) {
+            out += "#include <string>\n";
+            out += "static std::string __nexa_io_getline(const std::string& src, int lineNo) {\n";
+            out += "  if (lineNo < 1) return \"\";\n";
+            out += "  size_t start = 0;\n";
+            out += "  int cur = 1;\n";
+            out += "  while (cur < lineNo) {\n";
+            out += "    size_t nl = src.find('\\n', start);\n";
+            out += "    if (nl == std::string::npos) return \"\";\n";
+            out += "    start = nl + 1;\n";
+            out += "    cur++;\n";
+            out += "  }\n";
+            out += "  size_t end = src.find('\\n', start);\n";
+            out += "  std::string line = (end == std::string::npos) ? src.substr(start) : src.substr(start, end - start);\n";
+            out += "  if (!line.empty() && line.back() == '\\r') line.pop_back();\n";
+            out += "  return line;\n";
+            out += "}\n";
+            out += "static std::string __nexa_io_getline_by_key(const std::string& src, const std::string& key) {\n";
+            out += "  if (key.empty()) return \"\";\n";
+            out += "  size_t pos = 0;\n";
+            out += "  while (pos <= src.size()) {\n";
+            out += "    size_t end = src.find('\\n', pos);\n";
+            out += "    std::string line = (end == std::string::npos) ? src.substr(pos) : src.substr(pos, end - pos);\n";
+            out += "    if (!line.empty() && line.back() == '\\r') line.pop_back();\n";
+            out += "    size_t i = 0;\n";
+            out += "    while (i < line.size() && (line[i] == ' ' || line[i] == '\\t')) i++;\n";
+            out += "    if (line.compare(i, key.size(), key) == 0) {\n";
+            out += "      size_t j = i + key.size();\n";
+            out += "      while (j < line.size() && (line[j] == ' ' || line[j] == '\\t')) j++;\n";
+            out += "      if (j < line.size() && line[j] == ':') {\n";
+            out += "        return line.substr(i);\n";
+            out += "      }\n";
+            out += "    }\n";
+            out += "    if (end == std::string::npos) break;\n";
+            out += "    pos = end + 1;\n";
+            out += "  }\n";
+            out += "  return \"\";\n";
+            out += "}\n";
         }
         if (hasIo() && usage.ioToInt) {
             out += "#include <string>\n";
@@ -283,7 +323,7 @@ public:
 
     std::string getCppIncludes() const {
         CppUsage all;
-        all.ioPrint = all.ioReadln = all.ioToInt = true;
+        all.ioPrint = all.ioReadln = all.ioGetline = all.ioToInt = true;
         all.osSystem = all.osGetenv = all.osPlatform = all.osExeDir = true;
         all.osGetProcessId = true;
         all.osWindowControl = all.osMessageBox = all.osGrepKeys = all.osKeyPressed = true;

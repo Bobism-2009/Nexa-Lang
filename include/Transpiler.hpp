@@ -62,6 +62,7 @@ public:
                 case AstNode::Type::IoPrint:
                 case AstNode::Type::IoPrintln: cppUsage.ioPrint = true; break;
                 case AstNode::Type::IoReadln: cppUsage.ioReadln = true; break;
+                case AstNode::Type::IoGetline: cppUsage.ioGetline = true; break;
                 case AstNode::Type::IoToInt: cppUsage.ioToInt = true; break;
                 case AstNode::Type::OsSystem: cppUsage.osSystem = true; break;
                 case AstNode::Type::OsGetenv: cppUsage.osGetenv = true; break;
@@ -671,7 +672,7 @@ private:
     }
 
     static bool exprProducesString(const AstNode& e) {
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::ExprStringLiteral) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim) return true;
         if (e.type == AstNode::Type::ExprAdd && e.children.size() >= 2) {
             return exprProducesString(e.children[0]) || exprProducesString(e.children[1]);
         }
@@ -701,7 +702,7 @@ private:
             auto it = varIsString.find(e.value);
             return it != varIsString.end() && it->second;
         }
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim) return true;
         if (e.type == AstNode::Type::ExprAdd && e.children.size() >= 2) {
             return exprIsString(e.children[0], varIsString) || exprIsString(e.children[1], varIsString);
         }
@@ -1402,6 +1403,18 @@ private:
             case AstNode::Type::IoReadln: {
                 return "([]{ char __b[4096]; if (fgets(__b, sizeof(__b), stdin)) __b[strcspn(__b, \"\\n\")] = 0; return std::string(__b); }())";
             }
+            case AstNode::Type::IoGetline: {
+                std::string src = emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool);
+                if (e.children.size() >= 2) {
+                    bool argIsString = exprIsString(e.children[1], vIsStr);
+                    std::string arg2 = emitExpr(e.children[1], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool);
+                    if (argIsString) {
+                        return "__nexa_io_getline_by_key(" + src + ", " + arg2 + ")";
+                    }
+                    return "__nexa_io_getline(" + src + ", " + arg2 + ")";
+                }
+                return "__nexa_io_getline(" + src + ", 1)";
+            }
             case AstNode::Type::IoToInt: {
                 std::string s = emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool);
                 return "__nexa_to_int(" + s + ")";
@@ -1417,6 +1430,14 @@ private:
             case AstNode::Type::ExprLen: {
                 std::string s = emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool);
                 return "(int)((" + s + ").size())";
+            }
+            case AstNode::Type::ExprTrim: {
+                std::string w = emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool);
+                if (e.children.size() >= 2) {
+                    std::string p = emitExpr(e.children[1], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool);
+                    return "([](const std::string& __w, const std::string& __p){ auto __nst = [](const std::string& __t)->std::string { size_t __a = __t.find_first_not_of(\" \\t\\n\\r\\f\\v\"); if (__a == std::string::npos) return std::string(); size_t __b = __t.find_last_not_of(\" \\t\\n\\r\\f\\v\"); return __t.substr(__a, __b - __a + 1); }; std::string __s = __nst(__w); if (!__p.empty() && __s.size() >= __p.size() && __s.compare(0, __p.size(), __p) == 0) return __nst(__s.substr(__p.size())); return __s; })(" + w + ", " + p + ")";
+                }
+                return "([](const std::string& __nexa_t){ size_t __a = __nexa_t.find_first_not_of(\" \\t\\n\\r\\f\\v\"); if (__a == std::string::npos) return std::string(); size_t __b = __nexa_t.find_last_not_of(\" \\t\\n\\r\\f\\v\"); return __nexa_t.substr(__a, __b - __a + 1); })(" + w + ")";
             }
             case AstNode::Type::RandomInt: {
                 std::string minExpr = emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool);

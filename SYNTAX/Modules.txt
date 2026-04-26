@@ -7,7 +7,10 @@ Nexa Standard Modules
   Strings support escapes: \n \t \r \\ \" \xHH (hex ASCII)
   s += "x";        - string concatenation (compound assign)
   len(s)           - string or array length, returns int (built-in)
+  trim(s[, prefix]) / io.trim(s[, prefix]) - trim ASCII whitespace; if prefix is given, remove it once from the start after that (e.g. trim("  x:5  ", "x:") -> "5")
   io.readln()      - Read one line from stdin, returns string
+  io.getline(text[, lineNo]) - Return lineNo (1-based, default 1) from string buffer
+  io.getline(text, "key")    - Line matching key: (leading ws ok); returns from key through line end
   arg: one expression (literal, variable, or + chain). If any operand is string-typed or a string
        literal, + builds text: int/float/bool/char are converted (e.g. io.println("n=" + n);).
        Pure int/float + without string stays numeric (arithmetic).

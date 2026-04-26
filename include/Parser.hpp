@@ -15,7 +15,7 @@ namespace nexa {
 
 // AST node types - simple structure for our minimal grammar
 struct AstNode {
-    enum class Type { Include, CppHeaderInclude, IoPrint, IoPrintln, IoReadln, IoToInt, MainFunction, Function, FnCall, Variable, Assignment, OsSystem, OsGetenv, OsPlatform, OsExeDir, OsGetProcessId,
+    enum class Type { Include, CppHeaderInclude, IoPrint, IoPrintln, IoReadln, IoGetline, IoToInt, MainFunction, Function, FnCall, Variable, Assignment, OsSystem, OsGetenv, OsPlatform, OsExeDir, OsGetProcessId,
                       OsHideConsoleWindow, OsShowConsoleWindow, OsMinimizeConsoleWindow, OsMaximizeConsoleWindow,
                       OsMessageBox, OsGrepKeys, OsKeyPressed,
                       DllLoad, DllCall,
@@ -51,6 +51,7 @@ struct AstNode {
                       CondAnd, CondOr, CondNot,
                       ExprStringLiteral,
                       ExprLen,
+                      ExprTrim,
                       AssnIndex,
                       StructDef,
                       EnumDef,
@@ -138,7 +139,7 @@ private:
     const std::vector<std::string>* packagePaths_;
 
     static bool exprProducesString(const AstNode& e) {
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim) return true;
         if (e.type == AstNode::Type::ExprAdd && e.children.size() >= 2) {
             return exprProducesString(e.children[0]) || exprProducesString(e.children[1]);
         }
@@ -646,6 +647,24 @@ private:
             throw std::runtime_error("Expected ')' in len(...) at line " + std::to_string(peek().line));
         }
         return {AstNode::Type::ExprLen, "", {arg}};
+    }
+
+    AstNode parseTrimExpr() {
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "trim") {
+            throw std::runtime_error("Expected 'trim' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after trim at line " + std::to_string(peek().line));
+        }
+        AstNode arg = parseExpression();
+        AstNode node{AstNode::Type::ExprTrim, "", {arg}};
+        if (match(TokenType::Comma)) {
+            node.children.push_back(parseExpression());
+        }
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' in trim(...) at line " + std::to_string(peek().line));
+        }
+        return node;
     }
 
     AstNode parseFnCallExpr() {
@@ -1276,7 +1295,9 @@ private:
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
             std::string method = tokens_[pos_ + 2].value;
             if (method == "readln") return parseIoReadlnExpr();
+            if (method == "getline") return parseIoGetlineExpr();
             if (method == "to_int") return parseIoToIntExpr();
+            if (method == "trim") return parseIoTrimExpr();
         }
         if (peek().type == TokenType::Identifier && peek().value == "os" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
@@ -1321,6 +1342,10 @@ private:
         if (peek().type == TokenType::Identifier && peek().value == "len" && pos_ + 1 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::LParen) {
             return parseLenExpr();
+        }
+        if (peek().type == TokenType::Identifier && peek().value == "trim" && pos_ + 1 < tokens_.size() &&
+            tokens_[pos_ + 1].type == TokenType::LParen) {
+            return parseTrimExpr();
         }
         if (peek().type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::LParen) {
@@ -1683,6 +1708,35 @@ private:
         return {AstNode::Type::IoReadln, "", {}};
     }
 
+    AstNode parseIoGetlineExpr() {
+        size_t line = peek().line;
+        if (!modules_.hasIo()) {
+            throw std::runtime_error("io.getline requires #include <std/io> at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "io") {
+            throw std::runtime_error("Expected 'io' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "getline") {
+            throw std::runtime_error("Expected io.getline at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after getline at line " + std::to_string(peek().line));
+        }
+        AstNode sourceArg = parseExpression();
+        AstNode node{AstNode::Type::IoGetline, "", {}};
+        node.children.push_back(sourceArg);
+        if (match(TokenType::Comma)) {
+            node.children.push_back(parseExpression());
+        }
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' after io.getline(...) at line " + std::to_string(peek().line));
+        }
+        return node;
+    }
+
     AstNode parseIoToIntExpr() {
         size_t line = peek().line;
         if (!modules_.hasIo()) {
@@ -1705,6 +1759,34 @@ private:
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
         }
         return {AstNode::Type::IoToInt, "", {arg}};
+    }
+
+    AstNode parseIoTrimExpr() {
+        size_t line = peek().line;
+        if (!modules_.hasIo()) {
+            throw std::runtime_error("io.trim requires #include <std/io> at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "io") {
+            throw std::runtime_error("Expected 'io' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "trim") {
+            throw std::runtime_error("Expected io.trim at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after trim at line " + std::to_string(peek().line));
+        }
+        AstNode arg = parseExpression();
+        AstNode node{AstNode::Type::ExprTrim, "", {arg}};
+        if (match(TokenType::Comma)) {
+            node.children.push_back(parseExpression());
+        }
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' after io.trim(...) at line " + std::to_string(peek().line));
+        }
+        return node;
     }
 
     AstNode parseFileReadOrExists(bool isRead) {
