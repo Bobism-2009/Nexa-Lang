@@ -17,6 +17,7 @@ public:
         bool osGetenv = false;
         bool osPlatform = false;
         bool osExeDir = false;
+        bool osGetProcessId = false;
         bool osWindowControl = false;
         bool osMessageBox = false;
         bool osGrepKeys = false;
@@ -83,6 +84,10 @@ public:
         if (hasOs() && (usage.osGetenv || usage.osPlatform || usage.osExeDir || usage.osMessageBox || usage.osGrepKeys)) {
             out += "#include <string>\n";
         }
+        if (hasOs() && usage.osGetProcessId) {
+            out += "#include <string>\n";
+            out += "#ifdef _WIN32\n#include <windows.h>\n#include <tlhelp32.h>\n#else\n#include <unistd.h>\n#endif\n";
+        }
         if (hasOs() && usage.osExeDir) {
             out += "#ifdef __linux__\n#include <unistd.h>\n#endif\n";
             out += "#ifdef __APPLE__\n#include <mach-o/dyld.h>\n#endif\n";
@@ -103,6 +108,51 @@ public:
             out += "  return \"linux\";\n";
             out += "#else\n";
             out += "  return \"unknown\";\n";
+            out += "#endif\n";
+            out += "}\n";
+        }
+        if (hasOs() && usage.osGetProcessId) {
+            out += "static std::string __nexa_ascii_lower(const std::string& s) {\n";
+            out += "  std::string t = s;\n";
+            out += "  for (size_t i = 0; i < t.size(); ++i) {\n";
+            out += "    unsigned char c = static_cast<unsigned char>(t[i]);\n";
+            out += "    if (c >= 'A' && c <= 'Z') t[i] = static_cast<char>(c - 'A' + 'a');\n";
+            out += "  }\n";
+            out += "  return t;\n";
+            out += "}\n";
+            out += "static int __nexa_os_getprocessid() {\n";
+            out += "#ifdef _WIN32\n";
+            out += "  return static_cast<int>(GetCurrentProcessId());\n";
+            out += "#else\n";
+            out += "  return static_cast<int>(getpid());\n";
+            out += "#endif\n";
+            out += "}\n";
+            out += "static int __nexa_os_getprocessid_by_name(const std::string& name) {\n";
+            out += "#ifdef _WIN32\n";
+            out += "  std::string target = __nexa_ascii_lower(name);\n";
+            out += "  HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);\n";
+            out += "  if (snap == INVALID_HANDLE_VALUE) return 0;\n";
+            out += "  PROCESSENTRY32 pe; pe.dwSize = sizeof(pe);\n";
+            out += "  if (Process32First(snap, &pe)) {\n";
+            out += "    do {\n";
+            out += "#ifdef UNICODE\n";
+            out += "      char exe[260];\n";
+            out += "      int n = WideCharToMultiByte(CP_UTF8, 0, pe.szExeFile, -1, exe, sizeof(exe), NULL, NULL);\n";
+            out += "      std::string proc = (n > 0) ? std::string(exe) : std::string();\n";
+            out += "#else\n";
+            out += "      std::string proc = std::string(pe.szExeFile);\n";
+            out += "#endif\n";
+            out += "      if (__nexa_ascii_lower(proc) == target) {\n";
+            out += "        CloseHandle(snap);\n";
+            out += "        return static_cast<int>(pe.th32ProcessID);\n";
+            out += "      }\n";
+            out += "    } while (Process32Next(snap, &pe));\n";
+            out += "  }\n";
+            out += "  CloseHandle(snap);\n";
+            out += "  return 0;\n";
+            out += "#else\n";
+            out += "  (void)name;\n";
+            out += "  return 0;\n";
             out += "#endif\n";
             out += "}\n";
         }
@@ -235,6 +285,7 @@ public:
         CppUsage all;
         all.ioPrint = all.ioReadln = all.ioToInt = true;
         all.osSystem = all.osGetenv = all.osPlatform = all.osExeDir = true;
+        all.osGetProcessId = true;
         all.osWindowControl = all.osMessageBox = all.osGrepKeys = all.osKeyPressed = true;
         all.file = all.random = all.time = all.thread = all.dll = true;
         return getCppIncludes(all);

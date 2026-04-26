@@ -16,6 +16,7 @@ Nexa Standard Modules
   os.system(cmd)    - Run shell command, blocks until complete
   os.platform()     - Returns "windows", "linux", "darwin", or "unknown"
   os.getenv(name)   - Get environment variable, returns string (or "")
+  os.getprocessid() / os.getpid() - Current process ID (int)
   os.exe_dir()      - Directory containing the running executable (trailing slash)
   os.hideconsolewindow()     - Hide console window (Windows)
   os.showconsolewindow()     - Show console window (Windows)

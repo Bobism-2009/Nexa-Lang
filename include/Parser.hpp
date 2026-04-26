@@ -15,7 +15,7 @@ namespace nexa {
 
 // AST node types - simple structure for our minimal grammar
 struct AstNode {
-    enum class Type { Include, CppHeaderInclude, IoPrint, IoPrintln, IoReadln, IoToInt, MainFunction, Function, FnCall, Variable, Assignment, OsSystem, OsGetenv, OsPlatform, OsExeDir,
+    enum class Type { Include, CppHeaderInclude, IoPrint, IoPrintln, IoReadln, IoToInt, MainFunction, Function, FnCall, Variable, Assignment, OsSystem, OsGetenv, OsPlatform, OsExeDir, OsGetProcessId,
                       OsHideConsoleWindow, OsShowConsoleWindow, OsMinimizeConsoleWindow, OsMaximizeConsoleWindow,
                       OsMessageBox, OsGrepKeys, OsKeyPressed,
                       DllLoad, DllCall,
@@ -599,6 +599,9 @@ private:
                 stmts.push_back(parseRandomCall());
             } else if (t.type == TokenType::Identifier && t.value == "time") {
                 stmts.push_back(parseTimeCall());
+            } else if (t.type == TokenType::Identifier && (t.value == "getprocessid" || t.value == "getpid") &&
+                       pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::LParen) {
+                stmts.push_back(parseOsGetProcessIdBareStmt());
             } else if (t.type == TokenType::Identifier && t.value == "ui") {
                 throw std::runtime_error("std/ui has been removed at line " + std::to_string(t.line));
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
@@ -1048,6 +1051,9 @@ private:
                 stmts.push_back(parseRandomCall());
             } else if (t.type == TokenType::Identifier && t.value == "time") {
                 stmts.push_back(parseTimeCall());
+            } else if (t.type == TokenType::Identifier && (t.value == "getprocessid" || t.value == "getpid") &&
+                       pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::LParen) {
+                stmts.push_back(parseOsGetProcessIdBareStmt());
             } else if (t.type == TokenType::Identifier && t.value == "ui") {
                 throw std::runtime_error("std/ui has been removed at line " + std::to_string(t.line));
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
@@ -1278,8 +1284,13 @@ private:
             if (method == "getenv") return parseOsGetenv();
             if (method == "platform") return parseOsPlatform();
             if (method == "exe_dir") return parseOsExeDir();
+            if (method == "getprocessid" || method == "getpid" || method == "GetProcessID") return parseOsGetProcessId();
             if (method == "grepkeys" || method == "getkey") return parseOsGrepKeys();
             if (method == "keypressed") return parseOsKeyPressed();
+        }
+        if (peek().type == TokenType::Identifier && (peek().value == "getprocessid" || peek().value == "getpid") &&
+            pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::LParen) {
+            return parseOsGetProcessIdBareExpr();
         }
         if (peek().type == TokenType::Identifier && peek().value == "file" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
@@ -1352,6 +1363,9 @@ private:
 
     AstNode parseIoCall() {
         size_t line = peek().line;
+        if (!modules_.hasIo()) {
+            throw std::runtime_error("io.* requires #include <std/io> at line " + std::to_string(line));
+        }
         if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "io") {
             throw std::runtime_error("Expected 'io' at line " + std::to_string(line));
         }
@@ -1435,6 +1449,22 @@ private:
                 throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
             }
             AstNode node{AstNode::Type::OsMessageBox, "", {textArg, titleArg}};
+            return node;
+        }
+        if (method == "getprocessid" || method == "getpid" || method == "GetProcessID") {
+            if (!match(TokenType::LParen)) {
+                throw std::runtime_error("Expected '(' after os." + method + " at line " + std::to_string(peek().line));
+            }
+            AstNode node{AstNode::Type::OsGetProcessId, "", {}};
+            if (peek().type != TokenType::RParen) {
+                node.children.push_back(parseExpression());
+            }
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' after os." + method + " at line " + std::to_string(peek().line));
+            }
+            if (!match(TokenType::Semicolon)) {
+                throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
+            }
             return node;
         }
         if (method != "system") {
@@ -1528,6 +1558,69 @@ private:
         return {AstNode::Type::OsExeDir, "", {}};
     }
 
+    AstNode parseOsGetProcessId() {
+        if (!modules_.hasOs()) {
+            throw std::runtime_error("os.getprocessid requires #include <std/os> at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "os") {
+            throw std::runtime_error("Expected 'os' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier)) {
+            throw std::runtime_error("Expected 'getprocessid' at line " + std::to_string(peek().line));
+        }
+        std::string method = tokens_[pos_ - 1].value;
+        if (method != "getprocessid" && method != "getpid" && method != "GetProcessID") {
+            throw std::runtime_error("Expected 'getprocessid' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after os." + method + " at line " + std::to_string(peek().line));
+        }
+        AstNode node{AstNode::Type::OsGetProcessId, "", {}};
+        if (peek().type != TokenType::RParen) {
+            node.children.push_back(parseExpression());
+        }
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' after os." + method + " at line " + std::to_string(peek().line));
+        }
+        return node;
+    }
+
+    AstNode parseOsGetProcessIdBareExpr() {
+        size_t line = peek().line;
+        if (!modules_.hasOs()) {
+            throw std::runtime_error("getprocessid requires #include <std/os> at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Identifier)) {
+            throw std::runtime_error("Expected 'getprocessid' at line " + std::to_string(peek().line));
+        }
+        std::string method = tokens_[pos_ - 1].value;
+        if (method != "getprocessid" && method != "getpid") {
+            throw std::runtime_error("Expected 'getprocessid' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after " + method + " at line " + std::to_string(peek().line));
+        }
+        AstNode node{AstNode::Type::OsGetProcessId, "", {}};
+        if (peek().type != TokenType::RParen) {
+            node.children.push_back(parseExpression());
+        }
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' after " + method + " at line " + std::to_string(peek().line));
+        }
+        return node;
+    }
+
+    AstNode parseOsGetProcessIdBareStmt() {
+        AstNode node = parseOsGetProcessIdBareExpr();
+        if (!match(TokenType::Semicolon)) {
+            throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
+        }
+        return node;
+    }
+
     AstNode parseOsGrepKeys() {
         if (!modules_.hasOs()) {
             throw std::runtime_error("os.grepkeys requires #include <std/os> at line " + std::to_string(peek().line));
@@ -1571,6 +1664,10 @@ private:
     }
 
     AstNode parseIoReadlnExpr() {
+        size_t line = peek().line;
+        if (!modules_.hasIo()) {
+            throw std::runtime_error("io.readln requires #include <std/io> at line " + std::to_string(line));
+        }
         if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "io") {
             throw std::runtime_error("Expected 'io' at line " + std::to_string(peek().line));
         }
@@ -1587,6 +1684,10 @@ private:
     }
 
     AstNode parseIoToIntExpr() {
+        size_t line = peek().line;
+        if (!modules_.hasIo()) {
+            throw std::runtime_error("io.to_int requires #include <std/io> at line " + std::to_string(line));
+        }
         if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "io") {
             throw std::runtime_error("Expected 'io' at line " + std::to_string(peek().line));
         }

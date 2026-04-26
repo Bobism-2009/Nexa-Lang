@@ -12,6 +12,7 @@
 #include <string>
 #include <cstdio>
 #include <filesystem>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -73,10 +74,42 @@ static int doBuild(const std::string& dir) {
     fs::path entryPath(entry);
     std::string outBase = (base / entryPath.stem()).string();
     std::string exePath = getExePath();
+#ifdef _WIN32
+    if (exePath.empty()) exePath = "NexaC.exe";
+    std::string cmdLine = "\"" + exePath + "\" \"" + entry + "\" -o \"" + outBase + "\"";
+    std::vector<char> mutableCmd(cmdLine.begin(), cmdLine.end());
+    mutableCmd.push_back('\0');
+    STARTUPINFOA si{};
+    PROCESS_INFORMATION pi{};
+    si.cb = sizeof(si);
+    BOOL ok = CreateProcessA(
+        NULL,
+        mutableCmd.data(),
+        NULL,
+        NULL,
+        FALSE,
+        0,
+        NULL,
+        NULL,
+        &si,
+        &pi
+    );
+    if (!ok) {
+        std::cerr << "[Nexa] Error: Failed to launch build command.\n";
+        return 1;
+    }
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD exitCode = 1;
+    GetExitCodeProcess(pi.hProcess, &exitCode);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return (exitCode == 0) ? 0 : 1;
+#else
     std::string cmd = exePath.empty() ? "NexaC" : ("\"" + exePath + "\"");
     cmd += " \"" + entry + "\" -o \"" + outBase + "\"";
     int ret = std::system(cmd.c_str());
     return (ret == 0) ? 0 : 1;
+#endif
 }
 
 static int doInit(const std::string& dir) {
@@ -128,7 +161,7 @@ fn main() {
 // On Windows native: find clang, g++, or gcc (MinGW/MSYS2). Returns compiler name or empty.
 static std::string findWindowsCxxNative() {
 #ifdef _WIN32
-    const char* candidates[] = {"clang", "clang++", "g++", "gcc"};
+    const char* candidates[] = {"clang++", "clang", "g++", "gcc"};
     for (const char* cxx : candidates) {
         std::string cmd = "where ";
         cmd += cxx;
@@ -227,7 +260,9 @@ static std::string nexaBuildCompileCmd(
     bool buildDll,
     bool buildShared,
     bool buildWin,
-    bool modulesHasDll
+    bool modulesHasDll,
+    bool noConsole,
+    bool linkUser32
 ) {
     // Windows cmd.exe: do not wrap the compiler name in quotes unless it contains spaces;
     // "clang" combined with other quoted paths can confuse cmd's parser (error 123).
@@ -237,6 +272,10 @@ static std::string nexaBuildCompileCmd(
     std::string cmd = "\"" + cxx + "\"" + targetFlags;
 #endif
     cmd += " \"" + cppPath + "\" " + opt;
+    if (cxx.find("clang") != std::string::npos) {
+        // Generated C++ may intentionally carry extra grouping parentheses.
+        cmd += " -Wno-parentheses-equality";
+    }
     if (const char* nexaCxx = std::getenv("NEXA_CXXFLAGS")) {
         cmd += " ";
         cmd += nexaCxx;
@@ -245,14 +284,38 @@ static std::string nexaBuildCompileCmd(
     cmd += " -ffunction-sections -fdata-sections";
     if (buildDll || buildShared) {
         cmd += " -shared";
+        // Match Linux: garbage-collect unused sections + strip symbols. MSVC-target clang
+        // builds are uncommon here; if linking fails, use a MinGW/LLVM-MinGW toolchain.
+        cmd += " -Wl,--gc-sections -s";
+        if (buildDll) {
+            std::filesystem::path dllOut(exePath);
+            std::filesystem::path libOut = dllOut;
+            libOut.replace_extension(".lib");
+            cmd += " -Wl,--out-implib,\"";
+            cmd += libOut.string();
+            cmd += "\"";
+        }
     } else {
         // Quoted for cmd.exe: unquoted /SUBSYSTEM is parsed as multiple invalid paths (error 123).
-        cmd += " -Xlinker \"/SUBSYSTEM:CONSOLE\"";
+        cmd += noConsole ? " -Xlinker \"/SUBSYSTEM:WINDOWS\"" : " -Xlinker \"/SUBSYSTEM:CONSOLE\"";
+        // MinGW/LLVM-MinGW default to dynamic libgcc/libc++ (or libstdc++). Linking the .exe
+        // without the compiler's bin directory on PATH then fails at runtime (missing DLLs).
+        if (cxx.find("clang") != std::string::npos) {
+            cmd += " -static";
+        } else {
+            cmd += " -static -static-libgcc -static-libstdc++";
+        }
+        // Same as Linux: drop unreferenced object code from static libc++ and strip symbols
+        // (ffunction/fdata sections were enabled above; without --gc-sections, .exe stays large).
+        cmd += " -Wl,--gc-sections -s";
     }
 #else
     cmd += " -s -ffunction-sections -fdata-sections -Wl,--gc-sections";
     if (buildDll || buildShared) {
         cmd += " -shared -fPIC";
+    } else if (buildWin && noConsole) {
+        // mingw target: mark as GUI subsystem to suppress console window.
+        cmd += " -Wl,--subsystem,windows";
     }
 #endif
     if (buildWin && !buildDll && !buildShared) {
@@ -261,8 +324,10 @@ static std::string nexaBuildCompileCmd(
 #endif
     }
 #ifdef _WIN32
-    // user32: std/os (MessageBoxA, GetConsoleWindow, …) and inline_cpp + windows.h. lld-link does not pull it implicitly.
-    cmd += " -luser32";
+    if (linkUser32) {
+        // std/os (MessageBoxA, GetConsoleWindow, …) and some inline_cpp; lld does not always pull it implicitly.
+        cmd += " -luser32";
+    }
 #endif
     if (const char* nexaLd = std::getenv("NEXA_LDFLAGS")) {
         cmd += " ";
@@ -399,6 +464,9 @@ static int printHelp(int page = 1) {
         std::cout << "    Use: let p = os.platform();  io.println(p);\n\n";
         std::cout << "  os.getenv(name)\n";
         std::cout << "    Returns environment variable value (string) or \"\" if unset.\n\n";
+        std::cout << "  os.getprocessid() / os.getpid()\n";
+        std::cout << "    Returns current process ID as int.\n";
+        std::cout << "    Use: let pid = os.getprocessid();  io.println(pid);\n\n";
         std::cout << "  os.grepkeys() / os.getkey()\n";
         std::cout << "    Waits for a key press, returns key as string (Windows only).\n";
         std::cout << "    Use: let key = os.grepkeys();  Returns \"a\", \"Enter\", \"Escape\", \"Up\", etc.\n\n";
@@ -550,9 +618,10 @@ static int printHelp(int page = 1) {
     std::cout << "  --source [opts...] <f>  Emit C++ only (e.g. --source --p Out.cpp)\n";
     std::cout << "  --preserve-names, --p  Keep function names in generated C++ (default: mangle)\n";
     std::cout << "  --small       Optimize for smaller executable (-Os)\n";
-    std::cout << "  --dll     Build Windows .dll (uses mingw-w64 cross-compiler)\n";
-    std::cout << "  --shared  Build Linux .so (uses clang++)\n";
+    std::cout << "  --dll     Build Windows .dll (default: -Os + strip for smaller .dll)\n";
+    std::cout << "  --shared  Build Linux .so (default: -Os + strip)\n";
     std::cout << "  --win     Build Windows .exe (mingw-w64 from Linux; native on Windows)\n";
+    std::cout << "  --no-console  Build Windows GUI .exe (no console window)\n";
     std::cout << "  --help, -h    Show this help\n";
     std::cout << "  --version, --v, -v  Show version\n";
     std::cout << "  --help <page>  Show page (2=core ... 8=std/thread, 9=std/inline)\n";
@@ -604,6 +673,7 @@ int main(int argc, char* argv[]) {
     bool buildDll = false;   // mingw -> .dll
     bool buildShared = false;  // clang++ -> .so
     bool buildWin = false;   // mingw -> .exe (cross-compile from Linux)
+    bool noConsole = false;  // Windows GUI subsystem
     bool runAfterBuild = false;
     bool pendingSourceOut = false;
 
@@ -653,6 +723,8 @@ int main(int argc, char* argv[]) {
             buildShared = true;
         } else if (arg == "--win" || arg == "--windows") {
             buildWin = true;
+        } else if (arg == "--no-console") {
+            noConsole = true;
         } else if (arg == "--run" || arg == "-r") {
             runAfterBuild = true;
         } else if (arg[0] != '-') {
@@ -708,6 +780,16 @@ int main(int argc, char* argv[]) {
         std::cerr << "[Nexa] Error: --win cannot be used with --dll or --shared\n";
         return 1;
     }
+    if (noConsole && (buildDll || buildShared)) {
+        std::cerr << "[Nexa] Error: --no-console is only valid for executables, not --dll/--shared\n";
+        return 1;
+    }
+    if (noConsole && !buildWin) {
+#ifndef _WIN32
+        std::cerr << "[Nexa] Error: --no-console requires --win when compiling from non-Windows hosts\n";
+        return 1;
+#endif
+    }
 
     std::string cppPath;
     std::string exePath;
@@ -745,6 +827,11 @@ int main(int argc, char* argv[]) {
             }
         } else {
             exePath = outputExe;
+            if (buildDll && (exePath.size() < 4 || exePath.substr(exePath.size() - 4) != ".dll")) {
+                exePath += ".dll";
+            } else if (buildShared && (exePath.size() < 3 || exePath.substr(exePath.size() - 3) != ".so")) {
+                exePath += ".so";
+            }
             if (buildWin && (exePath.size() < 4 || exePath.substr(exePath.size() - 4) != ".exe")) {
                 exePath += ".exe";
             }
@@ -811,7 +898,7 @@ int main(int argc, char* argv[]) {
         std::string targetFlags;
         if (buildDll) {
 #ifdef _WIN32
-            cxx = "clang";
+            cxx = "clang++";
 #else
             cxx = findWindowsCxx();
             if (cxx.empty()) {
@@ -828,8 +915,8 @@ int main(int argc, char* argv[]) {
             std::cout << "[Nexa] Compiling with clang++ (shared library)...\n";
         } else if (buildWin) {
 #ifdef _WIN32
-            cxx = "clang";
-            std::cout << "[Nexa] Compiling with clang (Windows exe)...\n";
+            cxx = "clang++";
+            std::cout << "[Nexa] Compiling with clang++ (Windows exe)...\n";
 #else
             cxx = findWindowsCxx();
             if (cxx.empty()) {
@@ -858,14 +945,17 @@ int main(int argc, char* argv[]) {
         }
 
         std::cout.flush();  // ensure [Nexa] lines appear before child compiler output (e.g. when stdout is redirected)
-        std::string opt = optimizeSize ? "-Os" : "-O2";
-        std::string cmd = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll());
+        // Shared libraries (.dll / .so): default to -Os; use --small for exes, or NEXA_CXXFLAGS=-O2
+        // if you need speed on a specific library.
+        std::string opt = (optimizeSize || buildDll || buildShared) ? "-Os" : "-O2";
+        const bool linkUser32 = modules.hasOs() || modules.hasInlineCpp();
+        std::string cmd = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32);
         int ret = std::system(cmd.c_str());
 
         if (ret != 0) {
             std::string fallback;
 #ifdef _WIN32
-            const char* next[] = {"clang", "clang++", "g++", "gcc"};
+            const char* next[] = {"clang++", "clang", "g++", "gcc"};
             for (const char* n : next) {
                 if (std::string(n) != cxx) {
                     std::string cmd = "where ";
@@ -888,7 +978,7 @@ int main(int argc, char* argv[]) {
                 cxx = fallback;
                 targetFlags = "";
                 std::cout.flush();
-                std::string cmd2 = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll());
+                std::string cmd2 = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32);
                 ret = std::system(cmd2.c_str());
             }
         }

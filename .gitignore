@@ -1,5 +1,12 @@
-NexaC
-NexaC.exe
-NexaC-Installer-WINDOWS/
-NexaC-Installer-LINUX/
-WIN/NexaC.exe
+# Build output
+*.exe
+*.o
+*.cpp
+*.so
+*.dll
+
+# Packages
+.nexa/
+
+# Temp
+*.tmp

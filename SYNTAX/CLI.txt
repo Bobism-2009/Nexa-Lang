@@ -15,9 +15,10 @@ OPTIONS
   --source <f>    Emit C++ only, do not compile
   --preserve-names, -p  Keep function names (readability)
   --small         Optimize for smaller output (-Os)
-  --dll     Build Windows .dll (mingw-w64 cross-compile)
-  --shared  Build Linux .so (clang++)
+  --dll     Build Windows .dll (default: -Os; link with strip for size)
+  --shared  Build Linux .so (default: -Os; link with strip for size)
   --win     Build Windows .exe (mingw-w64 from Linux)
+  --no-console    Build Windows GUI .exe with no console window
   fn __init__() in a DLL/SO is auto-executed when the library is loaded
   --run, -r       Compile to temp file and run
   --help, -h      Show help

@@ -57,6 +57,7 @@ public:
 
         Modules::CppUsage cppUsage;
         std::function<void(const AstNode&)> detectCppUsage = [&](const AstNode& n) {
+            if (n.initFromDllLoad) cppUsage.dll = true;
             switch (n.type) {
                 case AstNode::Type::IoPrint:
                 case AstNode::Type::IoPrintln: cppUsage.ioPrint = true; break;
@@ -66,6 +67,7 @@ public:
                 case AstNode::Type::OsGetenv: cppUsage.osGetenv = true; break;
                 case AstNode::Type::OsPlatform: cppUsage.osPlatform = true; break;
                 case AstNode::Type::OsExeDir: cppUsage.osExeDir = true; break;
+                case AstNode::Type::OsGetProcessId: cppUsage.osGetProcessId = true; break;
                 case AstNode::Type::OsHideConsoleWindow:
                 case AstNode::Type::OsShowConsoleWindow:
                 case AstNode::Type::OsMinimizeConsoleWindow:
@@ -404,6 +406,14 @@ public:
                 out << "std::string " << vname << " = __nexa_exe_dir();\n";
                 globalVarMap[node.value] = vname;
                 globalVarIsString[node.value] = true;
+                globalVarIsArray[node.value] = false;
+                justEmittedGlobal = true;
+                continue;
+            }
+            if (!node.children.empty() && node.children[0].type == AstNode::Type::OsGetProcessId) {
+                out << "int " << vname << " = " << emitExpr(node.children[0], globalVarMap, fnName, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
+                globalVarMap[node.value] = vname;
+                globalVarIsString[node.value] = false;
                 globalVarIsArray[node.value] = false;
                 justEmittedGlobal = true;
                 continue;
@@ -821,6 +831,8 @@ private:
                     out << indent << "std::string " << vname << " = __nexa_os_grepkeys();\n";
                 } else if (!child.children.empty() && child.children[0].type == AstNode::Type::OsKeyPressed) {
                     out << indent << "int " << vname << " = __nexa_os_keypressed();\n";
+                } else if (!child.children.empty() && child.children[0].type == AstNode::Type::OsGetProcessId) {
+                    out << indent << "int " << vname << " = " << emitExpr(child.children[0], varMap, fnName, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
                 } else if (child.initUninitialized) {
                     std::string c = child.isConst ? "const " : "";
                     if (child.isFixedArray) {
@@ -1010,6 +1022,8 @@ private:
                 std::string textArg = textIsStr ? textExpr : ("std::to_string(" + textExpr + ")");
                 std::string titleArg = titleIsStr ? titleExpr : ("std::to_string(" + titleExpr + ")");
                 out << indent << "__nexa_os_messagebox(" << textArg << ", " << titleArg << ");\n";
+            } else if (child.type == AstNode::Type::OsGetProcessId) {
+                out << indent << "(void)__nexa_os_getprocessid();\n";
             } else if (child.type == AstNode::Type::FnCall) {
                 out << indent << fnName(child.value) << "(";
                 for (size_t i = 0; i < child.children.size(); i++) {
@@ -1377,6 +1391,12 @@ private:
                 return "__nexa_os_grepkeys()";
             case AstNode::Type::OsKeyPressed:
                 return "__nexa_os_keypressed()";
+            case AstNode::Type::OsGetProcessId:
+                if (!e.children.empty()) {
+                    std::string nameExpr = emitExpr(e.children[0], varMap, fnName, varIsString, varIsFloat, varIsChar, varIsBool);
+                    return "__nexa_os_getprocessid_by_name(" + nameExpr + ")";
+                }
+                return "__nexa_os_getprocessid()";
             case AstNode::Type::OsExeDir:
                 return "__nexa_exe_dir()";
             case AstNode::Type::IoReadln: {
