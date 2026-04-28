@@ -80,6 +80,7 @@ struct AstNode {
     bool isConst = false;       // for Variable: true = let const x = ...
     bool isFixedArray = false;  // for Variable: true = let x: type[size]; (fixed-size buffer)
     std::string arraySize = ""; // for Variable: size for fixed array, e.g. "4080"
+    std::string fnReturnType = ""; // for Function: explicit ": type" before `{`; empty = infer from returns
 };
 
 class Parser {
@@ -216,6 +217,7 @@ private:
         if (v == "bool") return "bool";
         if (v == "float") return "float";
         if (v == "char") return "char";
+        if (v == "void") return "void";
         return "struct:" + v;
     }
 
@@ -512,10 +514,15 @@ private:
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
         }
+        std::string fnReturnType;
+        if (match(TokenType::Colon)) {
+            fnReturnType = parseTypeName();
+        }
         if (!match(TokenType::LBrace)) {
             throw std::runtime_error("Expected '{' at line " + std::to_string(peek().line));
         }
         AstNode fnNode{AstNode::Type::Function, name, {}};
+        fnNode.fnReturnType = std::move(fnReturnType);
         fnNode.paramNames = std::move(params);
         fnNode.paramTypes = std::move(types);
         fnNode.children = parseBlock();
@@ -1412,7 +1419,9 @@ private:
         const Token& argTok = peek();
         AstNode result{isPrintln ? AstNode::Type::IoPrintln : AstNode::Type::IoPrint, "", {}};
         if (argTok.type == TokenType::String || argTok.type == TokenType::Number ||
-            argTok.type == TokenType::Identifier || argTok.type == TokenType::LParen) {
+            argTok.type == TokenType::Identifier || argTok.type == TokenType::LParen ||
+            argTok.type == TokenType::True || argTok.type == TokenType::False ||
+            argTok.type == TokenType::Float || argTok.type == TokenType::Char) {
             result.children.push_back(parseExpression());
         } else {
             throw std::runtime_error("Expected string or expression at line " + std::to_string(argTok.line));

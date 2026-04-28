@@ -37,19 +37,33 @@
       "patterns": [
         {
           "name": "meta.preprocessor.include.std.nexa",
-          "match": "^\\s*(#include)\\s+<(std/(io|os|dll|file|random|time|thread|inline))>",
+          "match": "(?m)^\\s*(#include)\\s*(<)(std/)(io|os|dll|file|random|time|thread|inline)(>)",
           "captures": {
             "1": { "name": "keyword.control.import.nexa" },
-            "2": { "name": "support.constant.module.nexa" },
-            "3": { "name": "entity.name.namespace.nexa" }
+            "2": { "name": "punctuation.definition.string.nexa" },
+            "3": { "name": "string.quoted.include.nexa" },
+            "4": { "name": "entity.name.namespace.nexa" },
+            "5": { "name": "punctuation.definition.string.nexa" }
           }
         },
         {
-          "name": "meta.preprocessor.include.nexa",
-          "match": "^\\s*(#include)\\s+(<[^>\\r\\n]+>|\"[^\"\\r\\n]*\")",
+          "name": "meta.preprocessor.include.angle.nexa",
+          "match": "(?m)^\\s*(#include)\\s*(<)([^>\\r\\n]+)(>)",
           "captures": {
             "1": { "name": "keyword.control.import.nexa" },
-            "2": { "name": "string.quoted.include.nexa" }
+            "2": { "name": "punctuation.definition.string.nexa" },
+            "3": { "name": "string.quoted.include.nexa" },
+            "4": { "name": "punctuation.definition.string.nexa" }
+          }
+        },
+        {
+          "name": "meta.preprocessor.include.quote.nexa",
+          "match": "(?m)^\\s*(#include)\\s*(\")([^\"\\r\\n]*)(\")",
+          "captures": {
+            "1": { "name": "keyword.control.import.nexa" },
+            "2": { "name": "punctuation.definition.string.nexa" },
+            "3": { "name": "string.quoted.include.nexa" },
+            "4": { "name": "punctuation.definition.string.nexa" }
           }
         }
       ]

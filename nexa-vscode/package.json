@@ -1,13 +1,22 @@
 {
   "name": "nexa",
   "displayName": "Nexa Language",
-  "description": "Syntax highlighting, snippets, and editor settings for Nexa (.nxa)",
-  "version": "0.1.4",
+  "description": "Syntax highlighting, snippets, go-to definition, find references, outline, and completions for Nexa (.nxa)",
+  "version": "0.1.5",
   "publisher": "nexac",
+  "main": "./out/extension.js",
   "engines": {
     "vscode": "^1.74.0"
   },
   "categories": ["Programming Languages"],
+  "activationEvents": [
+    "onLanguage:nexa"
+  ],
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile"
+  },
   "contributes": {
     "languages": [
       {
@@ -30,5 +39,10 @@
         "path": "./snippets/nexa.json"
       }
     ]
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.74.0",
+    "typescript": "^5.3.0"
   }
 }

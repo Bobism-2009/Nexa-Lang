@@ -1,3 +1,5 @@
+// Build with NexaC 0.1.4+ (or this repo). Older toolchains (before 0.1.4) may fail:
+// raw R"(...)" strings, newer std/io/os/file, etc.
 #include <std/io>
 #include <std/os>
 #include <std/file>

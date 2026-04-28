@@ -1,0 +1,20 @@
+#include <std/io>
+
+fn sum(a: int): int {
+    return a + 100;
+}
+
+fn sum(a: int, b: int): int {
+    return a + b;
+}
+
+fn main() {
+    let x = sum(10);
+    let y = sum(40, 2);
+    io.println(x);
+    io.println(y);
+    if (x + y == 152) {
+        return 0;
+    }
+    return 1;
+}

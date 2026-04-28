@@ -1,0 +1,10 @@
+#include <std/io>
+
+fn ExplitInt(n: int): int { 
+    return n;
+}
+// Etc for funcs
+
+fn main() {
+    return 0;
+}
