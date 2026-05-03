@@ -80,7 +80,7 @@ struct AstNode {
     bool isConst = false;       // for Variable: true = let const x = ...
     bool isFixedArray = false;  // for Variable: true = let x: type[size]; (fixed-size buffer)
     std::string arraySize = ""; // for Variable: size for fixed array, e.g. "4080"
-    std::string fnReturnType = ""; // for Function: explicit ": type" before `{`; empty = infer from returns
+    std::string fnReturnType = ""; // Function / MainFunction: explicit ": type" before `{`; empty = infer from returns
 };
 
 class Parser {
@@ -374,6 +374,9 @@ private:
                 if (path == "std/ui") {
                     throw std::runtime_error("std/ui has been removed");
                 }
+                if (path == "std/wait") {
+                    throw std::runtime_error("std/wait has been removed; use #include <std/time>");
+                }
                 // #include <std/io> - built-in module
                 modules_.enable(path);
                 return {{AstNode::Type::Include, path, {}}};
@@ -463,11 +466,16 @@ private:
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' at line " + std::to_string(line));
         }
+        std::string mainReturnType;
+        if (match(TokenType::Colon)) {
+            mainReturnType = parseTypeName();
+        }
         if (!match(TokenType::LBrace)) {
             throw std::runtime_error("Expected '{' at line " + std::to_string(line));
         }
 
         AstNode mainNode{AstNode::Type::MainFunction, "", {}};
+        mainNode.fnReturnType = std::move(mainReturnType);
         mainNode.children = parseBlock();
         if (!match(TokenType::RBrace)) {
             throw std::runtime_error("Expected '}' at line " + std::to_string(peek().line));
@@ -593,6 +601,8 @@ private:
                 stmts.push_back(parseFileCall());
             } else if (t.type == TokenType::Identifier && t.value == "thread") {
                 stmts.push_back(parseThreadCall());
+            } else if (t.type == TokenType::Identifier && t.value == "time") {
+                stmts.push_back(parseTimeCall());
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
                        tokens_[pos_ + 1].type == TokenType::Dot) {
                 const Token& id2 = tokens_[pos_ + 2];
@@ -605,8 +615,6 @@ private:
                 }
             } else if (t.type == TokenType::Identifier && t.value == "random") {
                 stmts.push_back(parseRandomCall());
-            } else if (t.type == TokenType::Identifier && t.value == "time") {
-                stmts.push_back(parseTimeCall());
             } else if (t.type == TokenType::Identifier && (t.value == "getprocessid" || t.value == "getpid") &&
                        pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::LParen) {
                 stmts.push_back(parseOsGetProcessIdBareStmt());
@@ -635,7 +643,10 @@ private:
                 stmts.push_back(parseBreak());
             } else if (t.type == TokenType::Continue) {
                 stmts.push_back(parseContinue());
-            } else if (t.type != TokenType::Eof) {
+            } else if (t.type == TokenType::Eof) {
+                throw std::runtime_error("Unexpected end of file inside block (missing '}') at line " +
+                                         std::to_string(t.line));
+            } else {
                 throw std::runtime_error("Unexpected token at line " + std::to_string(t.line));
             }
         }
@@ -1063,6 +1074,8 @@ private:
                 stmts.push_back(parseFileCall());
             } else if (t.type == TokenType::Identifier && t.value == "thread") {
                 stmts.push_back(parseThreadCall());
+            } else if (t.type == TokenType::Identifier && t.value == "time") {
+                stmts.push_back(parseTimeCall());
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
                        tokens_[pos_ + 1].type == TokenType::Dot) {
                 const Token& id2 = tokens_[pos_ + 2];
@@ -1075,8 +1088,6 @@ private:
                 }
             } else if (t.type == TokenType::Identifier && t.value == "random") {
                 stmts.push_back(parseRandomCall());
-            } else if (t.type == TokenType::Identifier && t.value == "time") {
-                stmts.push_back(parseTimeCall());
             } else if (t.type == TokenType::Identifier && (t.value == "getprocessid" || t.value == "getpid") &&
                        pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::LParen) {
                 stmts.push_back(parseOsGetProcessIdBareStmt());
@@ -1253,6 +1264,15 @@ private:
     }
 
     AstNode parseUnary() {
+        if (match(TokenType::Minus)) {
+            AstNode inner = parseUnary();
+            AstNode zero{AstNode::Type::ExprIntLiteral, "0", {}};
+            return {AstNode::Type::ExprSub, "", {std::move(zero), std::move(inner)}};
+        }
+        if (match(TokenType::Not)) {
+            AstNode inner = parseUnary();
+            return {AstNode::Type::CondNot, "", {std::move(inner)}};
+        }
         if (match(TokenType::BitNot)) {
             return {AstNode::Type::ExprBitNot, "", {parseUnary()}};
         }
@@ -1302,6 +1322,7 @@ private:
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
             std::string method = tokens_[pos_ + 2].value;
             if (method == "readln") return parseIoReadlnExpr();
+            if (method == "read_int") return parseIoReadIntExpr();
             if (method == "getline") return parseIoGetlineExpr();
             if (method == "to_int") return parseIoToIntExpr();
             if (method == "trim") return parseIoTrimExpr();
@@ -1717,6 +1738,28 @@ private:
         return {AstNode::Type::IoReadln, "", {}};
     }
 
+    // Same codegen as io.to_int(io.readln()) — one line without a temporary string binding.
+    AstNode parseIoReadIntExpr() {
+        size_t line = peek().line;
+        if (!modules_.hasIo()) {
+            throw std::runtime_error("io.read_int requires #include <std/io> at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "io") {
+            throw std::runtime_error("Expected 'io' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "read_int") {
+            throw std::runtime_error("Expected io.read_int at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::LParen) || !match(TokenType::RParen)) {
+            throw std::runtime_error("Expected '()' after read_int at line " + std::to_string(peek().line));
+        }
+        AstNode inner{AstNode::Type::IoReadln, "", {}};
+        return {AstNode::Type::IoToInt, "", {std::move(inner)}};
+    }
+
     AstNode parseIoGetlineExpr() {
         size_t line = peek().line;
         if (!modules_.hasIo()) {
@@ -1763,7 +1806,12 @@ private:
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
         }
-        AstNode arg = parseExpression();
+        AstNode arg;
+        if (peek().type == TokenType::RParen) {
+            arg = {AstNode::Type::ExprStringLiteral, "", {}};
+        } else {
+            arg = parseExpression();
+        }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
         }
@@ -2045,7 +2093,8 @@ private:
 
     AstNode parseTimeSeconds() {
         if (!modules_.hasTime()) {
-            throw std::runtime_error("time.seconds requires #include <std/time> at line " + std::to_string(peek().line));
+            throw std::runtime_error(
+                "time.seconds requires #include <std/time> at line " + std::to_string(peek().line));
         }
         if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "time") {
             throw std::runtime_error("Expected 'time' at line " + std::to_string(peek().line));
@@ -2068,7 +2117,8 @@ private:
 
     AstNode parseTimeMilliseconds() {
         if (!modules_.hasTime()) {
-            throw std::runtime_error("time.milliseconds requires #include <std/time> at line " + std::to_string(peek().line));
+            throw std::runtime_error(
+                "time.milliseconds requires #include <std/time> at line " + std::to_string(peek().line));
         }
         if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "time") {
             throw std::runtime_error("Expected 'time' at line " + std::to_string(peek().line));
@@ -2216,40 +2266,7 @@ private:
         }
         const Token& initTok = peek();
         AstNode node{AstNode::Type::Variable, name, {}};
-        if (initTok.type == TokenType::String) {
-            advance();
-            node.initValue = initTok.value;
-            node.initIsInt = false;
-        } else if (initTok.type == TokenType::Identifier && initTok.value == "io") {
-            node.children.push_back(parseExpression());
-            if (node.children.back().type == AstNode::Type::IoReadln) {
-                node.initFromReadln = true;
-                node.children.clear();
-            }
-            node.initIsInt = !exprProducesString(node.children.empty() ? AstNode{AstNode::Type::IoReadln, "", {}} : node.children.back());
-        } else if (initTok.type == TokenType::Identifier && initTok.value == "file") {
-            if (!modules_.hasFile()) {
-                throw std::runtime_error("file.read requires #include <std/file> at line " + std::to_string(line));
-            }
-            advance();
-            if (!match(TokenType::Dot)) {
-                throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
-            }
-            const Token& methodTok = peek();
-            if (methodTok.type != TokenType::Identifier || methodTok.value != "read") {
-                throw std::runtime_error("Expected file.read at line " + std::to_string(peek().line));
-            }
-            advance();
-            if (!match(TokenType::LParen)) {
-                throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
-            }
-            node.children.push_back(parseExpression());
-            if (!match(TokenType::RParen)) {
-                throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
-            }
-            node.initFromFileRead = true;
-            node.initIsInt = false;
-        } else if (initTok.type == TokenType::Identifier && initTok.value == "dll") {
+        if (initTok.type == TokenType::Identifier && initTok.value == "dll") {
             if (!modules_.hasDll()) {
                 throw std::runtime_error("dll.load requires #include <std/dll> at line " + std::to_string(line));
             }
@@ -2275,25 +2292,28 @@ private:
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
             }
-        } else if (initTok.type == TokenType::LBracket) {
-            node.children.push_back(parseArrayLiteral());
-            node.initFromArray = true;
-            node.initIsInt = false;
-        } else if (initTok.type == TokenType::Number || initTok.type == TokenType::Float || initTok.type == TokenType::Char ||
-                   initTok.type == TokenType::Identifier || initTok.type == TokenType::LParen ||
-                   initTok.type == TokenType::True || initTok.type == TokenType::False) {
+        } else {
+            // Any expression (calls, unary ! / ~ / -, string/array/io/file/..., parens, etc.)
             node.children.push_back(parseExpression());
-            if (node.children.back().type == AstNode::Type::ExprBoolLiteral) {
+            AstNode& b = node.children.back();
+            if (b.type == AstNode::Type::IoReadln) {
+                node.initFromReadln = true;
+                node.children.clear();
+            } else if (b.type == AstNode::Type::ExprArrayLiteral) {
+                node.initFromArray = true;
+                node.initIsInt = false;
+            } else if (b.type == AstNode::Type::FileRead) {
+                node.initFromFileRead = true;
+                node.initIsInt = false;
+            } else if (b.type == AstNode::Type::ExprBoolLiteral) {
                 node.initIsBool = true;
-            } else if (node.children.back().type == AstNode::Type::ExprFloatLiteral) {
+            } else if (b.type == AstNode::Type::ExprFloatLiteral) {
                 node.initIsFloat = true;
-            } else if (node.children.back().type == AstNode::Type::ExprCharLiteral) {
+            } else if (b.type == AstNode::Type::ExprCharLiteral) {
                 node.initIsChar = true;
             } else {
-                node.initIsInt = !exprProducesString(node.children.back());
+                node.initIsInt = !exprProducesString(b);
             }
-        } else {
-            throw std::runtime_error("Expected number, string, expression, io.readln(), or array at line " + std::to_string(initTok.line));
         }
         if (declType.empty() && !node.children.empty() && astHasMemberAccess(node.children.back())) {
             throw std::runtime_error("let with '.' access requires an explicit type (e.g. let x: int = s.field or let x: enum E = E.A) at line " + std::to_string(line));

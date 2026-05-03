@@ -10,6 +10,7 @@
 #include <functional>
 #include <vector>
 #include <cctype>
+#include <optional>
 
 namespace nexa {
 
@@ -59,6 +60,7 @@ public:
         Modules::CppUsage cppUsage;
         std::function<void(const AstNode&)> detectCppUsage = [&](const AstNode& n) {
             if (n.initFromDllLoad) cppUsage.dll = true;
+            if (n.initFromReadln) cppUsage.ioReadln = true;
             switch (n.type) {
                 case AstNode::Type::IoPrint:
                 case AstNode::Type::IoPrintln: cppUsage.ioPrint = true; break;
@@ -379,6 +381,15 @@ public:
                     stmtsClassifyReturns(node.children, mainValRet, mainVoidRet);
                     if (mainValRet && mainVoidRet) {
                         throw std::runtime_error("main mixes 'return;' and 'return expr;'");
+                    }
+                    if (!node.fnReturnType.empty()) {
+                        if (node.fnReturnType != "void") {
+                            throw std::runtime_error(
+                                "main may only use `: void` as an explicit return type (or omit it for int main)");
+                        }
+                        if (mainValRet) {
+                            throw std::runtime_error("cannot return a value from void main()");
+                        }
                     }
                     varStructPush();
                     nexaDeclStack_.push_back(globalNexaDecl_);
@@ -781,10 +792,13 @@ private:
             case AstNode::Type::TimeSeconds:
             case AstNode::Type::TimeMilliseconds:
                 return "int";
-            case AstNode::Type::FileRead:
             case AstNode::Type::IoReadln:
+                return "string";
+            case AstNode::Type::FileRead:
             case AstNode::Type::IoGetline:
                 return "string";
+            case AstNode::Type::CondNot:
+                return "bool";
             default:
                 return "int";
         }
@@ -1168,12 +1182,9 @@ private:
                         out << indent << c << "std::string " << vname << ";\n";
                     }
                 } else if (child.initFromFileRead && !child.children.empty()) {
-                    std::string pathExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
-                    out << indent << "std::string " << vname << ";\n";
-                    out << indent << "{\n";
-                    out << indent << "    std::ifstream __f(" << pathExpr << ");\n";
-                    out << indent << "    std::stringstream __ss; __ss << __f.rdbuf(); " << vname << " = __ss.str();\n";
-                    out << indent << "}\n";
+                    std::string c = child.isConst ? "const " : "";
+                    out << indent << c << "std::string " << vname << " = "
+                        << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
                 } else if (isArray && !child.children.empty()) {
                     std::string c = child.isConst ? "const " : "";
                     bool strArr = arrayLiteralProducesString(child.children[0], varIsString);
@@ -1208,7 +1219,7 @@ private:
                 if (!child.children.empty()) {
                     const AstNode& arg0 = child.children[0];
                     if (arg0.type == AstNode::Type::ExprStringLiteral) {
-                        out << indent << "printf(\"" << escapeStringForPrintf(arg0.value) << "\\n\");\n";
+                        out << indent << "puts(\"" << escapeString(arg0.value) << "\");\n";
                     } else if (arg0.type == AstNode::Type::ExprIntLiteral) {
                         out << indent << "printf(\"%d\\n\", " << arg0.value << ");\n";
                     } else if (arg0.type == AstNode::Type::ExprBoolLiteral) {
@@ -1219,9 +1230,21 @@ private:
                     bool exprIsC = exprIsChar(child.children[0], varIsChar);
                     std::string expr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                     expr = wrapExprForPrintf(child.children[0], expr, varMap, varIsEnum);
-                    std::string fmt = exprIsStr ? "%s" : exprIsF ? "%g" : exprIsC ? "%c" : "%d";
-                    std::string arg = exprIsStr ? expr + ".c_str()" : expr;
-                    out << indent << "printf(\"" << fmt << "\\n\", " << arg << ");\n";
+                    if (exprIsStr) {
+                        const bool strNeedsCStr = expr.empty() || expr[0] != '"';
+                        if (strNeedsCStr) {
+                            std::string arg = expr + ".c_str()";
+                            out << indent << "printf(\"%s\\n\", " << arg << ");\n";
+                        } else {
+                            out << indent << "puts(" << expr << ");\n";
+                        }
+                    } else if (exprIsF) {
+                        out << indent << "printf(\"%g\\n\", " << expr << ");\n";
+                    } else if (exprIsC) {
+                        out << indent << "printf(\"%c\\n\", " << expr << ");\n";
+                    } else {
+                        out << indent << "printf(\"%d\\n\", " << expr << ");\n";
+                    }
                     }
                 } else if (child.isVarRef) {
                     std::string v = preserveNames_ ? child.value : varMap.at(child.value);
@@ -1229,17 +1252,24 @@ private:
                     bool isF = varIsFloat.count(child.value) && varIsFloat.at(child.value);
                     bool isC = varIsChar.count(child.value) && varIsChar.at(child.value);
                     bool isEn = varIsEnum.count(child.value) && varIsEnum.at(child.value);
-                    std::string fmt = isStr ? "%s" : isF ? "%g" : isC ? "%c" : "%d";
-                    std::string arg = isStr ? v + ".c_str()" : (isEn ? ("static_cast<int>(" + v + ")") : v);
-                    out << indent << "printf(\"" << fmt << "\\n\", " << arg << ");\n";
+                    if (isStr) {
+                        out << indent << "puts(" << v << ".c_str());\n";
+                    } else if (isF) {
+                        out << indent << "printf(\"%g\\n\", " << v << ");\n";
+                    } else if (isC) {
+                        out << indent << "printf(\"%c\\n\", " << v << ");\n";
+                    } else {
+                        std::string arg = isEn ? ("static_cast<int>(" + v + ")") : v;
+                        out << indent << "printf(\"%d\\n\", " << arg << ");\n";
+                    }
                 } else {
-                    out << indent << "printf(\"" << escapeStringForPrintf(child.value) << "\\n\");\n";
+                    out << indent << "puts(\"" << escapeString(child.value) << "\");\n";
                 }
             } else if (child.type == AstNode::Type::IoPrint) {
                 if (!child.children.empty()) {
                     const AstNode& arg0 = child.children[0];
                     if (arg0.type == AstNode::Type::ExprStringLiteral) {
-                        out << indent << "printf(\"" << escapeStringForPrintf(arg0.value) << "\");\n";
+                        out << indent << "fputs(\"" << escapeString(arg0.value) << "\", stdout);\n";
                     } else if (arg0.type == AstNode::Type::ExprIntLiteral) {
                         out << indent << "printf(\"%d\", " << arg0.value << ");\n";
                     } else if (arg0.type == AstNode::Type::ExprBoolLiteral) {
@@ -1250,9 +1280,14 @@ private:
                     bool exprIsC = exprIsChar(child.children[0], varIsChar);
                     std::string expr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                     expr = wrapExprForPrintf(child.children[0], expr, varMap, varIsEnum);
-                    std::string fmt = exprIsStr ? "%s" : exprIsF ? "%g" : exprIsC ? "%c" : "%d";
-                    std::string arg = exprIsStr ? expr + ".c_str()" : expr;
-                    out << indent << "printf(\"" << fmt << "\", " << arg << ");\n";
+                    if (exprIsStr) {
+                        const bool strNeedsCStr = expr.empty() || expr[0] != '"';
+                        std::string arg = strNeedsCStr ? expr + ".c_str()" : expr;
+                        out << indent << "fputs(" << arg << ", stdout);\n";
+                    } else {
+                        std::string fmt = exprIsF ? "%g" : exprIsC ? "%c" : "%d";
+                        out << indent << "printf(\"" << fmt << "\", " << expr << ");\n";
+                    }
                     }
                 } else if (child.isVarRef) {
                     std::string v = preserveNames_ ? child.value : varMap.at(child.value);
@@ -1260,18 +1295,18 @@ private:
                     bool isF = varIsFloat.count(child.value) && varIsFloat.at(child.value);
                     bool isC = varIsChar.count(child.value) && varIsChar.at(child.value);
                     bool isEn = varIsEnum.count(child.value) && varIsEnum.at(child.value);
-                    std::string fmt = isStr ? "%s" : isF ? "%g" : isC ? "%c" : "%d";
-                    std::string arg = isStr ? v + ".c_str()" : (isEn ? ("static_cast<int>(" + v + ")") : v);
-                    out << indent << "printf(\"" << fmt << "\", " << arg << ");\n";
+                    if (isStr) {
+                        out << indent << "fputs(" << v << ".c_str(), stdout);\n";
+                    } else {
+                        std::string fmt = isF ? "%g" : isC ? "%c" : "%d";
+                        std::string arg = isEn ? ("static_cast<int>(" + v + ")") : v;
+                        out << indent << "printf(\"" << fmt << "\", " << arg << ");\n";
+                    }
                 } else {
-                    out << indent << "printf(\"" << escapeStringForPrintf(child.value) << "\");\n";
+                    out << indent << "fputs(\"" << escapeString(child.value) << "\", stdout);\n";
                 }
             } else if (child.type == AstNode::Type::FileRead) {
-                std::string pathExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
-                out << indent << "{\n";
-                out << indent << "    std::ifstream __f(" << pathExpr << ");\n";
-                out << indent << "    std::stringstream __ss; __ss << __f.rdbuf();\n";
-                out << indent << "}\n";
+                out << indent << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::FileWrite) {
                 std::string pathExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 std::string contentExpr = emitExpr(child.children[1], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
@@ -1578,7 +1613,7 @@ private:
             }
             bool first = true;
             for (const AstNode* c : cases) {
-                out << indent << (first ? "" : "else ") << "if (" << expr << " == std::string(\"" << escapeString(c->initValue) << "\")) {\n";
+                out << indent << (first ? "" : "else ") << "if (" << expr << " == \"" << escapeString(c->initValue) << "\") {\n";
                 first = false;
                 emitBlock(out, c->children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "    ", true);
                 out << indent << "}\n";
@@ -1642,9 +1677,19 @@ private:
                          const std::map<std::string, bool>* varIsBool = nullptr) {
         switch (c.type) {
             case AstNode::Type::CondEq:
-                return emitExpr(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " == " + emitExpr(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                if (c.children.size() >= 2 && c.children[0].type == AstNode::Type::ExprStringLiteral &&
+                    c.children[1].type == AstNode::Type::ExprStringLiteral) {
+                    return (c.children[0].value == c.children[1].value) ? "true" : "false";
+                }
+                return emitExpr(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " == " +
+                       emitExpr(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::CondNe:
-                return emitExpr(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " != " + emitExpr(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                if (c.children.size() >= 2 && c.children[0].type == AstNode::Type::ExprStringLiteral &&
+                    c.children[1].type == AstNode::Type::ExprStringLiteral) {
+                    return (c.children[0].value != c.children[1].value) ? "true" : "false";
+                }
+                return emitExpr(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " != " +
+                       emitExpr(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::CondLt:
                 return emitExpr(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " < " + emitExpr(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::CondLe:
@@ -1715,7 +1760,9 @@ private:
             case AstNode::Type::ExprBoolLiteral:
                 return e.value;
             case AstNode::Type::ExprStringLiteral:
-                return "std::string(\"" + escapeString(e.value) + "\")";
+                // C++ string literal (decays to const char*); avoids heap alloc vs std::string("...").
+                // String concat must not produce const char* + const char* — see emitConcatOperand folds.
+                return "\"" + escapeString(e.value) + "\"";
             case AstNode::Type::OsGetenv: {
                 std::string s = "([]{ const char* __p = getenv(\"" + escapeString(e.value) + "\"); return __p ? std::string(__p) : std::string(\"\"); }())";
                 return s;
@@ -1833,8 +1880,8 @@ private:
                     const std::map<std::string, bool>& vFl = varIsFloat ? *varIsFloat : kEmptyTypeMap;
                     const std::map<std::string, bool>& vCh = varIsChar ? *varIsChar : kEmptyTypeMap;
                     const std::map<std::string, bool>& vBo = varIsBool ? *varIsBool : kEmptyTypeMap;
-                    return "(" + emitConcatOperand(e.children[0], varMap, vIsStr, vFl, vCh, vBo) + " + "
-                        + emitConcatOperand(e.children[1], varMap, vIsStr, vFl, vCh, vBo) + ")";
+                    // Delegate so literal chains fold to one "..." and never become const char* + const char*.
+                    return emitConcatOperand(e, varMap, vIsStr, vFl, vCh, vBo);
                 }
                 return "(" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " + "
                     + emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
@@ -1858,9 +1905,22 @@ private:
                 return "(" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " >> " + emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::ExprBitNot:
                 return "(~" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
+            case AstNode::Type::CondNot:
+                return "(!" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             default:
                 return "0";
         }
+    }
+
+    std::optional<std::string> tryFoldStringLiteralChain(const AstNode& n,
+                                                         const std::map<std::string, bool>& varIsString) const {
+        if (n.type == AstNode::Type::ExprStringLiteral) return n.value;
+        if (n.type == AstNode::Type::ExprAdd && n.children.size() >= 2 && exprIsString(n, varIsString)) {
+            auto L = tryFoldStringLiteralChain(n.children[0], varIsString);
+            auto R = tryFoldStringLiteralChain(n.children[1], varIsString);
+            if (L && R) return *L + *R;
+        }
+        return std::nullopt;
     }
 
     std::string emitConcatOperand(const AstNode& child,
@@ -1874,6 +1934,9 @@ private:
         const std::map<std::string, bool>* pCh = &varIsChar;
         const std::map<std::string, bool>* pBo = &varIsBool;
         if (child.type == AstNode::Type::ExprAdd && exprIsString(child, varIsString)) {
+            if (auto folded = tryFoldStringLiteralChain(child, varIsString)) {
+                return "\"" + escapeString(*folded) + "\"";
+            }
             return "(" + emitConcatOperand(child.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " + "
                 + emitConcatOperand(child.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
         }
@@ -1936,25 +1999,6 @@ private:
             start = nl + 1;
         }
         out << indent << "}\n";
-    }
-
-    std::string escapeStringForPrintf(const std::string& s) {
-        std::string out;
-        for (unsigned char c : s) {
-            if (c == '\\') out += "\\\\";
-            else if (c == '"') out += "\\\"";
-            else if (c == '%') out += "%%";
-            else if (c == '\n') out += "\\n";
-            else if (c == '\t') out += "\\t";
-            else if (c == '\r') out += "\\r";
-            else if (c < 32 || c == 127) {
-                char buf[5];
-                snprintf(buf, sizeof(buf), "\\x%02X", c);
-                out += buf;
-            }
-            else out += c;
-        }
-        return out;
     }
 
     std::string escapeString(const std::string& s) {

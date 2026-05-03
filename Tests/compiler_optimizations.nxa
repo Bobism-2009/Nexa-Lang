@@ -1,0 +1,32 @@
+// Transpiler optimization harness — not a behavior spec test.
+// Build C++ and spot-check (examples):
+//   NexaC Tests/compiler_optimizations.nxa --source /tmp/opt.cpp
+//   - Folded concat -> puts("fold") (one literal, not std::string("...") trees)
+//   - io.print  -> fputs(..., stdout)   ;  io.println strings -> puts(...) or printf("%s\n", ...) for dynamic concat
+//   - Literal compare fold: ("z" == "z") -> if (true)
+//   - time.sleep chrono path present
+#include <std/io>
+#include <std/time>
+
+fn main(): void {
+    io.println("f" + "o" + "l" + "d");
+    io.print("flat");
+    io.println("");
+
+    let msg: string = "ok";
+    io.println(msg);
+    io.println("pre " + msg);
+
+    io.println(0);
+    let flag: bool = true;
+    io.println(flag);
+
+    if (msg == "ok") {
+        io.println("cmp_var_lit");
+    }
+    if ("z" == "z") {
+        io.println("cmp_lit_lit_fold");
+    }
+
+    time.sleep(time.milliseconds(0));
+}

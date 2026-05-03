@@ -9,6 +9,8 @@ Nexa Standard Modules
   len(s)           - string or array length, returns int (built-in)
   trim(s[, prefix]) / io.trim(s[, prefix]) - trim ASCII whitespace; if prefix is given, remove it once from the start after that (e.g. trim("  x:5  ", "x:") -> "5")
   io.readln()      - Read one line from stdin, returns string
+  io.read_int()    - Same as io.to_int(io.readln()); read one line from stdin as int (no temporary string binding)
+  io.to_int(s)      - Parse string expression as decimal int (failure -> 0)
   io.getline(text[, lineNo]) - Return lineNo (1-based, default 1) from string buffer
   io.getline(text, "key")    - Line matching key: (leading ws ok); returns from key through line end
   arg: one expression (literal, variable, or + chain). If any operand is string-typed or a string
