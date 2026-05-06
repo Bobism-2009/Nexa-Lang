@@ -11,6 +11,7 @@ class Modules {
 public:
     struct CppUsage {
         bool ioPrint = false;
+        bool ioFlush = false;
         bool ioReadln = false;
         bool ioGetline = false;
         bool ioToInt = false;
@@ -68,7 +69,7 @@ public:
 
     std::string getCppIncludes(const CppUsage& usage) const {
         std::string out;
-        if (hasIo() && (usage.ioPrint || usage.ioReadln)) {
+        if (hasIo() && (usage.ioPrint || usage.ioReadln || usage.ioFlush)) {
             out += "#include <cstdio>\n";
         }
         if (hasIo() && usage.ioReadln) {
@@ -282,6 +283,9 @@ public:
         if (hasTime() && usage.time) {
             out += "#include <thread>\n";
             out += "#include <chrono>\n";
+            out += "static double __nexa_time_now_ms() {\n";
+            out += "  return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();\n";
+            out += "}\n";
         }
         if (hasThread() && usage.thread) {
             out += "#include <thread>\n";
@@ -323,7 +327,7 @@ public:
 
     std::string getCppIncludes() const {
         CppUsage all;
-        all.ioPrint = all.ioReadln = all.ioGetline = all.ioToInt = true;
+        all.ioPrint = all.ioReadln = all.ioGetline = all.ioToInt = all.ioFlush = true;
         all.osSystem = all.osGetenv = all.osPlatform = all.osExeDir = true;
         all.osGetProcessId = true;
         all.osWindowControl = all.osMessageBox = all.osGrepKeys = all.osKeyPressed = true;

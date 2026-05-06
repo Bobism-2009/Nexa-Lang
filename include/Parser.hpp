@@ -15,13 +15,13 @@ namespace nexa {
 
 // AST node types - simple structure for our minimal grammar
 struct AstNode {
-    enum class Type { Include, CppHeaderInclude, IoPrint, IoPrintln, IoReadln, IoGetline, IoToInt, MainFunction, Function, FnCall, Variable, Assignment, OsSystem, OsGetenv, OsPlatform, OsExeDir, OsGetProcessId,
+    enum class Type { Include, CppHeaderInclude, IoPrint, IoPrintln, IoFlush, IoReadln, IoGetline, IoToInt, MainFunction, Function, FnCall, Variable, Assignment, OsSystem, OsGetenv, OsPlatform, OsExeDir, OsGetProcessId,
                       OsHideConsoleWindow, OsShowConsoleWindow, OsMinimizeConsoleWindow, OsMaximizeConsoleWindow,
                       OsMessageBox, OsGrepKeys, OsKeyPressed,
                       DllLoad, DllCall,
                       FileRead, FileWrite, FileAppend, FileExists,
                       RandomInt, RandomSeed,
-                      TimeSleep, TimeSeconds, TimeMilliseconds,
+                      TimeSleep, TimeSeconds, TimeMilliseconds, TimeNowMs,
                       ThreadSpawn, ThreadJoin,
                       IfElse,
                       Switch,
@@ -1358,6 +1358,7 @@ private:
             std::string method = tokens_[pos_ + 2].value;
             if (method == "seconds") return parseTimeSeconds();
             if (method == "milliseconds") return parseTimeMilliseconds();
+            if (method == "now_ms") return parseTimeNowMs();
         }
         if (peek().type == TokenType::Identifier && peek().value == "thread" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier &&
@@ -1427,13 +1428,28 @@ private:
         }
         const Token& methodTok = peek();
         if (methodTok.type != TokenType::Identifier) {
-            throw std::runtime_error("Expected 'print' or 'println' at line " + std::to_string(methodTok.line));
+            throw std::runtime_error("Expected io method (print, println, flush, ...) at line " +
+                                     std::to_string(methodTok.line));
         }
-        bool isPrintln = (methodTok.value == "println");
-        if (methodTok.value != "print" && !isPrintln) {
-            throw std::runtime_error("Expected 'print' or 'println' at line " + std::to_string(methodTok.line));
-        }
+        std::string method = methodTok.value;
         advance();
+        if (method == "flush") {
+            if (!match(TokenType::LParen)) {
+                throw std::runtime_error("Expected '(' after io.flush at line " + std::to_string(peek().line));
+            }
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' after io.flush() at line " + std::to_string(peek().line));
+            }
+            if (!match(TokenType::Semicolon)) {
+                throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
+            }
+            return {AstNode::Type::IoFlush, "", {}};
+        }
+        bool isPrintln = (method == "println");
+        if (method != "print" && !isPrintln) {
+            throw std::runtime_error("Expected 'print', 'println', or 'flush' at line " +
+                                     std::to_string(methodTok.line));
+        }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
         }
@@ -2139,6 +2155,29 @@ private:
         return {AstNode::Type::TimeMilliseconds, "", {arg}};
     }
 
+    AstNode parseTimeNowMs() {
+        if (!modules_.hasTime()) {
+            throw std::runtime_error(
+                "time.now_ms requires #include <std/time> at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "time") {
+            throw std::runtime_error("Expected 'time' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "now_ms") {
+            throw std::runtime_error("Expected time.now_ms at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
+        }
+        return {AstNode::Type::TimeNowMs, "", {}};
+    }
+
     AstNode parseThreadSpawnExpr() {
         size_t line = peek().line;
         if (!modules_.hasThread()) {
@@ -2308,6 +2347,8 @@ private:
             } else if (b.type == AstNode::Type::ExprBoolLiteral) {
                 node.initIsBool = true;
             } else if (b.type == AstNode::Type::ExprFloatLiteral) {
+                node.initIsFloat = true;
+            } else if (b.type == AstNode::Type::TimeNowMs) {
                 node.initIsFloat = true;
             } else if (b.type == AstNode::Type::ExprCharLiteral) {
                 node.initIsChar = true;

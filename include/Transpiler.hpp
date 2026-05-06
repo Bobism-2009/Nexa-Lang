@@ -64,6 +64,7 @@ public:
             switch (n.type) {
                 case AstNode::Type::IoPrint:
                 case AstNode::Type::IoPrintln: cppUsage.ioPrint = true; break;
+                case AstNode::Type::IoFlush: cppUsage.ioFlush = true; break;
                 case AstNode::Type::IoReadln: cppUsage.ioReadln = true; break;
                 case AstNode::Type::IoGetline: cppUsage.ioGetline = true; break;
                 case AstNode::Type::IoToInt: cppUsage.ioToInt = true; break;
@@ -87,7 +88,8 @@ public:
                 case AstNode::Type::RandomSeed: cppUsage.random = true; break;
                 case AstNode::Type::TimeSleep:
                 case AstNode::Type::TimeSeconds:
-                case AstNode::Type::TimeMilliseconds: cppUsage.time = true; break;
+                case AstNode::Type::TimeMilliseconds:
+                case AstNode::Type::TimeNowMs: cppUsage.time = true; break;
                 case AstNode::Type::ThreadSpawn:
                 case AstNode::Type::ThreadJoin: cppUsage.thread = true; break;
                 case AstNode::Type::DllLoad:
@@ -443,9 +445,16 @@ public:
                 continue;
             }
             if (!node.children.empty() && node.children[0].type == AstNode::Type::OsGetProcessId) {
-                out << "int " << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
+                std::string rhs = emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat,
+                                           &globalVarIsChar, &globalVarIsBool);
+                if (!node.declType.empty() && node.declType == "string") {
+                    out << "std::string " << vname << " = std::to_string(" << rhs << ");\n";
+                    globalVarIsString[node.value] = true;
+                } else {
+                    out << "int " << vname << " = " << rhs << ";\n";
+                    globalVarIsString[node.value] = false;
+                }
                 globalVarMap[node.value] = vname;
-                globalVarIsString[node.value] = false;
                 globalVarIsArray[node.value] = false;
                 justEmittedGlobal = true;
                 continue;
@@ -789,9 +798,12 @@ private:
             case AstNode::Type::ExprArrayIndex: return "int";
             case AstNode::Type::IoToInt: return "int";
             case AstNode::Type::RandomInt: return "int";
+            case AstNode::Type::OsGetProcessId: return "int";
             case AstNode::Type::TimeSeconds:
             case AstNode::Type::TimeMilliseconds:
                 return "int";
+            case AstNode::Type::TimeNowMs:
+                return "float";
             case AstNode::Type::IoReadln:
                 return "string";
             case AstNode::Type::FileRead:
@@ -997,6 +1009,7 @@ private:
             return ft == "float";
         }
         if (e.type == AstNode::Type::ExprFloatLiteral) return true;
+        if (e.type == AstNode::Type::TimeNowMs) return true;
         if (e.type == AstNode::Type::ExprVarRef) {
             auto it = varIsFloat.find(e.value);
             return it != varIsFloat.end() && it->second;
@@ -1157,7 +1170,12 @@ private:
                 } else if (!child.children.empty() && child.children[0].type == AstNode::Type::OsKeyPressed) {
                     out << indent << "int " << vname << " = __nexa_os_keypressed();\n";
                 } else if (!child.children.empty() && child.children[0].type == AstNode::Type::OsGetProcessId) {
-                    out << indent << "int " << vname << " = " << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
+                    std::string rhs = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                    if (!child.declType.empty() && child.declType == "string") {
+                        out << indent << "std::string " << vname << " = std::to_string(" << rhs << ");\n";
+                    } else {
+                        out << indent << "int " << vname << " = " << rhs << ";\n";
+                    }
                 } else if (child.initUninitialized) {
                     std::string c = child.isConst ? "const " : "";
                     if (child.isFixedArray) {
@@ -1219,51 +1237,59 @@ private:
                 if (!child.children.empty()) {
                     const AstNode& arg0 = child.children[0];
                     if (arg0.type == AstNode::Type::ExprStringLiteral) {
-                        out << indent << "puts(\"" << escapeString(arg0.value) << "\");\n";
+                        out << indent << "puts(\"" << escapeString(arg0.value) << "\"); fflush(stdout);\n";
                     } else if (arg0.type == AstNode::Type::ExprIntLiteral) {
-                        out << indent << "printf(\"%d\\n\", " << arg0.value << ");\n";
+                        out << indent << "printf(\"%d\\n\", " << arg0.value << "); fflush(stdout);\n";
                     } else if (arg0.type == AstNode::Type::ExprBoolLiteral) {
-                        out << indent << "printf(\"%d\\n\", " << (arg0.value == "true" ? "1" : "0") << ");\n";
+                        out << indent << "printf(\"%d\\n\", " << (arg0.value == "true" ? "1" : "0") << "); fflush(stdout);\n";
                     } else {
-                    bool exprIsStr = exprIsString(child.children[0], varIsString);
-                    bool exprIsF = exprIsFloat(child.children[0], varIsFloat);
-                    bool exprIsC = exprIsChar(child.children[0], varIsChar);
+                    std::string ntype = inferExprNexaType(child.children[0]);
+                    bool exprIsStr = (ntype == "string");
+                    bool exprIsF = (ntype == "float");
+                    bool exprIsC = (ntype == "char");
+                    bool exprIsBoolT = (ntype == "bool");
+                    bool isNexaEnum = !ntype.empty() && ntype.size() >= 5 && ntype.compare(0, 5, "enum:") == 0;
                     std::string expr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                     expr = wrapExprForPrintf(child.children[0], expr, varMap, varIsEnum);
                     if (exprIsStr) {
                         const bool strNeedsCStr = expr.empty() || expr[0] != '"';
                         if (strNeedsCStr) {
                             std::string arg = expr + ".c_str()";
-                            out << indent << "printf(\"%s\\n\", " << arg << ");\n";
+                            out << indent << "printf(\"%s\\n\", " << arg << "); fflush(stdout);\n";
                         } else {
-                            out << indent << "puts(" << expr << ");\n";
+                            out << indent << "puts(" << expr << "); fflush(stdout);\n";
                         }
                     } else if (exprIsF) {
-                        out << indent << "printf(\"%g\\n\", " << expr << ");\n";
+                        out << indent << "printf(\"%g\\n\", " << expr << "); fflush(stdout);\n";
                     } else if (exprIsC) {
-                        out << indent << "printf(\"%c\\n\", " << expr << ");\n";
+                        out << indent << "printf(\"%c\\n\", " << expr << "); fflush(stdout);\n";
+                    } else if (exprIsBoolT) {
+                        out << indent << "printf(\"%d\\n\", " << expr << "); fflush(stdout);\n";
                     } else {
-                        out << indent << "printf(\"%d\\n\", " << expr << ");\n";
+                        std::string arg = isNexaEnum ? ("static_cast<int>(" + expr + ")") : expr;
+                        out << indent << "printf(\"%d\\n\", " << arg << "); fflush(stdout);\n";
                     }
                     }
                 } else if (child.isVarRef) {
                     std::string v = preserveNames_ ? child.value : varMap.at(child.value);
-                    bool isStr = varIsString.count(child.value) && varIsString.at(child.value);
-                    bool isF = varIsFloat.count(child.value) && varIsFloat.at(child.value);
-                    bool isC = varIsChar.count(child.value) && varIsChar.at(child.value);
-                    bool isEn = varIsEnum.count(child.value) && varIsEnum.at(child.value);
+                    AstNode vref{AstNode::Type::ExprVarRef, child.value, {}};
+                    std::string ntype = inferExprNexaType(vref);
+                    bool isStr = (ntype == "string");
+                    bool isF = (ntype == "float");
+                    bool isC = (ntype == "char");
+                    bool isNexaEnum = !ntype.empty() && ntype.size() >= 5 && ntype.compare(0, 5, "enum:") == 0;
                     if (isStr) {
-                        out << indent << "puts(" << v << ".c_str());\n";
+                        out << indent << "puts(" << v << ".c_str()); fflush(stdout);\n";
                     } else if (isF) {
-                        out << indent << "printf(\"%g\\n\", " << v << ");\n";
+                        out << indent << "printf(\"%g\\n\", " << v << "); fflush(stdout);\n";
                     } else if (isC) {
-                        out << indent << "printf(\"%c\\n\", " << v << ");\n";
+                        out << indent << "printf(\"%c\\n\", " << v << "); fflush(stdout);\n";
                     } else {
-                        std::string arg = isEn ? ("static_cast<int>(" + v + ")") : v;
-                        out << indent << "printf(\"%d\\n\", " << arg << ");\n";
+                        std::string arg = isNexaEnum ? ("static_cast<int>(" + v + ")") : v;
+                        out << indent << "printf(\"%d\\n\", " << arg << "); fflush(stdout);\n";
                     }
                 } else {
-                    out << indent << "puts(\"" << escapeString(child.value) << "\");\n";
+                    out << indent << "puts(\"" << escapeString(child.value) << "\"); fflush(stdout);\n";
                 }
             } else if (child.type == AstNode::Type::IoPrint) {
                 if (!child.children.empty()) {
@@ -1275,9 +1301,12 @@ private:
                     } else if (arg0.type == AstNode::Type::ExprBoolLiteral) {
                         out << indent << "printf(\"%d\", " << (arg0.value == "true" ? "1" : "0") << ");\n";
                     } else {
-                    bool exprIsStr = exprIsString(child.children[0], varIsString);
-                    bool exprIsF = exprIsFloat(child.children[0], varIsFloat);
-                    bool exprIsC = exprIsChar(child.children[0], varIsChar);
+                    std::string ntype = inferExprNexaType(child.children[0]);
+                    bool exprIsStr = (ntype == "string");
+                    bool exprIsF = (ntype == "float");
+                    bool exprIsC = (ntype == "char");
+                    bool exprIsBoolT = (ntype == "bool");
+                    bool isNexaEnum = !ntype.empty() && ntype.size() >= 5 && ntype.compare(0, 5, "enum:") == 0;
                     std::string expr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                     expr = wrapExprForPrintf(child.children[0], expr, varMap, varIsEnum);
                     if (exprIsStr) {
@@ -1285,26 +1314,31 @@ private:
                         std::string arg = strNeedsCStr ? expr + ".c_str()" : expr;
                         out << indent << "fputs(" << arg << ", stdout);\n";
                     } else {
-                        std::string fmt = exprIsF ? "%g" : exprIsC ? "%c" : "%d";
-                        out << indent << "printf(\"" << fmt << "\", " << expr << ");\n";
+                        std::string fmt = exprIsF ? "%g" : exprIsC ? "%c" : exprIsBoolT ? "%d" : "%d";
+                        std::string arg = isNexaEnum ? ("static_cast<int>(" + expr + ")") : expr;
+                        out << indent << "printf(\"" << fmt << "\", " << arg << ");\n";
                     }
                     }
                 } else if (child.isVarRef) {
                     std::string v = preserveNames_ ? child.value : varMap.at(child.value);
-                    bool isStr = varIsString.count(child.value) && varIsString.at(child.value);
-                    bool isF = varIsFloat.count(child.value) && varIsFloat.at(child.value);
-                    bool isC = varIsChar.count(child.value) && varIsChar.at(child.value);
-                    bool isEn = varIsEnum.count(child.value) && varIsEnum.at(child.value);
+                    AstNode vref{AstNode::Type::ExprVarRef, child.value, {}};
+                    std::string ntype = inferExprNexaType(vref);
+                    bool isStr = (ntype == "string");
+                    bool isF = (ntype == "float");
+                    bool isC = (ntype == "char");
+                    bool isNexaEnum = !ntype.empty() && ntype.size() >= 5 && ntype.compare(0, 5, "enum:") == 0;
                     if (isStr) {
                         out << indent << "fputs(" << v << ".c_str(), stdout);\n";
                     } else {
                         std::string fmt = isF ? "%g" : isC ? "%c" : "%d";
-                        std::string arg = isEn ? ("static_cast<int>(" + v + ")") : v;
+                        std::string arg = isNexaEnum ? ("static_cast<int>(" + v + ")") : v;
                         out << indent << "printf(\"" << fmt << "\", " << arg << ");\n";
                     }
                 } else {
                     out << indent << "fputs(\"" << escapeString(child.value) << "\", stdout);\n";
                 }
+            } else if (child.type == AstNode::Type::IoFlush) {
+                out << indent << "fflush(stdout);\n";
             } else if (child.type == AstNode::Type::FileRead) {
                 out << indent << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::FileWrite) {
@@ -1361,9 +1395,18 @@ private:
 #endif
             } else if (child.type == AstNode::Type::OsSystem) {
                 if (!child.children.empty()) {
-                    bool exprIsStr = exprIsString(child.children[0], varIsString);
-                    std::string expr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
-                    out << indent << "std::system(" << (exprIsStr ? expr + ".c_str()" : expr) << ");\n";
+                    const AstNode& arg = child.children[0];
+                    bool exprIsStr = exprIsString(arg, varIsString);
+                    std::string expr = emitExpr(arg, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                    if (!exprIsStr) {
+                        out << indent << "std::system(" << expr << ");\n";
+                    } else if (arg.type == AstNode::Type::ExprStringLiteral) {
+                        out << indent << "std::system(" << expr << ");\n";
+                    } else if (auto folded = tryFoldStringLiteralChain(arg, varIsString)) {
+                        out << indent << "std::system(\"" << escapeString(*folded) << "\");\n";
+                    } else {
+                        out << indent << "std::system((" << expr << ").c_str());\n";
+                    }
                 } else if (child.isVarRef) {
                     std::string v = preserveNames_ ? child.value : varMap.at(child.value);
                     out << indent << "std::system(" << v << ".c_str());\n";
@@ -1387,7 +1430,12 @@ private:
                 std::string titleArg = titleIsStr ? titleExpr : ("std::to_string(" + titleExpr + ")");
                 out << indent << "__nexa_os_messagebox(" << textArg << ", " << titleArg << ");\n";
             } else if (child.type == AstNode::Type::OsGetProcessId) {
-                out << indent << "(void)__nexa_os_getprocessid();\n";
+                if (!child.children.empty()) {
+                    std::string nameExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                    out << indent << "(void)__nexa_os_getprocessid_by_name(" << nameExpr << ");\n";
+                } else {
+                    out << indent << "(void)__nexa_os_getprocessid();\n";
+                }
             } else if (child.type == AstNode::Type::FnCall) {
                 out << indent << emitFnCallCpp(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool)
                     << ";\n";
@@ -1833,6 +1881,8 @@ private:
                 std::string n = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 return "static_cast<int>(std::chrono::milliseconds(" + n + ").count())";
             }
+            case AstNode::Type::TimeNowMs:
+                return "__nexa_time_now_ms()";
             case AstNode::Type::ThreadSpawn: {
                 size_t z = slotForZeroArgFunctionNamed(e.value);
                 return "__nexa_thread_spawn(&" + cppFnNameForSlot(z) + ")";

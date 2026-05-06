@@ -4,6 +4,7 @@ Nexa Standard Modules
 #include <std/io>
   io.print(arg)     - Print to stdout, no newline
   io.println(arg)  - Print to stdout, add newline
+  io.flush()        - Flush stdout (fflush); use when output must appear immediately
   Strings support escapes: \n \t \r \\ \" \xHH (hex ASCII)
   s += "x";        - string concatenation (compound assign)
   len(s)           - string or array length, returns int (built-in)
@@ -41,7 +42,8 @@ Nexa Standard Modules
   time.sleep(duration)      - Sleeps using std::chrono (ms, or seconds()/milliseconds() helpers)
   time.seconds(n)           - Millisecond count via std::chrono::seconds(n) (same semantics as n*1000)
   time.milliseconds(n)    - Millisecond count via std::chrono::milliseconds(n)
-  Use: time.sleep(time.seconds(1));  time.sleep(time.milliseconds(250));  time.sleep(40);
+  time.now_ms()             - Monotonic time in milliseconds (float, steady_clock); subtract two reads for elapsed ms
+  Use: time.sleep(time.seconds(1));  let t0 = time.now_ms();  ...  let dt = time.now_ms() - t0;
 
 #include <std/thread>
   thread.spawn(fn_name)   - Start a new OS thread running fn_name(), returns thread handle (int)
