@@ -1,0 +1,12 @@
+#include <std/io>
+
+// Build: NexaC Tests/cli_args_demo.nxa
+// Run:   Tests/cli_args_demo.exe --help
+// if (...) must use a single ( ... ) around the whole condition (no ") && (" between).
+
+fn main(args: []string): void {
+    if (len(args) > 1 && args[1] == "--help") {
+        io.println("Help: --help, --version, --debug");
+        return;
+    }
+}

@@ -10,7 +10,12 @@ ENTRY POINT
   fn main() {
     ...
   }
+  fn main(args: []string): void {
+    ...
+  }
   - Every executable must have exactly one fn main()
+  - Optional command line: one parameter named as you like, type must be exactly []string.
+    Index 0 is the program name/path as in C argv[0]; 1.. are arguments. Use len(args) for the count.
   - DLL builds (--dll) do not require main
 
 STRUCTS

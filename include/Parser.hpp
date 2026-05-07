@@ -452,6 +452,22 @@ private:
         throw std::runtime_error("Invalid #include at line " + std::to_string(t.line));
     }
 
+    std::string parseMainArgsSliceType() {
+        size_t bracketLine = peek().line;
+        if (!match(TokenType::LBracket)) {
+            throw std::runtime_error("Expected '[' starting []string slice type at line " + std::to_string(bracketLine));
+        }
+        if (!match(TokenType::RBracket)) {
+            throw std::runtime_error("Expected ']' in []string at line " + std::to_string(peek().line));
+        }
+        const Token& elem = peek();
+        if (elem.type != TokenType::Identifier || elem.value != "string") {
+            throw std::runtime_error("main parameter type must be []string at line " + std::to_string(elem.line));
+        }
+        advance();
+        return "[]string";
+    }
+
     AstNode parseMainFunction() {
         size_t line = peek().line;
         if (!match(TokenType::Fn)) {
@@ -463,18 +479,38 @@ private:
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(line));
         }
-        if (!match(TokenType::RParen)) {
-            throw std::runtime_error("Expected ')' at line " + std::to_string(line));
+
+        AstNode mainNode{AstNode::Type::MainFunction, "", {}};
+        if (peek().type != TokenType::RParen) {
+            const Token& argTok = peek();
+            if (argTok.type != TokenType::Identifier) {
+                throw std::runtime_error("Expected parameter name at line " + std::to_string(argTok.line));
+            }
+            std::string pname = argTok.value;
+            advance();
+            if (!match(TokenType::Colon)) {
+                throw std::runtime_error("Expected ':' after parameter name at line " + std::to_string(peek().line));
+            }
+            std::string ptype = parseMainArgsSliceType();
+            mainNode.paramNames.push_back(std::move(pname));
+            mainNode.paramTypes.push_back(std::move(ptype));
+            if (peek().type == TokenType::Comma) {
+                throw std::runtime_error(
+                    "fn main accepts at most one parameter (args: []string) at line " + std::to_string(peek().line));
+            }
         }
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' after main(…) at line " + std::to_string(peek().line));
+        }
+
         std::string mainReturnType;
         if (match(TokenType::Colon)) {
             mainReturnType = parseTypeName();
         }
         if (!match(TokenType::LBrace)) {
-            throw std::runtime_error("Expected '{' at line " + std::to_string(line));
+            throw std::runtime_error("Expected '{' at line " + std::to_string(peek().line));
         }
 
-        AstNode mainNode{AstNode::Type::MainFunction, "", {}};
         mainNode.fnReturnType = std::move(mainReturnType);
         mainNode.children = parseBlock();
         if (!match(TokenType::RBrace)) {

@@ -195,6 +195,10 @@ public:
             }
             if (node.type == AstNode::Type::Variable && node.initFromArray) needsVector = true;
             if (node.type == AstNode::Type::Variable && !node.children.empty() && node.children[0].type == AstNode::Type::ExprArrayLiteral) needsVector = true;
+            if (node.type == AstNode::Type::MainFunction && node.paramNames.size() == 1 && node.paramTypes.size() == 1 &&
+                node.paramTypes[0] == "[]string") {
+                needsVector = true;
+            }
         }
         if (needsString && moduleCppIncludes.find("#include <string>\n") == std::string::npos) out << "#include <string>\n";
         if (needsVector && moduleCppIncludes.find("#include <vector>\n") == std::string::npos) out << "#include <vector>\n";
@@ -370,7 +374,17 @@ public:
             if (node.type == AstNode::Type::MainFunction) {
                 if (!buildDll_) {
                     wroteMain = true;
-                    out << "int main() {\n";
+                    const bool sliceMain = node.paramNames.size() == 1 && node.paramTypes.size() == 1 &&
+                                           node.paramTypes[0] == "[]string";
+                    if (!node.paramNames.empty() && !sliceMain) {
+                        throw std::runtime_error(
+                            "main(...) only supports an optional single parameter (args: []string)");
+                    }
+                    if (sliceMain) {
+                        out << "int main(int argc, char** argv) {\n";
+                    } else {
+                        out << "int main() {\n";
+                    }
                     std::map<std::string, std::string> varMap = globalVarMap;
                     int varIdx = 0;
                     std::map<std::string, bool> varIsString = globalVarIsString;
@@ -379,6 +393,17 @@ public:
                     std::map<std::string, bool> varIsChar = globalVarIsChar;
                     std::map<std::string, bool> varIsBool = globalVarIsBool;
                     std::map<std::string, bool> varIsEnum = globalVarIsEnum;
+                    if (sliceMain) {
+                        std::string aname = preserveNames_ ? node.paramNames[0] : "__nexa_var_0";
+                        varMap[node.paramNames[0]] = aname;
+                        varIsString[node.paramNames[0]] = true;
+                        varIdx = 1;
+                        out << "    std::vector<std::string> " << aname << ";\n";
+                        out << "    " << aname << ".reserve(static_cast<size_t>(argc));\n";
+                        out << "    for (int __nexa_ai = 0; __nexa_ai < argc; ++__nexa_ai) {\n";
+                        out << "        " << aname << ".emplace_back(argv[__nexa_ai] ? argv[__nexa_ai] : \"\");\n";
+                        out << "    }\n";
+                    }
                     bool mainValRet = false, mainVoidRet = false;
                     stmtsClassifyReturns(node.children, mainValRet, mainVoidRet);
                     if (mainValRet && mainVoidRet) {
@@ -395,6 +420,9 @@ public:
                     }
                     varStructPush();
                     nexaDeclStack_.push_back(globalNexaDecl_);
+                    if (sliceMain) {
+                        nexaDeclStack_.back()[node.paramNames[0]] = "[]string";
+                    }
                     emitFnRet_ = EmitFnRet::Main;
                     emitBlockStatements(out, node.children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum);
                     emitFnRet_ = EmitFnRet::Main;
@@ -771,6 +799,18 @@ private:
                 return inferReturnNexaType(ast_[fnOverloadSlots_[slot].astIndex]);
             }
             case AstNode::Type::ExprAdd:
+                if (e.children.size() >= 2) {
+                    std::string t0 = inferExprNexaType(e.children[0]);
+                    std::string t1 = inferExprNexaType(e.children[1]);
+                    if (t0 == "string" || t1 == "string") return "string";
+                    if (t0 == "float" || t1 == "float") return "float";
+                    return "int";
+                }
+                if (e.children.size() >= 1) {
+                    std::string t0 = inferExprNexaType(e.children[0]);
+                    return t0 == "float" ? "float" : "int";
+                }
+                return "int";
             case AstNode::Type::ExprSub:
             case AstNode::Type::ExprMul:
             case AstNode::Type::ExprDiv:
@@ -795,7 +835,11 @@ private:
             case AstNode::Type::ExprArrayLiteral:
                 if (!e.children.empty()) return "arrayelt:" + inferExprNexaType(e.children[0]);
                 return "int";
-            case AstNode::Type::ExprArrayIndex: return "int";
+            case AstNode::Type::ExprArrayIndex: {
+                std::string baseT = lookupNexaDecl(e.value);
+                if (baseT == "[]string") return "string";
+                return "int";
+            }
             case AstNode::Type::IoToInt: return "int";
             case AstNode::Type::RandomInt: return "int";
             case AstNode::Type::OsGetProcessId: return "int";
