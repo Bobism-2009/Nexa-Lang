@@ -298,13 +298,9 @@ static std::string nexaBuildCompileCmd(
     } else {
         // Quoted for cmd.exe: unquoted /SUBSYSTEM is parsed as multiple invalid paths (error 123).
         cmd += noConsole ? " -Xlinker \"/SUBSYSTEM:WINDOWS\"" : " -Xlinker \"/SUBSYSTEM:CONSOLE\"";
-        // MinGW/LLVM-MinGW default to dynamic libgcc/libc++ (or libstdc++). Linking the .exe
-        // without the compiler's bin directory on PATH then fails at runtime (missing DLLs).
-        if (cxx.find("clang") != std::string::npos) {
-            cmd += " -static";
-        } else {
-            cmd += " -static -static-libgcc -static-libstdc++";
-        }
+        // Fully static executables: avoid libgcc/libstdc++ (or mixed libc++) DLLs on machines
+        // without the compiler's bin directory on PATH.
+        cmd += " -static -static-libgcc -static-libstdc++";
         // Same as Linux: drop unreferenced object code from static libc++ and strip symbols
         // (ffunction/fdata sections were enabled above; without --gc-sections, .exe stays large).
         cmd += " -Wl,--gc-sections -s";

@@ -94,6 +94,8 @@ public:
                 case AstNode::Type::ThreadJoin: cppUsage.thread = true; break;
                 case AstNode::Type::DllLoad:
                 case AstNode::Type::DllCall: cppUsage.dll = true; break;
+                case AstNode::Type::TryCatch:
+                case AstNode::Type::Throw: cppUsage.exceptions = true; break;
                 default: break;
             }
             for (const AstNode& c : n.children) detectCppUsage(c);
@@ -160,9 +162,14 @@ public:
             }
             if ((n.type == AstNode::Type::IoPrintln || n.type == AstNode::Type::IoPrint) && !n.children.empty() && exprProducesString(n.children[0])) needsString = true;
             if (n.type == AstNode::Type::OsSystem && !n.children.empty() && exprProducesString(n.children[0])) needsString = true;
+            if (n.type == AstNode::Type::Throw && !n.children.empty() && exprProducesString(n.children[0])) needsString = true;
             if (n.type == AstNode::Type::While && n.children.size() > 1) { for (const auto& c : n.children[1].children) checkNeedsString(c); }
             if (n.type == AstNode::Type::For && n.children.size() > 1) { for (const auto& c : n.children[1].children) checkNeedsString(c); }
             if (n.type == AstNode::Type::IfElse) { for (size_t i = 1; i < n.children.size(); i++) { for (const auto& c : n.children[i].children) checkNeedsString(c); } }
+            if (n.type == AstNode::Type::TryCatch && n.children.size() >= 2) {
+                for (const auto& c : n.children[0].children) checkNeedsString(c);
+                for (const auto& c : n.children[1].children) checkNeedsString(c);
+            }
             if (n.type == AstNode::Type::Block) { for (const auto& c : n.children) checkNeedsString(c); }
         };
         for (const AstNode& node : ast_) {
@@ -187,6 +194,10 @@ public:
             if (n.type == AstNode::Type::While && n.children.size() > 1) { for (const auto& c : n.children[1].children) checkNeedsVector(c); }
             if (n.type == AstNode::Type::For && n.children.size() > 1) { for (const auto& c : n.children[1].children) checkNeedsVector(c); }
             if (n.type == AstNode::Type::IfElse) { for (size_t i = 1; i < n.children.size(); i++) { for (const auto& c : n.children[i].children) checkNeedsVector(c); } }
+            if (n.type == AstNode::Type::TryCatch && n.children.size() >= 2) {
+                for (const auto& c : n.children[0].children) checkNeedsVector(c);
+                for (const auto& c : n.children[1].children) checkNeedsVector(c);
+            }
             if (n.type == AstNode::Type::Block) { for (const auto& c : n.children) checkNeedsVector(c); }
         };
         for (const AstNode& node : ast_) {
@@ -1010,7 +1021,7 @@ private:
     }
 
     static bool exprProducesString(const AstNode& e) {
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::ExprTrim) return true;
         if (e.type == AstNode::Type::ExprAdd && e.children.size() >= 2) {
             return exprProducesString(e.children[0]) || exprProducesString(e.children[1]);
         }
@@ -1153,8 +1164,12 @@ private:
                    std::map<std::string, bool>& varIsString, std::map<std::string, bool>& varIsConst,
                    std::map<std::string, bool>& varIsFloat, std::map<std::string, bool>& varIsChar,
                    std::map<std::string, bool>& varIsBool, std::map<std::string, bool>& varIsEnum,
-                   const std::string& indent = "    ", bool inStringSwitchCase = false) {
+                   const std::string& indent = "    ", bool inStringSwitchCase = false,
+                   const std::map<std::string, std::string>* injectNexaDecl = nullptr) {
         nexaDeclStack_.push_back({});
+        if (injectNexaDecl) {
+            for (const auto& kv : *injectNexaDecl) nexaDeclStack_.back()[kv.first] = kv.second;
+        }
         varStructPush();
         emitBlockStatements(out, children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent, inStringSwitchCase);
         varStructPop();
@@ -1618,6 +1633,82 @@ private:
                 out << indent << "}\n";
                 if (!prevVal.empty()) { varMap[child.value] = prevVal; varIsString[child.value] = prevStr; varIsConst[child.value] = prevConst; varIsFloat[child.value] = prevFloat; varIsChar[child.value] = prevChar; varIsBool[child.value] = prevBool; varIsEnum[child.value] = prevEnum; }
                 else { varMap.erase(child.value); varIsString.erase(child.value); varIsConst.erase(child.value); varIsFloat.erase(child.value); varIsChar.erase(child.value); varIsBool.erase(child.value); varIsEnum.erase(child.value); }
+            } else if (child.type == AstNode::Type::TryCatch) {
+                if (child.children.size() < 2) {
+                    throw std::runtime_error("internal: try/catch missing try or catch block");
+                }
+                out << indent << "try {\n";
+                emitBlock(out, child.children[0].children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "    ", inStringSwitchCase);
+                const std::string& catchNexa = child.value;
+                if (catchNexa.empty()) {
+                    out << indent << "} catch (...) {\n";
+                    emitBlock(out, child.children[1].children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "    ", inStringSwitchCase);
+                    out << indent << "}\n";
+                } else {
+                    auto it = varMap.find(catchNexa);
+                    std::string prevMapped = (it != varMap.end()) ? it->second : "";
+                    bool hadMap = (it != varMap.end());
+                    bool prevStr = varIsString.count(catchNexa) ? varIsString[catchNexa] : false;
+                    bool hadStr = varIsString.count(catchNexa) > 0;
+                    bool prevConst = varIsConst.count(catchNexa) ? varIsConst[catchNexa] : false;
+                    bool hadConst = varIsConst.count(catchNexa) > 0;
+                    bool prevFloat = varIsFloat.count(catchNexa) ? varIsFloat[catchNexa] : false;
+                    bool hadFloat = varIsFloat.count(catchNexa) > 0;
+                    bool prevChar = varIsChar.count(catchNexa) ? varIsChar[catchNexa] : false;
+                    bool hadChar = varIsChar.count(catchNexa) > 0;
+                    bool prevBool = varIsBool.count(catchNexa) ? varIsBool[catchNexa] : false;
+                    bool hadBool = varIsBool.count(catchNexa) > 0;
+                    bool prevEnum = varIsEnum.count(catchNexa) ? varIsEnum[catchNexa] : false;
+                    bool hadEnum = varIsEnum.count(catchNexa) > 0;
+
+                    std::string cppCatch = preserveNames_ ? catchNexa : ("__nexa_var_" + std::to_string(varIdx++));
+                    varMap[catchNexa] = cppCatch;
+                    varIsString[catchNexa] = true;
+                    varIsConst[catchNexa] = false;
+
+                    out << indent << "} catch (...) {\n";
+                    std::string indIn = indent + "    ";
+                    std::string indDeep = indent + "        ";
+                    out << indIn << "std::string " << cppCatch << ";\n";
+                    out << indIn << "try {\n";
+                    out << indDeep << "throw;\n";
+                    out << indIn << "} catch (const std::exception& __nexa_ex) {\n";
+                    out << indDeep << cppCatch << " = std::string(__nexa_ex.what());\n";
+                    out << indIn << "} catch (...) {\n";
+                    out << indDeep << cppCatch << " = std::string(\"\");\n";
+                    out << indIn << "}\n";
+
+                    std::map<std::string, std::string> inj{{catchNexa, "string"}};
+                    emitBlock(out, child.children[1].children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indIn, inStringSwitchCase, &inj);
+
+                    if (hadMap) varMap[catchNexa] = prevMapped;
+                    else varMap.erase(catchNexa);
+                    if (hadStr) varIsString[catchNexa] = prevStr;
+                    else varIsString.erase(catchNexa);
+                    if (hadConst) varIsConst[catchNexa] = prevConst;
+                    else varIsConst.erase(catchNexa);
+                    if (hadFloat) varIsFloat[catchNexa] = prevFloat;
+                    else varIsFloat.erase(catchNexa);
+                    if (hadChar) varIsChar[catchNexa] = prevChar;
+                    else varIsChar.erase(catchNexa);
+                    if (hadBool) varIsBool[catchNexa] = prevBool;
+                    else varIsBool.erase(catchNexa);
+                    if (hadEnum) varIsEnum[catchNexa] = prevEnum;
+                    else varIsEnum.erase(catchNexa);
+
+                    out << indent << "}\n";
+                }
+            } else if (child.type == AstNode::Type::Throw) {
+                if (child.children.empty()) {
+                    throw std::runtime_error("internal: throw without expression");
+                }
+                std::string thrown = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                std::string ntype = inferExprNexaType(child.children[0]);
+                if (ntype == "string") {
+                    out << indent << "throw std::runtime_error(" << thrown << ");\n";
+                } else {
+                    out << indent << "throw (" << thrown << ");\n";
+                }
             } else if (child.type == AstNode::Type::Return) {
                 if (child.children.empty()) {
                     if (emitFnRet_ == EmitFnRet::Main) {

@@ -26,6 +26,20 @@ The generated C++ uses the standard library (`std::string`, `std::vector`, threa
 
 **From source (repo root):**
 
+**Windows:** link **statically** so `NexaC.exe` runs on a clean PC (no MinGW/LLVM C++ runtime DLLs):
+
+```bash
+clang++ -std=c++17 -O2 -static -static-libgcc -static-libstdc++ NexaC.cpp -o NexaC.exe
+```
+
+If that fails with your Clang (e.g. MSVC-target toolchain), build with **MinGW g++** instead, same flags:
+
+```bash
+g++ -std=c++17 -O2 -static -static-libgcc -static-libstdc++ NexaC.cpp -o NexaC.exe
+```
+
+**Linux / macOS:**
+
 ```bash
 clang++ -std=c++17 -O2 NexaC.cpp -o NexaC
 # Windows: adds .exe — e.g. NexaC.exe

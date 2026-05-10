@@ -1,0 +1,37 @@
+#include <std/io>
+
+// Build: NexaC Tests/try_catch.nxa
+//
+// Normal shape: try { ... } catch (e) { ... }  →  e is the error message (string).
+// Bare catch:   try { ... } catch { ... }       →  catch everything, no variable.
+
+fn require_positive(n: int): void {
+    if (n < 0) {
+        throw "Count cannot be negative.";
+    }
+}
+
+fn main(): void {
+    io.println("1) Bad value — you should see the error message:");
+    try {
+        require_positive(-1);
+        io.println("This line never runs.");
+    } catch (err) {
+        io.println("   Stopped because: " + err);
+    }
+
+    io.println("2) Good value — try block finishes, catch is skipped:");
+    try {
+        require_positive(5);
+        io.println("   Count accepted.");
+    } catch (err) {
+        io.println("   Should not print: " + err);
+    }
+
+    io.println("3) Bare catch — same idea, but no err variable:");
+    try {
+        throw "Manual failure.";
+    } catch {
+        io.println("   Handled (no message variable here).");
+    }
+}

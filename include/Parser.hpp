@@ -31,6 +31,8 @@ struct AstNode {
                       Return,
                       Break,
                       Continue,
+                      TryCatch,
+                      Throw,
                       IncPost,
                       DecPost,
                       AssnAdd,
@@ -59,7 +61,7 @@ struct AstNode {
                       AssnMember,
                       InlineCpp };
     Type type;
-    std::string value;           // for Include path, CppHeaderInclude line, string literal, or variable name
+    std::string value;           // for Include path, CppHeaderInclude line, string literal, variable name, or TryCatch catch binding
     std::vector<AstNode> children;
     std::vector<std::string> paramNames;   // for Function: parameter names
     std::vector<std::string> paramTypes;   // for Function: "int", "string", or "" (default int)
@@ -616,6 +618,10 @@ private:
                 stmts.push_back(parseWhile());
             } else if (t.type == TokenType::For) {
                 stmts.push_back(parseFor());
+            } else if (t.type == TokenType::Try) {
+                stmts.push_back(parseTryCatch());
+            } else if (t.type == TokenType::Throw) {
+                stmts.push_back(parseThrowStmt());
             } else if (t.type == TokenType::InlineCppBlock) {
                 if (!modules_.hasInlineCpp()) {
                     throw std::runtime_error("inline_cpp! requires #include <std/inline> at line " + std::to_string(t.line));
@@ -778,6 +784,63 @@ private:
             throw std::runtime_error("Expected ';' after continue at line " + std::to_string(peek().line));
         }
         return {AstNode::Type::Continue, "", {}};
+    }
+
+    AstNode parseTryCatch() {
+        size_t line = peek().line;
+        if (!match(TokenType::Try)) {
+            throw std::runtime_error("Expected 'try' at line " + std::to_string(line));
+        }
+        if (!match(TokenType::LBrace)) {
+            throw std::runtime_error("Expected '{' after try at line " + std::to_string(peek().line));
+        }
+        AstNode tryBlock{AstNode::Type::Block, "", {}};
+        tryBlock.children = parseBlock();
+        if (!match(TokenType::RBrace)) {
+            throw std::runtime_error("Expected '}' after try block at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Catch)) {
+            throw std::runtime_error("Expected 'catch' after try at line " + std::to_string(peek().line));
+        }
+        std::string catchBinding;
+        if (peek().type == TokenType::LParen) {
+            advance();
+            const Token& bindTok = peek();
+            if (bindTok.type != TokenType::Identifier) {
+                throw std::runtime_error("Expected catch variable name at line " + std::to_string(bindTok.line));
+            }
+            catchBinding = bindTok.value;
+            advance();
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' after catch variable at line " + std::to_string(peek().line));
+            }
+        }
+        if (!match(TokenType::LBrace)) {
+            throw std::runtime_error("Expected '{' after catch at line " + std::to_string(peek().line));
+        }
+        AstNode catchBlock{AstNode::Type::Block, "", {}};
+        catchBlock.children = parseBlock();
+        if (!match(TokenType::RBrace)) {
+            throw std::runtime_error("Expected '}' after catch block at line " + std::to_string(peek().line));
+        }
+        AstNode node{AstNode::Type::TryCatch, catchBinding, {}};
+        node.children.push_back(std::move(tryBlock));
+        node.children.push_back(std::move(catchBlock));
+        return node;
+    }
+
+    AstNode parseThrowStmt() {
+        size_t line = peek().line;
+        if (!match(TokenType::Throw)) {
+            throw std::runtime_error("Expected 'throw' at line " + std::to_string(line));
+        }
+        AstNode expr = parseExpression();
+        if (!match(TokenType::Semicolon)) {
+            throw std::runtime_error("Expected ';' after throw at line " + std::to_string(peek().line));
+        }
+        AstNode node{AstNode::Type::Throw, "", {}};
+        node.children.push_back(std::move(expr));
+        return node;
     }
 
     AstNode parseIncDec() {
@@ -1089,6 +1152,10 @@ private:
                 stmts.push_back(parseWhile());
             } else if (t.type == TokenType::For) {
                 stmts.push_back(parseFor());
+            } else if (t.type == TokenType::Try) {
+                stmts.push_back(parseTryCatch());
+            } else if (t.type == TokenType::Throw) {
+                stmts.push_back(parseThrowStmt());
             } else if (t.type == TokenType::InlineCppBlock) {
                 if (!modules_.hasInlineCpp()) {
                     throw std::runtime_error("inline_cpp! requires #include <std/inline> at line " + std::to_string(t.line));

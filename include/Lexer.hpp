@@ -24,6 +24,9 @@ enum class TokenType {
     Return,
     Break,
     Continue,
+    Try,
+    Catch,
+    Throw,
     Switch,
     Struct,
     Enum,
@@ -395,6 +398,9 @@ private:
         else if (value == "return") type = TokenType::Return;
         else if (value == "break") type = TokenType::Break;
         else if (value == "continue") type = TokenType::Continue;
+        else if (value == "try") type = TokenType::Try;
+        else if (value == "catch") type = TokenType::Catch;
+        else if (value == "throw") type = TokenType::Throw;
         else if (value == "switch") type = TokenType::Switch;
         else if (value == "struct") type = TokenType::Struct;
         else if (value == "enum") type = TokenType::Enum;

@@ -9,4 +9,12 @@ fn main(args: []string): void {
         io.println("Help: --help, --version, --debug");
         return;
     }
+    else if (len(args) > 1 && args[1] == "--version") {
+        io.println("Version: 0.1.4");
+        return;
+    }
+    else {
+        io.println("Unknown argument: " + args[1]);
+        return;
+    }
 }

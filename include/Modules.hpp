@@ -29,6 +29,7 @@ public:
         bool time = false;
         bool thread = false;
         bool dll = false;
+        bool exceptions = false;
     };
 
     void enable(const std::string& path) {
@@ -69,6 +70,9 @@ public:
 
     std::string getCppIncludes(const CppUsage& usage) const {
         std::string out;
+        if (usage.exceptions) {
+            out += "#include <stdexcept>\n";
+        }
         if (hasIo() && (usage.ioPrint || usage.ioReadln || usage.ioFlush)) {
             out += "#include <cstdio>\n";
         }
