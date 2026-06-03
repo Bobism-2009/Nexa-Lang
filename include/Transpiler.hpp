@@ -220,7 +220,10 @@ public:
         }
         if (needsString && moduleCppIncludes.find("#include <string>\n") == std::string::npos) out << "#include <string>\n";
         if (needsVector && moduleCppIncludes.find("#include <vector>\n") == std::string::npos) out << "#include <vector>\n";
+        // Float->string helper that matches io.print's "%g" formatting (e.g. 12.0 -> "12", not "12.000000").
+        if (needsString && moduleCppIncludes.find("#include <cstdio>\n") == std::string::npos) out << "#include <cstdio>\n";
         if (!moduleCppIncludes.empty() || !inlineCppHoisted.empty() || needsString || needsVector) out << "\n";
+        if (needsString) out << "[[maybe_unused]] static std::string __nexa_f2s(double __v) { char __b[32]; std::snprintf(__b, sizeof(__b), \"%g\", __v); return std::string(__b); }\n\n";
 
         bool wroteUserCppHeaders = false;
         for (const AstNode& node : ast_) {
@@ -1077,6 +1080,7 @@ private:
         }
         if (e.type == AstNode::Type::ExprFloatLiteral) return true;
         if (e.type == AstNode::Type::TimeNowMs) return true;
+        if (e.type == AstNode::Type::MathCall) return true;
         if (e.type == AstNode::Type::ExprVarRef) {
             auto it = varIsFloat.find(e.value);
             return it != varIsFloat.end() && it->second;
@@ -2159,13 +2163,16 @@ private:
                 + emitConcatOperand(child.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
         }
         if (child.type == AstNode::Type::ExprAdd) {
+            if (exprIsFloat(child, varIsFloat)) {
+                return "__nexa_f2s(" + emitExpr(child, varMap, pStr, pFl, pCh, pBo) + ")";
+            }
             return "std::to_string(" + emitExpr(child, varMap, pStr, pFl, pCh, pBo) + ")";
         }
         if (exprIsString(child, varIsString) || exprProducesString(child)) {
             return emitExpr(child, varMap, pStr, pFl, pCh, pBo);
         }
         if (exprIsFloat(child, varIsFloat)) {
-            return "std::to_string(" + emitExpr(child, varMap, pStr, pFl, pCh, pBo) + ")";
+            return "__nexa_f2s(" + emitExpr(child, varMap, pStr, pFl, pCh, pBo) + ")";
         }
         if (exprIsChar(child, varIsChar)) {
             return "std::string(1, " + emitExpr(child, varMap, pStr, pFl, pCh, pBo) + ")";
