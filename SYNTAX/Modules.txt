@@ -38,6 +38,24 @@ Nexa Standard Modules
   random.seed(n)        - Seed RNG for reproducibility
   Use: let roll = random.int(1, 6);  random.seed(42);
 
+#include <std/math>
+  math.abs(x)           - Absolute value
+  math.min(a, b)        - Smaller of two values
+  math.max(a, b)        - Larger of two values
+  math.pow(base, exp)   - base raised to exp
+  math.sqrt(x)          - Square root
+  math.floor(x)         - Round down to nearest whole number
+  math.ceil(x)          - Round up to nearest whole number
+  math.round(x)         - Round to nearest whole number
+  math.sin(x) / math.cos(x) / math.tan(x) - Trigonometry (radians)
+  math.log(x)           - Natural logarithm (base e)
+  math.log10(x)         - Base-10 logarithm
+  math.exp(x)           - e raised to x
+  math.pi               - 3.14159... (constant, no parentheses)
+  math.e                - 2.71828... (constant, no parentheses)
+  All math.* return float. For an int result, assign to int: let n: int = math.floor(x);
+  Use: let h = math.sqrt(math.pow(3.0, 2.0) + math.pow(4.0, 2.0));
+
 #include <std/time>
   time.sleep(duration)      - Sleeps using std::chrono (ms, or seconds()/milliseconds() helpers)
   time.seconds(n)           - Millisecond count via std::chrono::seconds(n) (same semantics as n*1000)

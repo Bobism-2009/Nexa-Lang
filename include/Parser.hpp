@@ -21,6 +21,7 @@ struct AstNode {
                       DllLoad, DllCall,
                       FileRead, FileWrite, FileAppend, FileExists,
                       RandomInt, RandomSeed,
+                      MathCall,
                       TimeSleep, TimeSeconds, TimeMilliseconds, TimeNowMs,
                       ThreadSpawn, ThreadJoin,
                       IfElse,
@@ -1456,6 +1457,10 @@ private:
             tokens_[pos_ + 2].value == "int") {
             return parseRandomInt();
         }
+        if (peek().type == TokenType::Identifier && peek().value == "math" && pos_ + 2 < tokens_.size() &&
+            tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
+            return parseMathCall();
+        }
         if (peek().type == TokenType::Identifier && peek().value == "time" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
             std::string method = tokens_[pos_ + 2].value;
@@ -2015,6 +2020,56 @@ private:
         return {AstNode::Type::RandomInt, "", {minArg, maxArg}};
     }
 
+    AstNode parseMathCall() {
+        size_t line = peek().line;
+        if (!modules_.hasMath()) {
+            throw std::runtime_error("math.* requires #include <std/math> at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "math") {
+            throw std::runtime_error("Expected 'math' at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        const Token& methodTok = peek();
+        if (methodTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected math function name at line " + std::to_string(methodTok.line));
+        }
+        std::string method = methodTok.value;
+        advance();
+        AstNode node{AstNode::Type::MathCall, method, {}};
+        // Constants: math.pi, math.e (no call parentheses)
+        if (method == "pi" || method == "e") {
+            return node;
+        }
+        // One-argument functions
+        static const std::set<std::string> oneArg = {
+            "abs", "sqrt", "floor", "ceil", "round",
+            "sin", "cos", "tan", "log", "log10", "exp"
+        };
+        // Two-argument functions
+        static const std::set<std::string> twoArg = {"pow", "min", "max"};
+        if (oneArg.find(method) == oneArg.end() && twoArg.find(method) == twoArg.end()) {
+            throw std::runtime_error("Unknown math function 'math." + method +
+                "' at line " + std::to_string(methodTok.line) +
+                " (use abs, min, max, pow, sqrt, floor, ceil, round, sin, cos, tan, log, log10, exp, pi, e)");
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after math." + method + " at line " + std::to_string(peek().line));
+        }
+        node.children.push_back(parseExpression());
+        if (twoArg.find(method) != twoArg.end()) {
+            if (!match(TokenType::Comma)) {
+                throw std::runtime_error("Expected ',' in math." + method + "(a, b) at line " + std::to_string(peek().line));
+            }
+            node.children.push_back(parseExpression());
+        }
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' after math." + method + " arguments at line " + std::to_string(peek().line));
+        }
+        return node;
+    }
+
     AstNode parseDllCall() {
         size_t line = peek().line;
         if (!modules_.hasDll()) {
@@ -2452,6 +2507,8 @@ private:
             } else if (b.type == AstNode::Type::ExprFloatLiteral) {
                 node.initIsFloat = true;
             } else if (b.type == AstNode::Type::TimeNowMs) {
+                node.initIsFloat = true;
+            } else if (b.type == AstNode::Type::MathCall) {
                 node.initIsFloat = true;
             } else if (b.type == AstNode::Type::ExprCharLiteral) {
                 node.initIsChar = true;

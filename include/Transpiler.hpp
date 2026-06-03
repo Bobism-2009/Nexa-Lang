@@ -91,6 +91,7 @@ public:
                 case AstNode::Type::FileExists: cppUsage.file = true; break;
                 case AstNode::Type::RandomInt:
                 case AstNode::Type::RandomSeed: cppUsage.random = true; break;
+                case AstNode::Type::MathCall: cppUsage.math = true; break;
                 case AstNode::Type::TimeSleep:
                 case AstNode::Type::TimeSeconds:
                 case AstNode::Type::TimeMilliseconds:
@@ -860,6 +861,10 @@ private:
             }
             case AstNode::Type::IoToInt: return "int";
             case AstNode::Type::RandomInt: return "int";
+            case AstNode::Type::MathCall:
+                // math.* operates in the floating-point domain and always yields float (double).
+                // For an integer result, assign to an int (e.g. let n: int = math.floor(x);).
+                return "float";
             case AstNode::Type::OsGetProcessId: return "int";
             case AstNode::Type::TimeSeconds:
             case AstNode::Type::TimeMilliseconds:
@@ -2016,6 +2021,25 @@ private:
                 std::string minExpr = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 std::string maxExpr = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 return "__nexa_random_int(" + minExpr + ", " + maxExpr + ")";
+            }
+            case AstNode::Type::MathCall: {
+                const std::string& fn = e.value;
+                if (fn == "pi") return "3.14159265358979323846";
+                if (fn == "e") return "2.71828182845904523536";
+                std::string a0 = e.children.empty() ? "" : emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                std::string da0 = "static_cast<double>(" + a0 + ")";
+                if (fn == "abs") return "std::abs(" + da0 + ")";
+                if (fn == "min" || fn == "max") {
+                    std::string a1 = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    // Explicit template argument keeps both operands double (avoids deduction failure on mixed int/float).
+                    return "std::" + fn + "<double>(" + da0 + ", static_cast<double>(" + a1 + "))";
+                }
+                if (fn == "pow") {
+                    std::string a1 = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    return "std::pow(" + da0 + ", static_cast<double>(" + a1 + "))";
+                }
+                // sqrt, floor, ceil, round, sin, cos, tan, log, log10, exp
+                return "std::" + fn + "(" + da0 + ")";
             }
             case AstNode::Type::TimeSeconds: {
                 std::string n = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);

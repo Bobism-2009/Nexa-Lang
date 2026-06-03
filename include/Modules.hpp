@@ -26,6 +26,7 @@ public:
         bool osKeyPressed = false;
         bool file = false;
         bool random = false;
+        bool math = false;
         bool time = false;
         bool thread = false;
         bool dll = false;
@@ -54,6 +55,10 @@ public:
 
     bool hasRandom() const {
         return enabled_.count("std/random") > 0;
+    }
+
+    bool hasMath() const {
+        return enabled_.count("std/math") > 0;
     }
 
     bool hasTime() const {
@@ -287,6 +292,11 @@ public:
             out += "static void __nexa_random_seed(int s) { __nexa_rng().seed(static_cast<unsigned>(s)); }\n";
             out += "static int __nexa_random_int(int a, int b) { return std::uniform_int_distribution<int>(a, b)(__nexa_rng()); }\n";
         }
+        if (hasMath() && usage.math) {
+            out += "#include <cmath>\n";
+            out += "#include <cstdlib>\n";
+            out += "#include <algorithm>\n";
+        }
         if (hasTime() && usage.time) {
             out += "#include <thread>\n";
             out += "#include <chrono>\n";
@@ -338,7 +348,7 @@ public:
         all.osSystem = all.osGetenv = all.osPlatform = all.osExeDir = true;
         all.osGetProcessId = true;
         all.osWindowControl = all.osMessageBox = all.osGrepKeys = all.osKeyPressed = true;
-        all.file = all.random = all.time = all.thread = all.dll = true;
+        all.file = all.random = all.math = all.time = all.thread = all.dll = true;
         return getCppIncludes(all);
     }
 

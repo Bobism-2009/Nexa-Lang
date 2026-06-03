@@ -723,6 +723,7 @@ static int printHelp(int page = 1) {
     std::cout << "  std/dll       Dynamic libraries: load, call\n";
     std::cout << "  std/file      File I/O: read, write, append, exists\n";
     std::cout << "  std/random   Random: int, seed\n";
+    std::cout << "  std/math      Math: abs, min, max, pow, sqrt, floor, ceil, round, sin, cos, tan, log, exp, pi, e\n";
     std::cout << "  std/thread   Threads: spawn, join\n";
     std::cout << "  std/inline   inline_cpp! { ... } embed C++ (requires include)\n";
     std::cout << "  core          Core language: variables, types, fn main, functions\n\n";
