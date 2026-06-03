@@ -54,10 +54,15 @@ public:
     Transpiler(const std::vector<AstNode>& ast, const Modules& modules, bool preserveNames = false, bool buildDll = false)
         : ast_(ast), modules_(modules), preserveNames_(preserveNames), buildDll_(buildDll) {}
 
+    // Valid after transpile(): which C++ features the generated code actually uses.
+    // Lets the build step drop exception/RTTI machinery when nothing needs it.
+    const Modules::CppUsage& cppUsage() const { return cppUsage_; }
+
     std::string transpile() {
         std::ostringstream out;
 
-        Modules::CppUsage cppUsage;
+        Modules::CppUsage& cppUsage = cppUsage_;
+        cppUsage = Modules::CppUsage{};
         std::function<void(const AstNode&)> detectCppUsage = [&](const AstNode& n) {
             if (n.initFromDllLoad) cppUsage.dll = true;
             if (n.initFromReadln) cppUsage.ioReadln = true;
@@ -209,6 +214,7 @@ public:
             if (node.type == AstNode::Type::MainFunction && node.paramNames.size() == 1 && node.paramTypes.size() == 1 &&
                 node.paramTypes[0] == "[]string") {
                 needsVector = true;
+                needsString = true;
             }
         }
         if (needsString && moduleCppIncludes.find("#include <string>\n") == std::string::npos) out << "#include <string>\n";
@@ -639,6 +645,7 @@ private:
     const Modules& modules_;
     bool preserveNames_;
     bool buildDll_;
+    Modules::CppUsage cppUsage_;
     // While emitting a function or main body: how bare `return;` / value returns are interpreted
     enum class EmitFnRet { Main, IntFn, VoidFn };
     mutable EmitFnRet emitFnRet_ = EmitFnRet::Main;
@@ -1206,6 +1213,7 @@ private:
                     nexaDeclStack_.back()[child.value] = nexaDeclFromVariableAst(child);
                 }
                 if (child.initFromReadln) {
+                    out << indent << "fflush(stdout);\n";
                     out << indent << "char __nexa_buf[4096];\n";
                     out << indent << "if (fgets(__nexa_buf, sizeof(__nexa_buf), stdin)) { __nexa_buf[strcspn(__nexa_buf, \"\\n\")] = 0; }\n";
                     out << indent << "std::string " << vname << "(__nexa_buf);\n";
@@ -1296,11 +1304,11 @@ private:
                 if (!child.children.empty()) {
                     const AstNode& arg0 = child.children[0];
                     if (arg0.type == AstNode::Type::ExprStringLiteral) {
-                        out << indent << "puts(\"" << escapeString(arg0.value) << "\"); fflush(stdout);\n";
+                        out << indent << "puts(\"" << escapeString(arg0.value) << "\");\n";
                     } else if (arg0.type == AstNode::Type::ExprIntLiteral) {
-                        out << indent << "printf(\"%d\\n\", " << arg0.value << "); fflush(stdout);\n";
+                        out << indent << "printf(\"%d\\n\", " << arg0.value << ");\n";
                     } else if (arg0.type == AstNode::Type::ExprBoolLiteral) {
-                        out << indent << "printf(\"%d\\n\", " << (arg0.value == "true" ? "1" : "0") << "); fflush(stdout);\n";
+                        out << indent << "printf(\"%d\\n\", " << (arg0.value == "true" ? "1" : "0") << ");\n";
                     } else {
                     std::string ntype = inferExprNexaType(child.children[0]);
                     bool exprIsStr = (ntype == "string");
@@ -1314,19 +1322,19 @@ private:
                         const bool strNeedsCStr = expr.empty() || expr[0] != '"';
                         if (strNeedsCStr) {
                             std::string arg = expr + ".c_str()";
-                            out << indent << "printf(\"%s\\n\", " << arg << "); fflush(stdout);\n";
+                            out << indent << "printf(\"%s\\n\", " << arg << ");\n";
                         } else {
-                            out << indent << "puts(" << expr << "); fflush(stdout);\n";
+                            out << indent << "puts(" << expr << ");\n";
                         }
                     } else if (exprIsF) {
-                        out << indent << "printf(\"%g\\n\", " << expr << "); fflush(stdout);\n";
+                        out << indent << "printf(\"%g\\n\", " << expr << ");\n";
                     } else if (exprIsC) {
-                        out << indent << "printf(\"%c\\n\", " << expr << "); fflush(stdout);\n";
+                        out << indent << "printf(\"%c\\n\", " << expr << ");\n";
                     } else if (exprIsBoolT) {
-                        out << indent << "printf(\"%d\\n\", " << expr << "); fflush(stdout);\n";
+                        out << indent << "printf(\"%d\\n\", " << expr << ");\n";
                     } else {
                         std::string arg = isNexaEnum ? ("static_cast<int>(" + expr + ")") : expr;
-                        out << indent << "printf(\"%d\\n\", " << arg << "); fflush(stdout);\n";
+                        out << indent << "printf(\"%d\\n\", " << arg << ");\n";
                     }
                     }
                 } else if (child.isVarRef) {
@@ -1338,17 +1346,17 @@ private:
                     bool isC = (ntype == "char");
                     bool isNexaEnum = !ntype.empty() && ntype.size() >= 5 && ntype.compare(0, 5, "enum:") == 0;
                     if (isStr) {
-                        out << indent << "puts(" << v << ".c_str()); fflush(stdout);\n";
+                        out << indent << "puts(" << v << ".c_str());\n";
                     } else if (isF) {
-                        out << indent << "printf(\"%g\\n\", " << v << "); fflush(stdout);\n";
+                        out << indent << "printf(\"%g\\n\", " << v << ");\n";
                     } else if (isC) {
-                        out << indent << "printf(\"%c\\n\", " << v << "); fflush(stdout);\n";
+                        out << indent << "printf(\"%c\\n\", " << v << ");\n";
                     } else {
                         std::string arg = isNexaEnum ? ("static_cast<int>(" + v + ")") : v;
-                        out << indent << "printf(\"%d\\n\", " << arg << "); fflush(stdout);\n";
+                        out << indent << "printf(\"%d\\n\", " << arg << ");\n";
                     }
                 } else {
-                    out << indent << "puts(\"" << escapeString(child.value) << "\"); fflush(stdout);\n";
+                    out << indent << "puts(\"" << escapeString(child.value) << "\");\n";
                 }
             } else if (child.type == AstNode::Type::IoPrint) {
                 if (!child.children.empty()) {
@@ -1453,6 +1461,7 @@ private:
                 out << indent << "}\n";
 #endif
             } else if (child.type == AstNode::Type::OsSystem) {
+                out << indent << "fflush(stdout);\n";
                 if (!child.children.empty()) {
                     const AstNode& arg = child.children[0];
                     bool exprIsStr = exprIsString(arg, varIsString);
@@ -1965,7 +1974,7 @@ private:
             case AstNode::Type::OsExeDir:
                 return "__nexa_exe_dir()";
             case AstNode::Type::IoReadln: {
-                return "([]{ char __b[4096]; if (fgets(__b, sizeof(__b), stdin)) __b[strcspn(__b, \"\\n\")] = 0; return std::string(__b); }())";
+                return "([]{ fflush(stdout); char __b[4096]; if (fgets(__b, sizeof(__b), stdin)) __b[strcspn(__b, \"\\n\")] = 0; return std::string(__b); }())";
             }
             case AstNode::Type::IoGetline: {
                 std::string src = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);

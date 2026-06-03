@@ -126,6 +126,9 @@ public:
         if (hasOs() && (usage.osSystem || usage.osGetenv)) {
             out += "#include <cstdlib>\n";
         }
+        if (hasOs() && usage.osSystem) {
+            out += "#include <cstdio>\n";
+        }
         if (hasOs() && (usage.osGetenv || usage.osPlatform || usage.osExeDir || usage.osMessageBox || usage.osGrepKeys)) {
             out += "#include <string>\n";
         }

@@ -262,7 +262,10 @@ static std::string nexaBuildCompileCmd(
     bool buildWin,
     bool modulesHasDll,
     bool noConsole,
-    bool linkUser32
+    bool linkUser32,
+    bool noExceptions,
+    bool noRtti,
+    const std::vector<std::string>& linkInputs
 ) {
     // Windows cmd.exe: do not wrap the compiler name in quotes unless it contains spaces;
     // "clang" combined with other quoted paths can confuse cmd's parser (error 123).
@@ -276,6 +279,17 @@ static std::string nexaBuildCompileCmd(
         // Generated C++ may intentionally carry extra grouping parentheses.
         cmd += " -Wno-parentheses-equality";
     }
+    // Size/perf: drop machinery the generated code provably never uses. RTTI is never emitted
+    // by the transpiler; exceptions/unwind tables are only needed for try/catch, throw, std::stoi,
+    // or inline_cpp. Stripping them removes .eh_frame and RTTI metadata (smaller, no perf cost).
+    if (noRtti) {
+        cmd += " -fno-rtti";
+    }
+    if (noExceptions) {
+        cmd += " -fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables";
+    }
+    // Trim non-essential metadata from the object/binary (no runtime effect).
+    cmd += " -fno-ident -fmerge-all-constants";
     if (const char* nexaCxx = std::getenv("NEXA_CXXFLAGS")) {
         cmd += " ";
         cmd += nexaCxx;
@@ -307,6 +321,25 @@ static std::string nexaBuildCompileCmd(
     }
 #else
     cmd += " -s -ffunction-sections -fdata-sections -Wl,--gc-sections";
+    // Native ELF output (Linux exe or .so), not mingw-cross (PE) builds.
+    const bool elfTarget = !buildWin && !buildDll;
+    if (elfTarget) {
+        // On aarch64 (e.g. Raspberry Pi) the default max-page-size is 64KB, which pads even a
+        // trivial binary to ~64KB+ of segment alignment. 4KB pages (the kernel default on Pi OS
+        // and most aarch64 Linux) shrink output ~10x. On x86-64 this is already the default (no-op).
+        cmd += " -Wl,-z,max-page-size=4096";
+        cmd += " -Wl,--build-id=none";
+    }
+    if (elfTarget && !buildShared) {
+        // Self-contained w.r.t. the C++ toolchain runtime: embed libstdc++ and libgcc so the
+        // binary does not require those to be installed on the target. Base system libraries
+        // (libc, libm, the dynamic loader) stay dynamic since they exist on every Linux by
+        // default. Programs that never touch the C++ runtime (e.g. only printf/puts) pull in
+        // nothing extra and stay tiny; programs using std::string/exceptions embed only the
+        // parts they use. Shared libraries (.so) are excluded: they load into a host process
+        // and must share its libstdc++ to avoid duplicate-runtime issues.
+        cmd += " -static-libstdc++ -static-libgcc";
+    }
     if (buildDll || buildShared) {
         cmd += " -shared -fPIC";
     } else if (buildWin && noConsole) {
@@ -325,6 +358,15 @@ static std::string nexaBuildCompileCmd(
         cmd += " -luser32";
     }
 #endif
+    // Extra link inputs (--link): static archives (.a/.lib) are baked in, objects (.o) embedded,
+    // shared libs (.so/.dll) linked dynamically. Placed after the main object so archive members
+    // that satisfy references from the generated code are pulled in (correct GNU ld link order).
+    for (const std::string& li : linkInputs) {
+        cmd += " ";
+        // Pass linker-style tokens (e.g. -lpthread, -L/path) verbatim; quote file paths.
+        if (!li.empty() && li[0] == '-') cmd += li;
+        else cmd += "\"" + li + "\"";
+    }
     if (const char* nexaLd = std::getenv("NEXA_LDFLAGS")) {
         cmd += " ";
         cmd += nexaLd;
@@ -334,6 +376,47 @@ static std::string nexaBuildCompileCmd(
     if (modulesHasDll && buildShared) cmd += " -ldl";
     cmd += " 2>&1";
 #endif
+    return cmd;
+}
+
+// Build a static archive (.a / .lib) from the generated C++: compile to a relocatable object,
+// then archive it. Objects are compiled -fPIC so the archive links cleanly into PIE executables.
+static std::string nexaStaticLibCmd(
+    const std::string& cxx,
+    const std::string& cppPath,
+    const std::string& objPath,
+    const std::string& archivePath,
+    const std::string& opt,
+    bool noExceptions,
+    bool noRtti
+) {
+#ifdef _WIN32
+    std::string cmd = cxx;
+#else
+    std::string cmd = "\"" + cxx + "\"";
+#endif
+    cmd += " \"" + cppPath + "\" " + opt;
+    if (cxx.find("clang") != std::string::npos) {
+        cmd += " -Wno-parentheses-equality";
+    }
+    if (noRtti) cmd += " -fno-rtti";
+    if (noExceptions) cmd += " -fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables";
+    cmd += " -fno-ident -fmerge-all-constants -ffunction-sections -fdata-sections -fPIC -c";
+    if (const char* nexaCxx = std::getenv("NEXA_CXXFLAGS")) {
+        cmd += " ";
+        cmd += nexaCxx;
+    }
+    cmd += " -o \"" + objPath + "\"";
+#ifndef _WIN32
+    cmd += " 2>&1";
+#endif
+    // Archive the object. llvm-ar (ships with clang) and GNU ar both accept "rcs".
+#ifdef _WIN32
+    std::string ar = "llvm-ar";
+#else
+    std::string ar = "ar";
+#endif
+    cmd += " && " + ar + " rcs \"" + archivePath + "\" \"" + objPath + "\"";
     return cmd;
 }
 
@@ -625,6 +708,9 @@ static int printHelp(int page = 1) {
     std::cout << "  --small       Optimize for smaller executable (-Os)\n";
     std::cout << "  --dll     Build Windows .dll (default: -Os + strip for smaller .dll)\n";
     std::cout << "  --shared  Build Linux .so (default: -Os + strip)\n";
+    std::cout << "  --static-lib  Build a static archive (.a Linux / .lib Windows) from a .nxa\n";
+    std::cout << "  --link <file>  Statically link an archive/object/lib into the executable\n";
+    std::cout << "                 (repeatable; .a/.o are baked in, .so/.dll link dynamically)\n";
     std::cout << "  --win     Build Windows .exe (mingw-w64 from Linux; native on Windows)\n";
     std::cout << "  --no-console  Build Windows GUI .exe (no console window)\n";
     std::cout << "  --help, -h    Show this help\n";
@@ -677,10 +763,12 @@ int main(int argc, char* argv[]) {
     bool optimizeSize = false;
     bool buildDll = false;   // mingw -> .dll
     bool buildShared = false;  // clang++ -> .so
+    bool buildStaticLib = false;  // -> .a (Linux) / .lib (Windows) static archive
     bool buildWin = false;   // mingw -> .exe (cross-compile from Linux)
     bool noConsole = false;  // Windows GUI subsystem
     bool runAfterBuild = false;
     bool pendingSourceOut = false;
+    std::vector<std::string> linkInputs;  // extra objects/archives/libs to link into the exe (--link)
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -726,6 +814,14 @@ int main(int argc, char* argv[]) {
             buildDll = true;
         } else if (arg == "--shared") {
             buildShared = true;
+        } else if (arg == "--static-lib" || arg == "--staticlib" || arg == "--lib" || arg == "--a") {
+            buildStaticLib = true;
+        } else if (arg == "--link") {
+            if (i + 1 >= argc) {
+                std::cerr << "[Nexa] Error: --link requires a file (e.g. --link libfoo.a)\n";
+                return 1;
+            }
+            linkInputs.push_back(argv[++i]);
         } else if (arg == "--win" || arg == "--windows") {
             buildWin = true;
         } else if (arg == "--no-console") {
@@ -795,6 +891,22 @@ int main(int argc, char* argv[]) {
         return 1;
 #endif
     }
+    if (buildStaticLib && (buildDll || buildShared || buildWin)) {
+        std::cerr << "[Nexa] Error: --static-lib cannot be combined with --dll, --shared, or --win\n";
+        return 1;
+    }
+    if (buildStaticLib && runAfterBuild) {
+        std::cerr << "[Nexa] Error: --run cannot be used with --static-lib (a library is not executable)\n";
+        return 1;
+    }
+    if (buildStaticLib && noConsole) {
+        std::cerr << "[Nexa] Error: --no-console is only valid for executables, not --static-lib\n";
+        return 1;
+    }
+    if (!linkInputs.empty() && (buildDll || buildShared || buildStaticLib)) {
+        std::cerr << "[Nexa] Error: --link adds libraries to an executable; it cannot be used with --dll, --shared, or --static-lib\n";
+        return 1;
+    }
 
     std::string cppPath;
     std::string exePath;
@@ -827,6 +939,12 @@ int main(int argc, char* argv[]) {
                 exePath += ".dll";
             } else if (buildShared) {
                 exePath += ".so";
+            } else if (buildStaticLib) {
+#ifdef _WIN32
+                exePath += ".lib";
+#else
+                exePath += ".a";
+#endif
             } else if (buildWin) {
                 exePath += ".exe";
             }
@@ -836,6 +954,12 @@ int main(int argc, char* argv[]) {
                 exePath += ".dll";
             } else if (buildShared && (exePath.size() < 3 || exePath.substr(exePath.size() - 3) != ".so")) {
                 exePath += ".so";
+            } else if (buildStaticLib) {
+#ifdef _WIN32
+                if (exePath.size() < 4 || exePath.substr(exePath.size() - 4) != ".lib") exePath += ".lib";
+#else
+                if (exePath.size() < 2 || exePath.substr(exePath.size() - 2) != ".a") exePath += ".a";
+#endif
             }
             if (buildWin && (exePath.size() < 4 || exePath.substr(exePath.size() - 4) != ".exe")) {
                 exePath += ".exe";
@@ -882,9 +1006,16 @@ int main(int argc, char* argv[]) {
 
         std::cout << "[Nexa] Transpiling...\n";
 
-        bool isSharedLib = buildDll || buildShared;
-        nexa::Transpiler transpiler(ast, modules, preserveNames || isSharedLib, isSharedLib);  // shared lib: preserve names
+        bool isLib = buildDll || buildShared || buildStaticLib;
+        nexa::Transpiler transpiler(ast, modules, preserveNames || isLib, isLib);  // library: preserve + export C names
         std::string cpp = transpiler.transpile();
+
+        // Decide which C++ machinery the generated code can safely omit. Exceptions/unwind tables
+        // are only needed for try/catch, throw, std::stoi (io.to_int), or inline_cpp (arbitrary C++).
+        // RTTI is never emitted by the transpiler, so it is dropped unless inline_cpp is present.
+        const nexa::Modules::CppUsage& usage = transpiler.cppUsage();
+        const bool noExceptions = !usage.exceptions && !usage.ioToInt && !modules.hasInlineCpp();
+        const bool noRtti = !modules.hasInlineCpp();
 
         std::ofstream out(cppPath);
         if (!out) {
@@ -918,6 +1049,17 @@ int main(int argc, char* argv[]) {
         } else if (buildShared) {
             cxx = "clang++";
             std::cout << "[Nexa] Compiling with clang++ (shared library)...\n";
+        } else if (buildStaticLib) {
+#ifdef _WIN32
+            cxx = findWindowsCxxNative();
+            if (cxx.empty()) {
+                std::cerr << "[Nexa] Error: No C++ compiler found. Install clang (LLVM) or MinGW (g++/gcc).\n";
+                return 1;
+            }
+#else
+            cxx = "clang++";
+#endif
+            std::cout << "[Nexa] Compiling with " << cxx << " (static library)...\n";
         } else if (buildWin) {
 #ifdef _WIN32
             cxx = "clang++";
@@ -954,7 +1096,24 @@ int main(int argc, char* argv[]) {
         // if you need speed on a specific library.
         std::string opt = (optimizeSize || buildDll || buildShared) ? "-Os" : "-O2";
         const bool linkUser32 = modules.hasOs() || modules.hasInlineCpp();
-        std::string cmd = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32);
+
+        if (buildStaticLib) {
+            std::string objPath = cppPath.substr(0, cppPath.size() - 4) + ".o";
+            std::string cmd = nexaStaticLibCmd(cxx, cppPath, objPath, exePath, opt, noExceptions, noRtti);
+            int ret = std::system(cmd.c_str());
+            std::remove(cppPath.c_str());
+            std::remove(objPath.c_str());
+            if (ret != 0) {
+                std::cerr << "[Nexa] Static library build failed.\n";
+                return 1;
+            }
+            std::cout << "[Nexa] Build successful! Static library: " << exePath << "\n";
+            std::cout << "[Nexa] Link it into an executable with: NexaC <main.nxa> --link \"" << exePath << "\" -o <exe>\n";
+            std::cout << "[Nexa] Call its exported functions from main via inline_cpp (declare 'extern \"C\" ...').\n";
+            return 0;
+        }
+
+        std::string cmd = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, noExceptions, noRtti, linkInputs);
         int ret = std::system(cmd.c_str());
 
         if (ret != 0) {
@@ -983,7 +1142,7 @@ int main(int argc, char* argv[]) {
                 cxx = fallback;
                 targetFlags = "";
                 std::cout.flush();
-                std::string cmd2 = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32);
+                std::string cmd2 = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, noExceptions, noRtti, linkInputs);
                 ret = std::system(cmd2.c_str());
             }
         }

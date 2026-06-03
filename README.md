@@ -2,7 +2,7 @@
 
 **Nexa** is a small systems-friendly language with C++-like surface syntax. **NexaC** is its compiler: it parses `.nxa` files, transpiles to a single C++ translation unit, and invokes **clang++** (or **g++** on Windows as a fallback) to produce a native executable or shared library.
 
-Current compiler version string: **0.1.4** (`NexaC --version`).
+Current compiler version string: **0.1.5** (`NexaC --version`).
 
 | | |
 |---|---|
@@ -96,7 +96,7 @@ fn main(args: []string): void {
 
 The **`if` condition must be one parenthesized expression** — use `if (a && b)` or `if ((a) && (b))`, not `if (a) && (b)`.
 
-Example project: [`Tests/cli_args_demo.nxa`](Tests/cli_args_demo.nxa).
+Example project: [`Examples/cli_args_demo.nxa`](Examples/cli_args_demo.nxa).
 
 ---
 
@@ -114,7 +114,40 @@ Full detail: [`SYNTAX/CLI.txt`](SYNTAX/CLI.txt) or `NexaC --help`.
 | `NexaC --run` / `-r` | Build to temp binary and run |
 | `NexaC -p` / `--preserve-names` | Keep readable C++ symbol names |
 | `NexaC --dll` / `--shared` | Build DLL / `.so` |
+| `NexaC --static-lib` | Build a static archive (`.a` Linux / `.lib` Windows) from a `.nxa` |
+| `NexaC file.nxa --link lib.a` | Statically link an archive/object into the executable (repeatable) |
 | `NexaC --no-console` | Windows subsystem without console (executables only) |
+
+---
+
+## Static libraries
+
+Build a `.nxa` into a static archive and bake it into an executable (no runtime `.so`/`.dll` to ship):
+
+```bash
+# 1. Compile a library source to a static archive (.a on Linux, .lib on Windows)
+NexaC mathlib.nxa --static-lib -o libmath.a
+
+# 2. Statically link it into an executable
+NexaC app.nxa --link libmath.a -o app
+```
+
+Library `fn`s are exported as `extern "C"` symbols. Call them from the executable through a
+file-scope `inline_cpp!` block (an `extern "C"` declaration must be at file scope, not inside `fn main`):
+
+```nexa
+#include <std/inline>
+
+inline_cpp! {
+extern "C" int add(int, int);
+}
+
+fn main() {
+    inline_cpp! { add(2, 3); }
+}
+```
+
+`--link` is repeatable; `.a`/`.o` inputs are baked in, while `.so`/`.dll` link dynamically.
 
 ---
 
@@ -125,7 +158,7 @@ Full detail: [`SYNTAX/CLI.txt`](SYNTAX/CLI.txt) or `NexaC --help`.
 | [`NexaC.cpp`](NexaC.cpp) | Driver: parse, transpile, compile, temp file handling |
 | [`include/`](include/) | Lexer, parser, transpiler, modules, package tool headers |
 | [`SYNTAX/`](SYNTAX/) | Language & compiler reference (`Core`, `Modules`, `CLI`, …) |
-| [`Tests/`](Tests/) | Small programs and harnesses (e.g. CLI demo, optimizations) |
+| `Tests/` | Small programs and harnesses (e.g. optimizations, arg slicing) |
 | [`Examples/`](Examples/) | Larger samples |
 | [`nexa-vscode/`](nexa-vscode/) | VS Code extension (syntax / tooling) |
 | [`Installer/`](Installer/) | Installer-related Nexa sources |

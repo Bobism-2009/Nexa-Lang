@@ -6,17 +6,25 @@ VS Code / Cursor extension for Nexa language syntax highlighting.
 
 ### Option 1: Copy to extensions folder
 
+First build the extension (the manifest's `main` is `out/extension.js`, produced by compiling):
+
+```bash
+cd nexa-vscode
+npm install
+npm run compile
+```
+
 **Windows (PowerShell):**
 
 ```powershell
-Copy-Item -Recurse nexa-vscode "$env:USERPROFILE\.cursor\extensions\nexac.nexa-0.1.4"
+Copy-Item -Recurse nexa-vscode "$env:USERPROFILE\.cursor\extensions\nexac.nexa-0.1.5"
 ```
 
 **macOS / Linux:**
 
 ```bash
-cp -r nexa-vscode ~/.cursor/extensions/nexac.nexa-0.1.4
-# or: ~/.vscode/extensions/nexac.nexa-0.1.4
+cp -r nexa-vscode ~/.cursor/extensions/nexac.nexa-0.1.5
+# or: ~/.vscode/extensions/nexac.nexa-0.1.5
 ```
 
 Restart VS Code/Cursor (or **Developer: Reload Window**). `.nxa` files use the Nexa grammar.
@@ -32,6 +40,7 @@ Restart VS Code/Cursor (or **Developer: Reload Window**). `.nxa` files use the N
 ```bash
 npm install -g @vscode/vsce
 cd nexa-vscode
+npm install
 vsce package
 ```
 
