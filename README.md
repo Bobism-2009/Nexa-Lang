@@ -117,6 +117,7 @@ Full detail: [`SYNTAX/CLI.txt`](SYNTAX/CLI.txt) or `NexaC --help`.
 | `NexaC --static-lib` | Build a static archive (`.a` Linux / `.lib` Windows) from a `.nxa` |
 | `NexaC file.nxa --link lib.a` | Statically link an archive/object into the executable (repeatable) |
 | `NexaC --no-console` | Windows subsystem without console (executables only) |
+| `nexapkg <cmd>` / `NexaC nexapkg <cmd>` | Package manager (see [Packages](#packages-nexapkg)) |
 
 ---
 
@@ -148,6 +149,40 @@ fn main() {
 ```
 
 `--link` is repeatable; `.a`/`.o` inputs are baked in, while `.so`/`.dll` link dynamically.
+
+---
+
+## Packages (nexapkg)
+
+`nexapkg` (an alias of `NexaC`, also runnable as `NexaC nexapkg <cmd>`) manages `.nxa` dependencies.
+Packages are folders of `.nxa` modules resolved from `./.nexa/packages/` then `~/.nexa/packages/`.
+
+```bash
+nexapkg install user/repo          # add + install a GitHub package (auto-creates manifest)
+nexapkg add user/repo@v1.2.0       # pin a dependency to a tag or branch
+nexapkg add ./local/lib            # add a local file or directory
+nexapkg add as net/http user/http  # install under a custom include path
+nexapkg install                    # install everything in nexapkg.json
+nexapkg install --global           # install into the shared ~/.nexa/packages/
+nexapkg update [name]              # re-fetch git deps and refresh the lock
+nexapkg remove <name>              # drop a dependency (alias: rm, uninstall)
+nexapkg list                       # show dependencies and locked commits
+```
+
+Use an installed package with an angle-bracket include:
+
+```nexa
+#include <user/repo>      // or <name/module> for a specific file in the package
+```
+
+| File | Purpose |
+|------|---------|
+| `nexapkg.json` | Manifest: project `name` + `dependencies` (`"include/path": "source"`) |
+| `nexapkg.lock` | Resolved git commit per dependency — commit it for reproducible builds |
+
+A `user/repo@tag` dependency is reproducible by tag; the lockfile additionally records the exact
+commit, so a fresh `nexapkg install` restores the same revision. Local (`file:`) dependencies are
+re-copied on every install so edits propagate during development.
 
 ---
 

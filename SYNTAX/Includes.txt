@@ -14,8 +14,10 @@ MODULE INCLUDES (angle brackets)
 
 PACKAGE INCLUDES (angle brackets, non-std)
   #include <pkgname/module>
-  - Resolved from .nexa/packages/ (project) and ~/.nexa/packages/ (global)
-  - Use nexapkg add <pkg> && nexapkg install to install packages
+  - Resolved from .nexa/packages/ (project) then ~/.nexa/packages/ (global)
+  - Install with: nexapkg install <pkg>   (or: nexapkg add <pkg> && nexapkg install)
+  - Pin a version: nexapkg add user/repo@v1.2.0
+  - See SYNTAX/Modules.txt (PACKAGES) for the full nexapkg command reference
 
 C/C++ HEADERS (.h, .hpp, .hxx, .hh)
   #include "local.hpp"

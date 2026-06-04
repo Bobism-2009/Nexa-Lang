@@ -1,0 +1,6 @@
+{
+  "name": "pkgtest",
+  "dependencies": {
+    "greeter": "file:../greeter"
+  }
+}

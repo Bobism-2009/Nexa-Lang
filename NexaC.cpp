@@ -141,7 +141,9 @@ fn main() {
 # Temp
 *.tmp
 )";
-    std::string nexapkgJson = "{\n  \"name\": \"myapp\",\n  \"dependencies\": {}\n}\n";
+    std::string projName = fs::absolute(base).filename().string();
+    if (projName.empty()) projName = "myapp";
+    std::string nexapkgJson = "{\n  \"name\": \"" + projName + "\",\n  \"dependencies\": {}\n}\n";
     try {
         std::ofstream(base / "main.nxa") << mainNxa;
         std::ofstream(base / ".gitignore") << gitignore;

@@ -92,9 +92,24 @@ Nexa Standard Modules
   Use with: let h = dll.load("./lib.so");  dll.call(h, "func_name");
 
 PACKAGES (nexapkg)
-  nexapkg init           - Create nexapkg.json
-  nexapkg add user/repo  - Add GitHub package
-  nexapkg add ./path     - Add local package
-  nexapkg install       - Install to .nexa/packages/
-  nexapkg list           - List dependencies
-  #include <pkgname/module> - Use installed package
+  nexapkg init               - Create nexapkg.json (project name = folder name)
+  nexapkg add user/repo      - Add GitHub package (default branch)
+  nexapkg add user/repo@v1   - Pin to a tag or branch
+  nexapkg add ./path         - Add local file or directory
+  nexapkg add as net/http <spec>   - Add under a custom include path
+  nexapkg install            - Install all dependencies to .nexa/packages/
+  nexapkg install user/repo  - Add + install a single package (auto-creates manifest)
+  nexapkg install --global   - Install into ~/.nexa/packages/ (shared)
+  nexapkg install --force    - Re-fetch even if already present
+  nexapkg update [name]      - Re-fetch git dependencies and refresh the lock
+  nexapkg remove <name>      - Remove a dependency (alias: rm, uninstall)
+  nexapkg list               - Show dependencies and locked commits
+  #include <pkgname/module>  - Use an installed package
+
+  Files:
+    nexapkg.json   - Manifest: { "name", "dependencies": { "include/path": "source" } }
+    nexapkg.lock   - Resolved git commit per dependency (commit this for reproducible builds)
+
+  Resolution order for #include <pkg/module>:  ./.nexa/packages/  then  ~/.nexa/packages/
+  A version-pinned dep (user/repo@tag) is reproducible by tag; the lock additionally
+  records the exact commit so a fresh 'install' restores the same revision.

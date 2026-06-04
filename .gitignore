@@ -8,5 +8,9 @@
 # Packages
 .nexa/
 
+# Test build artifacts
+Tests/PkgTest/pkgtest
+Tests/PkgTest/nexapkg.lock
+
 # Temp
 *.tmp
