@@ -115,3 +115,29 @@ ARITHMETIC
   Precedence (tightest first): * / % ; + - ; << >> ; & ; ^ ; |
   Bitwise: & | ^  (binary),  ~  (unary NOT),  << >>  (shift)
   int and float (int + float promotes to float)
+
+STRING METHODS (core; no #include required)
+  Method syntax on any string value (variable, literal, or parenthesized expression):
+
+    s.upper()              -> string   ASCII upper-case
+    s.lower()              -> string   ASCII lower-case
+    s.trim()               -> string   strip leading/trailing whitespace
+    s.len()                -> int       length (same as len(s))
+    s.contains(sub)        -> bool      true if sub occurs in s
+    s.starts_with(prefix)  -> bool
+    s.ends_with(suffix)    -> bool
+    s.index_of(sub)        -> int       first index of sub, or -1 if absent
+    s.replace(from, to)    -> string   replace every occurrence
+    s.substring(start, n)  -> string   n characters from start (n < 0 = to end)
+    s.repeat(n)            -> string   s concatenated n times
+    s.split(sep)           -> []string split on sep (empty sep -> [s])
+
+  Examples:
+    let parts = "a,b,c".split(",");      // []string of length 3
+    for (i, len(parts)) { io.println(parts[i]); }
+    io.println("Hello".upper());          // HELLO
+    io.println(name.trim().lower());      // chaining is allowed
+    if (line.starts_with("#")) { ... }
+
+  Note: index directly into a split result via a variable
+  (let parts = s.split(","); parts[0]), not s.split(",")[0].

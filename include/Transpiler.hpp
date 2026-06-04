@@ -92,6 +92,7 @@ public:
                 case AstNode::Type::RandomInt:
                 case AstNode::Type::RandomSeed: cppUsage.random = true; break;
                 case AstNode::Type::MathCall: cppUsage.math = true; break;
+                case AstNode::Type::StrMethod: cppUsage.str = true; break;
                 case AstNode::Type::TimeSleep:
                 case AstNode::Type::TimeSeconds:
                 case AstNode::Type::TimeMilliseconds:
@@ -515,7 +516,7 @@ public:
             globalVarIsBool[node.value] = (!node.declType.empty() && node.declType == "bool") || node.initIsBool;
             globalVarIsEnum[node.value] = !node.declType.empty() && isEnumDeclType(node.declType);
             bool isArray = node.initFromArray || (!node.children.empty() && node.children[0].type == AstNode::Type::ExprArrayLiteral);
-            bool isStrArr = isArray && !node.children.empty() && arrayLiteralProducesString(node.children[0], globalVarIsString);
+            bool isStrArr = isArray && !node.children.empty() && arrayInitProducesString(node.children[0], globalVarIsString);
             bool isStr = !isStructDeclType(node.declType) && !isEnumDeclType(node.declType) && (!node.declType.empty() ? (node.declType == "string") : (node.initUninitialized || (!node.initIsInt && !node.initIsBool && !node.initIsFloat && !node.initIsChar && !isArray && node.children.empty()) || (!node.children.empty() && (exprProducesString(node.children[0]) || isStrArr))));
             globalVarIsString[node.value] = isStr;
             globalVarIsArray[node.value] = isArray || node.isFixedArray;
@@ -544,7 +545,7 @@ public:
                 }
             } else if (isArray && !node.children.empty()) {
                 std::string c = node.isConst ? "const " : "";
-                bool strArr = arrayLiteralProducesString(node.children[0], globalVarIsString);
+                bool strArr = arrayInitProducesString(node.children[0], globalVarIsString);
                 out << c << (strArr ? "std::vector<std::string>" : "std::vector<int>") << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
             } else if (!node.children.empty()) {
                 std::string c = node.isConst ? "const " : "";
@@ -778,6 +779,9 @@ private:
         if (v.initFromReadln || v.initFromFileRead) return "string";
         if (v.initFromDllLoad) return "int";
         if (v.initFromArray) {
+            if (!v.children.empty() && v.children[0].type == AstNode::Type::StrMethod && v.children[0].value == "split") {
+                return "[]string";
+            }
             if (!v.children.empty() && v.children[0].type == AstNode::Type::ExprArrayLiteral) {
                 const AstNode& arr = v.children[0];
                 if (!arr.children.empty()) return inferExprNexaType(arr.children[0]);
@@ -868,6 +872,11 @@ private:
                 // math.* operates in the floating-point domain and always yields float (double).
                 // For an integer result, assign to an int (e.g. let n: int = math.floor(x);).
                 return "float";
+            case AstNode::Type::StrMethod:
+                if (strMethodReturnsString(e.value)) return "string";
+                if (strMethodReturnsBool(e.value)) return "bool";
+                if (e.value == "split") return "[]string";
+                return "int";  // len, index_of
             case AstNode::Type::OsGetProcessId: return "int";
             case AstNode::Type::TimeSeconds:
             case AstNode::Type::TimeMilliseconds:
@@ -1035,12 +1044,28 @@ private:
         return fit->second;
     }
 
+    // Core string-method return-type classification (value.method(...)).
+    static bool strMethodReturnsString(const std::string& m) {
+        return m == "upper" || m == "lower" || m == "trim" || m == "replace" ||
+               m == "substring" || m == "repeat";
+    }
+    static bool strMethodReturnsBool(const std::string& m) {
+        return m == "contains" || m == "starts_with" || m == "ends_with";
+    }
+
     static bool exprProducesString(const AstNode& e) {
         if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::ExprTrim) return true;
+        if (e.type == AstNode::Type::StrMethod) return strMethodReturnsString(e.value);
         if (e.type == AstNode::Type::ExprAdd && e.children.size() >= 2) {
             return exprProducesString(e.children[0]) || exprProducesString(e.children[1]);
         }
         return false;
+    }
+
+    // Whether an array-valued initializer expression yields std::vector<std::string>.
+    bool arrayInitProducesString(const AstNode& initExpr, const std::map<std::string, bool>& varIsString) const {
+        if (initExpr.type == AstNode::Type::StrMethod && initExpr.value == "split") return true;
+        return arrayLiteralProducesString(initExpr, varIsString);
     }
 
     bool arrayLiteralProducesString(const AstNode& arrNode, const std::map<std::string, bool>& varIsString) const {
@@ -1067,6 +1092,7 @@ private:
             return it != varIsString.end() && it->second;
         }
         if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim) return true;
+        if (e.type == AstNode::Type::StrMethod) return strMethodReturnsString(e.value);
         if (e.type == AstNode::Type::ExprAdd && e.children.size() >= 2) {
             return exprIsString(e.children[0], varIsString) || exprIsString(e.children[1], varIsString);
         }
@@ -1120,6 +1146,7 @@ private:
         if (e.type == AstNode::Type::ExprMember && !e.children.empty()) {
             return fieldTypeOfMemberExpr(e) == "bool";
         }
+        if (e.type == AstNode::Type::StrMethod) return strMethodReturnsBool(e.value);
         return false;
     }
 
@@ -1211,7 +1238,7 @@ private:
                 varIsBool[child.value] = isBool;
                 varIsEnum[child.value] = !child.declType.empty() && isEnumDeclType(child.declType);
                 bool isArray = child.initFromArray || (!child.children.empty() && child.children[0].type == AstNode::Type::ExprArrayLiteral);
-                bool isStrArr = isArray && !child.children.empty() && arrayLiteralProducesString(child.children[0], varIsString);
+                bool isStrArr = isArray && !child.children.empty() && arrayInitProducesString(child.children[0], varIsString);
                 bool isStr = !isArray && !isStructDeclType(child.declType) && !isEnumDeclType(child.declType) && (!child.declType.empty() ? (child.declType == "string") : (child.initUninitialized || child.initFromReadln || child.initFromFileRead || (!child.initIsInt && !child.initIsBool && !child.initIsFloat && !child.initIsChar && !child.initFromDllLoad && child.children.empty()) ||
                     (!child.children.empty() && exprProducesString(child.children[0]))));
                 varIsString[child.value] = isStr || isStrArr;
@@ -1281,7 +1308,7 @@ private:
                         << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
                 } else if (isArray && !child.children.empty()) {
                     std::string c = child.isConst ? "const " : "";
-                    bool strArr = arrayLiteralProducesString(child.children[0], varIsString);
+                    bool strArr = arrayInitProducesString(child.children[0], varIsString);
                     out << indent << c << (strArr ? "std::vector<std::string>" : "std::vector<int>") << " " << vname << " = " << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
                 } else if (!child.children.empty()) {
                     std::string c = child.isConst ? "const " : "";
@@ -1917,6 +1944,8 @@ private:
                 return "!(" + emitCond(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::ExprBoolLiteral:
                 return c.value;
+            case AstNode::Type::StrMethod:
+                return emitExpr(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::ExprIntLiteral:
             case AstNode::Type::ExprFloatLiteral:
             case AstNode::Type::ExprCharLiteral:
@@ -2044,6 +2073,37 @@ private:
                 }
                 // sqrt, floor, ceil, round, sin, cos, tan, log, log10, exp
                 return "std::" + fn + "(" + da0 + ")";
+            }
+            case AstNode::Type::StrMethod: {
+                const std::string& m = e.value;
+                std::string R = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                std::string A0 = e.children.size() > 1 ? emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) : "";
+                std::string A1 = e.children.size() > 2 ? emitExpr(e.children[2], varMap, varIsString, varIsFloat, varIsChar, varIsBool) : "";
+                if (m == "upper")
+                    return "([](std::string __s){ for (char& __c : __s) __c = (char)std::toupper((unsigned char)__c); return __s; })(" + R + ")";
+                if (m == "lower")
+                    return "([](std::string __s){ for (char& __c : __s) __c = (char)std::tolower((unsigned char)__c); return __s; })(" + R + ")";
+                if (m == "trim")
+                    return "([](const std::string& __s){ size_t __a = __s.find_first_not_of(\" \\t\\n\\r\\f\\v\"); if (__a == std::string::npos) return std::string(); size_t __b = __s.find_last_not_of(\" \\t\\n\\r\\f\\v\"); return __s.substr(__a, __b - __a + 1); })(" + R + ")";
+                if (m == "len")
+                    return "([](const std::string& __s){ return (int)__s.size(); })(" + R + ")";
+                if (m == "contains")
+                    return "([](const std::string& __s, const std::string& __p){ return __s.find(__p) != std::string::npos; })(" + R + ", " + A0 + ")";
+                if (m == "starts_with")
+                    return "([](const std::string& __s, const std::string& __p){ return __s.size() >= __p.size() && __s.compare(0, __p.size(), __p) == 0; })(" + R + ", " + A0 + ")";
+                if (m == "ends_with")
+                    return "([](const std::string& __s, const std::string& __p){ return __s.size() >= __p.size() && __s.compare(__s.size() - __p.size(), __p.size(), __p) == 0; })(" + R + ", " + A0 + ")";
+                if (m == "index_of")
+                    return "([](const std::string& __s, const std::string& __p){ size_t __n = __s.find(__p); return __n == std::string::npos ? -1 : (int)__n; })(" + R + ", " + A0 + ")";
+                if (m == "repeat")
+                    return "([](const std::string& __s, int __n){ std::string __o; for (int __i = 0; __i < __n; __i++) __o += __s; return __o; })(" + R + ", " + A0 + ")";
+                if (m == "replace")
+                    return "([](std::string __s, const std::string& __f, const std::string& __t){ if (__f.empty()) return __s; size_t __p = 0; while ((__p = __s.find(__f, __p)) != std::string::npos) { __s.replace(__p, __f.size(), __t); __p += __t.size(); } return __s; })(" + R + ", " + A0 + ", " + A1 + ")";
+                if (m == "substring")
+                    return "([](const std::string& __s, int __a, int __n){ if (__a < 0) __a = 0; if ((size_t)__a >= __s.size()) return std::string(); return __s.substr((size_t)__a, __n < 0 ? std::string::npos : (size_t)__n); })(" + R + ", " + A0 + ", " + A1 + ")";
+                if (m == "split")
+                    return "([](const std::string& __s, const std::string& __sep){ std::vector<std::string> __out; if (__sep.empty()) { __out.push_back(__s); return __out; } size_t __p = 0, __q; while ((__q = __s.find(__sep, __p)) != std::string::npos) { __out.push_back(__s.substr(__p, __q - __p)); __p = __q + __sep.size(); } __out.push_back(__s.substr(__p)); return __out; })(" + R + ", " + A0 + ")";
+                return R;
             }
             case AstNode::Type::TimeSeconds: {
                 std::string n = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);

@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <set>
+#include <map>
 #include <fstream>
 #include <sstream>
 #include <filesystem>
@@ -22,6 +23,7 @@ struct AstNode {
                       FileRead, FileWrite, FileAppend, FileExists,
                       RandomInt, RandomSeed,
                       MathCall,
+                      StrMethod,
                       TimeSleep, TimeSeconds, TimeMilliseconds, TimeNowMs,
                       ThreadSpawn, ThreadJoin,
                       IfElse,
@@ -144,6 +146,11 @@ private:
 
     static bool exprProducesString(const AstNode& e) {
         if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim) return true;
+        if (e.type == AstNode::Type::StrMethod) {
+            const std::string& m = e.value;
+            return m == "upper" || m == "lower" || m == "trim" || m == "replace" ||
+                   m == "substring" || m == "repeat";
+        }
         if (e.type == AstNode::Type::ExprAdd && e.children.size() >= 2) {
             return exprProducesString(e.children[0]) || exprProducesString(e.children[1]);
         }
@@ -1285,6 +1292,50 @@ private:
         return forNode;
     }
 
+    // Parses a chain of `.field` accesses and `.method(args)` calls applied to a base expression.
+    AstNode parseDotChain(AstNode cur) {
+        while (peek().type == TokenType::Dot) {
+            advance();
+            const Token& ftok = peek();
+            if (ftok.type != TokenType::Identifier) {
+                throw std::runtime_error("Expected field name after '.' at line " + std::to_string(ftok.line));
+            }
+            advance();
+            // value.method(args): core string methods callable on any string value.
+            if (peek().type == TokenType::LParen) {
+                std::string m = ftok.value;
+                // method name -> argument count
+                static const std::map<std::string, int> strMethods = {
+                    {"upper", 0}, {"lower", 0}, {"trim", 0}, {"len", 0},
+                    {"contains", 1}, {"starts_with", 1}, {"ends_with", 1},
+                    {"index_of", 1}, {"repeat", 1}, {"split", 1},
+                    {"replace", 2}, {"substring", 2}
+                };
+                auto mit = strMethods.find(m);
+                if (mit == strMethods.end()) {
+                    throw std::runtime_error("Unknown method '." + m + "()' at line " + std::to_string(ftok.line) +
+                        " (string methods: upper, lower, trim, len, contains, starts_with, ends_with, index_of, repeat, split, replace, substring)");
+                }
+                advance();  // consume '('
+                AstNode call{AstNode::Type::StrMethod, m, {std::move(cur)}};
+                for (int i = 0; i < mit->second; i++) {
+                    if (i > 0 && !match(TokenType::Comma)) {
+                        throw std::runtime_error("Expected ',' in ." + m + "(...) at line " + std::to_string(peek().line));
+                    }
+                    call.children.push_back(parseExpression());
+                }
+                if (!match(TokenType::RParen)) {
+                    throw std::runtime_error("Expected ')' after ." + m + "(...) at line " + std::to_string(peek().line));
+                }
+                cur = std::move(call);
+                continue;
+            }
+            AstNode mem{AstNode::Type::ExprMember, ftok.value, {std::move(cur)}};
+            cur = std::move(mem);
+        }
+        return cur;
+    }
+
     AstNode parseExpression() {
         return parseBitOr();
     }
@@ -1420,7 +1471,9 @@ private:
             return {AstNode::Type::ExprBoolLiteral, "false", {}};
         }
         if (match(TokenType::String)) {
-            return {AstNode::Type::ExprStringLiteral, tokens_[pos_ - 1].value, {}};
+            AstNode lit{AstNode::Type::ExprStringLiteral, tokens_[pos_ - 1].value, {}};
+            if (peek().type == TokenType::Dot) return parseDotChain(std::move(lit));
+            return lit;
         }
         if (peek().type == TokenType::Identifier && peek().value == "io" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
@@ -1490,17 +1543,7 @@ private:
         }
         if (match(TokenType::Identifier)) {
             std::string name = tokens_[pos_ - 1].value;
-            AstNode cur{AstNode::Type::ExprVarRef, name, {}};
-            while (peek().type == TokenType::Dot) {
-                advance();
-                const Token& ftok = peek();
-                if (ftok.type != TokenType::Identifier) {
-                    throw std::runtime_error("Expected field name after '.' at line " + std::to_string(ftok.line));
-                }
-                advance();
-                AstNode mem{AstNode::Type::ExprMember, ftok.value, {std::move(cur)}};
-                cur = std::move(mem);
-            }
+            AstNode cur = parseDotChain({AstNode::Type::ExprVarRef, name, {}});
             if (match(TokenType::LBracket)) {
                 if (cur.type != AstNode::Type::ExprVarRef) {
                     throw std::runtime_error("Only simple arrays support [] indexing at line " + std::to_string(peek().line));
@@ -1509,7 +1552,10 @@ private:
                 if (!match(TokenType::RBracket)) {
                     throw std::runtime_error("Expected ']' at line " + std::to_string(peek().line));
                 }
-                return {AstNode::Type::ExprArrayIndex, cur.value, {idx}};
+                AstNode indexed{AstNode::Type::ExprArrayIndex, cur.value, {idx}};
+                // Allow methods on an indexed element, e.g. parts[i].split("=").
+                if (peek().type == TokenType::Dot) return parseDotChain(std::move(indexed));
+                return indexed;
             }
             return cur;
         }
@@ -1518,6 +1564,7 @@ private:
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
             }
+            if (peek().type == TokenType::Dot) return parseDotChain(std::move(e));
             return e;
         }
         throw std::runtime_error("Expected number, variable, or (expression) at line " + std::to_string(peek().line));
@@ -2510,6 +2557,13 @@ private:
                 node.initIsFloat = true;
             } else if (b.type == AstNode::Type::MathCall) {
                 node.initIsFloat = true;
+            } else if (b.type == AstNode::Type::StrMethod && b.value == "split") {
+                node.initFromArray = true;
+                node.initIsInt = false;
+                node.declType = "[]string";
+            } else if (b.type == AstNode::Type::StrMethod &&
+                       (b.value == "contains" || b.value == "starts_with" || b.value == "ends_with")) {
+                node.initIsBool = true;
             } else if (b.type == AstNode::Type::ExprCharLiteral) {
                 node.initIsChar = true;
             } else {

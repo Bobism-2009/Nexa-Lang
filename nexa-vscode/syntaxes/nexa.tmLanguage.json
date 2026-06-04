@@ -192,6 +192,10 @@
         {
           "name": "support.function.builtin.nexa",
           "match": "\\b(len|trim)(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.builtin.nexa",
+          "match": "(?<=\\.)(upper|lower|trim|len|contains|starts_with|ends_with|index_of|replace|substring|repeat|split)(?=\\s*\\()"
         }
       ]
     },

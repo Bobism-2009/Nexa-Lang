@@ -27,6 +27,7 @@ public:
         bool file = false;
         bool random = false;
         bool math = false;
+        bool str = false;
         bool time = false;
         bool thread = false;
         bool dll = false;
@@ -297,6 +298,11 @@ public:
             out += "#include <cstdlib>\n";
             out += "#include <algorithm>\n";
         }
+        // Core string methods (value.upper(), value.split(...), ...) need no #include from the user.
+        if (usage.str) {
+            out += "#include <string>\n";
+            out += "#include <cctype>\n";
+        }
         if (hasTime() && usage.time) {
             out += "#include <thread>\n";
             out += "#include <chrono>\n";
@@ -349,6 +355,7 @@ public:
         all.osGetProcessId = true;
         all.osWindowControl = all.osMessageBox = all.osGrepKeys = all.osKeyPressed = true;
         all.file = all.random = all.math = all.time = all.thread = all.dll = true;
+        all.str = true;
         return getCppIncludes(all);
     }
 
