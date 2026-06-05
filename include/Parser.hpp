@@ -34,6 +34,8 @@ struct AstNode {
                       Return,
                       Break,
                       Continue,
+                      Goto,
+                      Label,
                       TryCatch,
                       Throw,
                       IncPost,
@@ -673,6 +675,11 @@ private:
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
                        tokens_[pos_ + 1].type == TokenType::LParen) {
                 stmts.push_back(parseFnCall());
+            } else if (t.type == TokenType::Goto) {
+                stmts.push_back(parseGoto());
+            } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
+                       tokens_[pos_ + 1].type == TokenType::Colon) {
+                stmts.push_back(parseLabel());
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size()) {
                 TokenType next = tokens_[pos_ + 1].type;
                 if (next == TokenType::LBracket) {
@@ -792,6 +799,33 @@ private:
             throw std::runtime_error("Expected ';' after continue at line " + std::to_string(peek().line));
         }
         return {AstNode::Type::Continue, "", {}};
+    }
+
+    AstNode parseGoto() {
+        if (!match(TokenType::Goto)) {
+            throw std::runtime_error("Expected 'goto' at line " + std::to_string(peek().line));
+        }
+        const Token& nameTok = peek();
+        if (nameTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected label name after 'goto' at line " + std::to_string(nameTok.line));
+        }
+        std::string label = nameTok.value;
+        advance();
+        if (!match(TokenType::Semicolon)) {
+            throw std::runtime_error("Expected ';' after goto " + label + " at line " + std::to_string(peek().line));
+        }
+        return {AstNode::Type::Goto, label, {}};
+    }
+
+    // A label definition:  name:
+    AstNode parseLabel() {
+        const Token& nameTok = peek();
+        std::string label = nameTok.value;
+        advance();  // identifier
+        if (!match(TokenType::Colon)) {
+            throw std::runtime_error("Expected ':' after label " + label + " at line " + std::to_string(peek().line));
+        }
+        return {AstNode::Type::Label, label, {}};
     }
 
     AstNode parseTryCatch() {
@@ -1207,6 +1241,11 @@ private:
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
                        tokens_[pos_ + 1].type == TokenType::LParen) {
                 stmts.push_back(parseFnCall());
+            } else if (t.type == TokenType::Goto) {
+                stmts.push_back(parseGoto());
+            } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
+                       tokens_[pos_ + 1].type == TokenType::Colon) {
+                stmts.push_back(parseLabel());
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size()) {
                 TokenType next = tokens_[pos_ + 1].type;
                 if (next == TokenType::LBracket) {

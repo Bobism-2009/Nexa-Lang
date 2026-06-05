@@ -52,3 +52,22 @@ LOOPS
       io.println(i);
       i = i + 1;
     }
+
+GOTO / LABELS
+  label:        - define a label (an identifier followed by ':')
+  goto label;   - jump to a label in the same function
+
+  - Labels and goto are function-local (you cannot jump between functions).
+  - Forward and backward jumps are both allowed.
+  - Like C, you cannot jump forward over a variable declaration and then use
+    that variable; the compiler will reject it.
+
+  Example:
+    let i = 0;
+  start:
+    if (i >= 5) { goto done; }
+    io.println(i);
+    i = i + 1;
+    goto start;
+  done:
+    io.println("done");

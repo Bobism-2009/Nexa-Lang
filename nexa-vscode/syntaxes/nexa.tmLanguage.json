@@ -175,7 +175,7 @@
         },
         {
           "name": "keyword.control.nexa",
-          "match": "\\b(fn|let|const|struct|enum|if|else|while|for|switch|case|default|return|break|continue)\\b"
+          "match": "\\b(fn|let|const|struct|enum|if|else|while|for|switch|case|default|return|break|continue|goto)\\b"
         },
         {
           "name": "keyword.other.entry.nexa",

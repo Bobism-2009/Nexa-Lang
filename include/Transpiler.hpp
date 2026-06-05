@@ -1773,6 +1773,10 @@ private:
                 if (!inStringSwitchCase) out << indent << "break;\n";
             } else if (child.type == AstNode::Type::Continue) {
                 if (!inStringSwitchCase) out << indent << "continue;\n";
+            } else if (child.type == AstNode::Type::Goto) {
+                out << indent << "goto nxa_lbl_" << child.value << ";\n";
+            } else if (child.type == AstNode::Type::Label) {
+                out << "nxa_lbl_" << child.value << ":;\n";
             } else if (child.type == AstNode::Type::IncPost) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
