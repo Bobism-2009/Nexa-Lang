@@ -588,11 +588,13 @@ private:
         return fnNode;
     }
 
-    std::vector<AstNode> parseBlock(AstNode* parentIf = nullptr) {
+    std::vector<AstNode> parseBlock(AstNode* parentIf = nullptr, bool singleStatement = false) {
         std::vector<AstNode> stmts;
         while (pos_ < tokens_.size()) {
             const Token& t = peek();
             if (t.type == TokenType::RBrace) break;
+            if (singleStatement && t.type == TokenType::Semicolon) { advance(); break; }
+            size_t before = stmts.size();
             if (t.type == TokenType::Let) {
                 stmts.push_back(parseVariable());
             } else if (t.type == TokenType::If) {
@@ -706,8 +708,27 @@ private:
             } else {
                 throw std::runtime_error("Unexpected token at line " + std::to_string(t.line));
             }
+            if (singleStatement && stmts.size() > before) break;
         }
         return stmts;
+    }
+
+    // Parse a braced block { ... } OR a single braceless statement (C-style),
+    // returning a Block node either way.
+    AstNode parseBody(AstNode* parentIf = nullptr) {
+        AstNode block{AstNode::Type::Block, "", {}};
+        if (match(TokenType::LBrace)) {
+            block.children = parseBlock(parentIf);
+            if (!match(TokenType::RBrace)) {
+                throw std::runtime_error("Expected '}' at line " + std::to_string(peek().line));
+            }
+        } else {
+            block.children = parseBlock(parentIf, /*singleStatement=*/true);
+            if (block.children.empty()) {
+                throw std::runtime_error("Expected '{' or a statement at line " + std::to_string(peek().line));
+            }
+        }
+        return block;
     }
 
     AstNode parseLenExpr() {
@@ -1049,30 +1070,15 @@ private:
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
         }
-        if (!match(TokenType::LBrace)) {
-            throw std::runtime_error("Expected '{' at line " + std::to_string(peek().line));
-        }
         AstNode thenBlock{AstNode::Type::Block, "", {}};
         AstNode ifNode{AstNode::Type::IfElse, "", {cond, thenBlock}};
-        thenBlock.children = parseBlock(&ifNode);
-        ifNode.children[1] = thenBlock;
-        if (!match(TokenType::RBrace)) {
-            throw std::runtime_error("Expected '}' at line " + std::to_string(peek().line));
-        }
+        ifNode.children[1] = parseBody(&ifNode);
         if (match(TokenType::Else)) {
             if (peek().type == TokenType::If) {
                 AstNode elseIfPart = parseIf();
                 ifNode.children.push_back(elseIfPart);
             } else {
-                if (!match(TokenType::LBrace)) {
-                    throw std::runtime_error("Expected '{' after else at line " + std::to_string(peek().line));
-                }
-                AstNode elseBlock{AstNode::Type::Block, "", {}};
-                elseBlock.children = parseBlock();
-                ifNode.children.push_back(elseBlock);
-                if (!match(TokenType::RBrace)) {
-                    throw std::runtime_error("Expected '}' at line " + std::to_string(peek().line));
-                }
+                ifNode.children.push_back(parseBody());
             }
         }
         return ifNode;
@@ -1287,14 +1293,7 @@ private:
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
         }
-        if (!match(TokenType::LBrace)) {
-            throw std::runtime_error("Expected '{' at line " + std::to_string(peek().line));
-        }
-        AstNode block{AstNode::Type::Block, "", {}};
-        block.children = parseBlock();
-        if (!match(TokenType::RBrace)) {
-            throw std::runtime_error("Expected '}' at line " + std::to_string(peek().line));
-        }
+        AstNode block = parseBody();
         return {AstNode::Type::While, "", {cond, block}};
     }
 
@@ -1319,14 +1318,7 @@ private:
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' after for loop count at line " + std::to_string(peek().line));
         }
-        if (!match(TokenType::LBrace)) {
-            throw std::runtime_error("Expected '{' at line " + std::to_string(peek().line));
-        }
-        AstNode block{AstNode::Type::Block, "", {}};
-        block.children = parseBlock();
-        if (!match(TokenType::RBrace)) {
-            throw std::runtime_error("Expected '}' at line " + std::to_string(peek().line));
-        }
+        AstNode block = parseBody();
         AstNode forNode{AstNode::Type::For, varName, {countExpr, block}};
         return forNode;
     }

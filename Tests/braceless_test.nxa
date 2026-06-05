@@ -1,0 +1,31 @@
+#include <std/io>
+
+fn main() {
+    let x = 7;
+
+    // braceless if
+    if (x > 5) io.println("x is big");
+
+    // braceless if / else
+    if (x % 2 == 0) io.println("even");
+    else io.println("odd");
+
+    // braceless else-if chain
+    if (x == 1) io.println("one");
+    else if (x == 7) io.println("seven");
+    else io.println("other");
+
+    // braceless while
+    let i = 0;
+    while (i < 3) i = i + 1;
+    io.println("i = " + i);
+
+    // braceless for
+    for (j, 3) io.println("j = " + j);
+
+    // still works with braces, and nested
+    if (x > 0) {
+        if (x > 100) io.println("huge");
+        else io.println("normal");
+    }
+}

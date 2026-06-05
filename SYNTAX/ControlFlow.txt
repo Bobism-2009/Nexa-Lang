@@ -6,6 +6,15 @@ CONDITIONALS
   if (cond) { ... } else { ... }
   if (cond) { ... } else if (cond) { ... } else { ... }
 
+  Braces are optional for a single statement (C-style):
+    if (x > 5) io.println("big");
+    if (x % 2 == 0) io.println("even"); else io.println("odd");
+    if (a) doA(); else if (b) doB(); else doC();
+  This also applies to while and for:
+    while (i < 3) i = i + 1;
+    for (j, 3) io.println(j);
+  Use braces { } when the body has more than one statement.
+
 COMPARISONS
   ==  !=  <  <=  >  >=
 
