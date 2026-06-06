@@ -1,8 +1,0 @@
-#include <std/io>
-
-fn main(argv: []string): void {
-    io.println(len(argv));
-    if (len(argv) > 1) {
-        io.println(argv[1]);
-    }
-}

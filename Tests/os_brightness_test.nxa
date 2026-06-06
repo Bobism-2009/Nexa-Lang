@@ -1,0 +1,15 @@
+#include <std/io>
+#include <std/os>
+
+fn main() {
+    let before = os.get_brightness();
+    io.println("current brightness: " + before);
+
+    os.set_brightness(60);
+    io.println("after set_brightness(60): " + os.get_brightness());
+
+    if (before > 0) {
+        os.set_brightness(before);
+        io.println("restored brightness: " + os.get_brightness());
+    }
+}

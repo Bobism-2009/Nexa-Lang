@@ -24,6 +24,15 @@ public:
         bool osMessageBox = false;
         bool osGrepKeys = false;
         bool osKeyPressed = false;
+        bool osLock = false;
+        bool osShutdown = false;
+        bool osReboot = false;
+        bool osSuspend = false;
+        bool osLogout = false;
+        bool osAudio = false;
+        bool osBrightness = false;
+        bool osClipboard = false;
+        bool osDesktop = false;
         bool file = false;
         bool random = false;
         bool math = false;
@@ -129,7 +138,10 @@ public:
             out += "#include <string>\n";
             out += "static int __nexa_to_int(const std::string& s) { try { return std::stoi(s); } catch(...) { return 0; } }\n";
         }
-        if (hasOs() && (usage.osSystem || usage.osGetenv)) {
+        if (hasOs() && (usage.osSystem || usage.osGetenv || usage.osLock ||
+                        usage.osShutdown || usage.osReboot || usage.osSuspend ||
+                        usage.osLogout || usage.osAudio || usage.osBrightness ||
+                        usage.osClipboard || usage.osDesktop)) {
             out += "#include <cstdlib>\n";
         }
         if (hasOs() && usage.osSystem) {
@@ -254,6 +266,311 @@ public:
             out += "#endif\n";
             out += "}\n";
         }
+        if (hasOs() && usage.osLock) {
+            out += "static void __nexa_os_lock() {\n";
+            out += "#ifdef _WIN32\n";
+            out += "  (void)system(\"rundll32.exe user32.dll,LockWorkStation\");\n";
+            out += "#elif defined(__APPLE__)\n";
+            out += "  (void)system(\"/System/Library/CoreServices/Menu\\\\ Extras/User.menu/Contents/Resources/CGSession -suspend\");\n";
+            out += "#else\n";
+            out += "  if (system(\"loginctl lock-session 2>/dev/null\") == 0) return;\n";
+            out += "  if (system(\"xdg-screensaver lock 2>/dev/null\") == 0) return;\n";
+            out += "  if (system(\"gnome-screensaver-command -l 2>/dev/null\") == 0) return;\n";
+            out += "  if (system(\"xscreensaver-command -lock 2>/dev/null\") == 0) return;\n";
+            out += "  (void)system(\"dm-tool lock 2>/dev/null\");\n";
+            out += "#endif\n";
+            out += "}\n";
+        }
+        if (hasOs() && usage.osShutdown) {
+            out += "static void __nexa_os_shutdown() {\n";
+            out += "#ifdef _WIN32\n";
+            out += "  (void)system(\"shutdown /s /t 0\");\n";
+            out += "#elif defined(__APPLE__)\n";
+            out += "  (void)system(\"osascript -e 'tell application \\\"System Events\\\" to shut down'\");\n";
+            out += "#else\n";
+            out += "  if (system(\"systemctl poweroff 2>/dev/null\") == 0) return;\n";
+            out += "  (void)system(\"shutdown -h now 2>/dev/null\");\n";
+            out += "#endif\n";
+            out += "}\n";
+        }
+        if (hasOs() && usage.osReboot) {
+            out += "static void __nexa_os_reboot() {\n";
+            out += "#ifdef _WIN32\n";
+            out += "  (void)system(\"shutdown /r /t 0\");\n";
+            out += "#elif defined(__APPLE__)\n";
+            out += "  (void)system(\"osascript -e 'tell application \\\"System Events\\\" to restart'\");\n";
+            out += "#else\n";
+            out += "  if (system(\"systemctl reboot 2>/dev/null\") == 0) return;\n";
+            out += "  (void)system(\"shutdown -r now 2>/dev/null\");\n";
+            out += "#endif\n";
+            out += "}\n";
+        }
+        if (hasOs() && usage.osSuspend) {
+            out += "static void __nexa_os_suspend() {\n";
+            out += "#ifdef _WIN32\n";
+            out += "  (void)system(\"rundll32.exe powrprof.dll,SetSuspendState 0,1,0\");\n";
+            out += "#elif defined(__APPLE__)\n";
+            out += "  (void)system(\"pmset sleepnow\");\n";
+            out += "#else\n";
+            out += "  (void)system(\"systemctl suspend 2>/dev/null\");\n";
+            out += "#endif\n";
+            out += "}\n";
+        }
+        if (hasOs() && usage.osLogout) {
+            out += "static void __nexa_os_logout() {\n";
+            out += "#ifdef _WIN32\n";
+            out += "  (void)system(\"shutdown /l\");\n";
+            out += "#elif defined(__APPLE__)\n";
+            out += "  (void)system(\"osascript -e 'tell application \\\"System Events\\\" to log out'\");\n";
+            out += "#else\n";
+            out += "  if (system(\"loginctl terminate-user \\\"$USER\\\" 2>/dev/null\") == 0) return;\n";
+            out += "  if (system(\"gnome-session-quit --logout --no-prompt 2>/dev/null\") == 0) return;\n";
+            out += "  (void)system(\"xfce4-session-logout --logout 2>/dev/null\");\n";
+            out += "#endif\n";
+            out += "}\n";
+        }
+        if (hasOs() && usage.osAudio) {
+            out += "#include <string>\n";
+            out += "#include <cstdio>\n";
+            out += "#ifdef _WIN32\n";
+            out += "#include <windows.h>\n";
+            out += "#include <mmdeviceapi.h>\n";
+            out += "#include <endpointvolume.h>\n";
+            out += "static IAudioEndpointVolume* __nexa_win_audio() {\n";
+            out += "  if (CoInitializeEx(NULL, COINIT_MULTITHREADED) < 0) {}\n";
+            out += "  IMMDeviceEnumerator* en = NULL;\n";
+            out += "  if (CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator), (void**)&en) < 0 || !en) return NULL;\n";
+            out += "  IMMDevice* dev = NULL; en->GetDefaultAudioEndpoint(eRender, eConsole, &dev); en->Release();\n";
+            out += "  if (!dev) return NULL;\n";
+            out += "  IAudioEndpointVolume* vol = NULL;\n";
+            out += "  dev->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, NULL, (void**)&vol); dev->Release();\n";
+            out += "  return vol;\n";
+            out += "}\n";
+            out += "#endif\n";
+            out += "static void __nexa_os_set_volume(int p) {\n";
+            out += "  if (p < 0) p = 0; if (p > 100) p = 100;\n";
+            out += "#ifdef _WIN32\n";
+            out += "  IAudioEndpointVolume* v = __nexa_win_audio();\n";
+            out += "  if (v) { v->SetMasterVolumeLevelScalar((float)p / 100.0f, NULL); v->Release(); }\n";
+            out += "  CoUninitialize();\n";
+            out += "#elif defined(__APPLE__)\n";
+            out += "  std::string c = \"osascript -e 'set volume output volume \" + std::to_string(p) + \"'\"; (void)system(c.c_str());\n";
+            out += "#else\n";
+            out += "  std::string s = std::to_string(p);\n";
+            out += "  if (system((\"wpctl set-volume @DEFAULT_AUDIO_SINK@ \" + s + \"% 2>/dev/null\").c_str()) == 0) return;\n";
+            out += "  if (system((\"pactl set-sink-volume @DEFAULT_SINK@ \" + s + \"% 2>/dev/null\").c_str()) == 0) return;\n";
+            out += "  (void)system((\"amixer set Master \" + s + \"% 2>/dev/null\").c_str());\n";
+            out += "#endif\n";
+            out += "}\n";
+            out += "static int __nexa_os_get_volume() {\n";
+            out += "#ifdef _WIN32\n";
+            out += "  IAudioEndpointVolume* v = __nexa_win_audio(); if (!v) { CoUninitialize(); return -1; }\n";
+            out += "  float f = 0.0f; v->GetMasterVolumeLevelScalar(&f); v->Release(); CoUninitialize();\n";
+            out += "  return (int)(f * 100.0f + 0.5f);\n";
+            out += "#else\n";
+            out += "  char buf[256]; int vol = -1;\n";
+            out += "#ifdef __APPLE__\n";
+            out += "  FILE* p = popen(\"osascript -e 'output volume of (get volume settings)' 2>/dev/null\", \"r\");\n";
+            out += "  if (p) { if (fgets(buf, sizeof(buf), p)) vol = atoi(buf); pclose(p); }\n";
+            out += "  return vol;\n";
+            out += "#else\n";
+            out += "  FILE* p = popen(\"wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null\", \"r\");\n";
+            out += "  if (p) { if (fgets(buf, sizeof(buf), p)) { double d = 0; if (sscanf(buf, \"Volume: %lf\", &d) == 1) vol = (int)(d * 100.0 + 0.5); } pclose(p); }\n";
+            out += "  if (vol >= 0) return vol;\n";
+            out += "  p = popen(\"amixer get Master 2>/dev/null | grep -o '[0-9]*%' | head -1 | tr -d '%'\", \"r\");\n";
+            out += "  if (p) { if (fgets(buf, sizeof(buf), p)) vol = atoi(buf); pclose(p); }\n";
+            out += "  return vol;\n";
+            out += "#endif\n";
+            out += "#endif\n";
+            out += "}\n";
+            out += "static void __nexa_os_set_mute(int on) {\n";
+            out += "#ifdef _WIN32\n";
+            out += "  IAudioEndpointVolume* v = __nexa_win_audio();\n";
+            out += "  if (v) { v->SetMute(on ? TRUE : FALSE, NULL); v->Release(); }\n";
+            out += "  CoUninitialize();\n";
+            out += "#elif defined(__APPLE__)\n";
+            out += "  (void)system(on ? \"osascript -e 'set volume output muted true'\" : \"osascript -e 'set volume output muted false'\");\n";
+            out += "#else\n";
+            out += "  const char* s = on ? \"1\" : \"0\";\n";
+            out += "  if (system((std::string(\"wpctl set-mute @DEFAULT_AUDIO_SINK@ \") + s + \" 2>/dev/null\").c_str()) == 0) return;\n";
+            out += "  if (system((std::string(\"pactl set-sink-mute @DEFAULT_SINK@ \") + s + \" 2>/dev/null\").c_str()) == 0) return;\n";
+            out += "  (void)system(on ? \"amixer set Master mute 2>/dev/null\" : \"amixer set Master unmute 2>/dev/null\");\n";
+            out += "#endif\n";
+            out += "}\n";
+            out += "static void __nexa_os_toggle_mute() {\n";
+            out += "#ifdef _WIN32\n";
+            out += "  IAudioEndpointVolume* v = __nexa_win_audio();\n";
+            out += "  if (v) { BOOL m = FALSE; v->GetMute(&m); v->SetMute(m ? FALSE : TRUE, NULL); v->Release(); }\n";
+            out += "  CoUninitialize();\n";
+            out += "#elif defined(__APPLE__)\n";
+            out += "  (void)system(\"osascript -e 'set volume output muted not (output muted of (get volume settings))'\");\n";
+            out += "#else\n";
+            out += "  if (system(\"wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle 2>/dev/null\") == 0) return;\n";
+            out += "  if (system(\"pactl set-sink-mute @DEFAULT_SINK@ toggle 2>/dev/null\") == 0) return;\n";
+            out += "  (void)system(\"amixer set Master toggle 2>/dev/null\");\n";
+            out += "#endif\n";
+            out += "}\n";
+        }
+        if (hasOs() && usage.osBrightness) {
+            out += "#include <string>\n";
+            out += "#include <cstdio>\n";
+            out += "static void __nexa_os_set_brightness(int p) {\n";
+            out += "  if (p < 0) p = 0; if (p > 100) p = 100;\n";
+            out += "  std::string s = std::to_string(p);\n";
+            out += "#ifdef _WIN32\n";
+            out += "  (void)system((\"powershell -NoProfile -Command \\\"(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1,\" + s + \")\\\" >nul 2>&1\").c_str());\n";
+            out += "#elif defined(__APPLE__)\n";
+            out += "  char b[32]; snprintf(b, sizeof(b), \"%.2f\", p / 100.0);\n";
+            out += "  (void)system((std::string(\"brightness \") + b + \" 2>/dev/null\").c_str());\n";
+            out += "#else\n";
+            out += "  if (system((\"brightnessctl set \" + s + \"% 2>/dev/null >/dev/null\").c_str()) == 0) return;\n";
+            out += "  if (system((\"test -n \\\"$(ls /sys/class/backlight 2>/dev/null)\\\" && for d in /sys/class/backlight/*; do m=$(cat \\\"$d/max_brightness\\\"); echo $((m * \" + s + \" / 100)) > \\\"$d/brightness\\\"; done 2>/dev/null\").c_str()) == 0) return;\n";
+            out += "  char fb[16]; snprintf(fb, sizeof(fb), \"%.2f\", p / 100.0);\n";
+            out += "  (void)system((std::string(\"o=$(xrandr 2>/dev/null | awk '/ connected/{print $1; exit}'); [ -n \\\"$o\\\" ] && xrandr --output \\\"$o\\\" --brightness \") + fb + \" 2>/dev/null\").c_str());\n";
+            out += "#endif\n";
+            out += "}\n";
+            out += "static int __nexa_os_get_brightness() {\n";
+            out += "  char buf[256]; int v = -1; FILE* p = NULL;\n";
+            out += "#ifdef _WIN32\n";
+            out += "  p = popen(\"powershell -NoProfile -Command \\\"(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightness).CurrentBrightness\\\" 2>nul\", \"r\");\n";
+            out += "  if (p) { if (fgets(buf, sizeof(buf), p)) v = atoi(buf); pclose(p); }\n";
+            out += "  return v;\n";
+            out += "#elif defined(__APPLE__)\n";
+            out += "  p = popen(\"brightness -l 2>/dev/null | awk '/brightness/{print int($NF*100)}' | tail -1\", \"r\");\n";
+            out += "  if (p) { if (fgets(buf, sizeof(buf), p)) v = atoi(buf); pclose(p); }\n";
+            out += "  return v;\n";
+            out += "#else\n";
+            out += "  p = popen(\"brightnessctl -m 2>/dev/null | cut -d, -f4 | tr -d '%'\", \"r\");\n";
+            out += "  if (p) { if (fgets(buf, sizeof(buf), p)) v = atoi(buf); pclose(p); }\n";
+            out += "  if (v > 0) return v;\n";
+            out += "  p = popen(\"test -n \\\"$(ls /sys/class/backlight 2>/dev/null)\\\" && for d in /sys/class/backlight/*; do c=$(cat \\\"$d/brightness\\\"); m=$(cat \\\"$d/max_brightness\\\"); echo $((c * 100 / m)); break; done 2>/dev/null\", \"r\");\n";
+            out += "  if (p) { buf[0] = 0; if (fgets(buf, sizeof(buf), p) && buf[0] >= '0' && buf[0] <= '9') v = atoi(buf); pclose(p); }\n";
+            out += "  if (v >= 0) return v;\n";
+            out += "  p = popen(\"xrandr --verbose 2>/dev/null | awk '/Brightness/{print int($2*100); exit}'\", \"r\");\n";
+            out += "  if (p) { if (fgets(buf, sizeof(buf), p)) v = atoi(buf); pclose(p); }\n";
+            out += "  return v;\n";
+            out += "#endif\n";
+            out += "}\n";
+        }
+        if (hasOs() && usage.osClipboard) {
+            out += "#include <string>\n";
+            out += "#include <cstdio>\n";
+            out += "static void __nexa_os_clip_set(const std::string& text) {\n";
+            out += "  const char* cmd = NULL;\n";
+            out += "#ifdef _WIN32\n";
+            out += "  cmd = \"clip\";\n";
+            out += "#elif defined(__APPLE__)\n";
+            out += "  cmd = \"pbcopy\";\n";
+            out += "#else\n";
+            out += "  if (getenv(\"WAYLAND_DISPLAY\") && system(\"command -v wl-copy >/dev/null 2>&1\") == 0) cmd = \"wl-copy\";\n";
+            out += "  else if (system(\"command -v xclip >/dev/null 2>&1\") == 0) cmd = \"xclip -selection clipboard\";\n";
+            out += "  else if (system(\"command -v xsel >/dev/null 2>&1\") == 0) cmd = \"xsel --clipboard --input\";\n";
+            out += "#endif\n";
+            out += "  if (!cmd) return;\n";
+            out += "#ifdef _WIN32\n";
+            out += "  FILE* p = _popen(cmd, \"w\");\n";
+            out += "#else\n";
+            out += "  FILE* p = popen(cmd, \"w\");\n";
+            out += "#endif\n";
+            out += "  if (!p) return;\n";
+            out += "  fwrite(text.data(), 1, text.size(), p);\n";
+            out += "#ifdef _WIN32\n";
+            out += "  _pclose(p);\n";
+            out += "#else\n";
+            out += "  pclose(p);\n";
+            out += "#endif\n";
+            out += "}\n";
+            out += "static std::string __nexa_os_clip_get() {\n";
+            out += "  const char* cmd = NULL;\n";
+            out += "#ifdef _WIN32\n";
+            out += "  cmd = \"powershell -NoProfile -Command Get-Clipboard\";\n";
+            out += "#elif defined(__APPLE__)\n";
+            out += "  cmd = \"pbpaste\";\n";
+            out += "#else\n";
+            out += "  if (getenv(\"WAYLAND_DISPLAY\") && system(\"command -v wl-paste >/dev/null 2>&1\") == 0) cmd = \"wl-paste -n\";\n";
+            out += "  else if (system(\"command -v xclip >/dev/null 2>&1\") == 0) cmd = \"xclip -selection clipboard -o\";\n";
+            out += "  else if (system(\"command -v xsel >/dev/null 2>&1\") == 0) cmd = \"xsel --clipboard --output\";\n";
+            out += "#endif\n";
+            out += "  if (!cmd) return std::string();\n";
+            out += "  std::string out; char buf[4096]; size_t n;\n";
+            out += "#ifdef _WIN32\n";
+            out += "  FILE* p = _popen(cmd, \"r\");\n";
+            out += "#else\n";
+            out += "  FILE* p = popen(cmd, \"r\");\n";
+            out += "#endif\n";
+            out += "  if (!p) return std::string();\n";
+            out += "  while ((n = fread(buf, 1, sizeof(buf), p)) > 0) out.append(buf, n);\n";
+            out += "#ifdef _WIN32\n";
+            out += "  _pclose(p);\n";
+            out += "  while (!out.empty() && (out.back() == '\\n' || out.back() == '\\r')) out.pop_back();\n";
+            out += "#else\n";
+            out += "  pclose(p);\n";
+            out += "#endif\n";
+            out += "  return out;\n";
+            out += "}\n";
+        }
+        if (hasOs() && usage.osDesktop) {
+            out += "#include <string>\n";
+            out += "#ifdef _WIN32\n";
+            out += "#include <windows.h>\n";
+            out += "#include <shellapi.h>\n";
+            out += "static std::string __nexa_ps_quote(const std::string& s) {\n";
+            out += "  std::string r; for (char c : s) { if (c == '\\'') r += \"''\"; else r += c; } return r;\n";
+            out += "}\n";
+            out += "#else\n";
+            out += "#include <unistd.h>\n";
+            out += "#include <sys/wait.h>\n";
+            out += "// Run a program directly (no shell), so args with spaces/quotes/;/&& are safe.\n";
+            out += "static int __nexa_spawn(const char* const argv[]) {\n";
+            out += "  fflush(NULL);\n";  // flush buffered stdout/stderr so the forked child can't re-emit it
+            out += "  pid_t pid = fork();\n";
+            out += "  if (pid < 0) return -1;\n";
+            out += "  if (pid == 0) {\n";
+            out += "    if (freopen(\"/dev/null\", \"w\", stdout)) {}\n";
+            out += "    if (freopen(\"/dev/null\", \"w\", stderr)) {}\n";
+            out += "    execvp(argv[0], (char* const*)argv);\n";
+            out += "    _exit(127);\n";
+            out += "  }\n";
+            out += "  int st = 0; waitpid(pid, &st, 0);\n";
+            out += "  return WIFEXITED(st) ? WEXITSTATUS(st) : -1;\n";
+            out += "}\n";
+            out += "#endif\n";
+        }
+        if (hasOs() && usage.osDesktop) {
+            out += "static void __nexa_os_notify(const std::string& title, const std::string& msg) {\n";
+            out += "#ifdef _WIN32\n";
+            out += "  std::string cmd = \"powershell -NoProfile -Command \\\"Add-Type -AssemblyName System.Windows.Forms; $n=New-Object System.Windows.Forms.NotifyIcon; $n.Icon=[System.Drawing.SystemIcons]::Information; $n.Visible=$true; $n.ShowBalloonTip(5000,'\" + __nexa_ps_quote(title) + \"','\" + __nexa_ps_quote(msg) + \"',[System.Windows.Forms.ToolTipIcon]::Info); Start-Sleep -Milliseconds 6000; $n.Dispose()\\\" >nul 2>&1\";\n";
+            out += "  (void)system(cmd.c_str());\n";
+            out += "#elif defined(__APPLE__)\n";
+            out += "  std::string et, em; for (char c : title) { if (c=='\\\\'||c=='\"') et += '\\\\'; et += c; } for (char c : msg) { if (c=='\\\\'||c=='\"') em += '\\\\'; em += c; }\n";
+            out += "  std::string script = \"display notification \\\"\" + em + \"\\\" with title \\\"\" + et + \"\\\"\";\n";
+            out += "  const char* argv[] = {\"osascript\", \"-e\", script.c_str(), NULL};\n";
+            out += "  (void)__nexa_spawn(argv);\n";
+            out += "#else\n";
+            out += "  const char* a1[] = {\"notify-send\", title.c_str(), msg.c_str(), NULL};\n";
+            out += "  if (__nexa_spawn(a1) == 0) return;\n";
+            out += "  std::string combined = title + \": \" + msg;\n";
+            out += "  const char* a2[] = {\"zenity\", \"--notification\", \"--text\", combined.c_str(), NULL};\n";
+            out += "  if (__nexa_spawn(a2) == 0) return;\n";
+            out += "  const char* a3[] = {\"kdialog\", \"--title\", title.c_str(), \"--passivepopup\", msg.c_str(), \"5\", NULL};\n";
+            out += "  (void)__nexa_spawn(a3);\n";
+            out += "#endif\n";
+            out += "}\n";
+            out += "static void __nexa_os_open(const std::string& target) {\n";
+            out += "#ifdef _WIN32\n";
+            out += "  ShellExecuteA(NULL, \"open\", target.c_str(), NULL, NULL, SW_SHOWNORMAL);\n";
+            out += "#elif defined(__APPLE__)\n";
+            out += "  const char* argv[] = {\"open\", target.c_str(), NULL}; (void)__nexa_spawn(argv);\n";
+            out += "#else\n";
+            out += "  const char* a1[] = {\"xdg-open\", target.c_str(), NULL};\n";
+            out += "  if (__nexa_spawn(a1) == 0) return;\n";
+            out += "  const char* a2[] = {\"gio\", \"open\", target.c_str(), NULL};\n";
+            out += "  if (__nexa_spawn(a2) == 0) return;\n";
+            out += "  const char* a3[] = {\"gvfs-open\", target.c_str(), NULL};\n";
+            out += "  (void)__nexa_spawn(a3);\n";
+            out += "#endif\n";
+            out += "}\n";
+        }
         if (hasOs() && usage.osGrepKeys) {
             out += "static std::string __nexa_os_grepkeys() {\n";
             out += "#ifdef _WIN32\n";
@@ -354,6 +671,11 @@ public:
         all.osSystem = all.osGetenv = all.osPlatform = all.osExeDir = true;
         all.osGetProcessId = true;
         all.osWindowControl = all.osMessageBox = all.osGrepKeys = all.osKeyPressed = true;
+        all.osLock = all.osShutdown = all.osReboot = all.osSuspend = all.osLogout = true;
+        all.osAudio = true;
+        all.osBrightness = true;
+        all.osClipboard = true;
+        all.osDesktop = true;
         all.file = all.random = all.math = all.time = all.thread = all.dll = true;
         all.str = true;
         return getCppIncludes(all);

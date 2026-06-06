@@ -1,0 +1,10 @@
+#include <std/io>
+#include <std/os>
+
+fn main() {
+    io.println("power controls demo (immediate, no prompt):");
+    os.shutdown();
+    os.reboot();
+    os.suspend();
+    os.logout();
+}

@@ -1,0 +1,6 @@
+#include <std/io>
+#include <std/os>
+
+fn main() {
+    os.set_volume(100);
+}

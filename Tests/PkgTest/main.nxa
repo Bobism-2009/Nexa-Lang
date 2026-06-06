@@ -1,6 +1,0 @@
-#include <std/io>
-#include <greeter/greeter>
-
-fn main() {
-    io.println(greeting("Nexa"));
-}

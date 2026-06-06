@@ -83,6 +83,22 @@ public:
                 case AstNode::Type::OsMinimizeConsoleWindow:
                 case AstNode::Type::OsMaximizeConsoleWindow: cppUsage.osWindowControl = true; break;
                 case AstNode::Type::OsMessageBox: cppUsage.osMessageBox = true; break;
+                case AstNode::Type::OsLock: cppUsage.osLock = true; break;
+                case AstNode::Type::OsShutdown: cppUsage.osShutdown = true; break;
+                case AstNode::Type::OsReboot: cppUsage.osReboot = true; break;
+                case AstNode::Type::OsSuspend: cppUsage.osSuspend = true; break;
+                case AstNode::Type::OsLogout: cppUsage.osLogout = true; break;
+                case AstNode::Type::OsSetVolume:
+                case AstNode::Type::OsGetVolume:
+                case AstNode::Type::OsMute:
+                case AstNode::Type::OsUnmute:
+                case AstNode::Type::OsToggleMute: cppUsage.osAudio = true; break;
+                case AstNode::Type::OsSetBrightness:
+                case AstNode::Type::OsGetBrightness: cppUsage.osBrightness = true; break;
+                case AstNode::Type::OsClipSet:
+                case AstNode::Type::OsClipGet: cppUsage.osClipboard = true; break;
+                case AstNode::Type::OsNotify:
+                case AstNode::Type::OsOpen: cppUsage.osDesktop = true; break;
                 case AstNode::Type::OsGrepKeys: cppUsage.osGrepKeys = true; break;
                 case AstNode::Type::OsKeyPressed: cppUsage.osKeyPressed = true; break;
                 case AstNode::Type::FileRead:
@@ -878,12 +894,16 @@ private:
                 if (e.value == "split") return "[]string";
                 return "int";  // len, index_of
             case AstNode::Type::OsGetProcessId: return "int";
+            case AstNode::Type::OsGetVolume: return "int";
+            case AstNode::Type::OsGetBrightness: return "int";
             case AstNode::Type::TimeSeconds:
             case AstNode::Type::TimeMilliseconds:
                 return "int";
             case AstNode::Type::TimeNowMs:
                 return "float";
             case AstNode::Type::IoReadln:
+                return "string";
+            case AstNode::Type::OsClipGet:
                 return "string";
             case AstNode::Type::FileRead:
             case AstNode::Type::IoGetline:
@@ -1054,7 +1074,7 @@ private:
     }
 
     static bool exprProducesString(const AstNode& e) {
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::ExprTrim) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::ExprTrim) return true;
         if (e.type == AstNode::Type::StrMethod) return strMethodReturnsString(e.value);
         if (e.type == AstNode::Type::ExprAdd && e.children.size() >= 2) {
             return exprProducesString(e.children[0]) || exprProducesString(e.children[1]);
@@ -1091,7 +1111,7 @@ private:
             auto it = varIsString.find(e.value);
             return it != varIsString.end() && it->second;
         }
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim) return true;
         if (e.type == AstNode::Type::StrMethod) return strMethodReturnsString(e.value);
         if (e.type == AstNode::Type::ExprAdd && e.children.size() >= 2) {
             return exprIsString(e.children[0], varIsString) || exprIsString(e.children[1], varIsString);
@@ -1525,6 +1545,49 @@ private:
                 out << indent << "__nexa_os_minimize_console_window();\n";
             } else if (child.type == AstNode::Type::OsMaximizeConsoleWindow) {
                 out << indent << "__nexa_os_maximize_console_window();\n";
+            } else if (child.type == AstNode::Type::OsLock) {
+                out << indent << "__nexa_os_lock();\n";
+            } else if (child.type == AstNode::Type::OsShutdown) {
+                out << indent << "__nexa_os_shutdown();\n";
+            } else if (child.type == AstNode::Type::OsReboot) {
+                out << indent << "__nexa_os_reboot();\n";
+            } else if (child.type == AstNode::Type::OsSuspend) {
+                out << indent << "__nexa_os_suspend();\n";
+            } else if (child.type == AstNode::Type::OsLogout) {
+                out << indent << "__nexa_os_logout();\n";
+            } else if (child.type == AstNode::Type::OsSetVolume) {
+                std::string p = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                out << indent << "__nexa_os_set_volume(" << p << ");\n";
+            } else if (child.type == AstNode::Type::OsGetVolume) {
+                out << indent << "(void)__nexa_os_get_volume();\n";
+            } else if (child.type == AstNode::Type::OsMute) {
+                out << indent << "__nexa_os_set_mute(1);\n";
+            } else if (child.type == AstNode::Type::OsUnmute) {
+                out << indent << "__nexa_os_set_mute(0);\n";
+            } else if (child.type == AstNode::Type::OsToggleMute) {
+                out << indent << "__nexa_os_toggle_mute();\n";
+            } else if (child.type == AstNode::Type::OsSetBrightness) {
+                std::string p = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                out << indent << "__nexa_os_set_brightness(" << p << ");\n";
+            } else if (child.type == AstNode::Type::OsGetBrightness) {
+                out << indent << "(void)__nexa_os_get_brightness();\n";
+            } else if (child.type == AstNode::Type::OsClipSet) {
+                std::string e = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                bool isStr = exprIsString(child.children[0], varIsString);
+                std::string arg = isStr ? ("std::string(" + e + ")") : ("std::to_string(" + e + ")");
+                out << indent << "__nexa_os_clip_set(" << arg << ");\n";
+            } else if (child.type == AstNode::Type::OsClipGet) {
+                out << indent << "(void)__nexa_os_clip_get();\n";
+            } else if (child.type == AstNode::Type::OsNotify) {
+                std::string te = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                std::string me = emitExpr(child.children[1], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                std::string ta = exprIsString(child.children[0], varIsString) ? ("std::string(" + te + ")") : ("std::to_string(" + te + ")");
+                std::string ma = exprIsString(child.children[1], varIsString) ? ("std::string(" + me + ")") : ("std::to_string(" + me + ")");
+                out << indent << "__nexa_os_notify(" << ta << ", " << ma << ");\n";
+            } else if (child.type == AstNode::Type::OsOpen) {
+                std::string e = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                std::string arg = exprIsString(child.children[0], varIsString) ? ("std::string(" + e + ")") : ("std::to_string(" + e + ")");
+                out << indent << "__nexa_os_open(" << arg << ");\n";
             } else if (child.type == AstNode::Type::OsMessageBox) {
                 std::string textExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 std::string titleExpr = emitExpr(child.children[1], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
@@ -2015,6 +2078,12 @@ private:
                 return "__nexa_os_getprocessid()";
             case AstNode::Type::OsExeDir:
                 return "__nexa_exe_dir()";
+            case AstNode::Type::OsGetVolume:
+                return "__nexa_os_get_volume()";
+            case AstNode::Type::OsGetBrightness:
+                return "__nexa_os_get_brightness()";
+            case AstNode::Type::OsClipGet:
+                return "__nexa_os_clip_get()";
             case AstNode::Type::IoReadln: {
                 return "([]{ fflush(stdout); char __b[4096]; if (fgets(__b, sizeof(__b), stdin)) __b[strcspn(__b, \"\\n\")] = 0; return std::string(__b); }())";
             }

@@ -358,6 +358,10 @@ static std::string nexaBuildCompileCmd(
     if (linkUser32) {
         // std/os (MessageBoxA, GetConsoleWindow, …) and some inline_cpp; lld does not always pull it implicitly.
         cmd += " -luser32";
+        // std/os audio (os.set_volume/get_volume/mute) uses the Core Audio COM API.
+        cmd += " -lole32";
+        // std/os open uses ShellExecuteA.
+        cmd += " -lshell32";
     }
 #endif
     // Extra link inputs (--link): static archives (.a/.lib) are baked in, objects (.o) embedded,

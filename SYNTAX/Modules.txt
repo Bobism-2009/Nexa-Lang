@@ -27,6 +27,37 @@ Nexa Standard Modules
   os.getenv(name)   - Get environment variable, returns string (or "")
   os.getprocessid() / os.getpid() - Current process ID (int)
   os.exe_dir()      - Directory containing the running executable (trailing slash)
+  os.lock()         - Lock the screen / session (cross-platform)
+  os.shutdown()     - Power off the machine immediately (no prompt)
+  os.reboot()       - Restart the machine immediately (no prompt)
+  os.suspend()      - Suspend / sleep the machine (distinct from os.sleep(ms) timer)
+  os.logout()       - Log out the current user session
+                      Power/lock/logout run the native command for the platform;
+                      the OS may still require privileges (sudo/polkit) to honor them.
+  os.set_volume(percent) - Set system output volume 0-100
+  os.get_volume()        - Current output volume 0-100 (int, -1 if unavailable)
+  os.mute()              - Mute system output
+  os.unmute()            - Unmute system output
+  os.toggle_mute()       - Toggle mute state
+                      Audio uses PipeWire/PulseAudio/ALSA on Linux (wpctl/pactl/amixer),
+                      osascript on macOS, and the Core Audio API on Windows.
+  os.set_brightness(percent) - Set screen brightness 0-100
+  os.get_brightness()        - Current brightness 0-100 (int, -1 if unavailable)
+                      Linux tries brightnessctl, then /sys/class/backlight, then
+                      xrandr (software/gamma dimming on X11). macOS uses the
+                      'brightness' tool; Windows uses WMI. Returns -1 if no
+                      controllable display is found.
+  os.clip_set(text)      - Copy text to the system clipboard
+  os.clip_get()          - Read the system clipboard, returns string ("" if empty)
+                      Linux uses wl-copy/wl-paste (Wayland), xclip or xsel (X11);
+                      macOS uses pbcopy/pbpaste; Windows uses clip/Get-Clipboard.
+  os.notify(title, message) - Show a desktop notification
+  os.open(target)        - Open a file, folder, or URL with the default app
+                      Linux notify: notify-send, then zenity, then kdialog.
+                      Linux open: xdg-open, then gio, then gvfs-open.
+                      macOS uses osascript/open; Windows uses a tray balloon /
+                      ShellExecute. Arguments are passed without a shell (execvp),
+                      so spaces, quotes, and ;/&& in titles or URLs are safe.
   os.hideconsolewindow()     - Hide console window (Windows)
   os.showconsolewindow()     - Show console window (Windows)
   os.minimizeconsolewindow() - Minimize console window (Windows)

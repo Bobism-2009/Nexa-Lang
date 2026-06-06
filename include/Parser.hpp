@@ -19,6 +19,11 @@ struct AstNode {
     enum class Type { Include, CppHeaderInclude, IoPrint, IoPrintln, IoFlush, IoReadln, IoGetline, IoToInt, MainFunction, Function, FnCall, Variable, Assignment, OsSystem, OsGetenv, OsPlatform, OsExeDir, OsGetProcessId,
                       OsHideConsoleWindow, OsShowConsoleWindow, OsMinimizeConsoleWindow, OsMaximizeConsoleWindow,
                       OsMessageBox, OsGrepKeys, OsKeyPressed,
+                      OsLock, OsShutdown, OsReboot, OsSuspend, OsLogout,
+                      OsSetVolume, OsGetVolume, OsMute, OsUnmute, OsToggleMute,
+                      OsSetBrightness, OsGetBrightness,
+                      OsClipSet, OsClipGet,
+                      OsNotify, OsOpen,
                       DllLoad, DllCall,
                       FileRead, FileWrite, FileAppend, FileExists,
                       RandomInt, RandomSeed,
@@ -147,7 +152,7 @@ private:
     const std::vector<std::string>* packagePaths_;
 
     static bool exprProducesString(const AstNode& e) {
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim) return true;
         if (e.type == AstNode::Type::StrMethod) {
             const std::string& m = e.value;
             return m == "upper" || m == "lower" || m == "trim" || m == "replace" ||
@@ -1524,6 +1529,9 @@ private:
             if (method == "getprocessid" || method == "getpid" || method == "GetProcessID") return parseOsGetProcessId();
             if (method == "grepkeys" || method == "getkey") return parseOsGrepKeys();
             if (method == "keypressed") return parseOsKeyPressed();
+            if (method == "get_volume") return parseOsGetVolume();
+            if (method == "get_brightness") return parseOsGetBrightness();
+            if (method == "clip_get") return parseOsClipGet();
         }
         if (peek().type == TokenType::Identifier && (peek().value == "getprocessid" || peek().value == "getpid") &&
             pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::LParen) {
@@ -1690,6 +1698,101 @@ private:
             else if (method == "maximizeconsolewindow" || method == "maximiseconsolewindow") nodeType = AstNode::Type::OsMaximizeConsoleWindow;
             return {nodeType, "", {}};
         }
+        if (method == "lock" || method == "shutdown" || method == "reboot" ||
+            method == "suspend" || method == "logout" ||
+            method == "mute" || method == "unmute" || method == "toggle_mute") {
+            if (!match(TokenType::LParen) || !match(TokenType::RParen)) {
+                throw std::runtime_error("Expected '()' after os." + method + " at line " + std::to_string(peek().line));
+            }
+            if (!match(TokenType::Semicolon)) {
+                throw std::runtime_error("Expected ';' after os." + method + "() at line " + std::to_string(peek().line));
+            }
+            AstNode::Type nodeType = AstNode::Type::OsLock;
+            if (method == "shutdown") nodeType = AstNode::Type::OsShutdown;
+            else if (method == "reboot") nodeType = AstNode::Type::OsReboot;
+            else if (method == "suspend") nodeType = AstNode::Type::OsSuspend;
+            else if (method == "logout") nodeType = AstNode::Type::OsLogout;
+            else if (method == "mute") nodeType = AstNode::Type::OsMute;
+            else if (method == "unmute") nodeType = AstNode::Type::OsUnmute;
+            else if (method == "toggle_mute") nodeType = AstNode::Type::OsToggleMute;
+            return {nodeType, "", {}};
+        }
+        if (method == "set_volume" || method == "set_brightness") {
+            if (!match(TokenType::LParen)) {
+                throw std::runtime_error("Expected '(' after os." + method + " at line " + std::to_string(peek().line));
+            }
+            AstNode arg = parseExpression();
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' after os." + method + "(...) at line " + std::to_string(peek().line));
+            }
+            if (!match(TokenType::Semicolon)) {
+                throw std::runtime_error("Expected ';' after os." + method + "(...) at line " + std::to_string(peek().line));
+            }
+            AstNode::Type nodeType = (method == "set_brightness") ? AstNode::Type::OsSetBrightness : AstNode::Type::OsSetVolume;
+            return {nodeType, "", {arg}};
+        }
+        if (method == "get_volume" || method == "get_brightness") {
+            if (!match(TokenType::LParen) || !match(TokenType::RParen)) {
+                throw std::runtime_error("Expected '()' after os." + method + " at line " + std::to_string(peek().line));
+            }
+            if (!match(TokenType::Semicolon)) {
+                throw std::runtime_error("Expected ';' after os." + method + "() at line " + std::to_string(peek().line));
+            }
+            AstNode::Type nodeType = (method == "get_brightness") ? AstNode::Type::OsGetBrightness : AstNode::Type::OsGetVolume;
+            return {nodeType, "", {}};
+        }
+        if (method == "clip_set") {
+            if (!match(TokenType::LParen)) {
+                throw std::runtime_error("Expected '(' after os.clip_set at line " + std::to_string(peek().line));
+            }
+            AstNode arg = parseExpression();
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' after os.clip_set(...) at line " + std::to_string(peek().line));
+            }
+            if (!match(TokenType::Semicolon)) {
+                throw std::runtime_error("Expected ';' after os.clip_set(...) at line " + std::to_string(peek().line));
+            }
+            return {AstNode::Type::OsClipSet, "", {arg}};
+        }
+        if (method == "clip_get") {
+            if (!match(TokenType::LParen) || !match(TokenType::RParen)) {
+                throw std::runtime_error("Expected '()' after os.clip_get at line " + std::to_string(peek().line));
+            }
+            if (!match(TokenType::Semicolon)) {
+                throw std::runtime_error("Expected ';' after os.clip_get() at line " + std::to_string(peek().line));
+            }
+            return {AstNode::Type::OsClipGet, "", {}};
+        }
+        if (method == "notify") {
+            if (!match(TokenType::LParen)) {
+                throw std::runtime_error("Expected '(' after os.notify at line " + std::to_string(peek().line));
+            }
+            AstNode titleArg = parseExpression();
+            if (!match(TokenType::Comma)) {
+                throw std::runtime_error("Expected ',' in os.notify(title, message) at line " + std::to_string(peek().line));
+            }
+            AstNode msgArg = parseExpression();
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' after os.notify(...) at line " + std::to_string(peek().line));
+            }
+            if (!match(TokenType::Semicolon)) {
+                throw std::runtime_error("Expected ';' after os.notify(...) at line " + std::to_string(peek().line));
+            }
+            return {AstNode::Type::OsNotify, "", {titleArg, msgArg}};
+        }
+        if (method == "open") {
+            if (!match(TokenType::LParen)) {
+                throw std::runtime_error("Expected '(' after os.open at line " + std::to_string(peek().line));
+            }
+            AstNode arg = parseExpression();
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' after os.open(...) at line " + std::to_string(peek().line));
+            }
+            if (!match(TokenType::Semicolon)) {
+                throw std::runtime_error("Expected ';' after os.open(...) at line " + std::to_string(peek().line));
+            }
+            return {AstNode::Type::OsOpen, "", {arg}};
+        }
         if (method == "messagebox") {
             if (!match(TokenType::LParen)) {
                 throw std::runtime_error("Expected '(' after os.messagebox at line " + std::to_string(peek().line));
@@ -1775,6 +1878,63 @@ private:
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
         }
         return {AstNode::Type::OsGetenv, envName, {}};
+    }
+
+    AstNode parseOsGetVolume() {
+        if (!modules_.hasOs()) {
+            throw std::runtime_error("os.get_volume requires #include <std/os> at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "os") {
+            throw std::runtime_error("Expected 'os' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "get_volume") {
+            throw std::runtime_error("Expected 'get_volume' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::LParen) || !match(TokenType::RParen)) {
+            throw std::runtime_error("Expected '()' after get_volume at line " + std::to_string(peek().line));
+        }
+        return {AstNode::Type::OsGetVolume, "", {}};
+    }
+
+    AstNode parseOsGetBrightness() {
+        if (!modules_.hasOs()) {
+            throw std::runtime_error("os.get_brightness requires #include <std/os> at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "os") {
+            throw std::runtime_error("Expected 'os' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "get_brightness") {
+            throw std::runtime_error("Expected 'get_brightness' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::LParen) || !match(TokenType::RParen)) {
+            throw std::runtime_error("Expected '()' after get_brightness at line " + std::to_string(peek().line));
+        }
+        return {AstNode::Type::OsGetBrightness, "", {}};
+    }
+
+    AstNode parseOsClipGet() {
+        if (!modules_.hasOs()) {
+            throw std::runtime_error("os.clip_get requires #include <std/os> at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "os") {
+            throw std::runtime_error("Expected 'os' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "clip_get") {
+            throw std::runtime_error("Expected 'clip_get' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::LParen) || !match(TokenType::RParen)) {
+            throw std::runtime_error("Expected '()' after clip_get at line " + std::to_string(peek().line));
+        }
+        return {AstNode::Type::OsClipGet, "", {}};
     }
 
     AstNode parseOsPlatform() {
