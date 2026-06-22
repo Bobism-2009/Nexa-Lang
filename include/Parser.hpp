@@ -23,6 +23,7 @@ struct AstNode {
                       OsSetVolume, OsGetVolume, OsMute, OsUnmute, OsToggleMute,
                       OsSetBrightness, OsGetBrightness,
                       OsClipSet, OsClipGet,
+                      OsType,
                       OsNotify, OsOpen,
                       DllLoad, DllCall,
                       FileRead, FileWrite, FileAppend, FileExists, FileMkdir,
@@ -1755,6 +1756,19 @@ private:
                 throw std::runtime_error("Expected ';' after os.clip_set(...) at line " + std::to_string(peek().line));
             }
             return {AstNode::Type::OsClipSet, "", {arg}};
+        }
+        if (method == "type" || method == "type_text") {
+            if (!match(TokenType::LParen)) {
+                throw std::runtime_error("Expected '(' after os." + method + " at line " + std::to_string(peek().line));
+            }
+            AstNode arg = parseExpression();
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' after os." + method + "(...) at line " + std::to_string(peek().line));
+            }
+            if (!match(TokenType::Semicolon)) {
+                throw std::runtime_error("Expected ';' after os." + method + "(...) at line " + std::to_string(peek().line));
+            }
+            return {AstNode::Type::OsType, "", {arg}};
         }
         if (method == "clip_get") {
             if (!match(TokenType::LParen) || !match(TokenType::RParen)) {

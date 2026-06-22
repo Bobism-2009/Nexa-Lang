@@ -66,6 +66,9 @@ Nexa Standard Modules
   os.messagebox(text, title) - Show message box (Windows)
   os.grepkeys() / os.getkey() - Wait for key press, return key as string (Windows)
   os.keypressed() - Non-blocking: returns 1 if key waiting, 0 otherwise (Windows)
+  os.type(text)       - Simulate keyboard typing into the focused window
+                        \\n = Enter, \\t = Tab. Windows: SendInput. Linux: xdotool/wtype.
+                        macOS: osascript (Accessibility permission required).
   cmd: string literal or expression (e.g. "mkdir -p " + dir)
 
 #include <std/random>

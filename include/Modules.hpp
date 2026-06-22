@@ -25,6 +25,7 @@ public:
         bool osMessageBox = false;
         bool osGrepKeys = false;
         bool osKeyPressed = false;
+        bool osType = false;
         bool osLock = false;
         bool osShutdown = false;
         bool osReboot = false;
@@ -528,7 +529,7 @@ public:
             out += "  return out;\n";
             out += "}\n";
         }
-        if (hasOs() && usage.osDesktop) {
+        if (hasOs() && (usage.osDesktop || usage.osType)) {
             out += "#include <string>\n";
             out += "#ifdef _WIN32\n";
             out += "#include <windows.h>\n";
@@ -539,9 +540,8 @@ public:
             out += "#else\n";
             out += "#include <unistd.h>\n";
             out += "#include <sys/wait.h>\n";
-            out += "// Run a program directly (no shell), so args with spaces/quotes/;/&& are safe.\n";
             out += "static int __nexa_spawn(const char* const argv[]) {\n";
-            out += "  fflush(NULL);\n";  // flush buffered stdout/stderr so the forked child can't re-emit it
+            out += "  fflush(NULL);\n";
             out += "  pid_t pid = fork();\n";
             out += "  if (pid < 0) return -1;\n";
             out += "  if (pid == 0) {\n";
@@ -554,6 +554,49 @@ public:
             out += "  return WIFEXITED(st) ? WEXITSTATUS(st) : -1;\n";
             out += "}\n";
             out += "#endif\n";
+        }
+        if (hasOs() && usage.osType) {
+            out += "static void __nexa_os_type(const std::string& text) {\n";
+            out += "#ifdef _WIN32\n";
+            out += "  auto send_vk = [](WORD vk) {\n";
+            out += "    INPUT in[2] = {};\n";
+            out += "    in[0].type = INPUT_KEYBOARD; in[0].ki.wVk = vk;\n";
+            out += "    in[1].type = INPUT_KEYBOARD; in[1].ki.wVk = vk; in[1].ki.dwFlags = KEYEVENTF_KEYUP;\n";
+            out += "    SendInput(2, in, sizeof(INPUT));\n";
+            out += "  };\n";
+            out += "  auto send_uni = [](wchar_t w) {\n";
+            out += "    INPUT in[2] = {};\n";
+            out += "    in[0].type = INPUT_KEYBOARD; in[0].ki.wScan = w; in[0].ki.dwFlags = KEYEVENTF_UNICODE;\n";
+            out += "    in[1].type = INPUT_KEYBOARD; in[1].ki.wScan = w; in[1].ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;\n";
+            out += "    SendInput(2, in, sizeof(INPUT));\n";
+            out += "  };\n";
+            out += "  int wlen = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), (int)text.size(), NULL, 0);\n";
+            out += "  if (wlen <= 0) return;\n";
+            out += "  std::wstring ws((size_t)wlen, L'\\0');\n";
+            out += "  MultiByteToWideChar(CP_UTF8, 0, text.c_str(), (int)text.size(), ws.data(), wlen);\n";
+            out += "  for (wchar_t w : ws) {\n";
+            out += "    if (w == L'\\n' || w == L'\\r') { if (w == L'\\n') send_vk(VK_RETURN); continue; }\n";
+            out += "    if (w == L'\\t') { send_vk(VK_TAB); continue; }\n";
+            out += "    send_uni(w);\n";
+            out += "  }\n";
+            out += "#elif defined(__APPLE__)\n";
+            out += "  std::string esc; esc.reserve(text.size() * 2);\n";
+            out += "  for (char c : text) {\n";
+            out += "    if (c == '\\\\' || c == '\"') esc += '\\\\';\n";
+            out += "    if (c == '\\n') { esc += \"\\\" & return & \\\"\"; continue; }\n";
+            out += "    if (c == '\\t') { esc += \"\\\" & tab & \\\"\"; continue; }\n";
+            out += "    esc += c;\n";
+            out += "  }\n";
+            out += "  std::string script = \"tell application \\\"System Events\\\" to keystroke \\\"\" + esc + \"\\\"\";\n";
+            out += "  const char* argv[] = {\"osascript\", \"-e\", script.c_str(), NULL};\n";
+            out += "  (void)__nexa_spawn(argv);\n";
+            out += "#else\n";
+            out += "  const char* a1[] = {\"xdotool\", \"type\", \"--clearmodifiers\", \"--\", text.c_str(), NULL};\n";
+            out += "  if (__nexa_spawn(a1) == 0) return;\n";
+            out += "  const char* a2[] = {\"wtype\", text.c_str(), NULL};\n";
+            out += "  (void)__nexa_spawn(a2);\n";
+            out += "#endif\n";
+            out += "}\n";
         }
         if (hasOs() && usage.osDesktop) {
             out += "static void __nexa_os_notify(const std::string& title, const std::string& msg) {\n";
@@ -691,6 +734,7 @@ public:
         all.osSystem = all.osExec = all.osGetenv = all.osPlatform = all.osExeDir = true;
         all.osGetProcessId = true;
         all.osWindowControl = all.osMessageBox = all.osGrepKeys = all.osKeyPressed = true;
+        all.osType = true;
         all.osLock = all.osShutdown = all.osReboot = all.osSuspend = all.osLogout = true;
         all.osAudio = true;
         all.osBrightness = true;

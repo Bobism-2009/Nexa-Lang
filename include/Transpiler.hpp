@@ -98,6 +98,7 @@ public:
                 case AstNode::Type::OsGetBrightness: cppUsage.osBrightness = true; break;
                 case AstNode::Type::OsClipSet:
                 case AstNode::Type::OsClipGet: cppUsage.osClipboard = true; break;
+                case AstNode::Type::OsType: cppUsage.osType = true; break;
                 case AstNode::Type::OsNotify:
                 case AstNode::Type::OsOpen: cppUsage.osDesktop = true; break;
                 case AstNode::Type::OsGrepKeys: cppUsage.osGrepKeys = true; break;
@@ -1629,6 +1630,11 @@ private:
                 bool isStr = exprIsString(child.children[0], varIsString);
                 std::string arg = isStr ? ("std::string(" + e + ")") : ("std::to_string(" + e + ")");
                 out << indent << "__nexa_os_clip_set(" << arg << ");\n";
+            } else if (child.type == AstNode::Type::OsType) {
+                std::string e = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                bool isStr = exprIsString(child.children[0], varIsString);
+                std::string arg = isStr ? ("std::string(" + e + ")") : ("std::to_string(" + e + ")");
+                out << indent << "__nexa_os_type(" << arg << ");\n";
             } else if (child.type == AstNode::Type::OsClipGet) {
                 out << indent << "(void)__nexa_os_clip_get();\n";
             } else if (child.type == AstNode::Type::OsNotify) {

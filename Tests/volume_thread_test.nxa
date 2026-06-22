@@ -1,0 +1,18 @@
+#include <std/os>
+#include <std/random>
+#include <std/thread>
+#include <std/time>
+
+fn volume_loop(): void {
+    let i: int = 0;
+    while (i < 10) {
+        os.set_volume(random.int(10, 100));
+        time.sleep(time.milliseconds(500));
+        i = i + 1;
+    }
+}
+
+fn main() {
+    let t: int = thread.spawn(volume_loop);
+    thread.join(t);
+}
