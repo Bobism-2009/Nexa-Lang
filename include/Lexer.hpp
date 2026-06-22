@@ -449,6 +449,12 @@ private:
         size_t start = pos_;
         size_t startLine = line_;
         if (source_[pos_] == '-') pos_++;
+        if (pos_ < source_.size() && source_[pos_] == '0' && pos_ + 1 < source_.size() &&
+            (source_[pos_ + 1] == 'x' || source_[pos_ + 1] == 'X')) {
+            pos_ += 2;
+            while (pos_ < source_.size() && std::isxdigit(static_cast<unsigned char>(source_[pos_]))) pos_++;
+            return {TokenType::Number, source_.substr(start, pos_ - start), startLine};
+        }
         while (pos_ < source_.size() && std::isdigit(source_[pos_])) pos_++;
         if (pos_ < source_.size() && source_[pos_] == '.' && pos_ + 1 < source_.size() && std::isdigit(source_[pos_ + 1])) {
             pos_++;

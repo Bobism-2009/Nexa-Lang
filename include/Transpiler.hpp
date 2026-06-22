@@ -74,6 +74,7 @@ public:
                 case AstNode::Type::IoGetline: cppUsage.ioGetline = true; break;
                 case AstNode::Type::IoToInt: cppUsage.ioToInt = true; break;
                 case AstNode::Type::OsSystem: cppUsage.osSystem = true; break;
+                case AstNode::Type::OsExec: cppUsage.osExec = true; break;
                 case AstNode::Type::OsGetenv: cppUsage.osGetenv = true; break;
                 case AstNode::Type::OsPlatform: cppUsage.osPlatform = true; break;
                 case AstNode::Type::OsExeDir: cppUsage.osExeDir = true; break;
@@ -104,7 +105,8 @@ public:
                 case AstNode::Type::FileRead:
                 case AstNode::Type::FileWrite:
                 case AstNode::Type::FileAppend:
-                case AstNode::Type::FileExists: cppUsage.file = true; break;
+                case AstNode::Type::FileExists:
+                case AstNode::Type::FileMkdir: cppUsage.file = true; break;
                 case AstNode::Type::RandomInt:
                 case AstNode::Type::RandomSeed: cppUsage.random = true; break;
                 case AstNode::Type::MathCall: cppUsage.math = true; break;
@@ -300,6 +302,48 @@ public:
         int globalIdx = 0;
         bool justEmittedGlobal = false;
         bool wroteMain = false;
+
+        // Emit forward declarations for every function so call sites can appear before
+        // the function body. Without this, NexaC emits functions in source order with
+        // no prototypes, which forces users to topologically order their definitions.
+        {
+            bool wroteAnyProto = false;
+            for (size_t astIdx = 0; astIdx < ast_.size(); ++astIdx) {
+                const AstNode& node = ast_[astIdx];
+                if (node.type != AstNode::Type::Function) continue;
+                std::string cppName = cppFnNameForAstIndex(astIdx);
+                bool hasValRet = false, hasVoidRet = false;
+                stmtsClassifyReturns(node.children, hasValRet, hasVoidRet);
+                std::string retCpp;
+                if (!node.fnReturnType.empty()) {
+                    if (node.fnReturnType == "void") retCpp = "void";
+                    else                              retCpp = nexaTypeToCpp(node.fnReturnType);
+                } else {
+                    retCpp = hasValRet ? "int" : "void";
+                }
+                out << (buildDll_ ? "extern \"C\" NEXA_EXPORT " : "static ") << retCpp << " " << cppName << "(";
+                for (size_t i = 0; i < node.paramNames.size(); i++) {
+                    if (i > 0) out << ", ";
+                    std::string ptype = "int";
+                    if (i < node.paramTypes.size()) {
+                        if      (node.paramTypes[i] == "string") ptype = "std::string";
+                        else if (node.paramTypes[i] == "bool")   ptype = "bool";
+                        else if (node.paramTypes[i] == "float")  ptype = "double";
+                        else if (node.paramTypes[i] == "char")   ptype = "char";
+                        else if (isStructDeclType(node.paramTypes[i])) {
+                            ptype = structCppNames_.at(structNameFromDecl(node.paramTypes[i]));
+                        } else if (isEnumDeclType(node.paramTypes[i])) {
+                            ptype = enumCppNames_.at(enumNameFromDecl(node.paramTypes[i]));
+                        }
+                    }
+                    out << ptype;
+                }
+                out << ");\n";
+                wroteAnyProto = true;
+            }
+            if (wroteAnyProto) out << "\n";
+        }
+
         for (size_t astIdx = 0; astIdx < ast_.size(); ++astIdx) {
             const AstNode& node = ast_[astIdx];
             if (node.type == AstNode::Type::Include || node.type == AstNode::Type::CppHeaderInclude) {
@@ -1074,7 +1118,7 @@ private:
     }
 
     static bool exprProducesString(const AstNode& e) {
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::ExprTrim) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::ExprTrim) return true;
         if (e.type == AstNode::Type::StrMethod) return strMethodReturnsString(e.value);
         if (e.type == AstNode::Type::ExprAdd && e.children.size() >= 2) {
             return exprProducesString(e.children[0]) || exprProducesString(e.children[1]);
@@ -1109,10 +1153,16 @@ private:
         }
         if (e.type == AstNode::Type::ExprArrayIndex) {
             auto it = varIsString.find(e.value);
-            return it != varIsString.end() && it->second;
+            if (it != varIsString.end() && it->second) return true;
+            // Globals declared as []string via .split() never enter varIsString,
+            // but inferExprNexaType resolves them through nexaDeclStack_.
+            return inferExprNexaType(e) == "string";
         }
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim) return true;
         if (e.type == AstNode::Type::StrMethod) return strMethodReturnsString(e.value);
+        if (e.type == AstNode::Type::FnCall) {
+            return inferExprNexaType(e) == "string";
+        }
         if (e.type == AstNode::Type::ExprAdd && e.children.size() >= 2) {
             return exprIsString(e.children[0], varIsString) || exprIsString(e.children[1], varIsString);
         }
@@ -1481,6 +1531,9 @@ private:
             } else if (child.type == AstNode::Type::FileExists) {
                 std::string pathExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 out << indent << "(void)(std::filesystem::exists(" << pathExpr << ") ? 1 : 0);\n";
+            } else if (child.type == AstNode::Type::FileMkdir) {
+                std::string pathExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                out << indent << "{ std::error_code __nexa_ec; (void)std::filesystem::create_directories(" << pathExpr << ", __nexa_ec); }\n";
             } else if (child.type == AstNode::Type::RandomSeed) {
                 std::string seedExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 out << indent << "__nexa_random_seed(" << seedExpr << ");\n";
@@ -1694,7 +1747,13 @@ private:
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
                 std::string v = preserveNames_ ? child.value : varMap.at(child.value);
-                out << indent << v << " = " << v << " ^ " << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
+                std::string rhs = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                if (varIsString.count(child.value) && varIsString.at(child.value)) {
+                    out << indent << "{ int __nexa_k = " << rhs << "; for (size_t __nexa_i = 0; __nexa_i < " << v << ".size(); __nexa_i++) "
+                        << v << "[__nexa_i] = (char)((unsigned char)" << v << "[__nexa_i] ^ (__nexa_k & 0xFF)); }\n";
+                } else {
+                    out << indent << v << " = " << v << " ^ " << rhs << ";\n";
+                }
             } else if (child.type == AstNode::Type::AssnShl) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
@@ -2022,6 +2081,10 @@ private:
                 std::string pathExpr = emitExpr(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 return "std::filesystem::exists(" + pathExpr + ")";
             }
+            case AstNode::Type::FnCall:
+            case AstNode::Type::ExprArrayIndex:
+            case AstNode::Type::ExprMember:
+                return emitExpr(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             default:
                 return "false";
         }
@@ -2064,6 +2127,13 @@ private:
                 std::string s = "([]{ const char* __p = getenv(\"" + escapeString(e.value) + "\"); return __p ? std::string(__p) : std::string(\"\"); }())";
                 return s;
             }
+            case AstNode::Type::OsExec: {
+                std::string cmd = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                if (exprIsString(e.children[0], *varIsString)) {
+                    return "__nexa_os_exec(" + cmd + ")";
+                }
+                return "__nexa_os_exec(std::to_string(" + cmd + "))";
+            }
             case AstNode::Type::OsPlatform:
                 return "__nexa_os_platform()";
             case AstNode::Type::OsGrepKeys:
@@ -2105,11 +2175,15 @@ private:
             }
             case AstNode::Type::FileRead: {
                 std::string pathExpr = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
-                return "([]{ std::ifstream __f(" + pathExpr + "); std::stringstream __ss; __ss << __f.rdbuf(); return __ss.str(); }())";
+                return "([&]{ std::ifstream __f(" + pathExpr + "); std::stringstream __ss; __ss << __f.rdbuf(); return __ss.str(); }())";
             }
             case AstNode::Type::FileExists: {
                 std::string pathExpr = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 return "(std::filesystem::exists(" + pathExpr + ") ? 1 : 0)";
+            }
+            case AstNode::Type::FileMkdir: {
+                std::string pathExpr = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                return "([]{ std::error_code __ec; std::filesystem::create_directories(" + pathExpr + ", __ec); return __ec ? 0 : 1; }())";
             }
             case AstNode::Type::ExprLen: {
                 std::string s = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
@@ -2252,8 +2326,18 @@ private:
                 return "(" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " & " + emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::ExprBitOr:
                 return "(" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " | " + emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
-            case AstNode::Type::ExprBitXor:
-                return "(" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " ^ " + emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
+            case AstNode::Type::ExprBitXor: {
+                bool lhsStr = exprIsString(e.children[0], vIsStr);
+                bool rhsStr = exprIsString(e.children[1], vIsStr);
+                std::string lhs = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                std::string rhs = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                if (lhsStr && !rhsStr) {
+                    return "([&]{ std::string __nexa_s = " + lhs + "; int __nexa_k = " + rhs
+                        + "; for (size_t __nexa_i = 0; __nexa_i < __nexa_s.size(); __nexa_i++) "
+                        "__nexa_s[__nexa_i] = (char)((unsigned char)__nexa_s[__nexa_i] ^ (__nexa_k & 0xFF)); return __nexa_s; }())";
+                }
+                return "(" + lhs + " ^ " + rhs + ")";
+            }
             case AstNode::Type::ExprShl:
                 return "(" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " << " + emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::ExprShr:
@@ -2262,6 +2346,15 @@ private:
                 return "(~" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::CondNot:
                 return "(!" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
+            case AstNode::Type::CondAnd:
+            case AstNode::Type::CondOr:
+            case AstNode::Type::CondEq:
+            case AstNode::Type::CondNe:
+            case AstNode::Type::CondLt:
+            case AstNode::Type::CondLe:
+            case AstNode::Type::CondGt:
+            case AstNode::Type::CondGe:
+                return "(" + emitCond(e, varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             default:
                 return "0";
         }
@@ -2302,6 +2395,9 @@ private:
             return "std::to_string(" + emitExpr(child, varMap, pStr, pFl, pCh, pBo) + ")";
         }
         if (exprIsString(child, varIsString) || exprProducesString(child)) {
+            return emitExpr(child, varMap, pStr, pFl, pCh, pBo);
+        }
+        if (child.type == AstNode::Type::FnCall && inferExprNexaType(child) == "string") {
             return emitExpr(child, varMap, pStr, pFl, pCh, pBo);
         }
         if (exprIsFloat(child, varIsFloat)) {

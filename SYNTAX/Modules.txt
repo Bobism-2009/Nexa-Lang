@@ -22,7 +22,8 @@ Nexa Standard Modules
        Pure int/float + without string stays numeric (arithmetic).
 
 #include <std/os>
-  os.system(cmd)    - Run shell command, blocks until complete
+  os.system(cmd)    - Run shell command, blocks until complete (statement)
+                    - As expression: run command and return stdout as string
   os.platform()     - Returns "windows", "linux", "darwin", or "unknown"
   os.getenv(name)   - Get environment variable, returns string (or "")
   os.getprocessid() / os.getpid() - Current process ID (int)
@@ -112,6 +113,7 @@ Nexa Standard Modules
   file.write(path, c)   - Write content to file (overwrites)
   file.append(path, c)  - Append content to file
   file.exists(path)     - Returns 1 if exists, 0 otherwise
+  file.mkdir(path)      - Create directory (and parents); statement or returns 1/0
   pathVar.Write(c)      - Write to path in variable (e.g. SaveData.Write("Test"))
   pathVar.Append(c)     - Append to path in variable
   path, content: string or variable

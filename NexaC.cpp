@@ -280,6 +280,10 @@ static std::string nexaBuildCompileCmd(
     if (cxx.find("clang") != std::string::npos) {
         // Generated C++ may intentionally carry extra grouping parentheses.
         cmd += " -Wno-parentheses-equality";
+        // Forward decls for Nexa wrapper fns inherit `extern "C"` linkage but may
+        // return std::string; clang emits a pedantic warning that doesn't matter
+        // (the whole pipeline is clang->clang, not C interop).
+        cmd += " -Wno-return-type-c-linkage";
     }
     // Size/perf: drop machinery the generated code provably never uses. RTTI is never emitted
     // by the transpiler; exceptions/unwind tables are only needed for try/catch, throw, std::stoi,
@@ -910,8 +914,8 @@ int main(int argc, char* argv[]) {
         std::cerr << "[Nexa] Error: --no-console is only valid for executables, not --static-lib\n";
         return 1;
     }
-    if (!linkInputs.empty() && (buildDll || buildShared || buildStaticLib)) {
-        std::cerr << "[Nexa] Error: --link adds libraries to an executable; it cannot be used with --dll, --shared, or --static-lib\n";
+    if (!linkInputs.empty() && buildStaticLib) {
+        std::cerr << "[Nexa] Error: --link cannot be used with --static-lib (archives just bundle objects, they do not link)\n";
         return 1;
     }
 

@@ -16,7 +16,7 @@ namespace nexa {
 
 // AST node types - simple structure for our minimal grammar
 struct AstNode {
-    enum class Type { Include, CppHeaderInclude, IoPrint, IoPrintln, IoFlush, IoReadln, IoGetline, IoToInt, MainFunction, Function, FnCall, Variable, Assignment, OsSystem, OsGetenv, OsPlatform, OsExeDir, OsGetProcessId,
+    enum class Type { Include, CppHeaderInclude, IoPrint, IoPrintln, IoFlush, IoReadln, IoGetline, IoToInt, MainFunction, Function, FnCall, Variable, Assignment, OsSystem, OsExec, OsGetenv, OsPlatform, OsExeDir, OsGetProcessId,
                       OsHideConsoleWindow, OsShowConsoleWindow, OsMinimizeConsoleWindow, OsMaximizeConsoleWindow,
                       OsMessageBox, OsGrepKeys, OsKeyPressed,
                       OsLock, OsShutdown, OsReboot, OsSuspend, OsLogout,
@@ -25,7 +25,7 @@ struct AstNode {
                       OsClipSet, OsClipGet,
                       OsNotify, OsOpen,
                       DllLoad, DllCall,
-                      FileRead, FileWrite, FileAppend, FileExists,
+                      FileRead, FileWrite, FileAppend, FileExists, FileMkdir,
                       RandomInt, RandomSeed,
                       MathCall,
                       StrMethod,
@@ -152,7 +152,7 @@ private:
     const std::vector<std::string>* packagePaths_;
 
     static bool exprProducesString(const AstNode& e) {
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim) return true;
         if (e.type == AstNode::Type::StrMethod) {
             const std::string& m = e.value;
             return m == "upper" || m == "lower" || m == "trim" || m == "replace" ||
@@ -662,6 +662,8 @@ private:
                 stmts.push_back(parseThreadCall());
             } else if (t.type == TokenType::Identifier && t.value == "time") {
                 stmts.push_back(parseTimeCall());
+            } else if (t.type == TokenType::Identifier && t.value == "random") {
+                stmts.push_back(parseRandomCall());
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
                        tokens_[pos_ + 1].type == TokenType::Dot) {
                 const Token& id2 = tokens_[pos_ + 2];
@@ -672,8 +674,6 @@ private:
                 } else {
                     stmts.push_back(parseMemberAssignment());
                 }
-            } else if (t.type == TokenType::Identifier && t.value == "random") {
-                stmts.push_back(parseRandomCall());
             } else if (t.type == TokenType::Identifier && (t.value == "getprocessid" || t.value == "getpid") &&
                        pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::LParen) {
                 stmts.push_back(parseOsGetProcessIdBareStmt());
@@ -1053,13 +1053,9 @@ private:
             AstNode inner = parseLogicalNot();
             return {AstNode::Type::CondNot, "", {inner}};
         }
-        if (match(TokenType::LParen)) {
-            AstNode inner = parseLogicalOr();
-            if (!match(TokenType::RParen)) {
-                throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
-            }
-            return inner;
-        }
+        // '(' is handled deeper down in parsePrimary so that arithmetic operators
+        // following a parenthesized sub-expression continue to work
+        // (e.g. (a + b) / 2 inside a let initializer).
         return parseCondition();
     }
 
@@ -1232,6 +1228,8 @@ private:
                 stmts.push_back(parseThreadCall());
             } else if (t.type == TokenType::Identifier && t.value == "time") {
                 stmts.push_back(parseTimeCall());
+            } else if (t.type == TokenType::Identifier && t.value == "random") {
+                stmts.push_back(parseRandomCall());
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
                        tokens_[pos_ + 1].type == TokenType::Dot) {
                 const Token& id2 = tokens_[pos_ + 2];
@@ -1242,8 +1240,6 @@ private:
                 } else {
                     stmts.push_back(parseMemberAssignment());
                 }
-            } else if (t.type == TokenType::Identifier && t.value == "random") {
-                stmts.push_back(parseRandomCall());
             } else if (t.type == TokenType::Identifier && (t.value == "getprocessid" || t.value == "getpid") &&
                        pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::LParen) {
                 stmts.push_back(parseOsGetProcessIdBareStmt());
@@ -1524,6 +1520,7 @@ private:
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
             std::string method = tokens_[pos_ + 2].value;
             if (method == "getenv") return parseOsGetenv();
+            if (method == "system") return parseOsExec();
             if (method == "platform") return parseOsPlatform();
             if (method == "exe_dir") return parseOsExeDir();
             if (method == "getprocessid" || method == "getpid" || method == "GetProcessID") return parseOsGetProcessId();
@@ -1542,6 +1539,9 @@ private:
             std::string method = tokens_[pos_ + 2].value;
             if (method == "read" || method == "exists") {
                 return parseFileReadOrExists(method == "read");
+            }
+            if (method == "mkdir") {
+                return parseFileMkdirExpr();
             }
         }
         if (peek().type == TokenType::Identifier && peek().value == "random" && pos_ + 2 < tokens_.size() &&
@@ -1599,7 +1599,9 @@ private:
             return cur;
         }
         if (match(TokenType::LParen)) {
-            AstNode e = parseExpression();
+            // Use the full top-level (parseLogicalOr) so parenthesized boolean expressions
+            // such as (a && b) parse correctly even when used in arithmetic contexts.
+            AstNode e = parseLogicalOr();
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
             }
@@ -1849,6 +1851,29 @@ private:
             throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
         }
         return result;
+    }
+
+    AstNode parseOsExec() {
+        if (!modules_.hasOs()) {
+            throw std::runtime_error("os.system requires #include <std/os> at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "os") {
+            throw std::runtime_error("Expected 'os' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "system") {
+            throw std::runtime_error("Expected 'system' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after os.system at line " + std::to_string(peek().line));
+        }
+        AstNode cmdArg = parseExpression();
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' after os.system(...) at line " + std::to_string(peek().line));
+        }
+        return {AstNode::Type::OsExec, "", {cmdArg}};
     }
 
     AstNode parseOsGetenv() {
@@ -2231,6 +2256,29 @@ private:
         return {isRead ? AstNode::Type::FileRead : AstNode::Type::FileExists, "", {pathArg}};
     }
 
+    AstNode parseFileMkdirExpr() {
+        if (!modules_.hasFile()) {
+            throw std::runtime_error("file.mkdir requires #include <std/file> at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "file") {
+            throw std::runtime_error("Expected 'file' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "mkdir") {
+            throw std::runtime_error("Expected 'mkdir' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
+        }
+        AstNode pathArg = parseExpression();
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
+        }
+        return {AstNode::Type::FileMkdir, "", {pathArg}};
+    }
+
     AstNode parseRandomInt() {
         if (!modules_.hasRandom()) {
             throw std::runtime_error("random.int requires #include <std/random> at line " + std::to_string(peek().line));
@@ -2365,11 +2413,11 @@ private:
         }
         const Token& methodTok = peek();
         if (methodTok.type != TokenType::Identifier) {
-            throw std::runtime_error("Expected file method (read, write, append, exists) at line " + std::to_string(methodTok.line));
+            throw std::runtime_error("Expected file method (read, write, append, exists, mkdir) at line " + std::to_string(methodTok.line));
         }
         std::string method = methodTok.value;
-        if (method != "read" && method != "write" && method != "append" && method != "exists") {
-            throw std::runtime_error("Expected file.read, file.write, file.append, or file.exists at line " + std::to_string(methodTok.line));
+        if (method != "read" && method != "write" && method != "append" && method != "exists" && method != "mkdir") {
+            throw std::runtime_error("Expected file.read, file.write, file.append, file.exists, or file.mkdir at line " + std::to_string(methodTok.line));
         }
         advance();
         if (!match(TokenType::LParen)) {
@@ -2377,7 +2425,7 @@ private:
         }
         AstNode pathArg = parseExpression();
         AstNode node{method == "read" ? AstNode::Type::FileRead : (method == "write" ? AstNode::Type::FileWrite :
-            (method == "append" ? AstNode::Type::FileAppend : AstNode::Type::FileExists)), "", {}};
+            (method == "append" ? AstNode::Type::FileAppend : (method == "mkdir" ? AstNode::Type::FileMkdir : AstNode::Type::FileExists))), "", {}};
         node.children.push_back(pathArg);
         if (method == "write" || method == "append") {
             if (!match(TokenType::Comma)) {
@@ -2728,8 +2776,10 @@ private:
                 throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
             }
         } else {
-            // Any expression (calls, unary ! / ~ / -, string/array/io/file/..., parens, etc.)
-            node.children.push_back(parseExpression());
+            // Any expression (calls, unary ! / ~ / -, string/array/io/file/..., parens, etc.).
+            // parseLogicalOr() also covers comparisons and arithmetic, so bool initializers
+            // like `let pressed: bool = hover && mouse_down(MOUSE_LEFT);` parse correctly.
+            node.children.push_back(parseLogicalOr());
             AstNode& b = node.children.back();
             if (b.type == AstNode::Type::IoReadln) {
                 node.initFromReadln = true;

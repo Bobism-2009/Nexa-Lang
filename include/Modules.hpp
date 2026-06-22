@@ -16,6 +16,7 @@ public:
         bool ioGetline = false;
         bool ioToInt = false;
         bool osSystem = false;
+        bool osExec = false;
         bool osGetenv = false;
         bool osPlatform = false;
         bool osExeDir = false;
@@ -138,17 +139,35 @@ public:
             out += "#include <string>\n";
             out += "static int __nexa_to_int(const std::string& s) { try { return std::stoi(s); } catch(...) { return 0; } }\n";
         }
-        if (hasOs() && (usage.osSystem || usage.osGetenv || usage.osLock ||
+        if (hasOs() && (usage.osSystem || usage.osExec || usage.osGetenv || usage.osLock ||
                         usage.osShutdown || usage.osReboot || usage.osSuspend ||
                         usage.osLogout || usage.osAudio || usage.osBrightness ||
                         usage.osClipboard || usage.osDesktop)) {
             out += "#include <cstdlib>\n";
         }
-        if (hasOs() && usage.osSystem) {
+        if (hasOs() && (usage.osSystem || usage.osExec)) {
             out += "#include <cstdio>\n";
         }
-        if (hasOs() && (usage.osGetenv || usage.osPlatform || usage.osExeDir || usage.osMessageBox || usage.osGrepKeys)) {
+        if (hasOs() && (usage.osGetenv || usage.osExec || usage.osPlatform || usage.osExeDir || usage.osMessageBox || usage.osGrepKeys)) {
             out += "#include <string>\n";
+        }
+        if (hasOs() && usage.osExec) {
+            out += "static std::string __nexa_os_exec(const std::string& cmd) {\n";
+            out += "  std::string result; char buf[4096]; size_t n;\n";
+            out += "#ifdef _WIN32\n";
+            out += "  FILE* p = _popen(cmd.c_str(), \"r\");\n";
+            out += "#else\n";
+            out += "  FILE* p = popen(cmd.c_str(), \"r\");\n";
+            out += "#endif\n";
+            out += "  if (!p) return std::string();\n";
+            out += "  while ((n = fread(buf, 1, sizeof(buf), p)) > 0) result.append(buf, n);\n";
+            out += "#ifdef _WIN32\n";
+            out += "  _pclose(p);\n";
+            out += "#else\n";
+            out += "  pclose(p);\n";
+            out += "#endif\n";
+            out += "  return result;\n";
+            out += "}\n";
         }
         if (hasOs() && usage.osGetProcessId) {
             out += "#include <string>\n";
@@ -603,6 +622,7 @@ public:
             out += "#include <fstream>\n";
             out += "#include <sstream>\n";
             out += "#include <filesystem>\n";
+            out += "#include <system_error>\n";
         }
         if (hasRandom() && usage.random) {
             out += "#include <random>\n";
@@ -668,7 +688,7 @@ public:
     std::string getCppIncludes() const {
         CppUsage all;
         all.ioPrint = all.ioReadln = all.ioGetline = all.ioToInt = all.ioFlush = true;
-        all.osSystem = all.osGetenv = all.osPlatform = all.osExeDir = true;
+        all.osSystem = all.osExec = all.osGetenv = all.osPlatform = all.osExeDir = true;
         all.osGetProcessId = true;
         all.osWindowControl = all.osMessageBox = all.osGrepKeys = all.osKeyPressed = true;
         all.osLock = all.osShutdown = all.osReboot = all.osSuspend = all.osLogout = true;
