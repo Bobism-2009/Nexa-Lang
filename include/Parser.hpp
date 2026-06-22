@@ -31,7 +31,7 @@ struct AstNode {
                       MathCall,
                       StrMethod,
                       TimeSleep, TimeSeconds, TimeMilliseconds, TimeNowMs,
-                      ThreadSpawn, ThreadJoin,
+                      ThreadSpawn, ThreadJoin, ThreadWorker, ThreadRun, ThreadWorkerJoin,
                       IfElse,
                       Switch,
                       SwitchCase,
@@ -1562,9 +1562,10 @@ private:
             if (method == "now_ms") return parseTimeNowMs();
         }
         if (peek().type == TokenType::Identifier && peek().value == "thread" && pos_ + 2 < tokens_.size() &&
-            tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier &&
-            tokens_[pos_ + 2].value == "spawn") {
-            return parseThreadSpawnExpr();
+            tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
+            std::string method = tokens_[pos_ + 2].value;
+            if (method == "worker") return parseThreadWorkerExpr();
+            if (method == "spawn") return parseThreadSpawnExpr();
         }
         if (peek().type == TokenType::Identifier && peek().value == "ui") {
             throw std::runtime_error("std/ui has been removed at line " + std::to_string(peek().line));
@@ -1669,7 +1670,13 @@ private:
         return result;
     }
 
-    AstNode parseOsCall() {
+    void finishOsCall(bool requireSemicolon, size_t line) {
+        if (requireSemicolon && !match(TokenType::Semicolon)) {
+            throw std::runtime_error("Expected ';' at line " + std::to_string(line));
+        }
+    }
+
+    AstNode parseOsCall(bool requireSemicolon = true) {
         size_t line = peek().line;
         if (!modules_.hasOs()) {
             throw std::runtime_error("os.* requires #include <std/os> at line " + std::to_string(line));
@@ -1692,9 +1699,7 @@ private:
             if (!match(TokenType::LParen) || !match(TokenType::RParen)) {
                 throw std::runtime_error("Expected '()' after os." + method + " at line " + std::to_string(peek().line));
             }
-            if (!match(TokenType::Semicolon)) {
-                throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
-            }
+            finishOsCall(requireSemicolon, peek().line);
             AstNode::Type nodeType = AstNode::Type::OsHideConsoleWindow;
             if (method == "showconsolewindow") nodeType = AstNode::Type::OsShowConsoleWindow;
             else if (method == "minimizeconsolewindow" || method == "minimiseconsolewindow") nodeType = AstNode::Type::OsMinimizeConsoleWindow;
@@ -1707,9 +1712,7 @@ private:
             if (!match(TokenType::LParen) || !match(TokenType::RParen)) {
                 throw std::runtime_error("Expected '()' after os." + method + " at line " + std::to_string(peek().line));
             }
-            if (!match(TokenType::Semicolon)) {
-                throw std::runtime_error("Expected ';' after os." + method + "() at line " + std::to_string(peek().line));
-            }
+            finishOsCall(requireSemicolon, peek().line);
             AstNode::Type nodeType = AstNode::Type::OsLock;
             if (method == "shutdown") nodeType = AstNode::Type::OsShutdown;
             else if (method == "reboot") nodeType = AstNode::Type::OsReboot;
@@ -1728,9 +1731,7 @@ private:
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' after os." + method + "(...) at line " + std::to_string(peek().line));
             }
-            if (!match(TokenType::Semicolon)) {
-                throw std::runtime_error("Expected ';' after os." + method + "(...) at line " + std::to_string(peek().line));
-            }
+            finishOsCall(requireSemicolon, peek().line);
             AstNode::Type nodeType = (method == "set_brightness") ? AstNode::Type::OsSetBrightness : AstNode::Type::OsSetVolume;
             return {nodeType, "", {arg}};
         }
@@ -1738,9 +1739,7 @@ private:
             if (!match(TokenType::LParen) || !match(TokenType::RParen)) {
                 throw std::runtime_error("Expected '()' after os." + method + " at line " + std::to_string(peek().line));
             }
-            if (!match(TokenType::Semicolon)) {
-                throw std::runtime_error("Expected ';' after os." + method + "() at line " + std::to_string(peek().line));
-            }
+            finishOsCall(requireSemicolon, peek().line);
             AstNode::Type nodeType = (method == "get_brightness") ? AstNode::Type::OsGetBrightness : AstNode::Type::OsGetVolume;
             return {nodeType, "", {}};
         }
@@ -1752,9 +1751,7 @@ private:
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' after os.clip_set(...) at line " + std::to_string(peek().line));
             }
-            if (!match(TokenType::Semicolon)) {
-                throw std::runtime_error("Expected ';' after os.clip_set(...) at line " + std::to_string(peek().line));
-            }
+            finishOsCall(requireSemicolon, peek().line);
             return {AstNode::Type::OsClipSet, "", {arg}};
         }
         if (method == "type" || method == "type_text") {
@@ -1765,18 +1762,14 @@ private:
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' after os." + method + "(...) at line " + std::to_string(peek().line));
             }
-            if (!match(TokenType::Semicolon)) {
-                throw std::runtime_error("Expected ';' after os." + method + "(...) at line " + std::to_string(peek().line));
-            }
+            finishOsCall(requireSemicolon, peek().line);
             return {AstNode::Type::OsType, "", {arg}};
         }
         if (method == "clip_get") {
             if (!match(TokenType::LParen) || !match(TokenType::RParen)) {
                 throw std::runtime_error("Expected '()' after os.clip_get at line " + std::to_string(peek().line));
             }
-            if (!match(TokenType::Semicolon)) {
-                throw std::runtime_error("Expected ';' after os.clip_get() at line " + std::to_string(peek().line));
-            }
+            finishOsCall(requireSemicolon, peek().line);
             return {AstNode::Type::OsClipGet, "", {}};
         }
         if (method == "notify") {
@@ -1791,9 +1784,7 @@ private:
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' after os.notify(...) at line " + std::to_string(peek().line));
             }
-            if (!match(TokenType::Semicolon)) {
-                throw std::runtime_error("Expected ';' after os.notify(...) at line " + std::to_string(peek().line));
-            }
+            finishOsCall(requireSemicolon, peek().line);
             return {AstNode::Type::OsNotify, "", {titleArg, msgArg}};
         }
         if (method == "open") {
@@ -1804,9 +1795,7 @@ private:
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' after os.open(...) at line " + std::to_string(peek().line));
             }
-            if (!match(TokenType::Semicolon)) {
-                throw std::runtime_error("Expected ';' after os.open(...) at line " + std::to_string(peek().line));
-            }
+            finishOsCall(requireSemicolon, peek().line);
             return {AstNode::Type::OsOpen, "", {arg}};
         }
         if (method == "messagebox") {
@@ -1821,9 +1810,7 @@ private:
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
             }
-            if (!match(TokenType::Semicolon)) {
-                throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
-            }
+            finishOsCall(requireSemicolon, peek().line);
             AstNode node{AstNode::Type::OsMessageBox, "", {textArg, titleArg}};
             return node;
         }
@@ -1838,9 +1825,7 @@ private:
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' after os." + method + " at line " + std::to_string(peek().line));
             }
-            if (!match(TokenType::Semicolon)) {
-                throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
-            }
+            finishOsCall(requireSemicolon, peek().line);
             return node;
         }
         if (method != "system") {
@@ -1861,9 +1846,7 @@ private:
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
         }
-        if (!match(TokenType::Semicolon)) {
-            throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
-        }
+        finishOsCall(requireSemicolon, peek().line);
         return result;
     }
 
@@ -2636,6 +2619,48 @@ private:
         return {AstNode::Type::TimeNowMs, "", {}};
     }
 
+    // Parses fn_name, fn(args), or os.*(...) for thread.spawn / thread.run.
+    AstNode parseThreadJob() {
+        if (peek().type == TokenType::Identifier && peek().value == "os") {
+            AstNode call = parseOsCall(false);
+            return {AstNode::Type::ThreadSpawn, "", {call}};
+        }
+        if (peek().type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
+            tokens_[pos_ + 1].type == TokenType::LParen) {
+            AstNode call = parseFnCallExpr();
+            if (call.children.empty()) {
+                return {AstNode::Type::ThreadSpawn, call.value, {}};
+            }
+            return {AstNode::Type::ThreadSpawn, "", {call}};
+        }
+        const Token& fnTok = peek();
+        if (fnTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected function or os.* call at line " + std::to_string(fnTok.line));
+        }
+        advance();
+        return {AstNode::Type::ThreadSpawn, fnTok.value, {}};
+    }
+
+    AstNode parseThreadWorkerExpr() {
+        size_t line = peek().line;
+        if (!modules_.hasThread()) {
+            throw std::runtime_error("thread.worker requires #include <std/thread> at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "thread") {
+            throw std::runtime_error("Expected 'thread' at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "worker") {
+            throw std::runtime_error("Expected thread.worker at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::LParen) || !match(TokenType::RParen)) {
+            throw std::runtime_error("Expected '()' after thread.worker at line " + std::to_string(peek().line));
+        }
+        return {AstNode::Type::ThreadWorker, "", {}};
+    }
+
     AstNode parseThreadSpawnExpr() {
         size_t line = peek().line;
         if (!modules_.hasThread()) {
@@ -2653,15 +2678,11 @@ private:
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
         }
-        const Token& fnTok = peek();
-        if (fnTok.type != TokenType::Identifier) {
-            throw std::runtime_error("thread.spawn expects a function name at line " + std::to_string(fnTok.line));
-        }
-        advance();
+        AstNode job = parseThreadJob();
         if (!match(TokenType::RParen)) {
-            throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
+            throw std::runtime_error("Expected ')' after thread.spawn(...) at line " + std::to_string(peek().line));
         }
-        return {AstNode::Type::ThreadSpawn, fnTok.value, {}};
+        return job;
     }
 
     AstNode parseThreadCall() {
@@ -2676,10 +2697,44 @@ private:
             throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
         }
         const Token& methodTok = peek();
-        if (methodTok.type != TokenType::Identifier || methodTok.value != "join") {
-            throw std::runtime_error("Expected thread.join at line " + std::to_string(methodTok.line));
+        if (methodTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected thread method at line " + std::to_string(methodTok.line));
         }
+        std::string method = methodTok.value;
         advance();
+        if (method == "run") {
+            if (!match(TokenType::LParen)) {
+                throw std::runtime_error("Expected '(' after thread.run at line " + std::to_string(peek().line));
+            }
+            AstNode handleArg = parseExpression();
+            if (!match(TokenType::Comma)) {
+                throw std::runtime_error("Expected ',' in thread.run(worker, job) at line " + std::to_string(peek().line));
+            }
+            AstNode job = parseThreadJob();
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' after thread.run(...) at line " + std::to_string(peek().line));
+            }
+            if (!match(TokenType::Semicolon)) {
+                throw std::runtime_error("Expected ';' after thread.run(...) at line " + std::to_string(peek().line));
+            }
+            return {AstNode::Type::ThreadRun, "", {handleArg, job}};
+        }
+        if (method == "worker_join") {
+            if (!match(TokenType::LParen)) {
+                throw std::runtime_error("Expected '(' after thread.worker_join at line " + std::to_string(peek().line));
+            }
+            AstNode handleArg = parseExpression();
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' after thread.worker_join(...) at line " + std::to_string(peek().line));
+            }
+            if (!match(TokenType::Semicolon)) {
+                throw std::runtime_error("Expected ';' after thread.worker_join(...) at line " + std::to_string(peek().line));
+            }
+            return {AstNode::Type::ThreadWorkerJoin, "", {handleArg}};
+        }
+        if (method != "join") {
+            throw std::runtime_error("Expected thread.join, thread.run, or thread.worker_join at line " + std::to_string(methodTok.line));
+        }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
         }

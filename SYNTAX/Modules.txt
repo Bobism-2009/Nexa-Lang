@@ -103,9 +103,16 @@ Nexa Standard Modules
 
 #include <std/thread>
   thread.spawn(fn_name)   - Start a new OS thread running fn_name(), returns thread handle (int)
+  thread.spawn(fn(a,b)) - Start a thread running a user function call with arguments
+  thread.spawn(os.notify(title, msg)) - Spawn an os.* call (also clip_set, type, messagebox, etc.)
   thread.join(handle)     - Join a spawned thread by handle
+  thread.worker()         - Create a reusable worker thread (returns handle int)
+  thread.run(worker, job) - Queue job on worker (same job forms as thread.spawn)
+  thread.worker_join(worker) - Stop worker and wait for it to finish
   Use: let t = thread.spawn(worker); thread.join(t);
-  Notes: spawn supports only zero-argument functions (fn worker() { ... }).
+  Use: let t = thread.spawn(os.notify("Hi", "There"));
+  Use: let w = thread.worker(); thread.run(w, os.notify("Hi", "There")); thread.worker_join(w);
+  Notes: spawn(fn_name) supports only zero-argument functions. spawn(call) captures arguments by value.
 
 #include <std/inline>
   Enables inline_cpp! { ... } — paste C++ into the generated file. Lines starting with #include are hoisted to the top of the generated .cpp (no automatic iostream).

@@ -41,6 +41,8 @@ public:
         bool str = false;
         bool time = false;
         bool thread = false;
+        bool threadLambda = false;
+        bool threadWorker = false;
         bool dll = false;
         bool exceptions = false;
     };
@@ -693,16 +695,75 @@ public:
         if (hasThread() && usage.thread) {
             out += "#include <thread>\n";
             out += "#include <vector>\n";
+            out += "#include <functional>\n";
             out += "static std::vector<std::thread> __nexa_threads;\n";
             out += "static int __nexa_thread_spawn(void (*fn)()) {\n";
             out += "  __nexa_threads.emplace_back(fn);\n";
             out += "  return static_cast<int>(__nexa_threads.size()) - 1;\n";
             out += "}\n";
+            if (usage.threadLambda) {
+                out += "static int __nexa_thread_spawn_fn(std::function<void()> fn) {\n";
+                out += "  __nexa_threads.emplace_back(std::move(fn));\n";
+                out += "  return static_cast<int>(__nexa_threads.size()) - 1;\n";
+                out += "}\n";
+            }
             out += "static void __nexa_thread_join(int idx) {\n";
             out += "  if (idx >= 0 && static_cast<size_t>(idx) < __nexa_threads.size() && __nexa_threads[idx].joinable()) {\n";
             out += "    __nexa_threads[idx].join();\n";
             out += "  }\n";
             out += "}\n";
+            if (usage.threadWorker) {
+                out += "#include <deque>\n";
+                out += "#include <mutex>\n";
+                out += "#include <condition_variable>\n";
+                out += "#include <memory>\n";
+                out += "struct __nexa_worker {\n";
+                out += "  std::thread t;\n";
+                out += "  std::mutex mu;\n";
+                out += "  std::condition_variable cv;\n";
+                out += "  std::deque<std::function<void()>> jobs;\n";
+                out += "  bool stop = false;\n";
+                out += "};\n";
+                out += "static std::vector<std::unique_ptr<__nexa_worker>> __nexa_workers;\n";
+                out += "static int __nexa_thread_worker_create() {\n";
+                out += "  auto w = std::make_unique<__nexa_worker>();\n";
+                out += "  __nexa_worker* wp = w.get();\n";
+                out += "  wp->t = std::thread([wp]() {\n";
+                out += "    while (true) {\n";
+                out += "      std::function<void()> job;\n";
+                out += "      {\n";
+                out += "        std::unique_lock<std::mutex> lock(wp->mu);\n";
+                out += "        wp->cv.wait(lock, [&]{ return wp->stop || !wp->jobs.empty(); });\n";
+                out += "        if (wp->stop && wp->jobs.empty()) return;\n";
+                out += "        job = std::move(wp->jobs.front());\n";
+                out += "        wp->jobs.pop_front();\n";
+                out += "      }\n";
+                out += "      if (job) job();\n";
+                out += "    }\n";
+                out += "  });\n";
+                out += "  __nexa_workers.push_back(std::move(w));\n";
+                out += "  return static_cast<int>(__nexa_workers.size()) - 1;\n";
+                out += "}\n";
+                out += "static void __nexa_thread_worker_run(int idx, std::function<void()> fn) {\n";
+                out += "  if (idx < 0 || static_cast<size_t>(idx) >= __nexa_workers.size()) return;\n";
+                out += "  auto& wp = *__nexa_workers[idx];\n";
+                out += "  {\n";
+                out += "    std::lock_guard<std::mutex> lock(wp.mu);\n";
+                out += "    wp.jobs.push_back(std::move(fn));\n";
+                out += "  }\n";
+                out += "  wp.cv.notify_one();\n";
+                out += "}\n";
+                out += "static void __nexa_thread_worker_join(int idx) {\n";
+                out += "  if (idx < 0 || static_cast<size_t>(idx) >= __nexa_workers.size()) return;\n";
+                out += "  auto& wp = *__nexa_workers[idx];\n";
+                out += "  {\n";
+                out += "    std::lock_guard<std::mutex> lock(wp.mu);\n";
+                out += "    wp.stop = true;\n";
+                out += "  }\n";
+                out += "  wp.cv.notify_one();\n";
+                out += "  if (wp.t.joinable()) wp.t.join();\n";
+                out += "}\n";
+            }
         }
         if (hasDll() && usage.dll) {
             out += "#include <vector>\n";

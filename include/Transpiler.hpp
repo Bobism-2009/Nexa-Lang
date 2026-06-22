@@ -117,7 +117,20 @@ public:
                 case AstNode::Type::TimeMilliseconds:
                 case AstNode::Type::TimeNowMs: cppUsage.time = true; break;
                 case AstNode::Type::ThreadSpawn:
+                    cppUsage.thread = true;
+                    if (!n.children.empty()) cppUsage.threadLambda = true;
+                    break;
                 case AstNode::Type::ThreadJoin: cppUsage.thread = true; break;
+                case AstNode::Type::ThreadWorker:
+                case AstNode::Type::ThreadWorkerJoin:
+                    cppUsage.thread = true;
+                    cppUsage.threadWorker = true;
+                    break;
+                case AstNode::Type::ThreadRun:
+                    cppUsage.thread = true;
+                    cppUsage.threadWorker = true;
+                    if (n.children.size() > 1 && !n.children[1].children.empty()) cppUsage.threadLambda = true;
+                    break;
                 case AstNode::Type::DllLoad:
                 case AstNode::Type::DllCall: cppUsage.dll = true; break;
                 case AstNode::Type::TryCatch:
@@ -814,6 +827,30 @@ private:
         const FnOverloadSlot& sl = fnOverloadSlots_.at(slotIdx);
         if (preserveNames_) return ast_[sl.astIndex].value;
         return "__nexa_fn_" + std::to_string(slotIdx);
+    }
+
+    std::string emitThreadJobFn(const AstNode& e,
+            const std::map<std::string, std::string>& varMap,
+            const std::map<std::string, bool>& varIsString,
+            const std::map<std::string, bool>& varIsFloat,
+            const std::map<std::string, bool>& varIsChar,
+            const std::map<std::string, bool>& varIsBool) {
+        if (e.children.empty()) {
+            size_t z = slotForZeroArgFunctionNamed(e.value);
+            return "&" + cppFnNameForSlot(z);
+        }
+        std::ostringstream body;
+        int spawnVarIdx = 0;
+        std::map<std::string, std::string> spawnVarMap = varMap;
+        std::map<std::string, bool> spawnStr = varIsString;
+        std::map<std::string, bool> spawnConst;
+        std::map<std::string, bool> spawnFloat = varIsFloat;
+        std::map<std::string, bool> spawnChar = varIsChar;
+        std::map<std::string, bool> spawnBool = varIsBool;
+        std::map<std::string, bool> spawnEnum;
+        emitBlockStatements(body, e.children, spawnVarMap, spawnVarIdx, spawnStr, spawnConst,
+            spawnFloat, spawnChar, spawnBool, spawnEnum, "", false);
+        return "[=]() { " + body.str() + "}";
     }
 
     std::string cppFnNameForAstIndex(size_t astIndex) const {
@@ -1557,6 +1594,13 @@ private:
             } else if (child.type == AstNode::Type::ThreadJoin) {
                 std::string idxExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 out << indent << "__nexa_thread_join(" << idxExpr << ");\n";
+            } else if (child.type == AstNode::Type::ThreadRun) {
+                std::string idxExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                std::string job = emitThreadJobFn(child.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                out << indent << "__nexa_thread_worker_run(" << idxExpr << ", " << job << ");\n";
+            } else if (child.type == AstNode::Type::ThreadWorkerJoin) {
+                std::string idxExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                out << indent << "__nexa_thread_worker_join(" << idxExpr << ");\n";
             } else if (child.type == AstNode::Type::DllCall) {
                 std::string h = preserveNames_ ? child.children[0].value : varMap.at(child.children[0].value);
 #ifdef _WIN32
@@ -2269,9 +2313,18 @@ private:
             case AstNode::Type::TimeNowMs:
                 return "__nexa_time_now_ms()";
             case AstNode::Type::ThreadSpawn: {
-                size_t z = slotForZeroArgFunctionNamed(e.value);
-                return "__nexa_thread_spawn(&" + cppFnNameForSlot(z) + ")";
+                if (e.children.empty()) {
+                    size_t z = slotForZeroArgFunctionNamed(e.value);
+                    return "__nexa_thread_spawn(&" + cppFnNameForSlot(z) + ")";
+                }
+                return "__nexa_thread_spawn_fn(" + emitThreadJobFn(e, varMap,
+                    varIsString ? *varIsString : std::map<std::string, bool>{},
+                    varIsFloat ? *varIsFloat : std::map<std::string, bool>{},
+                    varIsChar ? *varIsChar : std::map<std::string, bool>{},
+                    varIsBool ? *varIsBool : std::map<std::string, bool>{}) + ")";
             }
+            case AstNode::Type::ThreadWorker:
+                return "__nexa_thread_worker_create()";
             case AstNode::Type::ExprVarRef: {
                 auto it = varMap.find(e.value);
                 return (it != varMap.end()) ? it->second : e.value;

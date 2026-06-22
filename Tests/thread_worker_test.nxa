@@ -1,0 +1,16 @@
+#include <std/os>
+#include <std/thread>
+#include <std/time>
+
+fn ping() {
+    os.notify("worker", "ping");
+}
+
+fn main() {
+    let w: int = thread.worker();
+    thread.run(w, os.notify("worker", "one"));
+    thread.run(w, ping());
+    thread.run(w, os.notify("worker", "two"));
+    time.sleep(time.seconds(2));
+    thread.worker_join(w);
+}
