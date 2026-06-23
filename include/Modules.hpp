@@ -38,6 +38,7 @@ public:
         bool file = false;
         bool random = false;
         bool math = false;
+        bool crypto = false;
         bool str = false;
         bool time = false;
         bool thread = false;
@@ -73,6 +74,10 @@ public:
 
     bool hasMath() const {
         return enabled_.count("std/math") > 0;
+    }
+
+    bool hasCrypto() const {
+        return enabled_.count("std/crypto") > 0;
     }
 
     bool hasTime() const {
@@ -679,6 +684,19 @@ public:
             out += "#include <cmath>\n";
             out += "#include <cstdlib>\n";
             out += "#include <algorithm>\n";
+        }
+        if (hasCrypto() && usage.crypto) {
+            out += "#include <string>\n";
+            out += "#include <vector>\n";
+            out += "static std::string __nexa_crypto_xor(const std::string& __s, const std::vector<int>& __keys) {\n";
+            out += "  if (__keys.empty()) return __s;\n";
+            out += "  std::string __out = __s;\n";
+            out += "  const size_t __n = __keys.size();\n";
+            out += "  for (size_t __i = 0; __i < __out.size(); ++__i) {\n";
+            out += "    __out[__i] = (char)((unsigned char)__out[__i] ^ (__keys[__i % __n] & 0xFF));\n";
+            out += "  }\n";
+            out += "  return __out;\n";
+            out += "}\n";
         }
         // Core string methods (value.upper(), value.split(...), ...) need no #include from the user.
         if (usage.str) {

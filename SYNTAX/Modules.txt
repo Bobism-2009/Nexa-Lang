@@ -94,6 +94,11 @@ Nexa Standard Modules
   All math.* return float. For an int result, assign to int: let n: int = math.floor(x);
   Use: let h = math.sqrt(math.pow(3.0, 2.0) + math.pow(4.0, 2.0));
 
+#include <std/crypto>
+  crypto.xor(data, key1, key2, ...) - Rotating XOR: byte i uses key (i % n); returns string
+  XOR is symmetric — call again with the same keys to decrypt.
+  Use: let enc = crypto.xor(text, 0x5, 0x9, 0xF, 0xD, 0xB);
+
 #include <std/time>
   time.sleep(duration)      - Sleeps using std::chrono (ms, or seconds()/milliseconds() helpers)
   time.seconds(n)           - Millisecond count via std::chrono::seconds(n) (same semantics as n*1000)

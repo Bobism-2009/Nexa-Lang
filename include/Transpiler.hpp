@@ -111,6 +111,7 @@ public:
                 case AstNode::Type::RandomInt:
                 case AstNode::Type::RandomSeed: cppUsage.random = true; break;
                 case AstNode::Type::MathCall: cppUsage.math = true; break;
+                case AstNode::Type::CryptoXor: cppUsage.crypto = true; break;
                 case AstNode::Type::StrMethod: cppUsage.str = true; break;
                 case AstNode::Type::TimeSleep:
                 case AstNode::Type::TimeSeconds:
@@ -970,6 +971,8 @@ private:
                 // math.* operates in the floating-point domain and always yields float (double).
                 // For an integer result, assign to an int (e.g. let n: int = math.floor(x);).
                 return "float";
+            case AstNode::Type::CryptoXor:
+                return "string";
             case AstNode::Type::StrMethod:
                 if (strMethodReturnsString(e.value)) return "string";
                 if (strMethodReturnsBool(e.value)) return "bool";
@@ -2270,6 +2273,16 @@ private:
                 }
                 // sqrt, floor, ceil, round, sin, cos, tan, log, log10, exp
                 return "std::" + fn + "(" + da0 + ")";
+            }
+            case AstNode::Type::CryptoXor: {
+                std::string data = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                std::string keys = "std::vector<int>{";
+                for (size_t i = 1; i < e.children.size(); ++i) {
+                    if (i > 1) keys += ", ";
+                    keys += emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                }
+                keys += "}";
+                return "__nexa_crypto_xor(" + data + ", " + keys + ")";
             }
             case AstNode::Type::StrMethod: {
                 const std::string& m = e.value;

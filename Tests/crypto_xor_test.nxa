@@ -1,0 +1,11 @@
+#include <std/crypto>
+
+fn main() {
+    let plain: string = "Hello";
+    let enc: string = crypto.xor(plain, 0x5, 0x9, 0xF, 0xD, 0xB);
+    let dec: string = crypto.xor(enc, 0x5, 0x9, 0xF, 0xD, 0xB);
+    if (dec != plain) {
+        return 1;
+    }
+    return 0;
+}

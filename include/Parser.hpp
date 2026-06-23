@@ -28,7 +28,7 @@ struct AstNode {
                       DllLoad, DllCall,
                       FileRead, FileWrite, FileAppend, FileExists, FileMkdir,
                       RandomInt, RandomSeed,
-                      MathCall,
+                      MathCall, CryptoXor,
                       StrMethod,
                       TimeSleep, TimeSeconds, TimeMilliseconds, TimeNowMs,
                       ThreadSpawn, ThreadJoin, ThreadWorker, ThreadRun, ThreadWorkerJoin,
@@ -1554,6 +1554,11 @@ private:
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
             return parseMathCall();
         }
+        if (peek().type == TokenType::Identifier && peek().value == "crypto" && pos_ + 2 < tokens_.size() &&
+            tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier &&
+            tokens_[pos_ + 2].value == "xor") {
+            return parseCryptoXor();
+        }
         if (peek().type == TokenType::Identifier && peek().value == "time" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
             std::string method = tokens_[pos_ + 2].value;
@@ -2349,6 +2354,37 @@ private:
         }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' after math." + method + " arguments at line " + std::to_string(peek().line));
+        }
+        return node;
+    }
+
+    AstNode parseCryptoXor() {
+        size_t line = peek().line;
+        if (!modules_.hasCrypto()) {
+            throw std::runtime_error("crypto.xor requires #include <std/crypto> at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "crypto") {
+            throw std::runtime_error("Expected 'crypto' at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "xor") {
+            throw std::runtime_error("Expected crypto.xor at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after crypto.xor at line " + std::to_string(peek().line));
+        }
+        AstNode node{AstNode::Type::CryptoXor, "", {}};
+        node.children.push_back(parseExpression());
+        while (match(TokenType::Comma)) {
+            node.children.push_back(parseExpression());
+        }
+        if (node.children.size() < 2) {
+            throw std::runtime_error("crypto.xor(data, key1, ...) requires at least one key at line " + std::to_string(line));
+        }
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' after crypto.xor(...) at line " + std::to_string(peek().line));
         }
         return node;
     }
