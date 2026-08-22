@@ -48,13 +48,22 @@ SWITCH
   - default is optional
 
 LOOPS
-  for (i, n) { ... }  - loop i from 0 to n-1
+  for (i, n) { ... }       - loop i from 0 to n-1
+  for (x in arr) { ... }   - iterate each element of an array ([]int or []string)
   while (cond) { ... }
   while (true) { ... }   - infinite loop
   while (false) { ... }  - never runs
   break;                 - exit loop immediately
   continue;               - skip to next iteration
   true, false - boolean literals (like C++)
+
+  Example:
+    let nums = [10, 20, 30];
+    for (n in nums) {
+      io.println(n);
+    }
+    let parts = "a,b,c".split(",");
+    for (p in parts) io.println(p);
 
   Example:
     while (i < 10) {

@@ -135,6 +135,7 @@ STRING METHODS (core; no #include required)
   Examples:
     let parts = "a,b,c".split(",");      // []string of length 3
     for (i, len(parts)) { io.println(parts[i]); }
+    for (p in parts) { io.println(p); }  // same, range-for
     io.println("Hello".upper());          // HELLO
     io.println(name.trim().lower());      // chaining is allowed
     if (line.starts_with("#")) { ... }

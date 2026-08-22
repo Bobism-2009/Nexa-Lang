@@ -38,6 +38,11 @@ public:
         bool osBrightness = false;
         bool osClipboard = false;
         bool osDesktop = false;
+        bool osExit = false;
+        bool osHostname = false;
+        bool osUsername = false;
+        bool osHome = false;
+        bool osSetenv = false;
         bool file = false;
         bool random = false;
         bool math = false;
@@ -158,14 +163,19 @@ public:
         if (hasOs() && (usage.osSystem || usage.osExec || usage.osGetenv || usage.osLock ||
                         usage.osShutdown || usage.osReboot || usage.osSuspend ||
                         usage.osLogout || usage.osAudio || usage.osBrightness ||
-                        usage.osClipboard || usage.osDesktop)) {
+                        usage.osClipboard || usage.osDesktop || usage.osExit ||
+                        usage.osSetenv || usage.osHome || usage.osUsername)) {
             out += "#include <cstdlib>\n";
         }
         if (hasOs() && (usage.osSystem || usage.osExec)) {
             out += "#include <cstdio>\n";
         }
-        if (hasOs() && (usage.osGetenv || usage.osExec || usage.osPlatform || usage.osExeDir || usage.osMessageBox || usage.osGrepKeys)) {
+        if (hasOs() && (usage.osGetenv || usage.osExec || usage.osPlatform || usage.osExeDir || usage.osMessageBox || usage.osGrepKeys ||
+                        usage.osHostname || usage.osUsername || usage.osHome || usage.osSetenv)) {
             out += "#include <string>\n";
+        }
+        if (hasOs() && (usage.osHostname || usage.osUsername)) {
+            out += "#ifdef _WIN32\n#include <windows.h>\n#else\n#include <unistd.h>\n#endif\n";
         }
         if (hasOs() && usage.osExec) {
             out += "static std::string __nexa_os_exec(const std::string& cmd) {\n";
@@ -209,6 +219,63 @@ public:
             out += "  return \"linux\";\n";
             out += "#else\n";
             out += "  return \"unknown\";\n";
+            out += "#endif\n";
+            out += "}\n";
+        }
+        if (hasOs() && usage.osExit) {
+            out += "static void __nexa_os_exit(int code) { std::exit(code); }\n";
+        }
+        if (hasOs() && usage.osHostname) {
+            out += "static std::string __nexa_os_hostname() {\n";
+            out += "#ifdef _WIN32\n";
+            out += "  char buf[256]; DWORD n = (DWORD)sizeof(buf);\n";
+            out += "  if (GetComputerNameA(buf, &n)) return std::string(buf);\n";
+            out += "  return std::string();\n";
+            out += "#else\n";
+            out += "  char buf[256];\n";
+            out += "  if (gethostname(buf, sizeof(buf)) == 0) { buf[sizeof(buf)-1] = 0; return std::string(buf); }\n";
+            out += "  return std::string();\n";
+            out += "#endif\n";
+            out += "}\n";
+        }
+        if (hasOs() && usage.osUsername) {
+            out += "static std::string __nexa_os_username() {\n";
+            out += "#ifdef _WIN32\n";
+            out += "  char buf[256]; DWORD n = (DWORD)sizeof(buf);\n";
+            out += "  if (GetUserNameA(buf, &n)) return std::string(buf);\n";
+            out += "  const char* e = std::getenv(\"USERNAME\");\n";
+            out += "  return e ? std::string(e) : std::string();\n";
+            out += "#else\n";
+            out += "  const char* e = std::getenv(\"USER\");\n";
+            out += "  if (e && e[0]) return std::string(e);\n";
+            out += "  e = std::getenv(\"LOGNAME\");\n";
+            out += "  if (e && e[0]) return std::string(e);\n";
+            out += "  char* login = getlogin();\n";
+            out += "  return login ? std::string(login) : std::string();\n";
+            out += "#endif\n";
+            out += "}\n";
+        }
+        if (hasOs() && usage.osHome) {
+            out += "static std::string __nexa_os_home() {\n";
+            out += "#ifdef _WIN32\n";
+            out += "  const char* e = std::getenv(\"USERPROFILE\");\n";
+            out += "  if (e && e[0]) return std::string(e);\n";
+            out += "  const char* d = std::getenv(\"HOMEDRIVE\");\n";
+            out += "  const char* p = std::getenv(\"HOMEPATH\");\n";
+            out += "  if (d && p) return std::string(d) + std::string(p);\n";
+            out += "  return std::string();\n";
+            out += "#else\n";
+            out += "  const char* e = std::getenv(\"HOME\");\n";
+            out += "  return e ? std::string(e) : std::string();\n";
+            out += "#endif\n";
+            out += "}\n";
+        }
+        if (hasOs() && usage.osSetenv) {
+            out += "static void __nexa_os_setenv(const std::string& name, const std::string& value) {\n";
+            out += "#ifdef _WIN32\n";
+            out += "  _putenv_s(name.c_str(), value.c_str());\n";
+            out += "#else\n";
+            out += "  setenv(name.c_str(), value.c_str(), 1);\n";
             out += "#endif\n";
             out += "}\n";
         }
@@ -821,6 +888,7 @@ public:
         all.osBrightness = true;
         all.osClipboard = true;
         all.osDesktop = true;
+        all.osExit = all.osHostname = all.osUsername = all.osHome = all.osSetenv = true;
         all.file = all.random = all.math = all.time = all.thread = all.dll = true;
         all.str = true;
         return getCppIncludes(all);

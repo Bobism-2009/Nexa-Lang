@@ -101,6 +101,11 @@ public:
                 case AstNode::Type::OsType: cppUsage.osType = true; break;
                 case AstNode::Type::OsNotify:
                 case AstNode::Type::OsOpen: cppUsage.osDesktop = true; break;
+                case AstNode::Type::OsExit: cppUsage.osExit = true; break;
+                case AstNode::Type::OsHostname: cppUsage.osHostname = true; break;
+                case AstNode::Type::OsUsername: cppUsage.osUsername = true; break;
+                case AstNode::Type::OsHome: cppUsage.osHome = true; break;
+                case AstNode::Type::OsSetenv: cppUsage.osSetenv = true; break;
                 case AstNode::Type::OsGrepKeys: cppUsage.osGrepKeys = true; break;
                 case AstNode::Type::OsKeyPressed: cppUsage.osKeyPressed = true; break;
                 case AstNode::Type::FileRead:
@@ -207,6 +212,10 @@ public:
             if (n.type == AstNode::Type::Throw && !n.children.empty() && exprProducesString(n.children[0])) needsString = true;
             if (n.type == AstNode::Type::While && n.children.size() > 1) { for (const auto& c : n.children[1].children) checkNeedsString(c); }
             if (n.type == AstNode::Type::For && n.children.size() > 1) { for (const auto& c : n.children[1].children) checkNeedsString(c); }
+            if (n.type == AstNode::Type::ForIn) {
+                needsString = true;
+                if (n.children.size() > 1) { for (const auto& c : n.children[1].children) checkNeedsString(c); }
+            }
             if (n.type == AstNode::Type::IfElse) { for (size_t i = 1; i < n.children.size(); i++) { for (const auto& c : n.children[i].children) checkNeedsString(c); } }
             if (n.type == AstNode::Type::TryCatch && n.children.size() >= 2) {
                 for (const auto& c : n.children[0].children) checkNeedsString(c);
@@ -235,6 +244,8 @@ public:
             if (n.type == AstNode::Type::ExprArrayLiteral || n.type == AstNode::Type::ExprArrayIndex || n.type == AstNode::Type::AssnIndex) needsVector = true;
             if (n.type == AstNode::Type::While && n.children.size() > 1) { for (const auto& c : n.children[1].children) checkNeedsVector(c); }
             if (n.type == AstNode::Type::For && n.children.size() > 1) { for (const auto& c : n.children[1].children) checkNeedsVector(c); }
+            if (n.type == AstNode::Type::ForIn) needsVector = true;
+            if (n.type == AstNode::Type::ForIn && n.children.size() > 1) { for (const auto& c : n.children[1].children) checkNeedsVector(c); }
             if (n.type == AstNode::Type::IfElse) { for (size_t i = 1; i < n.children.size(); i++) { for (const auto& c : n.children[i].children) checkNeedsVector(c); } }
             if (n.type == AstNode::Type::TryCatch && n.children.size() >= 2) {
                 for (const auto& c : n.children[0].children) checkNeedsVector(c);
@@ -888,10 +899,12 @@ private:
             }
             if (!v.children.empty() && v.children[0].type == AstNode::Type::ExprArrayLiteral) {
                 const AstNode& arr = v.children[0];
-                if (!arr.children.empty()) return inferExprNexaType(arr.children[0]);
-                return "int";
+                if (!arr.children.empty() && inferExprNexaType(arr.children[0]) == "string") {
+                    return "[]string";
+                }
+                return "[]int";
             }
-            return "int";
+            return "[]int";
         }
         if (!v.children.empty()) return inferExprNexaType(v.children[0]);
         if (v.initIsBool) return "bool";
@@ -988,6 +1001,14 @@ private:
             case AstNode::Type::OsGetProcessId: return "int";
             case AstNode::Type::OsGetVolume: return "int";
             case AstNode::Type::OsGetBrightness: return "int";
+            case AstNode::Type::OsHostname:
+            case AstNode::Type::OsUsername:
+            case AstNode::Type::OsHome:
+            case AstNode::Type::OsPlatform:
+            case AstNode::Type::OsExeDir:
+            case AstNode::Type::OsGetenv:
+            case AstNode::Type::OsExec:
+                return "string";
             case AstNode::Type::TimeSeconds:
             case AstNode::Type::TimeMilliseconds:
                 return "int";
@@ -1173,7 +1194,7 @@ private:
     }
 
     static bool exprProducesString(const AstNode& e) {
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall || e.type == AstNode::Type::HttpCall) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsHostname || e.type == AstNode::Type::OsUsername || e.type == AstNode::Type::OsHome || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall || e.type == AstNode::Type::HttpCall) return true;
         if (e.type == AstNode::Type::FileCall) {
             const std::string& m = e.value;
             return m == "cwd" || m == "abspath" || m == "join" || m == "dirname" || m == "basename" || m == "extension";
@@ -1190,6 +1211,23 @@ private:
         if (initExpr.type == AstNode::Type::StrMethod && initExpr.value == "split") return true;
         if (initExpr.type == AstNode::Type::FileCall && initExpr.value == "list") return true;
         return arrayLiteralProducesString(initExpr, varIsString);
+    }
+
+    bool forInElementIsString(const AstNode& coll) const {
+        std::string t = inferExprNexaType(coll);
+        if (t == "[]string") return true;
+        if (t == "arrayelt:string") return true;
+        if (coll.type == AstNode::Type::ExprVarRef) {
+            std::string d = lookupNexaDecl(coll.value);
+            if (d == "[]string") return true;
+        }
+        if (coll.type == AstNode::Type::StrMethod && coll.value == "split") return true;
+        if (coll.type == AstNode::Type::FileCall && coll.value == "list") return true;
+        if (coll.type == AstNode::Type::ExprArrayLiteral) {
+            std::map<std::string, bool> empty;
+            return arrayLiteralProducesString(coll, empty);
+        }
+        return false;
     }
 
     bool arrayLiteralProducesString(const AstNode& arrNode, const std::map<std::string, bool>& varIsString) const {
@@ -1218,7 +1256,7 @@ private:
             // but inferExprNexaType resolves them through nexaDeclStack_.
             return inferExprNexaType(e) == "string";
         }
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall || e.type == AstNode::Type::HttpCall) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsHostname || e.type == AstNode::Type::OsUsername || e.type == AstNode::Type::OsHome || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall || e.type == AstNode::Type::HttpCall) return true;
         if (e.type == AstNode::Type::FileCall) {
             const std::string& m = e.value;
             return m == "cwd" || m == "abspath" || m == "join" || m == "dirname" || m == "basename" || m == "extension";
@@ -1719,6 +1757,21 @@ private:
                 std::string e = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 std::string arg = exprIsString(child.children[0], varIsString) ? ("std::string(" + e + ")") : ("std::to_string(" + e + ")");
                 out << indent << "__nexa_os_open(" << arg << ");\n";
+            } else if (child.type == AstNode::Type::OsExit) {
+                std::string code = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                out << indent << "__nexa_os_exit(" << code << ");\n";
+            } else if (child.type == AstNode::Type::OsSetenv) {
+                std::string ne = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                std::string ve = emitExpr(child.children[1], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                std::string na = exprIsString(child.children[0], varIsString) ? ("std::string(" + ne + ")") : ("std::to_string(" + ne + ")");
+                std::string va = exprIsString(child.children[1], varIsString) ? ("std::string(" + ve + ")") : ("std::to_string(" + ve + ")");
+                out << indent << "__nexa_os_setenv(" << na << ", " << va << ");\n";
+            } else if (child.type == AstNode::Type::OsHostname) {
+                out << indent << "(void)__nexa_os_hostname();\n";
+            } else if (child.type == AstNode::Type::OsUsername) {
+                out << indent << "(void)__nexa_os_username();\n";
+            } else if (child.type == AstNode::Type::OsHome) {
+                out << indent << "(void)__nexa_os_home();\n";
             } else if (child.type == AstNode::Type::OsMessageBox) {
                 std::string textExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 std::string titleExpr = emitExpr(child.children[1], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
@@ -1878,6 +1931,71 @@ private:
                 out << indent << "}\n";
                 if (!prevVal.empty()) { varMap[child.value] = prevVal; varIsString[child.value] = prevStr; varIsConst[child.value] = prevConst; varIsFloat[child.value] = prevFloat; varIsChar[child.value] = prevChar; varIsBool[child.value] = prevBool; varIsEnum[child.value] = prevEnum; }
                 else { varMap.erase(child.value); varIsString.erase(child.value); varIsConst.erase(child.value); varIsFloat.erase(child.value); varIsChar.erase(child.value); varIsBool.erase(child.value); varIsEnum.erase(child.value); }
+            } else if (child.type == AstNode::Type::ForIn) {
+                std::string loopVar = preserveNames_ ? child.value : ("__nexa_for_" + std::to_string(varIdx++));
+                auto it = varMap.find(child.value);
+                std::string prevVal = (it != varMap.end()) ? it->second : "";
+                bool prevStr = varIsString.count(child.value) ? varIsString[child.value] : false;
+                bool prevConst = varIsConst.count(child.value) ? varIsConst[child.value] : false;
+                bool prevFloat = varIsFloat.count(child.value) ? varIsFloat[child.value] : false;
+                bool prevChar = varIsChar.count(child.value) ? varIsChar[child.value] : false;
+                bool prevBool = varIsBool.count(child.value) ? varIsBool[child.value] : false;
+                bool prevEnum = varIsEnum.count(child.value) ? varIsEnum[child.value] : false;
+                std::string prevDecl;
+                bool hadDecl = false;
+                if (!nexaDeclStack_.empty()) {
+                    auto dit = nexaDeclStack_.back().find(child.value);
+                    if (dit != nexaDeclStack_.back().end()) {
+                        prevDecl = dit->second;
+                        hadDecl = true;
+                    }
+                }
+                bool elemIsString = forInElementIsString(child.children[0]);
+                // Evaluate collection before binding the loop variable (avoids shadowing).
+                std::string collExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                varMap[child.value] = loopVar;
+                varIsString[child.value] = elemIsString;
+                varIsConst[child.value] = false;
+                varIsFloat[child.value] = false;
+                varIsChar[child.value] = false;
+                varIsBool[child.value] = false;
+                varIsEnum[child.value] = false;
+                if (!nexaDeclStack_.empty()) {
+                    nexaDeclStack_.back()[child.value] = elemIsString ? "string" : "int";
+                }
+                std::string collTmp = "__nexa_forin_" + std::to_string(varIdx++);
+                out << indent << "{\n";
+                if (elemIsString) {
+                    out << indent << "    const std::vector<std::string>& " << collTmp << " = " << collExpr << ";\n";
+                    out << indent << "    for (const std::string& " << loopVar << " : " << collTmp << ") {\n";
+                } else {
+                    out << indent << "    const std::vector<int>& " << collTmp << " = " << collExpr << ";\n";
+                    out << indent << "    for (int " << loopVar << " : " << collTmp << ") {\n";
+                }
+                emitBlock(out, child.children[1].children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "        ", inStringSwitchCase);
+                out << indent << "    }\n";
+                out << indent << "}\n";
+                if (!prevVal.empty()) {
+                    varMap[child.value] = prevVal;
+                    varIsString[child.value] = prevStr;
+                    varIsConst[child.value] = prevConst;
+                    varIsFloat[child.value] = prevFloat;
+                    varIsChar[child.value] = prevChar;
+                    varIsBool[child.value] = prevBool;
+                    varIsEnum[child.value] = prevEnum;
+                } else {
+                    varMap.erase(child.value);
+                    varIsString.erase(child.value);
+                    varIsConst.erase(child.value);
+                    varIsFloat.erase(child.value);
+                    varIsChar.erase(child.value);
+                    varIsBool.erase(child.value);
+                    varIsEnum.erase(child.value);
+                }
+                if (!nexaDeclStack_.empty()) {
+                    if (hadDecl) nexaDeclStack_.back()[child.value] = prevDecl;
+                    else nexaDeclStack_.back().erase(child.value);
+                }
             } else if (child.type == AstNode::Type::TryCatch) {
                 if (child.children.size() < 2) {
                     throw std::runtime_error("internal: try/catch missing try or catch block");
@@ -2226,6 +2344,12 @@ private:
                 return "__nexa_os_getprocessid()";
             case AstNode::Type::OsExeDir:
                 return "__nexa_exe_dir()";
+            case AstNode::Type::OsHostname:
+                return "__nexa_os_hostname()";
+            case AstNode::Type::OsUsername:
+                return "__nexa_os_username()";
+            case AstNode::Type::OsHome:
+                return "__nexa_os_home()";
             case AstNode::Type::OsGetVolume:
                 return "__nexa_os_get_volume()";
             case AstNode::Type::OsGetBrightness:

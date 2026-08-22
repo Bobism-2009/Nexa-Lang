@@ -26,6 +26,11 @@ Nexa Standard Modules
                     - As expression: run command and return stdout as string
   os.platform()     - Returns "windows", "linux", "darwin", or "unknown"
   os.getenv(name)   - Get environment variable, returns string (or "")
+  os.setenv(name, value) - Set environment variable for this process
+  os.hostname()     - Machine hostname, returns string
+  os.username() / os.user() - Current username, returns string
+  os.home()         - User home directory, returns string
+  os.exit(code)     - Exit process with status code (statement)
   os.getprocessid() / os.getpid() - Current process ID (int)
   os.exe_dir()      - Directory containing the running executable (trailing slash)
   os.lock()         - Lock the screen / session (cross-platform)

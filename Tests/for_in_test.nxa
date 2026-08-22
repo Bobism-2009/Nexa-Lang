@@ -1,0 +1,13 @@
+#include <std/io>
+
+fn main() {
+    let nums = [10, 20, 30];
+    for (n in nums) {
+        io.println(n);
+    }
+    let parts = "a,b,c".split(",");
+    for (p in parts) {
+        io.println(p);
+    }
+    for (x in [1, 2]) io.println(x);
+}

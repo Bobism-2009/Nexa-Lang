@@ -25,6 +25,7 @@ struct AstNode {
                       OsClipSet, OsClipGet,
                       OsType,
                       OsNotify, OsOpen,
+                      OsExit, OsHostname, OsUsername, OsHome, OsSetenv,
                       DllLoad, DllCall,
                       FileRead, FileWrite, FileAppend, FileExists, FileMkdir, FileCall,
                       RandomInt, RandomSeed,
@@ -37,6 +38,7 @@ struct AstNode {
                       SwitchCase,
                       While,
                       For,
+                      ForIn,
                       Return,
                       Break,
                       Continue,
@@ -153,7 +155,7 @@ private:
     const std::vector<std::string>* packagePaths_;
 
     static bool exprProducesString(const AstNode& e) {
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall || e.type == AstNode::Type::HttpCall) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsHostname || e.type == AstNode::Type::OsUsername || e.type == AstNode::Type::OsHome || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall || e.type == AstNode::Type::HttpCall) return true;
         if (e.type == AstNode::Type::FileCall) {
             const std::string& m = e.value;
             return m == "cwd" || m == "abspath" || m == "join" || m == "dirname" || m == "basename" || m == "extension";
@@ -1317,8 +1319,19 @@ private:
         }
         advance();
         std::string varName = nameTok.value;
+        // for (x in coll) { ... }
+        if (peek().type == TokenType::Identifier && peek().value == "in") {
+            advance();
+            AstNode collExpr = parseExpression();
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' after for (... in ...) at line " + std::to_string(peek().line));
+            }
+            AstNode block = parseBody();
+            return {AstNode::Type::ForIn, varName, {collExpr, block}};
+        }
+        // for (i, n) { ... }
         if (!match(TokenType::Comma)) {
-            throw std::runtime_error("Expected ',' in for loop at line " + std::to_string(peek().line));
+            throw std::runtime_error("Expected ',' or 'in' in for loop at line " + std::to_string(peek().line));
         }
         AstNode countExpr = parseExpression();
         if (!match(TokenType::RParen)) {
@@ -1528,6 +1541,9 @@ private:
             if (method == "system") return parseOsExec();
             if (method == "platform") return parseOsPlatform();
             if (method == "exe_dir") return parseOsExeDir();
+            if (method == "hostname") return parseOsHostname();
+            if (method == "username" || method == "user") return parseOsUsername();
+            if (method == "home") return parseOsHome();
             if (method == "getprocessid" || method == "getpid" || method == "GetProcessID") return parseOsGetProcessId();
             if (method == "grepkeys" || method == "getkey") return parseOsGrepKeys();
             if (method == "keypressed") return parseOsKeyPressed();
@@ -1820,6 +1836,41 @@ private:
             AstNode node{AstNode::Type::OsMessageBox, "", {textArg, titleArg}};
             return node;
         }
+        if (method == "exit") {
+            if (!match(TokenType::LParen)) {
+                throw std::runtime_error("Expected '(' after os.exit at line " + std::to_string(peek().line));
+            }
+            AstNode codeArg = parseExpression();
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' after os.exit(...) at line " + std::to_string(peek().line));
+            }
+            finishOsCall(requireSemicolon, peek().line);
+            return {AstNode::Type::OsExit, "", {codeArg}};
+        }
+        if (method == "setenv") {
+            if (!match(TokenType::LParen)) {
+                throw std::runtime_error("Expected '(' after os.setenv at line " + std::to_string(peek().line));
+            }
+            AstNode nameArg = parseExpression();
+            if (!match(TokenType::Comma)) {
+                throw std::runtime_error("Expected ',' in os.setenv(name, value) at line " + std::to_string(peek().line));
+            }
+            AstNode valueArg = parseExpression();
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' after os.setenv(...) at line " + std::to_string(peek().line));
+            }
+            finishOsCall(requireSemicolon, peek().line);
+            return {AstNode::Type::OsSetenv, "", {nameArg, valueArg}};
+        }
+        if (method == "hostname" || method == "username" || method == "user" || method == "home") {
+            if (!match(TokenType::LParen) || !match(TokenType::RParen)) {
+                throw std::runtime_error("Expected '()' after os." + method + " at line " + std::to_string(peek().line));
+            }
+            finishOsCall(requireSemicolon, peek().line);
+            if (method == "hostname") return {AstNode::Type::OsHostname, "", {}};
+            if (method == "home") return {AstNode::Type::OsHome, "", {}};
+            return {AstNode::Type::OsUsername, "", {}};
+        }
         if (method == "getprocessid" || method == "getpid" || method == "GetProcessID") {
             if (!match(TokenType::LParen)) {
                 throw std::runtime_error("Expected '(' after os." + method + " at line " + std::to_string(peek().line));
@@ -2001,6 +2052,55 @@ private:
             throw std::runtime_error("Expected '()' after exe_dir at line " + std::to_string(peek().line));
         }
         return {AstNode::Type::OsExeDir, "", {}};
+    }
+
+    AstNode parseOsHostname() {
+        if (!modules_.hasOs()) {
+            throw std::runtime_error("os.hostname requires #include <std/os> at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "os") {
+            throw std::runtime_error("Expected 'os' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Dot) || !match(TokenType::Identifier) || tokens_[pos_ - 1].value != "hostname") {
+            throw std::runtime_error("Expected os.hostname at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::LParen) || !match(TokenType::RParen)) {
+            throw std::runtime_error("Expected '()' after os.hostname at line " + std::to_string(peek().line));
+        }
+        return {AstNode::Type::OsHostname, "", {}};
+    }
+
+    AstNode parseOsUsername() {
+        if (!modules_.hasOs()) {
+            throw std::runtime_error("os.username requires #include <std/os> at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "os") {
+            throw std::runtime_error("Expected 'os' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Dot) || !match(TokenType::Identifier) ||
+            (tokens_[pos_ - 1].value != "username" && tokens_[pos_ - 1].value != "user")) {
+            throw std::runtime_error("Expected os.username at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::LParen) || !match(TokenType::RParen)) {
+            throw std::runtime_error("Expected '()' after os.username at line " + std::to_string(peek().line));
+        }
+        return {AstNode::Type::OsUsername, "", {}};
+    }
+
+    AstNode parseOsHome() {
+        if (!modules_.hasOs()) {
+            throw std::runtime_error("os.home requires #include <std/os> at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "os") {
+            throw std::runtime_error("Expected 'os' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Dot) || !match(TokenType::Identifier) || tokens_[pos_ - 1].value != "home") {
+            throw std::runtime_error("Expected os.home at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::LParen) || !match(TokenType::RParen)) {
+            throw std::runtime_error("Expected '()' after os.home at line " + std::to_string(peek().line));
+        }
+        return {AstNode::Type::OsHome, "", {}};
     }
 
     AstNode parseOsGetProcessId() {
