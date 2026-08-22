@@ -55,15 +55,23 @@ fn Register_Nxa_Registry_Windows_System(ExePath: string) {
 }
 
 fn Install_Clang_Linux() {
-    os.system("which clang++ >/dev/null 2>&1 || (which apt-get >/dev/null 2>&1 && sudo apt-get update && sudo apt-get install -y clang) || (which dnf >/dev/null 2>&1 && sudo dnf install -y clang) || (which pacman >/dev/null 2>&1 && sudo pacman -S --noconfirm clang) || true");
+    // clang front-end + g++/libstdc++ so generated C++ links on a clean machine
+    os.system("which clang++ >/dev/null 2>&1 && which g++ >/dev/null 2>&1 || (which apt-get >/dev/null 2>&1 && sudo apt-get update && sudo apt-get install -y clang g++ build-essential) || (which dnf >/dev/null 2>&1 && sudo dnf install -y clang gcc-c++) || (which pacman >/dev/null 2>&1 && sudo pacman -S --noconfirm clang gcc) || true");
 }
 
 fn Install_Clang_Darwin() {
     os.system("which clang++ >/dev/null 2>&1 || (xcode-select -p >/dev/null 2>&1 || xcode-select --install) || true");
 }
 
-fn Install_Clang_Windows() {
-    os.system("where clang++ >nul 2>&1 || (winget install LLVM.LLVM --accept-package-agreements --accept-source-agreements 2>nul) || true");
+fn Install_Toolchain_Windows() {
+    // NexaC emits GNU-style link flags (-static-libgcc, -Wl,--gc-sections, -lwinhttp).
+    // Stock LLVM.LLVM is often MSVC-target and fails alone — install MinGW g++ first, then clang.
+    io.println("Installing MinGW g++ (required to link Nexa builds)...");
+    os.system("where g++ >nul 2>&1 || (winget install --id BrechtSanders.WinLibs.POSIX.UCRT -e --accept-package-agreements --accept-source-agreements) || (winget install --id MSYS2.MSYS2 -e --accept-package-agreements --accept-source-agreements) || true");
+    io.println("Installing LLVM clang (optional front-end; NexaC falls back to g++)...");
+    os.system("where clang++ >nul 2>&1 || (winget install --id LLVM.LLVM -e --accept-package-agreements --accept-source-agreements) || true");
+    // Ensure common MinGW bin dirs are on the user PATH for this and future shells.
+    os.system("powershell -NoProfile -Command \"$dirs=@('C:\\mingw64\\bin','C:\\WinLibs\\mingw64\\bin','C:\\msys64\\ucrt64\\bin','C:\\msys64\\mingw64\\bin'); $p=[Environment]::GetEnvironmentVariable('Path','User'); if(-not $p){$p=''}; foreach($d in $dirs){ if((Test-Path $d) -and ($p -notlike ('*'+$d+'*'))){ $p=$p+';'+$d } }; [Environment]::SetEnvironmentVariable('Path',$p,'User'); $env:Path=$p+';'+$env:Path\"");
 }
 
 fn Add_To_Path_User_Linux() {
@@ -104,7 +112,7 @@ fn Install_System_Wide() {
         os.system("sudo ln -sf NexaC /usr/local/bin/nexac");
         os.system("sudo ln -sf NexaC /usr/local/bin/nexapkg");
         Register_Nxa_Mime_Linux_System();
-        io.println("Installing clang (required for compiling .nxa files)...");
+        io.println("Installing C++ toolchain (clang + g++)...");
         Install_Clang_Linux();
         io.println("NexaC installed to /usr/local/bin (in PATH). .nxa files recognized as Nexa Source File.");
         }
@@ -145,10 +153,11 @@ fn Install_System_Wide() {
         os.system("copy /Y \"" + Src + "\" \"C:\\Program Files\\NexaC\\nexac.exe\"");
         os.system("copy /Y \"" + Src + "\" \"C:\\Program Files\\NexaC\\nexapkg.exe\"");
         Register_Nxa_Registry_Windows_System("C:\\Program Files\\NexaC\\NexaC.exe");
-        io.println("Installing clang (winget)...");
-        Install_Clang_Windows();
+        io.println("Installing C++ toolchain (MinGW g++ + clang via winget)...");
+        Install_Toolchain_Windows();
         Add_To_Path_Windows_System("C:\\Program Files\\NexaC");
-        io.println("NexaC installed to C:\\Program Files\\NexaC. Added to system PATH. Restart terminal for PATH to take effect.");
+        io.println("NexaC installed to C:\\Program Files\\NexaC. Added to system PATH.");
+        io.println("Restart the terminal (or sign out/in) so g++/clang are on PATH, then run: NexaC --version");
         }
         else {
             io.println("Error: Cannot find NexaC.exe. Run installer from folder containing NexaC.exe.");
@@ -174,7 +183,7 @@ fn Install_User() {
         os.system("ln -sf NexaC ~/.local/bin/nexac");
         os.system("ln -sf NexaC ~/.local/bin/nexapkg");
         Register_Nxa_Mime_Linux_User();
-        io.println("Installing clang (required for compiling .nxa files)...");
+        io.println("Installing C++ toolchain (clang + g++)...");
         Install_Clang_Linux();
         Add_To_Path_User_Linux();
         io.println("NexaC installed to ~/.local/bin. Added to PATH in ~/.bashrc and ~/.profile. Restart terminal or run: source ~/.bashrc");
@@ -219,10 +228,11 @@ fn Install_User() {
         os.system("copy /Y \"" + Src + "\" \"" + LocalAppData + "\\NexaC\\nexac.exe\"");
         os.system("copy /Y \"" + Src + "\" \"" + LocalAppData + "\\NexaC\\nexapkg.exe\"");
         Register_Nxa_Registry_Windows_User(ExePath);
-        io.println("Installing clang (winget)...");
-        Install_Clang_Windows();
+        io.println("Installing C++ toolchain (MinGW g++ + clang via winget)...");
+        Install_Toolchain_Windows();
         Add_To_Path_Windows_User(LocalAppData + "\\NexaC");
-        io.println("NexaC installed to " + LocalAppData + "\\NexaC. Added to PATH. Restart terminal for PATH to take effect.");
+        io.println("NexaC installed to " + LocalAppData + "\\NexaC. Added to PATH.");
+        io.println("Restart the terminal (or sign out/in) so g++/clang are on PATH, then run: NexaC --version");
         }
         else {
             io.println("Error: Cannot find NexaC.exe. Run installer from folder containing NexaC.exe.");
