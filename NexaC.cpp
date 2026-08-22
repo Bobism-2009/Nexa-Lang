@@ -265,6 +265,7 @@ static std::string nexaBuildCompileCmd(
     bool modulesHasDll,
     bool noConsole,
     bool linkUser32,
+    bool linkHttp,
     bool noExceptions,
     bool noRtti,
     const std::vector<std::string>& linkInputs
@@ -366,6 +367,14 @@ static std::string nexaBuildCompileCmd(
         cmd += " -lole32";
         // std/os open uses ShellExecuteA.
         cmd += " -lshell32";
+    }
+    if (linkHttp) {
+        // std/http uses WinHTTP (OS API; HTTPS via Schannel).
+        cmd += " -lwinhttp";
+    }
+#elif defined(__APPLE__)
+    if (linkHttp) {
+        cmd += " -framework CoreFoundation -framework CFNetwork";
     }
 #endif
     // Extra link inputs (--link): static archives (.a/.lib) are baked in, objects (.o) embedded,
@@ -1107,6 +1116,7 @@ int main(int argc, char* argv[]) {
         // if you need speed on a specific library.
         std::string opt = (optimizeSize || buildDll || buildShared) ? "-Os" : "-O2";
         const bool linkUser32 = modules.hasOs() || modules.hasInlineCpp();
+        const bool linkHttp = modules.hasHttp();
 
         if (buildStaticLib) {
             std::string objPath = cppPath.substr(0, cppPath.size() - 4) + ".o";
@@ -1124,7 +1134,7 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 
-        std::string cmd = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, noExceptions, noRtti, linkInputs);
+        std::string cmd = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, noExceptions, noRtti, linkInputs);
         int ret = std::system(cmd.c_str());
 
         if (ret != 0) {
@@ -1153,7 +1163,7 @@ int main(int argc, char* argv[]) {
                 cxx = fallback;
                 targetFlags = "";
                 std::cout.flush();
-                std::string cmd2 = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, noExceptions, noRtti, linkInputs);
+                std::string cmd2 = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, noExceptions, noRtti, linkInputs);
                 ret = std::system(cmd2.c_str());
             }
         }

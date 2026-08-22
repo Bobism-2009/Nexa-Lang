@@ -108,6 +108,16 @@ Nexa Standard Modules
   Use: let h = crypto.sha256("hello");
   Use: let t = crypto.hmac_sha256("key", "message");
 
+#include <std/http>
+  OS APIs only (no curl/OpenSSL bundled).
+  Windows: WinHTTP (HTTP + HTTPS via Schannel)
+  macOS:   CFNetwork (HTTP + HTTPS)
+  Linux:   POSIX sockets (HTTP only; HTTPS returns an error message)
+  http.get(url)           - GET request; returns response body string ("" on failure)
+  http.post(url, body)    - POST request; returns response body string ("" on failure)
+  Use: let html = http.get("https://example.com/");
+  Use: let r = http.post("https://httpbin.org/post", "{\"a\":1}");
+
 #include <std/time>
   time.sleep(duration)      - Sleeps using std::chrono (ms, or seconds()/milliseconds() helpers)
   time.seconds(n)           - Millisecond count via std::chrono::seconds(n) (same semantics as n*1000)

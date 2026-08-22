@@ -1,0 +1,16 @@
+#include <std/http>
+#include <std/io>
+
+fn main() {
+    let body: string = http.get("https://example.com/");
+    if (body.len() < 10) {
+        io.println("http get failed or empty");
+        return 1;
+    }
+    if (!body.contains("Example Domain")) {
+        io.println("unexpected body");
+        return 2;
+    }
+    io.println("http ok");
+    return 0;
+}

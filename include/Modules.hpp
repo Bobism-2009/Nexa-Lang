@@ -5,6 +5,7 @@
 #include <sstream>
 #include "CryptoRuntime.hpp"
 #include "FileRuntime.hpp"
+#include "HttpRuntime.hpp"
 
 namespace nexa {
 
@@ -41,6 +42,7 @@ public:
         bool random = false;
         bool math = false;
         bool crypto = false;
+        bool http = false;
         bool str = false;
         bool time = false;
         bool thread = false;
@@ -80,6 +82,10 @@ public:
 
     bool hasCrypto() const {
         return enabled_.count("std/crypto") > 0;
+    }
+
+    bool hasHttp() const {
+        return enabled_.count("std/http") > 0;
     }
 
     bool hasTime() const {
@@ -690,6 +696,9 @@ public:
         }
         if (hasCrypto() && usage.crypto) {
             out += cryptoRuntimeCpp();
+        }
+        if (hasHttp() && usage.http) {
+            out += httpRuntimeCpp();
         }
         // Core string methods (value.upper(), value.split(...), ...) need no #include from the user.
         if (usage.str) {

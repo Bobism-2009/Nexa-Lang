@@ -113,6 +113,7 @@ public:
                 case AstNode::Type::RandomSeed: cppUsage.random = true; break;
                 case AstNode::Type::MathCall: cppUsage.math = true; break;
                 case AstNode::Type::CryptoCall: cppUsage.crypto = true; break;
+                case AstNode::Type::HttpCall: cppUsage.http = true; break;
                 case AstNode::Type::StrMethod: cppUsage.str = true; break;
                 case AstNode::Type::TimeSleep:
                 case AstNode::Type::TimeSeconds:
@@ -977,6 +978,8 @@ private:
                 return "float";
             case AstNode::Type::CryptoCall:
                 return "string";
+            case AstNode::Type::HttpCall:
+                return "string";
             case AstNode::Type::StrMethod:
                 if (strMethodReturnsString(e.value)) return "string";
                 if (strMethodReturnsBool(e.value)) return "bool";
@@ -1170,7 +1173,7 @@ private:
     }
 
     static bool exprProducesString(const AstNode& e) {
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall || e.type == AstNode::Type::HttpCall) return true;
         if (e.type == AstNode::Type::FileCall) {
             const std::string& m = e.value;
             return m == "cwd" || m == "abspath" || m == "join" || m == "dirname" || m == "basename" || m == "extension";
@@ -1215,7 +1218,7 @@ private:
             // but inferExprNexaType resolves them through nexaDeclStack_.
             return inferExprNexaType(e) == "string";
         }
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall || e.type == AstNode::Type::HttpCall) return true;
         if (e.type == AstNode::Type::FileCall) {
             const std::string& m = e.value;
             return m == "cwd" || m == "abspath" || m == "join" || m == "dirname" || m == "basename" || m == "extension";
@@ -2352,6 +2355,16 @@ private:
                     return "__nexa_crypto_hmac_sha256(" + key + ", " + data + ")";
                 }
                 throw std::runtime_error("Internal: unknown crypto method '" + fn + "'");
+            }
+            case AstNode::Type::HttpCall: {
+                const std::string& fn = e.value;
+                std::string url = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                if (fn == "get") return "__nexa_http_get(" + url + ")";
+                if (fn == "post") {
+                    std::string body = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    return "__nexa_http_post(" + url + ", " + body + ")";
+                }
+                throw std::runtime_error("Internal: unknown http method '" + fn + "'");
             }
             case AstNode::Type::StrMethod: {
                 const std::string& m = e.value;

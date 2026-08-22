@@ -28,7 +28,7 @@ struct AstNode {
                       DllLoad, DllCall,
                       FileRead, FileWrite, FileAppend, FileExists, FileMkdir, FileCall,
                       RandomInt, RandomSeed,
-                      MathCall, CryptoCall,
+                      MathCall, CryptoCall, HttpCall,
                       StrMethod,
                       TimeSleep, TimeSeconds, TimeMilliseconds, TimeNowMs,
                       ThreadSpawn, ThreadJoin, ThreadWorker, ThreadRun, ThreadWorkerJoin,
@@ -153,7 +153,7 @@ private:
     const std::vector<std::string>* packagePaths_;
 
     static bool exprProducesString(const AstNode& e) {
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall || e.type == AstNode::Type::HttpCall) return true;
         if (e.type == AstNode::Type::FileCall) {
             const std::string& m = e.value;
             return m == "cwd" || m == "abspath" || m == "join" || m == "dirname" || m == "basename" || m == "extension";
@@ -1556,6 +1556,10 @@ private:
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
             return parseCryptoCall();
         }
+        if (peek().type == TokenType::Identifier && peek().value == "http" && pos_ + 2 < tokens_.size() &&
+            tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
+            return parseHttpCall();
+        }
         if (peek().type == TokenType::Identifier && peek().value == "time" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
             std::string method = tokens_[pos_ + 2].value;
@@ -2489,6 +2493,44 @@ private:
         }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' after crypto." + method + "(...) at line " + std::to_string(peek().line));
+        }
+        return node;
+    }
+
+    AstNode parseHttpCall() {
+        size_t line = peek().line;
+        if (!modules_.hasHttp()) {
+            throw std::runtime_error("http.* requires #include <std/http> at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "http") {
+            throw std::runtime_error("Expected 'http' at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        const Token& methodTok = peek();
+        if (methodTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected http method at line " + std::to_string(methodTok.line));
+        }
+        std::string method = methodTok.value;
+        advance();
+        if (method != "get" && method != "post") {
+            throw std::runtime_error("Unknown http function 'http." + method +
+                "' at line " + std::to_string(methodTok.line) + " (use get, post)");
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after http." + method + " at line " + std::to_string(peek().line));
+        }
+        AstNode node{AstNode::Type::HttpCall, method, {}};
+        node.children.push_back(parseExpression());
+        if (method == "post") {
+            if (!match(TokenType::Comma)) {
+                throw std::runtime_error("Expected ',' in http.post(url, body) at line " + std::to_string(peek().line));
+            }
+            node.children.push_back(parseExpression());
+        }
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' after http." + method + "(...) at line " + std::to_string(peek().line));
         }
         return node;
     }
