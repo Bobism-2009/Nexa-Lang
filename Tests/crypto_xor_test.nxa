@@ -1,11 +1,66 @@
 #include <std/crypto>
+#include <std/io>
 
 fn main() {
-    let plain: string = "Hello";
-    let enc: string = crypto.xor(plain, 0x5, 0x9, 0xF, 0xD, 0xB);
-    let dec: string = crypto.xor(enc, 0x5, 0x9, 0xF, 0xD, 0xB);
-    if (dec != plain) {
+    let plain: string = "Hello, Nexa!";
+    let enc_int: string = crypto.xor(plain, 0x5, 0x9, 0xF, 0xD, 0xB);
+    let dec_int: string = crypto.xor(enc_int, 0x5, 0x9, 0xF, 0xD, 0xB);
+    if (dec_int != plain) {
+        io.println("int xor failed");
         return 1;
     }
+
+    let enc_key: string = crypto.xor(plain, "secret-passphrase");
+    let dec_key: string = crypto.xor(enc_key, "secret-passphrase");
+    if (dec_key != plain) {
+        io.println("string xor failed");
+        return 2;
+    }
+
+    let h: string = crypto.sha256("abc");
+    if (h != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad") {
+        io.println("sha256 failed: " + h);
+        return 3;
+    }
+
+    let s1: string = crypto.sha1("abc");
+    if (s1 != "a9993e364706816aba3e25717850c26c9cd0d89d") {
+        io.println("sha1 failed: " + s1);
+        return 4;
+    }
+
+    let mac: string = crypto.hmac_sha256("key", "The quick brown fox jumps over the lazy dog");
+    if (mac != "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8") {
+        io.println("hmac failed: " + mac);
+        return 5;
+    }
+
+    let b64: string = crypto.base64_encode("Man");
+    if (b64 != "TWFu") {
+        io.println("b64 encode failed: " + b64);
+        return 6;
+    }
+    if (crypto.base64_decode(b64) != "Man") {
+        io.println("b64 decode failed");
+        return 7;
+    }
+
+    let hx: string = crypto.hex_encode("Hi");
+    if (hx != "4869") {
+        io.println("hex encode failed: " + hx);
+        return 8;
+    }
+    if (crypto.hex_decode(hx) != "Hi") {
+        io.println("hex decode failed");
+        return 9;
+    }
+
+    let rb: string = crypto.random_bytes(16);
+    if (rb.len() != 16) {
+        io.println("random_bytes length failed");
+        return 10;
+    }
+
+    io.println("crypto ok");
     return 0;
 }

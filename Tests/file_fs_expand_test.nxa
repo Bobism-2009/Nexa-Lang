@@ -1,0 +1,33 @@
+#include <std/file>
+#include <std/io>
+
+fn main() {
+    let root: string = "Tests/_fs_expand";
+    file.remove_all(root);
+    file.mkdir(file.join(root, "nested"));
+    file.write(file.join(root, "a.txt"), "hello");
+    file.copy(file.join(root, "a.txt"), file.join(root, "b.txt"));
+    file.rename(file.join(root, "b.txt"), file.join(root, "c.txt"));
+
+    if (file.exists(file.join(root, "a.txt")) != 1) { io.println("exists fail"); return 1; }
+    if (file.isfile(file.join(root, "a.txt")) != 1) { io.println("isfile fail"); return 2; }
+    if (file.isdir(file.join(root, "nested")) != 1) { io.println("isdir fail"); return 3; }
+    if (file.size(file.join(root, "a.txt")) != 5) { io.println("size fail"); return 4; }
+
+    let names = file.list(root);
+    if (len(names) < 2) { io.println("list fail"); return 5; }
+
+    let abs: string = file.abspath(file.join(root, "a.txt"));
+    if (file.basename(abs) != "a.txt") { io.println("basename fail"); return 6; }
+    if (file.extension(abs) != ".txt") { io.println("extension fail"); return 7; }
+
+    let cwd: string = file.cwd();
+    if (cwd.len() < 1) { io.println("cwd fail"); return 8; }
+
+    file.remove(file.join(root, "c.txt"));
+    if (file.exists(file.join(root, "c.txt")) != 0) { io.println("remove fail"); return 9; }
+
+    file.remove_all(root);
+    io.println("fs ok");
+    return 0;
+}

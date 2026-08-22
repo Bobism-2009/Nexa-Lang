@@ -107,11 +107,12 @@ public:
                 case AstNode::Type::FileWrite:
                 case AstNode::Type::FileAppend:
                 case AstNode::Type::FileExists:
-                case AstNode::Type::FileMkdir: cppUsage.file = true; break;
+                case AstNode::Type::FileMkdir:
+                case AstNode::Type::FileCall: cppUsage.file = true; break;
                 case AstNode::Type::RandomInt:
                 case AstNode::Type::RandomSeed: cppUsage.random = true; break;
                 case AstNode::Type::MathCall: cppUsage.math = true; break;
-                case AstNode::Type::CryptoXor: cppUsage.crypto = true; break;
+                case AstNode::Type::CryptoCall: cppUsage.crypto = true; break;
                 case AstNode::Type::StrMethod: cppUsage.str = true; break;
                 case AstNode::Type::TimeSleep:
                 case AstNode::Type::TimeSeconds:
@@ -881,6 +882,9 @@ private:
             if (!v.children.empty() && v.children[0].type == AstNode::Type::StrMethod && v.children[0].value == "split") {
                 return "[]string";
             }
+            if (!v.children.empty() && v.children[0].type == AstNode::Type::FileCall && v.children[0].value == "list") {
+                return "[]string";
+            }
             if (!v.children.empty() && v.children[0].type == AstNode::Type::ExprArrayLiteral) {
                 const AstNode& arr = v.children[0];
                 if (!arr.children.empty()) return inferExprNexaType(arr.children[0]);
@@ -971,7 +975,7 @@ private:
                 // math.* operates in the floating-point domain and always yields float (double).
                 // For an integer result, assign to an int (e.g. let n: int = math.floor(x);).
                 return "float";
-            case AstNode::Type::CryptoXor:
+            case AstNode::Type::CryptoCall:
                 return "string";
             case AstNode::Type::StrMethod:
                 if (strMethodReturnsString(e.value)) return "string";
@@ -993,6 +997,13 @@ private:
             case AstNode::Type::FileRead:
             case AstNode::Type::IoGetline:
                 return "string";
+            case AstNode::Type::FileCall:
+                if (e.value == "list") return "[]string";
+                if (e.value == "cwd" || e.value == "abspath" || e.value == "join" ||
+                    e.value == "dirname" || e.value == "basename" || e.value == "extension") {
+                    return "string";
+                }
+                return "int";
             case AstNode::Type::CondNot:
                 return "bool";
             default:
@@ -1159,7 +1170,11 @@ private:
     }
 
     static bool exprProducesString(const AstNode& e) {
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::ExprTrim) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall) return true;
+        if (e.type == AstNode::Type::FileCall) {
+            const std::string& m = e.value;
+            return m == "cwd" || m == "abspath" || m == "join" || m == "dirname" || m == "basename" || m == "extension";
+        }
         if (e.type == AstNode::Type::StrMethod) return strMethodReturnsString(e.value);
         if (e.type == AstNode::Type::ExprAdd && e.children.size() >= 2) {
             return exprProducesString(e.children[0]) || exprProducesString(e.children[1]);
@@ -1170,6 +1185,7 @@ private:
     // Whether an array-valued initializer expression yields std::vector<std::string>.
     bool arrayInitProducesString(const AstNode& initExpr, const std::map<std::string, bool>& varIsString) const {
         if (initExpr.type == AstNode::Type::StrMethod && initExpr.value == "split") return true;
+        if (initExpr.type == AstNode::Type::FileCall && initExpr.value == "list") return true;
         return arrayLiteralProducesString(initExpr, varIsString);
     }
 
@@ -1199,7 +1215,11 @@ private:
             // but inferExprNexaType resolves them through nexaDeclStack_.
             return inferExprNexaType(e) == "string";
         }
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall) return true;
+        if (e.type == AstNode::Type::FileCall) {
+            const std::string& m = e.value;
+            return m == "cwd" || m == "abspath" || m == "join" || m == "dirname" || m == "basename" || m == "extension";
+        }
         if (e.type == AstNode::Type::StrMethod) return strMethodReturnsString(e.value);
         if (e.type == AstNode::Type::FnCall) {
             return inferExprNexaType(e) == "string";
@@ -1575,6 +1595,8 @@ private:
             } else if (child.type == AstNode::Type::FileMkdir) {
                 std::string pathExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 out << indent << "{ std::error_code __nexa_ec; (void)std::filesystem::create_directories(" << pathExpr << ", __nexa_ec); }\n";
+            } else if (child.type == AstNode::Type::FileCall) {
+                out << indent << "(void)(" << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ");\n";
             } else if (child.type == AstNode::Type::RandomSeed) {
                 std::string seedExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 out << indent << "__nexa_random_seed(" << seedExpr << ");\n";
@@ -2238,6 +2260,29 @@ private:
                 std::string pathExpr = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 return "([]{ std::error_code __ec; std::filesystem::create_directories(" + pathExpr + ", __ec); return __ec ? 0 : 1; }())";
             }
+            case AstNode::Type::FileCall: {
+                const std::string& fn = e.value;
+                if (fn == "cwd") return "__nexa_file_cwd()";
+                std::string a0 = e.children.empty() ? "" : emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                if (fn == "remove") return "__nexa_file_remove(" + a0 + ")";
+                if (fn == "remove_all") return "__nexa_file_remove_all(" + a0 + ")";
+                if (fn == "list") return "__nexa_file_list(" + a0 + ")";
+                if (fn == "isdir") return "__nexa_file_isdir(" + a0 + ")";
+                if (fn == "isfile") return "__nexa_file_isfile(" + a0 + ")";
+                if (fn == "size") return "__nexa_file_size(" + a0 + ")";
+                if (fn == "chdir") return "__nexa_file_chdir(" + a0 + ")";
+                if (fn == "abspath") return "__nexa_file_abspath(" + a0 + ")";
+                if (fn == "dirname") return "__nexa_file_dirname(" + a0 + ")";
+                if (fn == "basename") return "__nexa_file_basename(" + a0 + ")";
+                if (fn == "extension") return "__nexa_file_extension(" + a0 + ")";
+                if (fn == "rename" || fn == "copy" || fn == "join") {
+                    std::string a1 = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    if (fn == "rename") return "__nexa_file_rename(" + a0 + ", " + a1 + ")";
+                    if (fn == "copy") return "__nexa_file_copy(" + a0 + ", " + a1 + ")";
+                    return "__nexa_file_join(" + a0 + ", " + a1 + ")";
+                }
+                throw std::runtime_error("Internal: unknown file method '" + fn + "'");
+            }
             case AstNode::Type::ExprLen: {
                 std::string s = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 return "(int)((" + s + ").size())";
@@ -2274,15 +2319,39 @@ private:
                 // sqrt, floor, ceil, round, sin, cos, tan, log, log10, exp
                 return "std::" + fn + "(" + da0 + ")";
             }
-            case AstNode::Type::CryptoXor: {
-                std::string data = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
-                std::string keys = "std::vector<int>{";
-                for (size_t i = 1; i < e.children.size(); ++i) {
-                    if (i > 1) keys += ", ";
-                    keys += emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+            case AstNode::Type::CryptoCall: {
+                const std::string& fn = e.value;
+                if (fn == "xor") {
+                    std::string data = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    std::map<std::string, bool> emptyStr;
+                    const auto& vIsStr = varIsString ? *varIsString : emptyStr;
+                    if (e.children.size() == 2 && exprIsString(e.children[1], vIsStr)) {
+                        std::string key = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                        return "__nexa_crypto_xor_key(" + data + ", " + key + ")";
+                    }
+                    std::string keys = "std::vector<int>{";
+                    for (size_t i = 1; i < e.children.size(); ++i) {
+                        if (i > 1) keys += ", ";
+                        keys += emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    }
+                    keys += "}";
+                    return "__nexa_crypto_xor(" + data + ", " + keys + ")";
                 }
-                keys += "}";
-                return "__nexa_crypto_xor(" + data + ", " + keys + ")";
+                if (fn == "sha256" || fn == "sha1" || fn == "hex_encode" || fn == "hex_decode" ||
+                    fn == "base64_encode" || fn == "base64_decode") {
+                    std::string a0 = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    return "__nexa_crypto_" + fn + "(" + a0 + ")";
+                }
+                if (fn == "random_bytes") {
+                    std::string n = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    return "__nexa_crypto_random_bytes(" + n + ")";
+                }
+                if (fn == "hmac_sha256") {
+                    std::string key = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    std::string data = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    return "__nexa_crypto_hmac_sha256(" + key + ", " + data + ")";
+                }
+                throw std::runtime_error("Internal: unknown crypto method '" + fn + "'");
             }
             case AstNode::Type::StrMethod: {
                 const std::string& m = e.value;

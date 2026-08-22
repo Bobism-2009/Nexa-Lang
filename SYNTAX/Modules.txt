@@ -95,9 +95,18 @@ Nexa Standard Modules
   Use: let h = math.sqrt(math.pow(3.0, 2.0) + math.pow(4.0, 2.0));
 
 #include <std/crypto>
-  crypto.xor(data, key1, key2, ...) - Rotating XOR: byte i uses key (i % n); returns string
-  XOR is symmetric — call again with the same keys to decrypt.
-  Use: let enc = crypto.xor(text, 0x5, 0x9, 0xF, 0xD, 0xB);
+  crypto.xor(data, key1, key2, ...) - Rotating XOR with int keys (byte i uses key i % n)
+  crypto.xor(data, key_string)      - Rotating XOR with a string key (stronger for passphrases)
+  crypto.sha256(data)               - SHA-256 digest as lowercase hex string
+  crypto.sha1(data)                 - SHA-1 digest as lowercase hex (legacy; prefer sha256)
+  crypto.hmac_sha256(key, data)     - HMAC-SHA256 as lowercase hex
+  crypto.hex_encode(data) / crypto.hex_decode(hex)
+  crypto.base64_encode(data) / crypto.base64_decode(b64)
+  crypto.random_bytes(n)            - n cryptographically-seeded random bytes (as string)
+  XOR is symmetric — call again with the same key(s) to decrypt.
+  Use: let enc = crypto.xor(text, "secret-key");
+  Use: let h = crypto.sha256("hello");
+  Use: let t = crypto.hmac_sha256("key", "message");
 
 #include <std/time>
   time.sleep(duration)      - Sleeps using std::chrono (ms, or seconds()/milliseconds() helpers)
@@ -129,6 +138,20 @@ Nexa Standard Modules
   file.append(path, c)  - Append content to file
   file.exists(path)     - Returns 1 if exists, 0 otherwise
   file.mkdir(path)      - Create directory (and parents); statement or returns 1/0
+  file.remove(path) / file.delete(path) - Delete a file or empty directory; returns 1/0
+  file.remove_all(path) - Delete a path recursively; returns 1/0
+  file.rename(from, to) / file.move(from, to) - Rename/move; returns 1/0
+  file.copy(from, to)   - Copy file or directory tree; returns 1/0
+  file.list(path) / file.listdir(path) - Entry names in directory as []string
+  file.isdir(path) / file.isfile(path) - Returns 1/0
+  file.size(path)       - File size in bytes (int), or -1 if unavailable
+  file.cwd()            - Current working directory (string)
+  file.chdir(path)      - Change working directory; returns 1/0
+  file.abspath(path)    - Absolute path (string)
+  file.join(a, b)       - Join path segments (string)
+  file.dirname(path) / file.parent(path) - Parent directory (string)
+  file.basename(path) / file.name(path) - Final path component (string)
+  file.extension(path)  - Extension including leading '.' (string)
   pathVar.Write(c)      - Write to path in variable (e.g. SaveData.Write("Test"))
   pathVar.Append(c)     - Append to path in variable
   path, content: string or variable

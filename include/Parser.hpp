@@ -26,9 +26,9 @@ struct AstNode {
                       OsType,
                       OsNotify, OsOpen,
                       DllLoad, DllCall,
-                      FileRead, FileWrite, FileAppend, FileExists, FileMkdir,
+                      FileRead, FileWrite, FileAppend, FileExists, FileMkdir, FileCall,
                       RandomInt, RandomSeed,
-                      MathCall, CryptoXor,
+                      MathCall, CryptoCall,
                       StrMethod,
                       TimeSleep, TimeSeconds, TimeMilliseconds, TimeNowMs,
                       ThreadSpawn, ThreadJoin, ThreadWorker, ThreadRun, ThreadWorkerJoin,
@@ -153,7 +153,11 @@ private:
     const std::vector<std::string>* packagePaths_;
 
     static bool exprProducesString(const AstNode& e) {
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall) return true;
+        if (e.type == AstNode::Type::FileCall) {
+            const std::string& m = e.value;
+            return m == "cwd" || m == "abspath" || m == "join" || m == "dirname" || m == "basename" || m == "extension";
+        }
         if (e.type == AstNode::Type::StrMethod) {
             const std::string& m = e.value;
             return m == "upper" || m == "lower" || m == "trim" || m == "replace" ||
@@ -1537,13 +1541,7 @@ private:
         }
         if (peek().type == TokenType::Identifier && peek().value == "file" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
-            std::string method = tokens_[pos_ + 2].value;
-            if (method == "read" || method == "exists") {
-                return parseFileReadOrExists(method == "read");
-            }
-            if (method == "mkdir") {
-                return parseFileMkdirExpr();
-            }
+            return parseFileExpr();
         }
         if (peek().type == TokenType::Identifier && peek().value == "random" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier &&
@@ -1555,9 +1553,8 @@ private:
             return parseMathCall();
         }
         if (peek().type == TokenType::Identifier && peek().value == "crypto" && pos_ + 2 < tokens_.size() &&
-            tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier &&
-            tokens_[pos_ + 2].value == "xor") {
-            return parseCryptoXor();
+            tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
+            return parseCryptoCall();
         }
         if (peek().type == TokenType::Identifier && peek().value == "time" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
@@ -2235,50 +2232,136 @@ private:
         return node;
     }
 
-    AstNode parseFileReadOrExists(bool isRead) {
-        if (!modules_.hasFile()) {
-            throw std::runtime_error("file.read/file.exists requires #include <std/file> at line " + std::to_string(peek().line));
-        }
-        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "file") {
-            throw std::runtime_error("Expected 'file' at line " + std::to_string(peek().line));
-        }
-        if (!match(TokenType::Dot)) {
-            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
-        }
-        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != (isRead ? "read" : "exists")) {
-            throw std::runtime_error(std::string("Expected file.") + (isRead ? "read" : "exists") + " at line " + std::to_string(peek().line));
-        }
-        if (!match(TokenType::LParen)) {
-            throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
-        }
-        AstNode pathArg = parseExpression();
-        if (!match(TokenType::RParen)) {
-            throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
-        }
-        return {isRead ? AstNode::Type::FileRead : AstNode::Type::FileExists, "", {pathArg}};
+    static std::string canonicalizeFileMethod(const std::string& method) {
+        if (method == "delete") return "remove";
+        if (method == "move") return "rename";
+        if (method == "listdir") return "list";
+        if (method == "name") return "basename";
+        if (method == "parent") return "dirname";
+        return method;
     }
 
-    AstNode parseFileMkdirExpr() {
+    static bool isLegacyFileMethod(const std::string& method) {
+        return method == "read" || method == "write" || method == "append" || method == "exists" || method == "mkdir";
+    }
+
+    static bool isExtendedFileMethod(const std::string& method) {
+        static const std::set<std::string> m = {
+            "remove", "remove_all", "rename", "copy", "list",
+            "isdir", "isfile", "size", "cwd", "chdir",
+            "abspath", "join", "dirname", "basename", "extension"
+        };
+        return m.count(method) > 0;
+    }
+
+    AstNode parseFileExpr() {
+        size_t line = peek().line;
         if (!modules_.hasFile()) {
-            throw std::runtime_error("file.mkdir requires #include <std/file> at line " + std::to_string(peek().line));
+            throw std::runtime_error("file.* requires #include <std/file> at line " + std::to_string(line));
         }
         if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "file") {
-            throw std::runtime_error("Expected 'file' at line " + std::to_string(peek().line));
+            throw std::runtime_error("Expected 'file' at line " + std::to_string(line));
         }
         if (!match(TokenType::Dot)) {
             throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
         }
-        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "mkdir") {
-            throw std::runtime_error("Expected 'mkdir' at line " + std::to_string(peek().line));
+        const Token& methodTok = peek();
+        if (methodTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected file method at line " + std::to_string(methodTok.line));
         }
+        std::string method = canonicalizeFileMethod(methodTok.value);
+        advance();
+        if (method == "write" || method == "append") {
+            throw std::runtime_error("file." + method + " cannot be used as an expression at line " + std::to_string(methodTok.line));
+        }
+        if (!isLegacyFileMethod(method) && !isExtendedFileMethod(method)) {
+            throw std::runtime_error("Unknown file method 'file." + methodTok.value + "' at line " + std::to_string(methodTok.line));
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after file." + method + " at line " + std::to_string(peek().line));
+        }
+        AstNode node;
+        if (method == "read") {
+            node = {AstNode::Type::FileRead, "", {}};
+        } else if (method == "exists") {
+            node = {AstNode::Type::FileExists, "", {}};
+        } else if (method == "mkdir") {
+            node = {AstNode::Type::FileMkdir, "", {}};
+        } else {
+            node = {AstNode::Type::FileCall, method, {}};
+        }
+        if (method == "cwd") {
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' after file.cwd() at line " + std::to_string(peek().line));
+            }
+            return node;
+        }
+        node.children.push_back(parseExpression());
+        if (method == "rename" || method == "copy" || method == "join") {
+            if (!match(TokenType::Comma)) {
+                throw std::runtime_error("Expected ',' in file." + method + "(a, b) at line " + std::to_string(peek().line));
+            }
+            node.children.push_back(parseExpression());
+        }
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' after file." + method + "(...) at line " + std::to_string(peek().line));
+        }
+        return node;
+    }
+
+    AstNode parseFileCall() {
+        size_t line = peek().line;
+        if (!modules_.hasFile()) {
+            throw std::runtime_error("file.* requires #include <std/file> at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "file") {
+            throw std::runtime_error("Expected 'file' at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        const Token& methodTok = peek();
+        if (methodTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected file method at line " + std::to_string(methodTok.line));
+        }
+        std::string method = canonicalizeFileMethod(methodTok.value);
+        if (!isLegacyFileMethod(method) && !isExtendedFileMethod(method)) {
+            throw std::runtime_error("Unknown file method 'file." + methodTok.value + "' at line " + std::to_string(methodTok.line));
+        }
+        advance();
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
         }
-        AstNode pathArg = parseExpression();
+        AstNode node;
+        if (method == "read") {
+            node = {AstNode::Type::FileRead, "", {}};
+        } else if (method == "write") {
+            node = {AstNode::Type::FileWrite, "", {}};
+        } else if (method == "append") {
+            node = {AstNode::Type::FileAppend, "", {}};
+        } else if (method == "exists") {
+            node = {AstNode::Type::FileExists, "", {}};
+        } else if (method == "mkdir") {
+            node = {AstNode::Type::FileMkdir, "", {}};
+        } else {
+            node = {AstNode::Type::FileCall, method, {}};
+        }
+        if (method != "cwd") {
+            node.children.push_back(parseExpression());
+            if (method == "write" || method == "append" || method == "rename" || method == "copy" || method == "join") {
+                if (!match(TokenType::Comma)) {
+                    throw std::runtime_error("Expected ',' in file." + method + "(...) at line " + std::to_string(peek().line));
+                }
+                node.children.push_back(parseExpression());
+            }
+        }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
         }
-        return {AstNode::Type::FileMkdir, "", {pathArg}};
+        if (!match(TokenType::Semicolon)) {
+            throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
+        }
+        return node;
     }
 
     AstNode parseRandomInt() {
@@ -2358,10 +2441,10 @@ private:
         return node;
     }
 
-    AstNode parseCryptoXor() {
+    AstNode parseCryptoCall() {
         size_t line = peek().line;
         if (!modules_.hasCrypto()) {
-            throw std::runtime_error("crypto.xor requires #include <std/crypto> at line " + std::to_string(line));
+            throw std::runtime_error("crypto.* requires #include <std/crypto> at line " + std::to_string(line));
         }
         if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "crypto") {
             throw std::runtime_error("Expected 'crypto' at line " + std::to_string(line));
@@ -2369,22 +2452,43 @@ private:
         if (!match(TokenType::Dot)) {
             throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
         }
-        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "xor") {
-            throw std::runtime_error("Expected crypto.xor at line " + std::to_string(peek().line));
+        const Token& methodTok = peek();
+        if (methodTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected crypto method at line " + std::to_string(methodTok.line));
+        }
+        std::string method = methodTok.value;
+        advance();
+        static const std::set<std::string> oneArg = {
+            "sha256", "sha1", "hex_encode", "hex_decode",
+            "base64_encode", "base64_decode", "random_bytes"
+        };
+        static const std::set<std::string> twoArg = {"hmac_sha256"};
+        bool isXor = (method == "xor");
+        if (!isXor && oneArg.find(method) == oneArg.end() && twoArg.find(method) == twoArg.end()) {
+            throw std::runtime_error("Unknown crypto function 'crypto." + method +
+                "' at line " + std::to_string(methodTok.line) +
+                " (use xor, sha256, sha1, hmac_sha256, hex_encode, hex_decode, base64_encode, base64_decode, random_bytes)");
         }
         if (!match(TokenType::LParen)) {
-            throw std::runtime_error("Expected '(' after crypto.xor at line " + std::to_string(peek().line));
+            throw std::runtime_error("Expected '(' after crypto." + method + " at line " + std::to_string(peek().line));
         }
-        AstNode node{AstNode::Type::CryptoXor, "", {}};
+        AstNode node{AstNode::Type::CryptoCall, method, {}};
         node.children.push_back(parseExpression());
-        while (match(TokenType::Comma)) {
+        if (isXor) {
+            while (match(TokenType::Comma)) {
+                node.children.push_back(parseExpression());
+            }
+            if (node.children.size() < 2) {
+                throw std::runtime_error("crypto.xor(data, key...) requires at least one key at line " + std::to_string(line));
+            }
+        } else if (twoArg.find(method) != twoArg.end()) {
+            if (!match(TokenType::Comma)) {
+                throw std::runtime_error("Expected ',' in crypto." + method + "(a, b) at line " + std::to_string(peek().line));
+            }
             node.children.push_back(parseExpression());
         }
-        if (node.children.size() < 2) {
-            throw std::runtime_error("crypto.xor(data, key1, ...) requires at least one key at line " + std::to_string(line));
-        }
         if (!match(TokenType::RParen)) {
-            throw std::runtime_error("Expected ')' after crypto.xor(...) at line " + std::to_string(peek().line));
+            throw std::runtime_error("Expected ')' after crypto." + method + "(...) at line " + std::to_string(peek().line));
         }
         return node;
     }
@@ -2431,48 +2535,6 @@ private:
         AstNode result{AstNode::Type::DllCall, symTok.value, {}};
         result.children.push_back({AstNode::Type::ExprVarRef, handleVar, {}});
         return result;
-    }
-
-    AstNode parseFileCall() {
-        size_t line = peek().line;
-        if (!modules_.hasFile()) {
-            throw std::runtime_error("file.* requires #include <std/file> at line " + std::to_string(line));
-        }
-        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "file") {
-            throw std::runtime_error("Expected 'file' at line " + std::to_string(line));
-        }
-        if (!match(TokenType::Dot)) {
-            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
-        }
-        const Token& methodTok = peek();
-        if (methodTok.type != TokenType::Identifier) {
-            throw std::runtime_error("Expected file method (read, write, append, exists, mkdir) at line " + std::to_string(methodTok.line));
-        }
-        std::string method = methodTok.value;
-        if (method != "read" && method != "write" && method != "append" && method != "exists" && method != "mkdir") {
-            throw std::runtime_error("Expected file.read, file.write, file.append, file.exists, or file.mkdir at line " + std::to_string(methodTok.line));
-        }
-        advance();
-        if (!match(TokenType::LParen)) {
-            throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
-        }
-        AstNode pathArg = parseExpression();
-        AstNode node{method == "read" ? AstNode::Type::FileRead : (method == "write" ? AstNode::Type::FileWrite :
-            (method == "append" ? AstNode::Type::FileAppend : (method == "mkdir" ? AstNode::Type::FileMkdir : AstNode::Type::FileExists))), "", {}};
-        node.children.push_back(pathArg);
-        if (method == "write" || method == "append") {
-            if (!match(TokenType::Comma)) {
-                throw std::runtime_error("Expected ',' before content at line " + std::to_string(peek().line));
-            }
-            node.children.push_back(parseExpression());
-        }
-        if (!match(TokenType::RParen)) {
-            throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
-        }
-        if (!match(TokenType::Semicolon)) {
-            throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
-        }
-        return node;
     }
 
     AstNode parsePathVarFileCall() {
@@ -2895,6 +2957,14 @@ private:
             } else if (b.type == AstNode::Type::FileRead) {
                 node.initFromFileRead = true;
                 node.initIsInt = false;
+            } else if (b.type == AstNode::Type::FileCall &&
+                       (b.value == "cwd" || b.value == "abspath" || b.value == "join" ||
+                        b.value == "dirname" || b.value == "basename" || b.value == "extension")) {
+                node.initIsInt = false;
+            } else if (b.type == AstNode::Type::FileCall && b.value == "list") {
+                node.initFromArray = true;
+                node.initIsInt = false;
+                node.declType = "[]string";
             } else if (b.type == AstNode::Type::ExprBoolLiteral) {
                 node.initIsBool = true;
             } else if (b.type == AstNode::Type::ExprFloatLiteral) {
