@@ -88,6 +88,32 @@ fn Add_To_Path_Windows_System(InstallDir: string) {
     os.system("powershell -Command \"$p=[Environment]::GetEnvironmentVariable('Path','Machine'); if($p -notlike '*NexaC*'){[Environment]::SetEnvironmentVariable('Path',$p+';" + InstallDir + "','Machine')}\" 2>nul");
 }
 
+fn Is_Windows_Admin(): int {
+    let r: string = os.system("powershell -NoProfile -Command \"if (([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { Write-Output 1 } else { Write-Output 0 }\"");
+    if (r.contains("1")) {
+        return 1;
+    }
+    return 0;
+}
+
+// If not elevated, show UAC prompt and relaunch with --system. Returns 1 if already admin (continue), 0 if relaunched/cancelled.
+fn Ensure_Windows_Admin_Or_Relaunch(): int {
+    if (Is_Windows_Admin() == 1) {
+        return 1;
+    }
+    io.println("Administrator access is required for a system-wide install.");
+    io.println("Windows will ask for permission (UAC)...");
+    let dir: string = os.exe_dir();
+    let exe: string = dir + "Installer.exe";
+    if (!file.exists(exe)) {
+        io.println("Error: could not find Installer.exe next to this program.");
+        return 0;
+    }
+    // -Wait so this process stays up until the elevated install finishes (or UAC is denied).
+    os.system("powershell -NoProfile -Command \"Start-Process -FilePath '" + exe + "' -ArgumentList '--system' -WorkingDirectory '" + dir + "' -Verb RunAs -Wait\"");
+    return 0;
+}
+
 fn Menu() {
     io.println(title_ascii);
     io.println("\nWelcome to the NexaC Installer! Please choose an install option.\n");
@@ -243,7 +269,20 @@ fn Install_User() {
     }
 }
 
-fn main() {
+fn main(args: []string) {
+    // Elevated relaunch path: skip the menu and install system-wide.
+    if (len(args) >= 2) {
+        if (args[1] == "--system") {
+            io.println(title_ascii);
+            io.println("\nInstalling NexaC system-wide (administrator)...");
+            io.println("Detected OS: " + Plat + "\n");
+            Install_System_Wide();
+            io.println("\nPress Enter to close...");
+            let blank: string = io.readln();
+            return;
+        }
+    }
+
     Menu();
     let Choice: string = io.readln();
     let Choice_Int = io.to_int(Choice);
@@ -252,6 +291,12 @@ fn main() {
         case 1:
             io.println("Installing NexaC system-wide...");
             io.println("\nDetected OS: " + Plat);
+            if (Plat == "windows") {
+                if (Ensure_Windows_Admin_Or_Relaunch() == 0) {
+                    // Elevated child ran the install (or UAC was cancelled).
+                    return;
+                }
+            }
             Install_System_Wide();
             break;
         case 2:
