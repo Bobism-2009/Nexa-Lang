@@ -78,6 +78,8 @@ struct AstNode {
     std::vector<AstNode> children;
     std::vector<std::string> paramNames;   // for Function: parameter names
     std::vector<std::string> paramTypes;   // for Function: "int", "string", or "" (default int)
+    std::vector<bool> paramHasDefault;     // for Function: true if this param has a default
+    std::vector<AstNode> paramDefaults;    // for Function: default expr when paramHasDefault[i]
     std::string initValue;       // for Variable: literal initializer value
     bool initIsInt = false;     // for Variable: true = int, false = string
     bool initFromReadln = false; // for Variable: true = io.readln()
@@ -563,6 +565,9 @@ private:
         }
         std::vector<std::string> params;
         std::vector<std::string> types;
+        std::vector<bool> hasDefault;
+        std::vector<AstNode> defaults;
+        bool seenDefault = false;
         if (peek().type != TokenType::RParen) {
             for (;;) {
                 const Token& p = peek();
@@ -571,11 +576,24 @@ private:
                 }
                 params.push_back(p.value);
                 advance();
-                std::string ptype = "int";  // default
+                std::string ptype = "int";  // default type
                 if (match(TokenType::Colon)) {
                     ptype = parseTypeName();
                 }
                 types.push_back(ptype);
+                if (match(TokenType::Assign)) {
+                    seenDefault = true;
+                    hasDefault.push_back(true);
+                    defaults.push_back(parseExpression());
+                } else {
+                    if (seenDefault) {
+                        throw std::runtime_error(
+                            "Parameter '" + params.back() + "' must have a default value (defaults must be trailing) at line " +
+                            std::to_string(p.line));
+                    }
+                    hasDefault.push_back(false);
+                    defaults.push_back(AstNode{AstNode::Type::ExprIntLiteral, "0", {}});
+                }
                 if (!match(TokenType::Comma)) break;
             }
         }
@@ -593,6 +611,8 @@ private:
         fnNode.fnReturnType = std::move(fnReturnType);
         fnNode.paramNames = std::move(params);
         fnNode.paramTypes = std::move(types);
+        fnNode.paramHasDefault = std::move(hasDefault);
+        fnNode.paramDefaults = std::move(defaults);
         fnNode.children = parseBlock();
         if (!match(TokenType::RBrace)) {
             throw std::runtime_error("Expected '}' at line " + std::to_string(peek().line));

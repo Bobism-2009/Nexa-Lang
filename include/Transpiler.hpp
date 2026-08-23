@@ -753,6 +753,7 @@ private:
         size_t astIndex = 0;
         std::string name;
         std::vector<std::string> paramTypes;
+        size_t minArgs = 0;  // required args (params before the first default)
     };
     std::vector<FnOverloadSlot> fnOverloadSlots_;
     std::map<std::string, std::string> globalNexaDecl_;
@@ -762,6 +763,17 @@ private:
         if (i >= fn.paramTypes.size()) return "int";
         const std::string& pt = fn.paramTypes[i];
         return pt.empty() ? "int" : pt;
+    }
+
+    static size_t fnMinArgs(const AstNode& fn) {
+        size_t minArgs = fn.paramNames.size();
+        for (size_t i = 0; i < fn.paramHasDefault.size(); ++i) {
+            if (fn.paramHasDefault[i]) {
+                minArgs = i;
+                break;
+            }
+        }
+        return minArgs;
     }
 
     static bool typesMatchForOverload(const std::string& formal, const std::string& actual) {
@@ -784,7 +796,8 @@ private:
         std::vector<size_t> compat;
         for (size_t s = 0; s < fnOverloadSlots_.size(); ++s) {
             const FnOverloadSlot& sl = fnOverloadSlots_[s];
-            if (sl.name != name || sl.paramTypes.size() != k) continue;
+            if (sl.name != name) continue;
+            if (k < sl.minArgs || k > sl.paramTypes.size()) continue;
             bool ok = true;
             for (size_t i = 0; i < k; ++i) {
                 if (!typesMatchForOverload(sl.paramTypes[i], actualArgTypes[i])) {
@@ -803,8 +816,15 @@ private:
             msg += ")";
             throw std::runtime_error(msg);
         }
-        std::vector<size_t> exact;
+        // Prefer exact arity match (no defaults filled).
+        std::vector<size_t> exactArity;
         for (size_t s : compat) {
+            if (fnOverloadSlots_[s].paramTypes.size() == k) exactArity.push_back(s);
+        }
+        const std::vector<size_t>& pool = exactArity.empty() ? compat : exactArity;
+
+        std::vector<size_t> exact;
+        for (size_t s : pool) {
             const FnOverloadSlot& sl = fnOverloadSlots_[s];
             bool isExact = true;
             for (size_t i = 0; i < k; ++i) {
@@ -819,7 +839,7 @@ private:
         if (exact.size() > 1) {
             throw std::runtime_error("Ambiguous overload resolution for '" + name + "'");
         }
-        if (compat.size() == 1) return compat[0];
+        if (pool.size() == 1) return pool[0];
         throw std::runtime_error("Ambiguous overload resolution for '" + name + "'");
     }
 
@@ -1046,11 +1066,20 @@ private:
         argT.reserve(e.children.size());
         for (const AstNode& a : e.children) argT.push_back(inferExprNexaType(a));
         size_t slot = resolveOverload(e.value, argT);
+        const FnOverloadSlot& sl = fnOverloadSlots_[slot];
+        const AstNode& fn = ast_[sl.astIndex];
         std::string name = cppFnNameForSlot(slot);
         std::string s = name + "(";
-        for (size_t i = 0; i < e.children.size(); i++) {
+        for (size_t i = 0; i < fn.paramNames.size(); i++) {
             if (i > 0) s += ", ";
-            s += emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+            if (i < e.children.size()) {
+                s += emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+            } else {
+                if (i >= fn.paramHasDefault.size() || !fn.paramHasDefault[i] || i >= fn.paramDefaults.size()) {
+                    throw std::runtime_error("Internal: missing default for parameter in call to '" + e.value + "'");
+                }
+                s += emitExpr(fn.paramDefaults[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+            }
         }
         s += ")";
         return s;
@@ -1065,6 +1094,7 @@ private:
             FnOverloadSlot slot;
             slot.astIndex = ai;
             slot.name = n.value;
+            slot.minArgs = fnMinArgs(n);
             for (size_t i = 0; i < n.paramNames.size(); i++) {
                 slot.paramTypes.push_back(canonicalParamType(n, i));
             }

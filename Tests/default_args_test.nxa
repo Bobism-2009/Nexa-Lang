@@ -1,0 +1,17 @@
+#include <std/io>
+
+fn greet(name: string, greeting: string = "Hello") {
+    io.println(greeting + ", " + name);
+}
+
+fn add(a: int, b: int = 1, c: int = 0): int {
+    return a + b + c;
+}
+
+fn main() {
+    greet("World");
+    greet("World", "Hi");
+    io.println(add(10));
+    io.println(add(10, 2));
+    io.println(add(10, 2, 3));
+}

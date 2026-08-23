@@ -53,12 +53,17 @@ FUNCTIONS
   fn name() { ... }           - No parameters, void return
   fn name(a, b) { ... }      - Parameters (default int)
   fn name(a: int, b: string, flag: bool, x: float, c: char, p: Point) { ... }  - Typed parameters (struct or enum: fn f(c: enum Color) { ... })
+  fn name(a: int, b: int = 0, msg: string = "hi") { ... }  - Default argument values
   return expr;               - Return a value (int) from a value-returning function
   return;                   - Early exit from a void function (no value)
   name();                    - Call (statement)
   let z = name(x, y);        - Call (expression)
+  name(1);                   - Omit trailing defaults (same as name(1, 0, "hi") above)
 
   - Parameters: default int, or add : int / : string / : bool / : float / : char / : YourStruct / : enum YourEnum
+  - Defaults: write = expr after the type (or after the name if untyped). Once one parameter
+    has a default, every following parameter must also have a default.
+  - Defaults are filled in at the call site (omitted args use the default expressions).
   - Return type inferred: int if any `return expr;` appears (including inside if/while/for), else void
   - Do not mix `return;` and `return expr;` in the same function; main() only uses value returns (`return expr;` or implicit exit)
   - In main(), `return;` is compiled as `return 0;`
