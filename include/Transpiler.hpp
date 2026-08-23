@@ -981,6 +981,7 @@ private:
             case AstNode::Type::ExprArrayIndex: {
                 std::string baseT = lookupNexaDecl(e.value);
                 if (baseT == "[]string") return "string";
+                if (baseT == "string") return "char";
                 return "int";
             }
             case AstNode::Type::IoToInt: return "int";
@@ -1250,10 +1251,6 @@ private:
             return it != varIsString.end() && it->second;
         }
         if (e.type == AstNode::Type::ExprArrayIndex) {
-            auto it = varIsString.find(e.value);
-            if (it != varIsString.end() && it->second) return true;
-            // Globals declared as []string via .split() never enter varIsString,
-            // but inferExprNexaType resolves them through nexaDeclStack_.
             return inferExprNexaType(e) == "string";
         }
         if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsHostname || e.type == AstNode::Type::OsUsername || e.type == AstNode::Type::OsHome || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall || e.type == AstNode::Type::HttpCall) return true;
@@ -1302,6 +1299,9 @@ private:
             return ft == "char";
         }
         if (e.type == AstNode::Type::ExprCharLiteral) return true;
+        if (e.type == AstNode::Type::ExprArrayIndex) {
+            return inferExprNexaType(e) == "char";
+        }
         if (e.type == AstNode::Type::ExprVarRef) {
             auto it = varIsChar.find(e.value);
             return it != varIsChar.end() && it->second;
@@ -1413,6 +1413,35 @@ private:
                 bool isStrArr = isArray && !child.children.empty() && arrayInitProducesString(child.children[0], varIsString);
                 bool isStr = !isArray && !isStructDeclType(child.declType) && !isEnumDeclType(child.declType) && (!child.declType.empty() ? (child.declType == "string") : (child.initUninitialized || child.initFromReadln || child.initFromFileRead || (!child.initIsInt && !child.initIsBool && !child.initIsFloat && !child.initIsChar && !child.initFromDllLoad && child.children.empty()) ||
                     (!child.children.empty() && exprProducesString(child.children[0]))));
+                // Refine from expression type (e.g. s[i] -> char, parts[i] -> string).
+                if (child.declType.empty() && !isArray && !child.children.empty()) {
+                    std::string it = inferExprNexaType(child.children[0]);
+                    if (it == "char") {
+                        isChar = true;
+                        isStr = false;
+                        isFloat = false;
+                        isBool = false;
+                        varIsChar[child.value] = true;
+                        varIsFloat[child.value] = false;
+                        varIsBool[child.value] = false;
+                    } else if (it == "string") {
+                        isStr = true;
+                        isChar = false;
+                        varIsChar[child.value] = false;
+                    } else if (it == "int") {
+                        isStr = false;
+                        isChar = false;
+                        varIsChar[child.value] = false;
+                    } else if (it == "float") {
+                        isFloat = true;
+                        isStr = false;
+                        varIsFloat[child.value] = true;
+                    } else if (it == "bool") {
+                        isBool = true;
+                        isStr = false;
+                        varIsBool[child.value] = true;
+                    }
+                }
                 varIsString[child.value] = isStr || isStrArr;
                 if (!child.declType.empty() && isStructDeclType(child.declType)) {
                     varStructDeclare(child.value, structNameFromDecl(child.declType));
@@ -1495,6 +1524,35 @@ private:
                         bool useInt = !child.declType.empty() ? (child.declType == "int") : child.initIsInt;
                         bool useFloat = !child.declType.empty() ? (child.declType == "float") : child.initIsFloat;
                         bool useChar = !child.declType.empty() ? (child.declType == "char") : child.initIsChar;
+                        if (child.declType.empty()) {
+                            std::string it = inferExprNexaType(child.children[0]);
+                            if (it == "char") {
+                                useChar = true;
+                                useInt = false;
+                                useFloat = false;
+                                useBool = false;
+                            } else if (it == "string") {
+                                useChar = false;
+                                useInt = false;
+                                useFloat = false;
+                                useBool = false;
+                            } else if (it == "int") {
+                                useInt = true;
+                                useChar = false;
+                                useFloat = false;
+                                useBool = false;
+                            } else if (it == "float") {
+                                useFloat = true;
+                                useInt = false;
+                                useChar = false;
+                                useBool = false;
+                            } else if (it == "bool") {
+                                useBool = true;
+                                useInt = false;
+                                useChar = false;
+                                useFloat = false;
+                            }
+                        }
                         std::string cppType = c + (useBool ? "bool " : useFloat ? "double " : useChar ? "char " : (useInt ? "int " : "std::string "));
                         out << indent << cppType << vname << " = " << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
                     }
@@ -1826,7 +1884,18 @@ private:
                 std::string v = preserveNames_ ? child.value : varMap.at(child.value);
                 std::string idx = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 std::string val = emitExpr(child.children[1], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
-                out << indent << v << "[" << idx << "] = " << val << ";\n";
+                // String scalar: s[i] = char/int. Arrays: arr[i] = element.
+                std::string baseT = lookupNexaDecl(child.value);
+                if (baseT == "string") {
+                    if (exprIsString(child.children[1], varIsString)) {
+                        // Allow s[i] = "x" when RHS is a 1-char string expression.
+                        out << indent << v << "[" << idx << "] = (" << val << ").empty() ? '\\0' : (" << val << ")[0];\n";
+                    } else {
+                        out << indent << v << "[" << idx << "] = static_cast<char>(" << val << ");\n";
+                    }
+                } else {
+                    out << indent << v << "[" << idx << "] = " << val << ";\n";
+                }
             } else if (child.type == AstNode::Type::AssnAdd) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");

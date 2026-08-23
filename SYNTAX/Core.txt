@@ -93,7 +93,7 @@ VARIABLES
     - Number:     let x = 42;
     - Float:      let pi = 3.14;  let x = .5;
     - Char:       let c = 'A';  let nl = '\n';
-    - String:     let s = "hi";
+    - String:     let s = "hi";  s[i] returns char;  s[i] = 'x';
     - Array:      let arr = [1, 2, 3];  arr[i] = x;  (int elements)
     - String array: let names = ["bob", "jessica"];  names[i] returns string
     - io.readln:  let s = io.readln();
@@ -139,6 +139,12 @@ STRING METHODS (core; no #include required)
     io.println("Hello".upper());          // HELLO
     io.println(name.trim().lower());      // chaining is allowed
     if (line.starts_with("#")) { ... }
+
+  STRING INDEXING
+    s[i]           - character at index i (type char); i is 0-based
+    s[i] = 'x';    - replace character at i (also accepts int code point)
+    Bounds are not checked (same as C++ std::string).
+    Note: []string indexing still returns string (parts[i]), not char.
 
   Note: index directly into a split result via a variable
   (let parts = s.split(","); parts[0]), not s.split(",")[0].

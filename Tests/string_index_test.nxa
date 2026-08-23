@@ -1,0 +1,24 @@
+#include <std/io>
+
+fn main() {
+    let s = "Hello";
+    io.println(s[0]);
+    io.println(s[1]);
+    let c = s[4];
+    io.println(c);
+
+    s[0] = 'J';
+    io.println(s);
+
+    let i = 0;
+    while (i < len(s)) {
+        let b = s[i];
+        s[i] = b ^ 1;
+        i = i + 1;
+    }
+    io.println(s);
+
+    let parts = "a,b,c".split(",");
+    io.println(parts[0]);
+    io.println(parts[2]);
+}

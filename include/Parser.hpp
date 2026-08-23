@@ -1609,7 +1609,7 @@ private:
             AstNode cur = parseDotChain({AstNode::Type::ExprVarRef, name, {}});
             if (match(TokenType::LBracket)) {
                 if (cur.type != AstNode::Type::ExprVarRef) {
-                    throw std::runtime_error("Only simple arrays support [] indexing at line " + std::to_string(peek().line));
+                    throw std::runtime_error("Only simple variable [] indexing is supported at line " + std::to_string(peek().line));
                 }
                 AstNode idx = parseExpression();
                 if (!match(TokenType::RBracket)) {
