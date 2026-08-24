@@ -38,6 +38,7 @@ public:
         bool osBrightness = false;
         bool osClipboard = false;
         bool osDesktop = false;
+        bool osSpawn = false;
         bool osExit = false;
         bool osHostname = false;
         bool osUsername = false;
@@ -164,15 +165,58 @@ public:
                         usage.osShutdown || usage.osReboot || usage.osSuspend ||
                         usage.osLogout || usage.osAudio || usage.osBrightness ||
                         usage.osClipboard || usage.osDesktop || usage.osExit ||
-                        usage.osSetenv || usage.osHome || usage.osUsername)) {
+                        usage.osSetenv || usage.osHome || usage.osUsername || usage.osSpawn)) {
             out += "#include <cstdlib>\n";
         }
         if (hasOs() && (usage.osSystem || usage.osExec)) {
             out += "#include <cstdio>\n";
         }
         if (hasOs() && (usage.osGetenv || usage.osExec || usage.osPlatform || usage.osExeDir || usage.osMessageBox || usage.osGrepKeys ||
-                        usage.osHostname || usage.osUsername || usage.osHome || usage.osSetenv)) {
+                        usage.osHostname || usage.osUsername || usage.osHome || usage.osSetenv || usage.osSpawn)) {
             out += "#include <string>\n";
+        }
+        if (hasOs() && usage.osSpawn) {
+            out += "#include <vector>\n";
+            out += "#ifdef _WIN32\n#include <windows.h>\n#else\n#include <unistd.h>\n#endif\n";
+            out += "static int __nexa_os_spawn(const std::vector<std::string>& args) {\n";
+            out += "  if (args.empty() || args[0].empty()) return 0;\n";
+            out += "#ifdef _WIN32\n";
+            out += "  auto append_arg = [](std::string& cmd, const std::string& arg) {\n";
+            out += "    if (!cmd.empty()) cmd.push_back(' ');\n";
+            out += "    if (arg.empty()) { cmd += \"\\\"\\\"\"; return; }\n";
+            out += "    bool need = false;\n";
+            out += "    for (char c : arg) { if (c == ' ' || c == '\\t' || c == '\"') { need = true; break; } }\n";
+            out += "    if (!need) { cmd += arg; return; }\n";
+            out += "    cmd.push_back('\"');\n";
+            out += "    for (char c : arg) { if (c == '\"') cmd += '\\\\'; cmd += c; }\n";
+            out += "    cmd.push_back('\"');\n";
+            out += "  };\n";
+            out += "  std::string cmdline;\n";
+            out += "  for (const auto& a : args) append_arg(cmdline, a);\n";
+            out += "  std::vector<char> buf(cmdline.begin(), cmdline.end());\n";
+            out += "  buf.push_back('\\0');\n";
+            out += "  STARTUPINFOA si; ZeroMemory(&si, sizeof(si)); si.cb = sizeof(si);\n";
+            out += "  PROCESS_INFORMATION pi; ZeroMemory(&pi, sizeof(pi));\n";
+            out += "  BOOL ok = CreateProcessA(NULL, buf.data(), NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi);\n";
+            out += "  if (!ok) return 0;\n";
+            out += "  CloseHandle(pi.hThread);\n";
+            out += "  CloseHandle(pi.hProcess);\n";
+            out += "  return (int)pi.dwProcessId;\n";
+            out += "#else\n";
+            out += "  std::vector<char*> argv;\n";
+            out += "  argv.reserve(args.size() + 1);\n";
+            out += "  for (const auto& s : args) argv.push_back(const_cast<char*>(s.c_str()));\n";
+            out += "  argv.push_back(nullptr);\n";
+            out += "  fflush(NULL);\n";
+            out += "  pid_t pid = fork();\n";
+            out += "  if (pid < 0) return 0;\n";
+            out += "  if (pid == 0) {\n";
+            out += "    execvp(argv[0], argv.data());\n";
+            out += "    _exit(127);\n";
+            out += "  }\n";
+            out += "  return (int)pid;\n";
+            out += "#endif\n";
+            out += "}\n";
         }
         if (hasOs() && (usage.osHostname || usage.osUsername)) {
             out += "#ifdef _WIN32\n#include <windows.h>\n#else\n#include <unistd.h>\n#endif\n";
@@ -888,6 +932,7 @@ public:
         all.osBrightness = true;
         all.osClipboard = true;
         all.osDesktop = true;
+        all.osSpawn = true;
         all.osExit = all.osHostname = all.osUsername = all.osHome = all.osSetenv = true;
         all.file = all.random = all.math = all.time = all.thread = all.dll = true;
         all.str = true;

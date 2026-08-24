@@ -24,7 +24,7 @@ STRUCTS
     other: string;
     nested: InnerStruct;   // InnerStruct must be declared earlier in the file
   }
-  - Field types: int, string, bool, float, char, unsigned char, or another struct name
+  - Field types: int, unsigned int, string, bool, float, char, unsigned char, *T pointers, or another struct name
   - Optional semicolon after the closing }
 
   Variables:
@@ -86,10 +86,30 @@ VARIABLES
 
   Types (inferred or explicit):
     int:    let x = 42;  let n: int = -10;  let c: int;
+    unsigned int: let u: unsigned int = 42;  let w: unsigned int;
     string: let s = "hello";  let name: string = io.readln();  let msg: string;
     bool:   let ok = true;  let flag: bool = false;  let b: bool;
     float:  let pi = 3.14;  let x: float = 2.5;  let f: float;
     char:   let c = 'A';  let ch: char = 'x';  let letter: char;
+    unsigned char: let b: unsigned char = 255;
+    pointers: let p: *int = &x;  let q: **int;  (see POINTERS)
+
+POINTERS (no GC — manual, C-style)
+  Type:     *T   **T   (prefix star on the type)
+  Address:  &x
+  Deref:    *p
+  Assign:   *p = value;   *p += 1;
+  Null:     null   (emits C++ nullptr)
+  Examples:
+    let x = 10;
+    let p: *int = &x;
+    *p = 20;              // x is now 20
+    io.println(*p);
+    let q: *int = null;
+    if (q != null) { ... }
+    fn bump(p: *int) { *p = *p + 1; }
+  Struct fields may be pointers:  field: *int;
+  There is no garbage collector; dangling pointers are undefined behavior (same as C/C++).
 
   String escapes: \n \t \r \\ \" \xHH (hex ASCII, e.g. \x41 = 'A')
   Raw strings: R"()" or R"delim(...)delim" - no escapes, can contain newlines and "
@@ -120,6 +140,16 @@ ARITHMETIC
   Precedence (tightest first): * / % ; + - ; << >> ; & ; ^ ; |
   Bitwise: & | ^  (binary),  ~  (unary NOT),  << >>  (shift)
   int and float (int + float promotes to float)
+
+CASTS (C-style)
+  (int)expr    (float)expr    (char)expr    (bool)expr    (string)expr
+  (unsigned char)expr    (unsigned int)expr
+  Same precedence as unary operators. Examples:
+    let x: float = 3.7;
+    let n = (int)x;           // 3
+    let s = (string)n;        // "3"
+    let c = (char)65;         // 'A'
+    let f = (float)(int)s;    // parse then cast (s must be string)
 
 STRING METHODS (core; no #include required)
   Method syntax on any string value (variable, literal, or parenthesized expression):

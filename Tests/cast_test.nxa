@@ -1,0 +1,18 @@
+#include <std/io>
+
+fn main() {
+    let x: float = 3.7;
+    let n = (int)x;
+    io.println(n);
+    io.println((string)n);
+    io.println((char)65);
+    let s = "42";
+    io.println((int)s);
+    io.println((float)s);
+    let b = (bool)1;
+    if (b) {
+        io.println("yes");
+    }
+    let f = (float)(int)"9";
+    io.println((string)f);
+}

@@ -24,7 +24,7 @@ struct AstNode {
                       OsSetBrightness, OsGetBrightness,
                       OsClipSet, OsClipGet,
                       OsType,
-                      OsNotify, OsOpen,
+                      OsNotify, OsOpen, OsSpawn,
                       OsExit, OsHostname, OsUsername, OsHome, OsSetenv,
                       DllLoad, DllCall,
                       FileRead, FileWrite, FileAppend, FileExists, FileMkdir, FileCall,
@@ -62,12 +62,17 @@ struct AstNode {
                       ExprIntLiteral, ExprFloatLiteral, ExprCharLiteral, ExprBoolLiteral, ExprVarRef, ExprAdd, ExprSub, ExprMul, ExprDiv, ExprMod,
                       ExprBitAnd, ExprBitOr, ExprBitXor, ExprShl, ExprShr, ExprBitNot,
                       ExprArrayLiteral, ExprArrayIndex,
+                      ExprCast,
+                      ExprAddrOf,
+                      ExprDeref,
+                      ExprNull,
                       CondEq, CondNe, CondLt, CondGt, CondLe, CondGe,
                       CondAnd, CondOr, CondNot,
                       ExprStringLiteral,
                       ExprLen,
                       ExprTrim,
                       AssnIndex,
+                      AssnDeref,
                       StructDef,
                       EnumDef,
                       ExprMember,
@@ -90,7 +95,7 @@ struct AstNode {
     bool initIsBool = false;       // for Variable: true = let x = true/false
     bool initIsFloat = false;      // for Variable: true = let x = 3.14
     bool initIsChar = false;       // for Variable: true = let x = 'a'
-    std::string declType = "";  // for Variable: "int", "string", "bool", "float", "char", "unsigned char", or "" (inferred)
+    std::string declType = "";  // for Variable: "int", "string", "bool", "float", "char", "unsigned char", "unsigned int", or "" (inferred)
     bool isVarRef = false;      // for IoPrint/IoPrintln: true = print variable, false = print string
     bool caseIsString = false;  // for SwitchCase: true = case "str", false = case 42
     bool caseIsEnum = false;    // for SwitchCase: Enum.variant; value = enum name, initValue = variant
@@ -158,6 +163,7 @@ private:
 
     static bool exprProducesString(const AstNode& e) {
         if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsHostname || e.type == AstNode::Type::OsUsername || e.type == AstNode::Type::OsHome || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall || e.type == AstNode::Type::HttpCall) return true;
+        if (e.type == AstNode::Type::ExprCast && e.value == "string") return true;
         if (e.type == AstNode::Type::FileCall) {
             const std::string& m = e.value;
             return m == "cwd" || m == "abspath" || m == "join" || m == "dirname" || m == "basename" || m == "extension";
@@ -215,6 +221,10 @@ private:
     }
 
     std::string parseTypeName() {
+        // Pointer types: *int, **char, *Point, etc. (prefix *, like Go / systems style)
+        if (match(TokenType::Star)) {
+            return std::string("*") + parseTypeName();
+        }
         if (match(TokenType::Enum)) {
             const Token& t = peek();
             if (t.type != TokenType::Identifier) {
@@ -227,11 +237,18 @@ private:
         if (t.type == TokenType::Identifier && t.value == "unsigned") {
             advance();
             const Token& t2 = peek();
-            if (t2.type != TokenType::Identifier || t2.value != "char") {
-                throw std::runtime_error("Expected 'char' after 'unsigned' at line " + std::to_string(t2.line));
+            if (t2.type != TokenType::Identifier) {
+                throw std::runtime_error("Expected 'char' or 'int' after 'unsigned' at line " + std::to_string(t2.line));
             }
-            advance();
-            return "unsigned char";
+            if (t2.value == "char") {
+                advance();
+                return "unsigned char";
+            }
+            if (t2.value == "int") {
+                advance();
+                return "unsigned int";
+            }
+            throw std::runtime_error("Expected 'char' or 'int' after 'unsigned' at line " + std::to_string(t2.line));
         }
         if (t.type != TokenType::Identifier) {
             throw std::runtime_error("Expected type name at line " + std::to_string(t.line));
@@ -706,6 +723,8 @@ private:
                 stmts.push_back(parseOsGetProcessIdBareStmt());
             } else if (t.type == TokenType::Identifier && t.value == "ui") {
                 throw std::runtime_error("std/ui has been removed at line " + std::to_string(t.line));
+            } else if (t.type == TokenType::Star) {
+                stmts.push_back(parseDerefAssignment());
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
                        tokens_[pos_ + 1].type == TokenType::LParen) {
                 stmts.push_back(parseFnCall());
@@ -983,6 +1002,35 @@ private:
         }
         AstNode node{AstNode::Type::AssnIndex, name, {idx, expr}};
         return node;
+    }
+
+    // *p = expr;  *p += n;  etc.
+    AstNode parseDerefAssignment() {
+        size_t line = peek().line;
+        if (!match(TokenType::Star)) {
+            throw std::runtime_error("Expected '*' for pointer assignment at line " + std::to_string(line));
+        }
+        AstNode ptrExpr = parseUnary();
+        std::string op = "=";
+        if (match(TokenType::Assign)) op = "=";
+        else if (match(TokenType::PlusAssign)) op = "+=";
+        else if (match(TokenType::MinusAssign)) op = "-=";
+        else if (match(TokenType::StarAssign)) op = "*=";
+        else if (match(TokenType::SlashAssign)) op = "/=";
+        else if (match(TokenType::PercentAssign)) op = "%=";
+        else if (match(TokenType::BitAndAssign)) op = "&=";
+        else if (match(TokenType::BitOrAssign)) op = "|=";
+        else if (match(TokenType::BitXorAssign)) op = "^=";
+        else if (match(TokenType::ShlAssign)) op = "<<=";
+        else if (match(TokenType::ShrAssign)) op = ">>=";
+        else {
+            throw std::runtime_error("Expected '=' after *ptr at line " + std::to_string(peek().line));
+        }
+        AstNode rhs = parseExpression();
+        if (!match(TokenType::Semicolon)) {
+            throw std::runtime_error("Expected ';' after pointer assignment at line " + std::to_string(peek().line));
+        }
+        return {AstNode::Type::AssnDeref, op, {std::move(ptrExpr), std::move(rhs)}};
     }
 
     AstNode parseAssignment() {
@@ -1272,6 +1320,8 @@ private:
                 stmts.push_back(parseOsGetProcessIdBareStmt());
             } else if (t.type == TokenType::Identifier && t.value == "ui") {
                 throw std::runtime_error("std/ui has been removed at line " + std::to_string(t.line));
+            } else if (t.type == TokenType::Star) {
+                stmts.push_back(parseDerefAssignment());
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
                        tokens_[pos_ + 1].type == TokenType::LParen) {
                 stmts.push_back(parseFnCall());
@@ -1489,6 +1539,35 @@ private:
     }
 
     AstNode parseUnary() {
+        // C-style cast: (int)x, (float)y, (string)z, ...
+        if (peek().type == TokenType::LParen && pos_ + 2 < tokens_.size()) {
+            const Token& t1 = tokens_[pos_ + 1];
+            const Token& t2 = tokens_[pos_ + 2];
+            if (t1.type == TokenType::Identifier && t2.type == TokenType::RParen) {
+                const std::string& tn = t1.value;
+                if (tn == "int" || tn == "float" || tn == "char" || tn == "bool" || tn == "string") {
+                    advance();  // (
+                    advance();  // type
+                    advance();  // )
+                    AstNode inner = parseUnary();
+                    return {AstNode::Type::ExprCast, tn, {std::move(inner)}};
+                }
+            }
+            // (unsigned char)x / (unsigned int)x
+            if (t1.type == TokenType::Identifier && t1.value == "unsigned" &&
+                pos_ + 3 < tokens_.size() &&
+                tokens_[pos_ + 2].type == TokenType::Identifier &&
+                (tokens_[pos_ + 2].value == "char" || tokens_[pos_ + 2].value == "int") &&
+                tokens_[pos_ + 3].type == TokenType::RParen) {
+                advance();  // (
+                advance();  // unsigned
+                std::string ut = tokens_[pos_].value == "char" ? "unsigned char" : "unsigned int";
+                advance();  // char|int
+                advance();  // )
+                AstNode inner = parseUnary();
+                return {AstNode::Type::ExprCast, ut, {std::move(inner)}};
+            }
+        }
         if (match(TokenType::Minus)) {
             AstNode inner = parseUnary();
             AstNode zero{AstNode::Type::ExprIntLiteral, "0", {}};
@@ -1500,6 +1579,14 @@ private:
         }
         if (match(TokenType::BitNot)) {
             return {AstNode::Type::ExprBitNot, "", {parseUnary()}};
+        }
+        // *p  (dereference) — must be before parseFactor; distinct from binary *
+        if (match(TokenType::Star)) {
+            return {AstNode::Type::ExprDeref, "", {parseUnary()}};
+        }
+        // &x  (address-of) — distinct from binary &
+        if (match(TokenType::BitAnd)) {
+            return {AstNode::Type::ExprAddrOf, "", {parseUnary()}};
         }
         return parseFactor();
     }
@@ -1540,6 +1627,10 @@ private:
         if (match(TokenType::False)) {
             return {AstNode::Type::ExprBoolLiteral, "false", {}};
         }
+        if (peek().type == TokenType::Identifier && peek().value == "null") {
+            advance();
+            return {AstNode::Type::ExprNull, "null", {}};
+        }
         if (match(TokenType::String)) {
             AstNode lit{AstNode::Type::ExprStringLiteral, tokens_[pos_ - 1].value, {}};
             if (peek().type == TokenType::Dot) return parseDotChain(std::move(lit));
@@ -1570,6 +1661,7 @@ private:
             if (method == "get_volume") return parseOsGetVolume();
             if (method == "get_brightness") return parseOsGetBrightness();
             if (method == "clip_get") return parseOsClipGet();
+            if (method == "spawn") return parseOsSpawn();
         }
         if (peek().type == TokenType::Identifier && (peek().value == "getprocessid" || peek().value == "getpid") &&
             pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::LParen) {
@@ -1698,7 +1790,10 @@ private:
         if (argTok.type == TokenType::String || argTok.type == TokenType::Number ||
             argTok.type == TokenType::Identifier || argTok.type == TokenType::LParen ||
             argTok.type == TokenType::True || argTok.type == TokenType::False ||
-            argTok.type == TokenType::Float || argTok.type == TokenType::Char) {
+            argTok.type == TokenType::Float || argTok.type == TokenType::Char ||
+            argTok.type == TokenType::Star || argTok.type == TokenType::BitAnd ||
+            argTok.type == TokenType::Minus || argTok.type == TokenType::Not ||
+            argTok.type == TokenType::BitNot) {
             result.children.push_back(parseExpression());
         } else {
             throw std::runtime_error("Expected string or expression at line " + std::to_string(argTok.line));
@@ -1840,6 +1935,21 @@ private:
             finishOsCall(requireSemicolon, peek().line);
             return {AstNode::Type::OsOpen, "", {arg}};
         }
+        if (method == "spawn") {
+            if (!match(TokenType::LParen)) {
+                throw std::runtime_error("Expected '(' after os.spawn at line " + std::to_string(peek().line));
+            }
+            AstNode node{AstNode::Type::OsSpawn, "", {}};
+            node.children.push_back(parseExpression());
+            while (match(TokenType::Comma)) {
+                node.children.push_back(parseExpression());
+            }
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' after os.spawn(...) at line " + std::to_string(peek().line));
+            }
+            finishOsCall(requireSemicolon, peek().line);
+            return node;
+        }
         if (method == "messagebox") {
             if (!match(TokenType::LParen)) {
                 throw std::runtime_error("Expected '(' after os.messagebox at line " + std::to_string(peek().line));
@@ -1925,6 +2035,33 @@ private:
         }
         finishOsCall(requireSemicolon, peek().line);
         return result;
+    }
+
+    AstNode parseOsSpawn() {
+        if (!modules_.hasOs()) {
+            throw std::runtime_error("os.spawn requires #include <std/os> at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "os") {
+            throw std::runtime_error("Expected 'os' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "spawn") {
+            throw std::runtime_error("Expected 'spawn' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after os.spawn at line " + std::to_string(peek().line));
+        }
+        AstNode node{AstNode::Type::OsSpawn, "", {}};
+        node.children.push_back(parseExpression());
+        while (match(TokenType::Comma)) {
+            node.children.push_back(parseExpression());
+        }
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' after os.spawn(...) at line " + std::to_string(peek().line));
+        }
+        return node;
     }
 
     AstNode parseOsExec() {
@@ -3039,7 +3176,7 @@ private:
                 if (declType == "string" || declType == "bool" || declType == "float" ||
                     (declType.size() >= 7 && declType.compare(0, 7, "struct:") == 0) ||
                     (declType.size() >= 5 && declType.compare(0, 5, "enum:") == 0)) {
-                    throw std::runtime_error("Fixed array only supports int, char, or unsigned char at line " + std::to_string(peek().line));
+                    throw std::runtime_error("Fixed array only supports int, unsigned int, char, or unsigned char at line " + std::to_string(peek().line));
                 }
             }
         }
@@ -3053,7 +3190,7 @@ private:
             AstNode node{AstNode::Type::Variable, name, {}};
             node.initUninitialized = true;
             node.declType = declType;
-            node.initIsInt = (declType == "int");
+            node.initIsInt = (declType == "int" || declType == "unsigned int");
             node.initIsBool = (declType == "bool");
             node.initIsFloat = (declType == "float");
             node.initIsChar = (declType == "char");
@@ -3153,7 +3290,7 @@ private:
         }
         if (!declType.empty()) {
             node.declType = declType;
-            node.initIsInt = (declType == "int");
+            node.initIsInt = (declType == "int" || declType == "unsigned int");
             node.initIsBool = (declType == "bool");
             node.initIsFloat = (declType == "float");
             node.initIsChar = (declType == "char");

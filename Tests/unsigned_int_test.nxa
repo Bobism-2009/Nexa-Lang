@@ -1,0 +1,19 @@
+#include <std/io>
+
+fn main() {
+    let u: unsigned int = 42;
+    let w: unsigned int;
+    w = 100;
+    io.println(u);
+    io.println(w);
+    let n = (unsigned int)(-1);
+    io.println(n);
+    let s = "99";
+    io.println((unsigned int)s);
+    let arr: unsigned int[4];
+    arr[0] = 1;
+    arr[1] = 2;
+    io.println(arr[0]);
+    let p: *unsigned int = &u;
+    io.println(*p);
+}

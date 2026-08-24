@@ -24,6 +24,11 @@ Nexa Standard Modules
 #include <std/os>
   os.system(cmd)    - Run shell command, blocks until complete (statement)
                     - As expression: run command and return stdout as string
+  os.spawn(prog [, arg...]) - Start a program directly (no shell). Does not wait.
+                    - Returns process id (int), or 0 on failure
+                    - On Windows, no console window is created for the child
+                    - Example: os.spawn("cmd", "/c", "echo", "hi");
+                    - Example: let pid = os.spawn("notepad");
   os.platform()     - Returns "windows", "linux", "darwin", or "unknown"
   os.getenv(name)   - Get environment variable, returns string (or "")
   os.setenv(name, value) - Set environment variable for this process
