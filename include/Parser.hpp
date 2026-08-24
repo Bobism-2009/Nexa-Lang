@@ -101,8 +101,11 @@ struct AstNode {
     bool caseIsEnum = false;    // for SwitchCase: Enum.variant; value = enum name, initValue = variant
     bool isConst = false;       // for Variable: true = let const x = ...
     bool isFixedArray = false;  // for Variable: true = let x: type[size]; (fixed-size buffer)
+    bool isArrowMember = false; // for ExprMember: true = ptr->field, false = value.field
     std::string arraySize = ""; // for Variable: size for fixed array, e.g. "4080"
     std::string fnReturnType = ""; // Function / MainFunction: explicit ": type" before `{`; empty = infer from returns
+    bool isExtern = false;         // Function: true = extern fn (C linkage declaration, no body)
+    bool isVariadic = false;       // Function: true = trailing ... (C varargs)
 };
 
 class Parser {
@@ -123,6 +126,8 @@ public:
             if (t.type == TokenType::Include) {
                 std::vector<AstNode> incNodes = parseInclude();
                 for (AstNode& n : incNodes) ast.push_back(std::move(n));
+            } else if (t.type == TokenType::Extern) {
+                ast.push_back(parseExternFunction());
             } else if (t.type == TokenType::Fn) {
                 if (pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::Main) {
                     ast.push_back(parseMainFunction());
@@ -357,17 +362,21 @@ private:
         }
         advance();
         AstNode cur{AstNode::Type::ExprVarRef, nameTok.value, {}};
-        while (match(TokenType::Dot)) {
+        while (peek().type == TokenType::Dot || peek().type == TokenType::Arrow) {
+            bool arrow = peek().type == TokenType::Arrow;
+            advance();
             const Token& ftok = peek();
             if (ftok.type != TokenType::Identifier) {
-                throw std::runtime_error("Expected field name after '.' at line " + std::to_string(ftok.line));
+                throw std::runtime_error(std::string("Expected field name after '") + (arrow ? "->" : ".") +
+                    "' at line " + std::to_string(ftok.line));
             }
             advance();
             AstNode mem{AstNode::Type::ExprMember, ftok.value, {std::move(cur)}};
+            mem.isArrowMember = arrow;
             cur = std::move(mem);
         }
         if (cur.type != AstNode::Type::ExprMember) {
-            throw std::runtime_error("Expected member assignment (e.g. obj.field = ...) at line " + std::to_string(line));
+            throw std::runtime_error("Expected member assignment (e.g. obj.field = ... or ptr->field = ...) at line " + std::to_string(line));
         }
         std::string op = "=";
         if (match(TokenType::Assign)) {
@@ -637,6 +646,68 @@ private:
         return fnNode;
     }
 
+    AstNode parseExternFunction() {
+        size_t line = peek().line;
+        if (!match(TokenType::Extern)) {
+            throw std::runtime_error("Expected 'extern' at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Fn)) {
+            throw std::runtime_error("Expected 'fn' after extern at line " + std::to_string(peek().line));
+        }
+        const Token& nameTok = peek();
+        if (nameTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected function name at line " + std::to_string(nameTok.line));
+        }
+        advance();
+        std::string name = nameTok.value;
+        if (name == "main") {
+            throw std::runtime_error("extern fn cannot be named main at line " + std::to_string(line));
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
+        }
+        std::vector<std::string> params;
+        std::vector<std::string> types;
+        if (peek().type != TokenType::RParen && peek().type != TokenType::Ellipsis) {
+            for (;;) {
+                const Token& p = peek();
+                if (p.type != TokenType::Identifier) {
+                    throw std::runtime_error("Expected parameter name at line " + std::to_string(p.line));
+                }
+                params.push_back(p.value);
+                advance();
+                std::string ptype = "int";
+                if (match(TokenType::Colon)) {
+                    ptype = parseTypeName();
+                }
+                if (match(TokenType::Assign)) {
+                    throw std::runtime_error("extern fn parameters cannot have default values at line " + std::to_string(peek().line));
+                }
+                types.push_back(ptype);
+                if (peek().type == TokenType::Ellipsis) break;
+                if (!match(TokenType::Comma)) break;
+            }
+        }
+        bool variadic = match(TokenType::Ellipsis);
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Colon)) {
+            throw std::runtime_error("extern fn requires an explicit return type (e.g. : int or : void) at line " + std::to_string(peek().line));
+        }
+        std::string fnReturnType = parseTypeName();
+        if (!match(TokenType::Semicolon)) {
+            throw std::runtime_error("Expected ';' after extern fn declaration at line " + std::to_string(peek().line));
+        }
+        AstNode fnNode{AstNode::Type::Function, name, {}};
+        fnNode.isExtern = true;
+        fnNode.isVariadic = variadic;
+        fnNode.fnReturnType = std::move(fnReturnType);
+        fnNode.paramNames = std::move(params);
+        fnNode.paramTypes = std::move(types);
+        return fnNode;
+    }
+
     std::vector<AstNode> parseBlock(AstNode* parentIf = nullptr, bool singleStatement = false) {
         std::vector<AstNode> stmts;
         while (pos_ < tokens_.size()) {
@@ -709,9 +780,10 @@ private:
             } else if (t.type == TokenType::Identifier && t.value == "random") {
                 stmts.push_back(parseRandomCall());
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
-                       tokens_[pos_ + 1].type == TokenType::Dot) {
+                       (tokens_[pos_ + 1].type == TokenType::Dot || tokens_[pos_ + 1].type == TokenType::Arrow)) {
                 const Token& id2 = tokens_[pos_ + 2];
-                bool isPathFile = id2.type == TokenType::Identifier && (id2.value == "Write" || id2.value == "Append") &&
+                bool isPathFile = tokens_[pos_ + 1].type == TokenType::Dot &&
+                    id2.type == TokenType::Identifier && (id2.value == "Write" || id2.value == "Append") &&
                     pos_ + 3 < tokens_.size() && tokens_[pos_ + 3].type == TokenType::LParen;
                 if (isPathFile) {
                     stmts.push_back(parsePathVarFileCall());
@@ -1306,9 +1378,10 @@ private:
             } else if (t.type == TokenType::Identifier && t.value == "random") {
                 stmts.push_back(parseRandomCall());
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
-                       tokens_[pos_ + 1].type == TokenType::Dot) {
+                       (tokens_[pos_ + 1].type == TokenType::Dot || tokens_[pos_ + 1].type == TokenType::Arrow)) {
                 const Token& id2 = tokens_[pos_ + 2];
-                bool isPathFile = id2.type == TokenType::Identifier && (id2.value == "Write" || id2.value == "Append") &&
+                bool isPathFile = tokens_[pos_ + 1].type == TokenType::Dot &&
+                    id2.type == TokenType::Identifier && (id2.value == "Write" || id2.value == "Append") &&
                     pos_ + 3 < tokens_.size() && tokens_[pos_ + 3].type == TokenType::LParen;
                 if (isPathFile) {
                     stmts.push_back(parsePathVarFileCall());
@@ -1412,17 +1485,19 @@ private:
         return forNode;
     }
 
-    // Parses a chain of `.field` accesses and `.method(args)` calls applied to a base expression.
+    // Parses a chain of `.field` / `->field` accesses and `.method(args)` calls on a base expression.
     AstNode parseDotChain(AstNode cur) {
-        while (peek().type == TokenType::Dot) {
+        while (peek().type == TokenType::Dot || peek().type == TokenType::Arrow) {
+            bool arrow = peek().type == TokenType::Arrow;
             advance();
             const Token& ftok = peek();
             if (ftok.type != TokenType::Identifier) {
-                throw std::runtime_error("Expected field name after '.' at line " + std::to_string(ftok.line));
+                throw std::runtime_error(std::string("Expected field name after '") + (arrow ? "->" : ".") +
+                    "' at line " + std::to_string(ftok.line));
             }
             advance();
-            // value.method(args): core string methods callable on any string value.
-            if (peek().type == TokenType::LParen) {
+            // value.method(args): core string methods — only with '.', not '->'
+            if (!arrow && peek().type == TokenType::LParen) {
                 std::string m = ftok.value;
                 // method name -> argument count
                 static const std::map<std::string, int> strMethods = {
@@ -1450,7 +1525,11 @@ private:
                 cur = std::move(call);
                 continue;
             }
+            if (arrow && peek().type == TokenType::LParen) {
+                throw std::runtime_error("Methods use '.' not '->' at line " + std::to_string(ftok.line));
+            }
             AstNode mem{AstNode::Type::ExprMember, ftok.value, {std::move(cur)}};
+            mem.isArrowMember = arrow;
             cur = std::move(mem);
         }
         return cur;
@@ -1633,7 +1712,7 @@ private:
         }
         if (match(TokenType::String)) {
             AstNode lit{AstNode::Type::ExprStringLiteral, tokens_[pos_ - 1].value, {}};
-            if (peek().type == TokenType::Dot) return parseDotChain(std::move(lit));
+            if (peek().type == TokenType::Dot || peek().type == TokenType::Arrow) return parseDotChain(std::move(lit));
             return lit;
         }
         if (peek().type == TokenType::Identifier && peek().value == "io" && pos_ + 2 < tokens_.size() &&
@@ -1728,8 +1807,8 @@ private:
                     throw std::runtime_error("Expected ']' at line " + std::to_string(peek().line));
                 }
                 AstNode indexed{AstNode::Type::ExprArrayIndex, cur.value, {idx}};
-                // Allow methods on an indexed element, e.g. parts[i].split("=").
-                if (peek().type == TokenType::Dot) return parseDotChain(std::move(indexed));
+                // Allow methods/fields on an indexed element, e.g. parts[i].split("=") or arr[i]->x.
+                if (peek().type == TokenType::Dot || peek().type == TokenType::Arrow) return parseDotChain(std::move(indexed));
                 return indexed;
             }
             return cur;
@@ -1741,7 +1820,7 @@ private:
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
             }
-            if (peek().type == TokenType::Dot) return parseDotChain(std::move(e));
+            if (peek().type == TokenType::Dot || peek().type == TokenType::Arrow) return parseDotChain(std::move(e));
             return e;
         }
         throw std::runtime_error("Expected number, variable, or (expression) at line " + std::to_string(peek().line));

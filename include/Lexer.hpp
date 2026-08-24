@@ -36,6 +36,7 @@ enum class TokenType {
     True,
     False,
     Fn,
+    Extern,
     Main,
     LParen,
     RParen,
@@ -45,6 +46,8 @@ enum class TokenType {
     RBracket,
     Semicolon,
     Dot,
+    Arrow,
+    Ellipsis,
     Comma,
     Colon,
     Assign,
@@ -163,6 +166,9 @@ public:
             } else if (c == ';') {
                 tokens.push_back({TokenType::Semicolon, ";", line_});
                 pos_++;
+            } else if (c == '.' && pos_ + 2 < source_.size() && source_[pos_ + 1] == '.' && source_[pos_ + 2] == '.') {
+                tokens.push_back({TokenType::Ellipsis, "...", line_});
+                pos_ += 3;
             } else if (c == '.' && pos_ + 1 < source_.size() && std::isdigit(source_[pos_ + 1])) {
                 tokens.push_back(scanFloatFromDot());
             } else if (c == '.') {
@@ -246,6 +252,9 @@ public:
             } else if (c == '+') {
                 tokens.push_back({TokenType::Plus, "+", line_});
                 pos_++;
+            } else if (c == '-' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '>') {
+                tokens.push_back({TokenType::Arrow, "->", line_});
+                pos_ += 2;
             } else if (c == '-' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '-') {
                 tokens.push_back({TokenType::MinusMinus, "--", line_});
                 pos_ += 2;
@@ -410,6 +419,7 @@ private:
         else if (value == "default") type = TokenType::Default;
         else if (value == "true") type = TokenType::True;
         else if (value == "false") type = TokenType::False;
+        else if (value == "extern") type = TokenType::Extern;
         else if (value == "inline_cpp") type = TokenType::InlineCpp;
 
         return {type, value, startLine};

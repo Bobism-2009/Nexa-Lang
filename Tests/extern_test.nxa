@@ -1,0 +1,8 @@
+#include <std/io>
+
+extern fn strlen(s: *char): int;
+
+fn main() {
+    let n = strlen("hello");
+    io.println(n);
+}

@@ -1,0 +1,30 @@
+#include <std/io>
+
+struct Point {
+    x: int;
+    y: int;
+    label: string;
+}
+
+fn bump(p: *Point) {
+    p->x = p->x + 1;
+}
+
+fn main() {
+    let pt: Point;
+    pt.x = 10;
+    pt.y = 20;
+    pt.label = "hi";
+
+    let p: *Point = &pt;
+    io.println(p->x);
+    p->x = 30;
+    io.println(pt.x);
+    p->y += 5;
+    io.println(p->y);
+    p->label += "!";
+    io.println(p->label);
+
+    bump(&pt);
+    io.println(pt.x);
+}

@@ -348,6 +348,11 @@ public:
             for (size_t astIdx = 0; astIdx < ast_.size(); ++astIdx) {
                 const AstNode& node = ast_[astIdx];
                 if (node.type != AstNode::Type::Function) continue;
+                if (node.isExtern) {
+                    emitExternDecl(out, node);
+                    wroteAnyProto = true;
+                    continue;
+                }
                 std::string cppName = cppFnNameForAstIndex(astIdx);
                 bool hasValRet = false, hasVoidRet = false;
                 stmtsClassifyReturns(node.children, hasValRet, hasVoidRet);
@@ -398,6 +403,7 @@ public:
                 continue;
             }
             if (node.type == AstNode::Type::Function) {
+                if (node.isExtern) continue;
                 std::string cppName = cppFnNameForAstIndex(astIdx);
                 bool hasValRet = false, hasVoidRet = false;
                 stmtsClassifyReturns(node.children, hasValRet, hasVoidRet);
@@ -792,11 +798,14 @@ private:
         if (formal == "float" && actual == "int") return true;
         // null is compatible with any pointer parameter
         if (isPointerType(formal) && actual == "null") return true;
+        // C strings: string literals/values pass to *char extern params
+        if (isPointerType(formal) && pointerPointeeType(formal) == "char" && actual == "string") return true;
         return false;
     }
 
     std::string inferReturnNexaType(const AstNode& fn) const {
         if (!fn.fnReturnType.empty()) return fn.fnReturnType;
+        if (fn.isExtern) return "int";
         bool hasValRet = false, hasVoidRet = false;
         stmtsClassifyReturns(fn.children, hasValRet, hasVoidRet);
         if (hasValRet) return "int";
@@ -872,6 +881,7 @@ private:
 
     std::string cppFnNameForSlot(size_t slotIdx) const {
         const FnOverloadSlot& sl = fnOverloadSlots_.at(slotIdx);
+        if (ast_[sl.astIndex].isExtern) return ast_[sl.astIndex].value;
         if (preserveNames_) return ast_[sl.astIndex].value;
         return "__nexa_fn_" + std::to_string(slotIdx);
     }
@@ -1101,7 +1111,16 @@ private:
         for (size_t i = 0; i < fn.paramNames.size(); i++) {
             if (i > 0) s += ", ";
             if (i < e.children.size()) {
-                s += emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                std::string arg = emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                if (fn.isExtern && i < fn.paramTypes.size()) {
+                    const std::string& pt = fn.paramTypes[i];
+                    if (isPointerType(pt) && pointerPointeeType(pt) == "char" &&
+                        exprIsString(e.children[i], *varIsString) &&
+                        e.children[i].type != AstNode::Type::ExprStringLiteral) {
+                        arg += ".c_str()";
+                    }
+                }
+                s += arg;
             } else {
                 if (i >= fn.paramHasDefault.size() || !fn.paramHasDefault[i] || i >= fn.paramDefaults.size()) {
                     throw std::runtime_error("Internal: missing default for parameter in call to '" + e.value + "'");
@@ -1189,6 +1208,34 @@ private:
         }
         throw std::runtime_error("Unknown type: " + t);
     }
+    std::string nexaTypeToCppExtern(const std::string& t) const {
+        if (isPointerType(t)) {
+            std::string pt = pointerPointeeType(t);
+            if (pt == "char") return "const char*";
+            if (pt == "void") return "void*";
+            return nexaTypeToCppExtern(pt) + "*";
+        }
+        if (t == "string") return "const char*";
+        if (t == "void") return "void";
+        return nexaTypeToCpp(t);
+    }
+    void emitExternDecl(std::ostream& out, const AstNode& node) const {
+        std::string retCpp = node.fnReturnType == "void" ? "void" : nexaTypeToCppExtern(node.fnReturnType);
+        out << "extern \"C\" " << retCpp << " " << node.value << "(";
+        for (size_t i = 0; i < node.paramNames.size(); i++) {
+            if (i > 0) out << ", ";
+            std::string ptype = "int";
+            if (i < node.paramTypes.size() && !node.paramTypes[i].empty()) {
+                ptype = nexaTypeToCppExtern(canonicalParamType(node, i));
+            }
+            out << ptype << " " << node.paramNames[i];
+        }
+        if (node.isVariadic) {
+            if (!node.paramNames.empty()) out << ", ";
+            out << "...";
+        }
+        out << ");\n";
+    }
 
     bool exprIsEnumLike(const AstNode& e, const std::map<std::string, std::string>& varMap,
                         const std::map<std::string, bool>& varIsEnum) const {
@@ -1232,13 +1279,7 @@ private:
     std::string structTypeOfExprValue(const AstNode& e) const {
         if (e.type == AstNode::Type::ExprVarRef) return varStructLookup(e.value);
         if (e.type == AstNode::Type::ExprMember && !e.children.empty()) {
-            std::string inner = structTypeOfExprValue(e.children[0]);
-            if (inner.empty()) return "";
-            auto sit = structFields_.find(inner);
-            if (sit == structFields_.end()) return "";
-            auto fit = sit->second.find(e.value);
-            if (fit == sit->second.end()) return "";
-            const std::string& ft = fit->second;
+            std::string ft = fieldTypeOfMemberExpr(e);
             if (ft.size() >= 7 && ft.compare(0, 7, "struct:") == 0) return ft.substr(7);
             return "";
         }
@@ -1246,7 +1287,16 @@ private:
     }
     std::string fieldTypeOfMemberExpr(const AstNode& e) const {
         if (e.type != AstNode::Type::ExprMember || e.children.empty()) return "";
-        std::string st = structTypeOfExprValue(e.children[0]);
+        std::string st;
+        if (e.isArrowMember) {
+            std::string baseT = inferExprNexaType(e.children[0]);
+            if (!isPointerType(baseT)) return "";
+            std::string pt = pointerPointeeType(baseT);
+            if (!isStructDeclType(pt)) return "";
+            st = structNameFromDecl(pt);
+        } else {
+            st = structTypeOfExprValue(e.children[0]);
+        }
         if (st.empty()) return "";
         auto sit = structFields_.find(st);
         if (sit == structFields_.end()) return "";
@@ -2791,7 +2841,8 @@ private:
                         }
                     }
                 }
-                return emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + "." + e.value;
+                return emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool)
+                    + (e.isArrowMember ? "->" : ".") + e.value;
             }
             case AstNode::Type::FnCall:
                 return emitFnCallCpp(e, varMap, varIsString, varIsFloat, varIsChar, varIsBool);

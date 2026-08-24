@@ -32,6 +32,7 @@ STRUCTS
     let q: Point = p;       - copy from another value of the same struct type
   Field access (expression):  p.x   p.label
   Field assignment:           p.x = 10;   p.label += "suffix";
+  Through pointer:            ptr->x   ptr->x = 10;   (same as (*ptr).x)
   Function parameters:       fn use(pt: Point) { ... }
 
   - Reading a struct field in a let initializer requires an explicit type:
@@ -68,6 +69,20 @@ FUNCTIONS
   - Do not mix `return;` and `return expr;` in the same function; main() only uses value returns (`return expr;` or implicit exit)
   - In main(), `return;` is compiled as `return 0;`
   - Use --preserve-names to keep names in output (default: mangle)
+
+EXTERN (C FFI — core)
+  Declare C library functions with typed signatures; no body, no #include required.
+  extern fn strlen(s: *char): int;
+  extern fn printf(fmt: *char, ...): int;
+  extern fn free(p: *void): void;
+
+  - Use *char for C strings (not Nexa string). String literals work at call sites.
+  - Nexa string variables are passed as .c_str() automatically when the param is *char.
+  - Explicit return type required (: int, : void, : *T, etc.). No default parameters.
+  - Emits extern "C" ...; and calls the symbol by its real C name.
+  - Pair with #include <cstring> or a C header if needed for your toolchain;
+  - DLL builds (--dll): exported fn definitions already use extern "C"; extern fn is for
+    importing C APIs, not exporting your own code.
 
 VARIABLES
   let name = value;
@@ -108,6 +123,7 @@ POINTERS (no GC — manual, C-style)
     let q: *int = null;
     if (q != null) { ... }
     fn bump(p: *int) { *p = *p + 1; }
+  Struct fields via pointer:  let p: *Point = &pt;  p->x = 1;  io.println(p->x);
   Struct fields may be pointers:  field: *int;
   There is no garbage collector; dangling pointers are undefined behavior (same as C/C++).
 
