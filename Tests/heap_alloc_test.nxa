@@ -1,0 +1,66 @@
+#include <std/io>
+
+struct Point {
+    x: int;
+    y: int;
+}
+
+fn bump(p: *int) {
+    *p = *p + 10;
+}
+
+fn main() {
+    let p: *int = new int;
+    *p = 42;
+    io.println(*p);
+    bump(p);
+    io.println(*p);
+    delete p;
+
+    let n = 3;
+    let a: *int = new int[n];
+    a[0] = 1;
+    a[1] = 2;
+    a[2] = 3;
+    io.println(a[0]);
+    io.println(a[1]);
+    io.println(a[2]);
+    delete[] a;
+
+    let q = new int;
+    *q = 7;
+    io.println(*q);
+    delete q;
+
+    let pt: *Point = new Point;
+    pt->x = 10;
+    pt->y = 20;
+    io.println(pt->x);
+    io.println(pt->y);
+    delete pt;
+
+    let pts: *Point = new Point[2];
+    pts[0].x = 1;
+    pts[0].y = 2;
+    pts[1].x = 3;
+    pts[1].y = 4;
+    io.println(pts[0].x);
+    io.println(pts[1].y);
+    delete[] pts;
+
+    let u: *unsigned int = new unsigned int;
+    *u = 99;
+    io.println(*u);
+    delete u;
+
+    let z: *int = null;
+    delete z;
+
+    let buf: *char = new char[5];
+    buf[0] = 'h';
+    buf[1] = 'i';
+    buf[2] = 0;
+    io.println(buf[0]);
+    io.println(buf[1]);
+    delete[] buf;
+}

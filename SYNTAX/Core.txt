@@ -127,6 +127,32 @@ POINTERS (no GC — manual, C-style)
   Struct fields may be pointers:  field: *int;
   There is no garbage collector; dangling pointers are undefined behavior (same as C/C++).
 
+HEAP ALLOCATION (no GC — manual, C-style)
+  new T            - allocate one T, value-initialized (zeros / empty string), type *T
+  new T[n]         - allocate n elements, value-initialized, type *T
+  delete p;        - free a single object from new T  (no-op if p is null)
+  delete[] p;      - free an array from new T[n]
+  Match them: new T with delete, new T[n] with delete[]. Mixing is undefined (same as C++).
+  Examples:
+    let p: *int = new int;
+    *p = 42;
+    delete p;
+
+    let a: *int = new int[4];
+    a[0] = 1;
+    a[1] = 2;
+    delete[] a;
+
+    let pt: *Point = new Point;
+    pt->x = 10;
+    delete pt;
+
+    let pts: *Point = new Point[2];
+    pts[0].x = 1;
+    pts[1].x = 2;
+    delete[] pts;
+  Cannot new void. new *T allocates a pointer-sized cell (type **T).
+
   String escapes: \n \t \r \\ \" \xHH (hex ASCII, e.g. \x41 = 'A')
   Raw strings: R"()" or R"delim(...)delim" - no escapes, can contain newlines and "
 
@@ -166,6 +192,22 @@ CASTS (C-style)
     let s = (string)n;        // "3"
     let c = (char)65;         // 'A'
     let f = (float)(int)s;    // parse then cast (s must be string)
+
+SIZEOF
+  sizeof(T)        - byte size of type T (int)
+  sizeof(expr)     - byte size of the expression's type (expr is not evaluated)
+  sizeof expr      - same, without parentheses (e.g. sizeof x, sizeof *p)
+  Types: int, unsigned int, char, unsigned char, float, bool, string, *T, structs, enums
+  sizeof(void) is not allowed. sizeof(*void) is the size of a pointer.
+  sizeof(string) is the size of the string object, not len(s).
+  Fixed arrays: sizeof(buf) for let buf: int[4] is 4 * sizeof(int).
+  Result is int (truncated from C++ size_t).
+  Examples:
+    let n = sizeof(int);
+    let buf: *unsigned char = new unsigned char[n];
+    io.println(sizeof(p));     // pointer width
+    io.println(sizeof(*p));    // sizeof(int)
+    io.println(sizeof(Point)); // struct size; type names need parentheses
 
 STRING METHODS (core; no #include required)
   Method syntax on any string value (variable, literal, or parenthesized expression):

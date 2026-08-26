@@ -1,8 +1,8 @@
 {
   "name": "nexa",
   "displayName": "Nexa Language",
-  "description": "Syntax highlighting, snippets, go-to definition, find references, outline, and completions for Nexa (.nxa)",
-  "version": "0.1.5",
+  "description": "Syntax highlighting, snippets, go-to definition, completions, hover, and NexaC run/build for Nexa (.nxa)",
+  "version": "0.2.4",
   "publisher": "nexac",
   "main": "./out/extension.js",
   "engines": {
@@ -33,12 +33,83 @@
         "path": "./syntaxes/nexa.tmLanguage.json"
       }
     ],
+    "semanticTokenTypes": [
+      { "id": "module", "superType": "namespace", "description": "Standard module (os, file, io)" },
+      { "id": "member", "superType": "method", "description": "Module member (system, write)" },
+      { "id": "importKeyword", "superType": "keyword", "description": "#include keyword" },
+      { "id": "importModule", "superType": "namespace", "description": "Import path module name" },
+      { "id": "importPrefix", "superType": "keyword", "description": "std/ in import paths" }
+    ],
     "snippets": [
       {
         "language": "nexa",
         "path": "./snippets/nexa.json"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Nexa",
+      "properties": {
+        "nexa.nexacPath": {
+          "type": "string",
+          "default": "NexaC",
+          "description": "Path to the NexaC compiler executable (must be on PATH or an absolute path)."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "nexa.runFile",
+        "title": "Nexa: Run Current File",
+        "icon": "$(play)"
+      },
+      {
+        "command": "nexa.buildFile",
+        "title": "Nexa: Build Current File",
+        "icon": "$(tools)"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "nexa.runFile",
+          "when": "resourceLangId == nexa",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "nexa.runFile",
+          "when": "resourceLangId == nexa"
+        },
+        {
+          "command": "nexa.buildFile",
+          "when": "resourceLangId == nexa"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "nexa.runFile",
+        "key": "ctrl+shift+r",
+        "mac": "cmd+shift+r",
+        "when": "resourceLangId == nexa && editorTextFocus"
+      }
+    ],
+    "configurationDefaults": {
+      "[nexa]": {
+        "editor.semanticHighlighting.enabled": true,
+        "editor.semanticTokenColorCustomizations": {
+          "enabled": true,
+          "rules": {
+            "module": "#4EC9B0",
+            "member": "#DCDCAA",
+            "importKeyword": "#C586C0",
+            "importModule": "#4EC9B0",
+            "importPrefix": "#569CD6"
+          }
+        }
+      }
+    }
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

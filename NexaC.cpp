@@ -65,14 +65,36 @@ static std::string findEntryFile(const std::filesystem::path& base) {
 static int doBuild(const std::string& dir) {
     namespace fs = std::filesystem;
     fs::path base = dir.empty() ? fs::current_path() : fs::path(dir);
-    std::string entry = findEntryFile(base);
+    nexa::pkg::Manifest manifest;
+    fs::path manifestPath = base / "nexapkg.json";
+    if (fs::exists(manifestPath)) {
+        nexa::pkg::readManifest(manifestPath, manifest);
+    }
+
+    std::string entry;
+    if (!manifest.entry.empty()) {
+        fs::path entryPath = base / manifest.entry;
+        if (!fs::exists(entryPath)) {
+            std::cerr << "[Nexa] Error: Entry file not found: " << entryPath.string() << "\n";
+            return 1;
+        }
+        entry = entryPath.string();
+    } else {
+        entry = findEntryFile(base);
+    }
     if (entry.empty()) {
         std::cerr << "[Nexa] Error: No .nxa file with fn main() or fn __init__() in " << base.string() << "\n";
         std::cerr << "Run 'NexaC init' to create a project.\n";
         return 1;
     }
     fs::path entryPath(entry);
-    std::string outBase = (base / entryPath.stem()).string();
+    std::string outBase;
+    if (!manifest.output.empty()) {
+        fs::path outPath(manifest.output);
+        outBase = outPath.is_absolute() ? outPath.string() : (base / outPath).string();
+    } else {
+        outBase = (base / entryPath.stem()).string();
+    }
     std::string exePath = getExePath();
 #ifdef _WIN32
     if (exePath.empty()) exePath = "NexaC.exe";

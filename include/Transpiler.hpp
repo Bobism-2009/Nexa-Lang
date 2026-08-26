@@ -1023,10 +1023,13 @@ private:
                 return "int";
             case AstNode::Type::ExprArrayIndex: {
                 std::string baseT = lookupNexaDecl(e.value);
+                if (isPointerType(baseT)) return pointerPointeeType(baseT);
                 if (baseT == "[]string") return "string";
                 if (baseT == "string") return "char";
                 return "int";
             }
+            case AstNode::Type::ExprNew:
+                return std::string("*") + (e.value.empty() ? "int" : e.value);
             case AstNode::Type::ExprNull:
                 return "null";
             case AstNode::Type::ExprAddrOf: {
@@ -1041,6 +1044,8 @@ private:
             }
             case AstNode::Type::ExprCast:
                 return e.value.empty() ? "int" : e.value;
+            case AstNode::Type::ExprSizeof:
+                return "int";
             case AstNode::Type::IoToInt: return "int";
             case AstNode::Type::RandomInt: return "int";
             case AstNode::Type::MathCall:
@@ -1193,6 +1198,7 @@ private:
         if (t == "char") return "char";
         if (t == "unsigned char") return "unsigned char";
         if (t == "unsigned int") return "unsigned int";
+        if (t == "void") return "void";
         if (t == "null") return "std::nullptr_t";
         if (t.size() >= 7 && t.compare(0, 7, "struct:") == 0) {
             std::string n = t.substr(7);
@@ -1278,6 +1284,14 @@ private:
     }
     std::string structTypeOfExprValue(const AstNode& e) const {
         if (e.type == AstNode::Type::ExprVarRef) return varStructLookup(e.value);
+        if (e.type == AstNode::Type::ExprArrayIndex) {
+            std::string t = lookupNexaDecl(e.value);
+            if (isPointerType(t)) {
+                std::string pt = pointerPointeeType(t);
+                if (isStructDeclType(pt)) return structNameFromDecl(pt);
+            }
+            return "";
+        }
         if (e.type == AstNode::Type::ExprMember && !e.children.empty()) {
             std::string ft = fieldTypeOfMemberExpr(e);
             if (ft.size() >= 7 && ft.compare(0, 7, "struct:") == 0) return ft.substr(7);
@@ -2051,6 +2065,16 @@ private:
                 std::string rhs = emitExpr(child.children[1], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 const std::string& op = child.value;
                 out << indent << "(*" << ptr << ") " << op << " " << rhs << ";\n";
+            } else if (child.type == AstNode::Type::StmtDelete) {
+                if (child.children.empty()) {
+                    throw std::runtime_error("delete requires a pointer expression");
+                }
+                std::string p = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                if (child.value == "[]") {
+                    out << indent << "delete[] " << p << ";\n";
+                } else {
+                    out << indent << "delete " << p << ";\n";
+                }
             } else if (child.type == AstNode::Type::Assignment) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
@@ -2892,6 +2916,25 @@ private:
                 return "(*" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::ExprNull:
                 return "nullptr";
+            case AstNode::Type::ExprNew: {
+                std::string cppT = nexaTypeToCpp(e.value);
+                if (e.isFixedArray) {
+                    if (e.children.empty()) {
+                        throw std::runtime_error("new T[] requires a length");
+                    }
+                    std::string n = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    return "(new " + cppT + "[" + n + "]())";
+                }
+                return "(new " + cppT + "())";
+            }
+            case AstNode::Type::ExprSizeof: {
+                if (!e.value.empty()) {
+                    return "static_cast<int>(sizeof(" + nexaTypeToCpp(e.value) + "))";
+                }
+                if (e.children.empty()) return "0";
+                return "static_cast<int>(sizeof(" +
+                    emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + "))";
+            }
             case AstNode::Type::ExprCast: {
                 if (e.children.empty()) return "0";
                 const std::string& to = e.value;

@@ -37,6 +37,9 @@ enum class TokenType {
     False,
     Fn,
     Extern,
+    New,
+    Delete,
+    Sizeof,
     Main,
     LParen,
     RParen,
@@ -420,6 +423,9 @@ private:
         else if (value == "true") type = TokenType::True;
         else if (value == "false") type = TokenType::False;
         else if (value == "extern") type = TokenType::Extern;
+        else if (value == "new") type = TokenType::New;
+        else if (value == "delete") type = TokenType::Delete;
+        else if (value == "sizeof") type = TokenType::Sizeof;
         else if (value == "inline_cpp") type = TokenType::InlineCpp;
 
         return {type, value, startLine};

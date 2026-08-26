@@ -5,6 +5,7 @@
   "patterns": [
     { "include": "#comments" },
     { "include": "#preprocessor" },
+    { "include": "#builtin-modules" },
     { "include": "#raw-strings" },
     { "include": "#strings" },
     { "include": "#chars" },
@@ -15,7 +16,6 @@
     { "include": "#function-def" },
     { "include": "#keywords" },
     { "include": "#builtins" },
-    { "include": "#builtin-modules" },
     { "include": "#operators" },
     { "include": "#punctuation" }
   ],
@@ -36,35 +36,57 @@
     "preprocessor": {
       "patterns": [
         {
-          "name": "meta.preprocessor.include.std.nexa",
-          "match": "(?m)^\\s*(#include)\\s*(<)(std/)(io|os|dll|file|random|math|time|thread|inline)(>)",
-          "captures": {
-            "1": { "name": "keyword.control.import.nexa" },
-            "2": { "name": "punctuation.definition.string.nexa" },
-            "3": { "name": "string.quoted.include.nexa" },
-            "4": { "name": "entity.name.namespace.nexa" },
-            "5": { "name": "punctuation.definition.string.nexa" }
-          }
-        },
-        {
           "name": "meta.preprocessor.include.angle.nexa",
-          "match": "(?m)^\\s*(#include)\\s*(<)([^>\\r\\n]+)(>)",
-          "captures": {
+          "begin": "^\\s*(#include)\\s*(<)",
+          "beginCaptures": {
             "1": { "name": "keyword.control.import.nexa" },
-            "2": { "name": "punctuation.definition.string.nexa" },
-            "3": { "name": "string.quoted.include.nexa" },
-            "4": { "name": "punctuation.definition.string.nexa" }
-          }
+            "2": { "name": "punctuation.definition.string.begin.nexa" }
+          },
+          "end": "(>)",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.string.end.nexa" }
+          },
+          "patterns": [
+            {
+              "name": "meta.import.std.nexa",
+              "match": "(std/)(io|os|dll|file|random|math|crypto|http|time|thread|inline)\\b",
+              "captures": {
+                "1": { "name": "keyword.other.import.prefix.nexa" },
+                "2": { "name": "entity.name.namespace" }
+              }
+            },
+            {
+              "name": "meta.import.package.nexa",
+              "match": "([A-Za-z_][A-Za-z0-9_-]*)(/)([A-Za-z_][A-Za-z0-9_-]*)",
+              "captures": {
+                "1": { "name": "entity.name.namespace" },
+                "2": { "name": "punctuation.separator.path.nexa" },
+                "3": { "name": "entity.name.namespace" }
+              }
+            },
+            {
+              "name": "entity.name.namespace",
+              "match": "[A-Za-z_][A-Za-z0-9_-]*"
+            }
+          ]
         },
         {
           "name": "meta.preprocessor.include.quote.nexa",
-          "match": "(?m)^\\s*(#include)\\s*(\")([^\"\\r\\n]*)(\")",
-          "captures": {
+          "begin": "^\\s*(#include)\\s*(\")",
+          "beginCaptures": {
             "1": { "name": "keyword.control.import.nexa" },
-            "2": { "name": "punctuation.definition.string.nexa" },
-            "3": { "name": "string.quoted.include.nexa" },
-            "4": { "name": "punctuation.definition.string.nexa" }
-          }
+            "2": { "name": "punctuation.definition.string.begin.nexa" }
+          },
+          "end": "(\")",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.string.end.nexa" }
+          },
+          "patterns": [
+            {
+              "name": "string.quoted.double.nexa",
+              "match": "[^\"\\r\\n]+"
+            }
+          ]
         }
       ]
     },
@@ -157,6 +179,16 @@
     "function-def": {
       "patterns": [
         {
+          "name": "meta.function.extern.nexa",
+          "match": "\\b(extern)\\s+(fn)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(\\()",
+          "captures": {
+            "1": { "name": "keyword.control.nexa" },
+            "2": { "name": "keyword.control.nexa" },
+            "3": { "name": "entity.name.function.nexa" },
+            "4": { "name": "punctuation.definition.parameters.begin.nexa" }
+          }
+        },
+        {
           "name": "meta.function.nexa",
           "match": "\\b(fn)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(\\()",
           "captures": {
@@ -171,15 +203,23 @@
       "patterns": [
         {
           "name": "storage.type.nexa",
-          "match": "\\b(int|string|bool|float|char|unsigned\\s+char)\\b"
+          "match": "\\b(int|string|bool|float|char|void|unsigned\\s+int|unsigned\\s+char)\\b"
+        },
+        {
+          "name": "storage.type.pointer.nexa",
+          "match": "\\*+(?:int|string|char|void|float|bool|[A-Za-z_][A-Za-z0-9_]*)"
         },
         {
           "name": "keyword.control.nexa",
-          "match": "\\b(fn|let|const|struct|enum|if|else|while|for|switch|case|default|return|break|continue|goto)\\b"
+          "match": "\\b(fn|extern|new|delete|sizeof|let|const|struct|enum|if|else|while|for|switch|case|default|return|break|continue|goto|try|catch|throw)\\b"
         },
         {
           "name": "keyword.other.entry.nexa",
           "match": "\\b(main|__init__)\\b"
+        },
+        {
+          "name": "constant.language.null.nexa",
+          "match": "\\bnull\\b"
         },
         {
           "name": "constant.language.boolean.nexa",
@@ -202,11 +242,11 @@
     "builtin-modules": {
       "patterns": [
         {
-          "name": "support.function.module.nexa",
-          "match": "\\b(io|os|dll|file|random|math|time|thread)\\.([a-zA-Z_][a-zA-Z0-9_]*)",
+          "name": "meta.module.access.nexa",
+          "match": "\\b(io|os|dll|file|random|math|crypto|http|time|thread)\\.([a-zA-Z_][a-zA-Z0-9_]*)",
           "captures": {
-            "1": { "name": "entity.name.namespace.nexa" },
-            "2": { "name": "entity.name.function.member.nexa" }
+            "1": { "name": "entity.name.namespace" },
+            "2": { "name": "entity.name.function" }
           }
         }
       ]
@@ -250,8 +290,20 @@
           "match": "<|>"
         },
         {
-          "name": "keyword.operator.bitwise.nexa",
+          "name": "keyword.operator.arrow.nexa",
+          "match": "->"
+        },
+        {
+          "name": "keyword.operator.address.nexa",
           "match": "(?<![&])&(?![&=])"
+        },
+        {
+          "name": "keyword.operator.dereference.nexa",
+          "match": "(?<![*])\\*(?![*=])"
+        },
+        {
+          "name": "keyword.operator.ellipsis.nexa",
+          "match": "\\.\\.\\."
         },
         {
           "name": "keyword.operator.bitwise.nexa",

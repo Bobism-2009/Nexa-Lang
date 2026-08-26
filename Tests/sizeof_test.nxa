@@ -1,0 +1,76 @@
+#include <std/io>
+
+struct Point {
+    x: int;
+    y: int;
+}
+
+enum Color {
+    Red;
+    Blue;
+}
+
+fn main() {
+    if (sizeof(char) != 1) {
+        io.println("fail char");
+        return 1;
+    }
+    if (sizeof(unsigned char) != 1) {
+        io.println("fail uchar");
+        return 1;
+    }
+    if (sizeof(int) < 4) {
+        io.println("fail int");
+        return 1;
+    }
+    if (sizeof(unsigned int) != sizeof(int)) {
+        io.println("fail uint");
+        return 1;
+    }
+    if (sizeof(*int) < 4) {
+        io.println("fail ptr type");
+        return 1;
+    }
+    if (sizeof(Point) < sizeof(int) * 2) {
+        io.println("fail Point");
+        return 1;
+    }
+    if (sizeof(Color) < 1) {
+        io.println("fail Color");
+        return 1;
+    }
+
+    let x = 10;
+    if (sizeof(x) != sizeof(int)) {
+        io.println("fail sizeof x");
+        return 1;
+    }
+    let p: *int = &x;
+    if (sizeof(p) != sizeof(*int)) {
+        io.println("fail sizeof p");
+        return 1;
+    }
+    if (sizeof(*p) != sizeof(int)) {
+        io.println("fail sizeof *p");
+        return 1;
+    }
+    if (sizeof p != sizeof(p)) {
+        io.println("fail sizeof no-paren");
+        return 1;
+    }
+
+    let buf: int[4];
+    if (sizeof(buf) != sizeof(int) * 4) {
+        io.println("fail buf");
+        return 1;
+    }
+
+    let n = sizeof(int);
+    let a: *int = new int[n];
+    a[0] = 1;
+    io.println(a[0]);
+    delete[] a;
+
+    io.println(sizeof(int));
+    io.println("ok");
+}

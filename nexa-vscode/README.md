@@ -1,12 +1,10 @@
-# Nexa Syntax Highlighting
+# Nexa Language (VS Code / Cursor)
 
-VS Code / Cursor extension for Nexa language syntax highlighting.
+Syntax highlighting, IntelliSense, and NexaC integration for `.nxa` files.
 
 ## Installation
 
-### Option 1: Copy to extensions folder
-
-First build the extension (the manifest's `main` is `out/extension.js`, produced by compiling):
+### Copy into extensions folder
 
 ```bash
 cd nexa-vscode
@@ -17,38 +15,57 @@ npm run compile
 **Windows (PowerShell):**
 
 ```powershell
-Copy-Item -Recurse nexa-vscode "$env:USERPROFILE\.cursor\extensions\nexac.nexa-0.1.5"
+Copy-Item -Recurse nexa-vscode "$env:USERPROFILE\.cursor\extensions\nexac.nexa-0.2.2"
+# or: $env:USERPROFILE\.vscode\extensions\nexac.nexa-0.2.2
 ```
 
 **macOS / Linux:**
 
 ```bash
-cp -r nexa-vscode ~/.cursor/extensions/nexac.nexa-0.1.5
-# or: ~/.vscode/extensions/nexac.nexa-0.1.5
+cp -r nexa-vscode ~/.cursor/extensions/nexac.nexa-0.2.0
 ```
 
-Restart VS Code/Cursor (or **Developer: Reload Window**). `.nxa` files use the Nexa grammar.
-
-### Option 2: Run from folder (development)
-
-1. Open the `nexa-vscode` folder in VS Code
-2. Press F5 to launch Extension Development Host
-3. Open a `.nxa` file in the new window
+Reload the window (**Developer: Reload Window**).
 
 ### Package as VSIX (optional)
 
 ```bash
 npm install -g @vscode/vsce
 cd nexa-vscode
-npm install
 vsce package
 ```
 
-Then install the generated `.vsix` file via **Extensions: Install from VSIX...**.
+Install via **Extensions: Install from VSIX...**.
 
 ## Features
 
-- Syntax highlighting: keywords, `fn` / function names, `io.*` / `os.*` / `dll.*` / `file.*` / `random.*` / `time.*` / `thread.*`, std module includes (`#include <std/...>`), types, `#include`, strings, char literals, floats
-- Snippets: `main`, `fn`, `incio`, `println`, `while`, `init`, etc.
-- Comments: `//` and `/* */`
-- Bracket matching, auto-closing, basic brace indentation
+### Language support
+- **Syntax highlighting** — keywords, types (`unsigned int`, pointers), `extern fn`, `null`, `->`, operators, std modules (`io`, `os`, `file`, `math`, `crypto`, `http`, …), structs, enums, strings/chars, `#include`
+- **Snippets** — `main`, `fn`, `extern`, `struct`, `enum`, `forin`, module includes, `inlinecpp`, etc.
+- **Bracket matching** and indent for `{}`, `case`/`default`
+
+### IntelliSense
+- **Completions** — keywords, types, functions/variables/structs/enums in the file, `module.` member lists (`io.`, `os.`, …), string methods after `.`
+- **Hover** — brief docs for std module calls
+- **Go to definition** — functions (including `extern fn`), structs, enums, `let` bindings
+- **Find references** — workspace-wide for `.nxa` files
+- **Document outline** — symbols in the file tree
+
+### NexaC integration
+- **Nexa: Run Current File** — runs `NexaC path.nxa --run` in the integrated terminal (editor run button or `Ctrl+Shift+R` / `Cmd+Shift+R`)
+- **Nexa: Build Current File** — runs `NexaC path.nxa`
+- Setting **`nexa.nexacPath`** — path to `NexaC` (default: `NexaC` on PATH)
+
+## Development
+
+1. Open the `nexa-vscode` folder
+2. Press **F5** to launch Extension Development Host
+3. Open a `.nxa` file in the new window
+
+```bash
+npm run watch   # recompile on save
+```
+
+## Requirements
+
+[NexaC](https://github.com/Bobism-2009/Nexa-Lang) on PATH (or set `nexa.nexacPath`) for run/build commands.

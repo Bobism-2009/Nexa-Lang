@@ -122,6 +122,8 @@ static std::string findStringField(const std::string& content, const std::string
 struct Manifest {
     std::string name = "myapp";
     std::string version;
+    std::string entry;   // .nxa entry file for NexaC build (e.g. main.nxa)
+    std::string output;  // executable base name or path for NexaC build (-o)
     // Ordered include-path -> source (source may carry a trailing @ref).
     std::vector<std::pair<std::string, std::string>> deps;
 
@@ -151,6 +153,8 @@ static bool readManifest(const fs::path& path, Manifest& m) {
     std::string nm = findStringField(content, "name");
     if (!nm.empty()) m.name = nm;
     m.version = findStringField(content, "version");
+    m.entry = findStringField(content, "entry");
+    m.output = findStringField(content, "output");
 
     m.deps.clear();
     size_t i = content.find("\"dependencies\"");
@@ -179,6 +183,8 @@ static void writeManifest(const fs::path& path, const Manifest& m) {
     out << "{\n";
     out << "  \"name\": \"" << jsonEscape(m.name) << "\",\n";
     if (!m.version.empty()) out << "  \"version\": \"" << jsonEscape(m.version) << "\",\n";
+    if (!m.entry.empty()) out << "  \"entry\": \"" << jsonEscape(m.entry) << "\",\n";
+    if (!m.output.empty()) out << "  \"output\": \"" << jsonEscape(m.output) << "\",\n";
     out << "  \"dependencies\": {";
     for (size_t k = 0; k < m.deps.size(); k++) {
         out << (k == 0 ? "\n" : ",\n");

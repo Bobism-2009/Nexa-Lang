@@ -4,10 +4,34 @@
     "body": ["fn main() {", "\t$0", "}"],
     "description": "Program entry with fn main()"
   },
+  "Nexa: fn main args": {
+    "prefix": "mainargs",
+    "body": ["fn main(args: []string): void {", "\t$0", "}"],
+    "description": "fn main with command-line args"
+  },
   "Nexa: fn": {
     "prefix": "fn",
     "body": ["fn ${1:name}($2) {", "\t$0", "}"],
     "description": "Function definition"
+  },
+  "Nexa: extern fn": {
+    "prefix": "extern",
+    "body": ["extern fn ${1:name}(${2:args}): ${3:int};"],
+    "description": "C FFI extern declaration"
+  },
+  "Nexa: struct": {
+    "prefix": "struct",
+    "body": [
+      "struct ${1:Name} {",
+      "\t${2:field}: ${3:int};",
+      "}"
+    ],
+    "description": "Struct definition"
+  },
+  "Nexa: enum": {
+    "prefix": "enum",
+    "body": ["enum ${1:Name} {", "\t${2:VariantA};", "\t${3:VariantB};", "}"],
+    "description": "Enum definition"
   },
   "Nexa: include std/io": {
     "prefix": "incio",
@@ -19,25 +43,45 @@
     "body": ["#include <std/os>"],
     "description": "OS module"
   },
-  "Nexa: include std/dll": {
-    "prefix": "incdll",
-    "body": ["#include <std/dll>"],
-    "description": "Dynamic library module"
-  },
   "Nexa: include std/file": {
     "prefix": "incfile",
     "body": ["#include <std/file>"],
     "description": "File I/O module"
+  },
+  "Nexa: include std/dll": {
+    "prefix": "incdll",
+    "body": ["#include <std/dll>"],
+    "description": "Dynamic library module"
   },
   "Nexa: include std/random": {
     "prefix": "incrnd",
     "body": ["#include <std/random>"],
     "description": "Random module"
   },
+  "Nexa: include std/math": {
+    "prefix": "incmath",
+    "body": ["#include <std/math>"],
+    "description": "Math module"
+  },
+  "Nexa: include std/crypto": {
+    "prefix": "inccrypto",
+    "body": ["#include <std/crypto>"],
+    "description": "Crypto module"
+  },
+  "Nexa: include std/http": {
+    "prefix": "inchttp",
+    "body": ["#include <std/http>"],
+    "description": "HTTP module"
+  },
   "Nexa: include std/thread": {
     "prefix": "incthread",
     "body": ["#include <std/thread>"],
     "description": "Threading module"
+  },
+  "Nexa: include std/inline": {
+    "prefix": "incinline",
+    "body": ["#include <std/inline>"],
+    "description": "inline_cpp! escape hatch"
   },
   "Nexa: println": {
     "prefix": "println",
@@ -49,6 +93,16 @@
     "body": ["let ${1:x} = $0;"],
     "description": "let binding"
   },
+  "Nexa: let typed": {
+    "prefix": "lett",
+    "body": ["let ${1:x}: ${2:int} = $0;"],
+    "description": "Typed let binding"
+  },
+  "Nexa: for-in": {
+    "prefix": "forin",
+    "body": ["for (${1:x} in ${2:arr}) {", "\t$0", "}"],
+    "description": "for-in loop over array"
+  },
   "Nexa: while": {
     "prefix": "while",
     "body": ["while (${1:condition}) {", "\t$0", "}"],
@@ -59,9 +113,44 @@
     "body": ["if (${1:condition}) {", "\t$0", "}"],
     "description": "if statement"
   },
+  "Nexa: switch": {
+    "prefix": "switch",
+    "body": ["switch (${1:expr}) {", "\tcase ${2:0}:", "\t\t$0", "\tbreak;", "}"],
+    "description": "switch statement"
+  },
   "Nexa: __init__": {
     "prefix": "init",
     "body": ["fn __init__() {", "\t$0", "}"],
     "description": "Library init hook"
+  },
+  "Nexa: inline_cpp": {
+    "prefix": "inlinecpp",
+    "body": ["inline_cpp! {", "\t$0", "}"],
+    "description": "Raw C++ block (requires std/inline)"
+  },
+  "Nexa: new": {
+    "prefix": "new",
+    "body": ["let ${1:p}: *${2:int} = new ${2:int};"],
+    "description": "Heap allocate one object"
+  },
+  "Nexa: new array": {
+    "prefix": "newa",
+    "body": ["let ${1:p}: *${2:int} = new ${2:int}[${3:n}];"],
+    "description": "Heap allocate array"
+  },
+  "Nexa: delete": {
+    "prefix": "delete",
+    "body": ["delete ${1:p};"],
+    "description": "Free a single new T allocation"
+  },
+  "Nexa: delete[]": {
+    "prefix": "deletea",
+    "body": ["delete[] ${1:p};"],
+    "description": "Free a new T[n] allocation"
+  },
+  "Nexa: sizeof": {
+    "prefix": "sizeof",
+    "body": ["sizeof(${1:int})"],
+    "description": "Byte size of a type or expression"
   }
 }

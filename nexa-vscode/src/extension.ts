@@ -1,5 +1,16 @@
 import * as vscode from "vscode";
 import { indexNexaDefinitions, maskComments, type IndexedDef } from "./nexaIndex";
+import {
+  keywordCompletions,
+  typeCompletions,
+  moduleMemberCompletions,
+  stringMethodCompletions,
+  linePrefix,
+  HOVER_DOCS,
+  MODULE_MEMBERS,
+} from "./nexaCompletions";
+import { runNexaFile } from "./nexaRun";
+import { registerSemanticTokens } from "./nexaSemantic";
 
 const WORD = (name: string) => new RegExp(`\\b${escapeRe(name)}\\b`, "g");
 
@@ -7,21 +18,16 @@ function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Only keywords / declarations that are never a user-defined identifier for lookup. */
 const RESERVED = new Set(
-  "if,else,while,for,switch,case,default,return,break,continue,let,const,fn"
-    .split(",")
-    .map((s) => s.trim())
+  [
+    "if", "else", "while", "for", "switch", "case", "default", "return",
+    "break", "continue", "let", "const", "fn", "extern", "struct", "enum",
+    "try", "catch", "throw", "true", "false", "null", "new", "delete", "sizeof",
+  ]
 );
 
 function isReservedWordForLookup(name: string): boolean {
-  if (RESERVED.has(name)) {
-    return true;
-  }
-  if (name === "struct" || name === "enum" || name === "false" || name === "true") {
-    return true;
-  }
-  return false;
+  return RESERVED.has(name);
 }
 
 function allRefsInDocument(
@@ -90,6 +96,9 @@ function defKindToSymbol(d: IndexedDef): vscode.SymbolKind {
   if (d.kind === "enum") {
     return vscode.SymbolKind.Enum;
   }
+  if (d.kind === "variable") {
+    return vscode.SymbolKind.Variable;
+  }
   return vscode.SymbolKind.Function;
 }
 
@@ -111,14 +120,9 @@ function locationsFromIndexedDefs(
   defs: IndexedDef[]
 ): vscode.Location | vscode.Location[] {
   if (defs.length === 1) {
-    return new vscode.Location(
-      document.uri,
-      (defs[0] as IndexedDef).nameRange
-    );
+    return new vscode.Location(document.uri, defs[0]!.nameRange);
   }
-  return defs.map(
-    (d) => new vscode.Location(document.uri, d.nameRange)
-  );
+  return defs.map((d) => new vscode.Location(document.uri, d.nameRange));
 }
 
 async function findDefinitionInOtherFiles(
@@ -161,23 +165,121 @@ async function findDefinitionInOtherFiles(
     return null;
   }
   if (found.length === 1) {
-    return found[0] as vscode.Location;
+    return found[0]!;
   }
   return found;
 }
 
+function provideCompletions(
+  document: vscode.TextDocument,
+  position: vscode.Position
+): vscode.CompletionItem[] {
+  const prefix = linePrefix(document, position);
+  const items: vscode.CompletionItem[] = [];
+
+  const modDot = prefix.match(/(?:^|\s)([a-z]+)\.\s*([A-Za-z_]*)$/);
+  if (modDot) {
+    return moduleMemberCompletions(modDot[1]!);
+  }
+
+  const strDot = prefix.match(/\.([A-Za-z_]*)$/);
+  if (strDot) {
+    return stringMethodCompletions();
+  }
+
+  items.push(...keywordCompletions());
+  items.push(...typeCompletions());
+
+  for (const d of indexNexaDefinitions(document)) {
+    const kind =
+      d.kind === "function"
+        ? vscode.CompletionItemKind.Function
+        : d.kind === "variable"
+          ? vscode.CompletionItemKind.Variable
+          : d.kind === "struct"
+            ? vscode.CompletionItemKind.Struct
+            : vscode.CompletionItemKind.Enum;
+    const c = new vscode.CompletionItem(d.name, kind);
+    c.detail = `Nexa ${d.kind} in this file`;
+    items.push(c);
+  }
+
+  for (const mod of Object.keys(MODULE_MEMBERS)) {
+    const c = new vscode.CompletionItem(mod, vscode.CompletionItemKind.Module);
+    c.detail = `${mod}.* standard module`;
+    c.insertText = new vscode.SnippetString(`${mod}.$0`);
+    items.push(c);
+  }
+
+  return items;
+}
+
+function provideHover(
+  document: vscode.TextDocument,
+  position: vscode.Position
+): vscode.Hover | null {
+  const wordRange = document.getWordRangeAtPosition(
+    position,
+    /[A-Za-z_][A-Za-z0-9_]*/
+  );
+  if (!wordRange) {
+    return null;
+  }
+  const word = document.getText(wordRange);
+  const line = document.lineAt(position.line).text;
+
+  const modCall = line.match(
+    new RegExp(`\\b(${Object.keys(MODULE_MEMBERS).join("|")})\\.${escapeRe(word)}\\b`)
+  );
+  if (modCall) {
+    const key = `${modCall[1]}.${word}`;
+    const members = MODULE_MEMBERS[modCall[1]!];
+    const member = members?.find((m) => m.name === word);
+    const docText = HOVER_DOCS[key] ?? member?.detail ?? key;
+    return new vscode.Hover(docText, wordRange);
+  }
+
+  if (word === "null" && HOVER_DOCS.null) {
+    return new vscode.Hover(HOVER_DOCS.null, wordRange);
+  }
+
+  if (line.includes("extern fn") && word !== "extern" && word !== "fn") {
+    const defs = indexNexaDefinitions(document).filter(
+      (d) => d.name === word && d.kind === "function"
+    );
+    if (defs.length) {
+      return new vscode.Hover("extern fn — C FFI declaration", defs[0]!.nameRange);
+    }
+  }
+
+  return null;
+}
+
 export function activate(context: vscode.ExtensionContext): void {
+  registerSemanticTokens(context);
+
   const docFilter: vscode.DocumentSelector = [
     { language: "nexa", scheme: "file" },
   ];
 
   context.subscriptions.push(
+    vscode.commands.registerCommand("nexa.runFile", () => {
+      const editor = vscode.window.activeTextEditor;
+      if (editor?.document.languageId === "nexa") {
+        void runNexaFile(editor.document, true);
+      }
+    }),
+    vscode.commands.registerCommand("nexa.buildFile", () => {
+      const editor = vscode.window.activeTextEditor;
+      if (editor?.document.languageId === "nexa") {
+        void runNexaFile(editor.document, false);
+      }
+    })
+  );
+
+  context.subscriptions.push(
     vscode.languages.registerDefinitionProvider(docFilter, {
-      provideDefinition(
-        document: vscode.TextDocument,
-        position: vscode.Position,
-        token: vscode.CancellationToken
-      ) {
+      provideDefinition(document, position, token) {
         return (async () => {
           const idRange = document.getWordRangeAtPosition(
             position,
@@ -202,12 +304,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.languages.registerReferenceProvider(docFilter, {
-      provideReferences(
-        document: vscode.TextDocument,
-        position: vscode.Position,
-        context: vscode.ReferenceContext,
-        token: vscode.CancellationToken
-      ) {
+      provideReferences(document, position, refContext, token) {
         return (async () => {
           const idRange = document.getWordRangeAtPosition(
             position,
@@ -221,7 +318,7 @@ export function activate(context: vscode.ExtensionContext): void {
             return null;
           }
           const refs = await allRefsInWorkspace(document, name, token);
-          if (context.includeDeclaration) {
+          if (refContext.includeDeclaration) {
             return refs;
           }
           const out: vscode.Location[] = [];
@@ -243,35 +340,38 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.languages.registerDocumentSymbolProvider(docFilter, {
-      provideDocumentSymbols(document: vscode.TextDocument) {
-        return indexNexaDefinitions(document).map((d) => {
-          return new vscode.DocumentSymbol(
-            d.name,
-            d.kind,
-            defKindToSymbol(d),
-            d.lineRange,
-            d.nameRange
-          );
-        });
+      provideDocumentSymbols(document) {
+        return indexNexaDefinitions(document).map(
+          (d) =>
+            new vscode.DocumentSymbol(
+              d.name,
+              d.kind,
+              defKindToSymbol(d),
+              d.lineRange,
+              d.nameRange
+            )
+        );
       },
     })
   );
 
   context.subscriptions.push(
-    vscode.languages.registerCompletionItemProvider(docFilter, {
-      provideCompletionItems(document: vscode.TextDocument) {
-        const items: vscode.CompletionItem[] = [];
-        for (const d of indexNexaDefinitions(document)) {
-          if (d.kind === "function") {
-            const c = new vscode.CompletionItem(
-              d.name,
-              vscode.CompletionItemKind.Function
-            );
-            c.detail = "Nexa function in this file";
-            items.push(c);
-          }
-        }
-        return items;
+    vscode.languages.registerCompletionItemProvider(
+      docFilter,
+      {
+        provideCompletionItems(document, position) {
+          return provideCompletions(document, position);
+        },
+      },
+      ".",
+      " "
+    )
+  );
+
+  context.subscriptions.push(
+    vscode.languages.registerHoverProvider(docFilter, {
+      provideHover(document, position) {
+        return provideHover(document, position);
       },
     })
   );

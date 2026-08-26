@@ -66,6 +66,9 @@ struct AstNode {
                       ExprAddrOf,
                       ExprDeref,
                       ExprNull,
+                      ExprNew,
+                      StmtDelete,
+                      ExprSizeof,
                       CondEq, CondNe, CondLt, CondGt, CondLe, CondGe,
                       CondAnd, CondOr, CondNot,
                       ExprStringLiteral,
@@ -125,6 +128,7 @@ public:
             if (t.type == TokenType::Eof) break;
             if (t.type == TokenType::Include) {
                 std::vector<AstNode> incNodes = parseInclude();
+                noteTypeDefs(incNodes);
                 for (AstNode& n : incNodes) ast.push_back(std::move(n));
             } else if (t.type == TokenType::Extern) {
                 ast.push_back(parseExternFunction());
@@ -165,6 +169,8 @@ private:
     std::string currentFilePath_;
     std::set<std::string>* includedFiles_;
     const std::vector<std::string>* packagePaths_;
+    std::set<std::string> structNames_;
+    std::set<std::string> enumNames_;
 
     static bool exprProducesString(const AstNode& e) {
         if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsHostname || e.type == AstNode::Type::OsUsername || e.type == AstNode::Type::OsHome || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall || e.type == AstNode::Type::HttpCall) return true;
@@ -266,7 +272,102 @@ private:
         if (v == "float") return "float";
         if (v == "char") return "char";
         if (v == "void") return "void";
+        if (enumNames_.count(v)) return "enum:" + v;
         return "struct:" + v;
+    }
+
+    void noteTypeDefs(const std::vector<AstNode>& nodes) {
+        for (const AstNode& n : nodes) {
+            if (n.type == AstNode::Type::StructDef) structNames_.insert(n.value);
+            else if (n.type == AstNode::Type::EnumDef) enumNames_.insert(n.value);
+        }
+    }
+
+    bool looksLikeTypeAt(size_t p) const {
+        if (p >= tokens_.size()) return false;
+        const Token& t = tokens_[p];
+        if (t.type == TokenType::Star) return looksLikeTypeAt(p + 1);
+        if (t.type == TokenType::Enum) return true;
+        if (t.type != TokenType::Identifier) return false;
+        const std::string& v = t.value;
+        if (v == "int" || v == "float" || v == "char" || v == "bool" || v == "string" ||
+            v == "void" || v == "unsigned") {
+            return true;
+        }
+        return structNames_.count(v) != 0 || enumNames_.count(v) != 0;
+    }
+
+    bool looksLikeType() const {
+        return looksLikeTypeAt(pos_);
+    }
+
+    AstNode parseSizeof() {
+        size_t line = peek().line;
+        if (!match(TokenType::Sizeof)) {
+            throw std::runtime_error("Expected 'sizeof' at line " + std::to_string(line));
+        }
+        if (match(TokenType::LParen)) {
+            if (looksLikeType()) {
+                std::string ty = parseTypeName();
+                if (ty == "void") {
+                    throw std::runtime_error("sizeof(void) is not allowed at line " + std::to_string(line));
+                }
+                if (!match(TokenType::RParen)) {
+                    throw std::runtime_error("Expected ')' after sizeof type at line " + std::to_string(peek().line));
+                }
+                return {AstNode::Type::ExprSizeof, ty, {}};
+            }
+            AstNode inner = parseExpression();
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' after sizeof(...) at line " + std::to_string(peek().line));
+            }
+            return {AstNode::Type::ExprSizeof, "", {std::move(inner)}};
+        }
+        return {AstNode::Type::ExprSizeof, "", {parseUnary()}};
+    }
+
+    static bool isAllocatableType(const std::string& ty) {
+        if (ty.empty() || ty == "void") return false;
+        return true;
+    }
+
+    AstNode parseNewExpr() {
+        size_t line = peek().line;
+        if (!match(TokenType::New)) {
+            throw std::runtime_error("Expected 'new' at line " + std::to_string(line));
+        }
+        std::string ty = parseTypeName();
+        if (!isAllocatableType(ty)) {
+            throw std::runtime_error("Cannot allocate type '" + ty + "' at line " + std::to_string(line));
+        }
+        AstNode node{AstNode::Type::ExprNew, ty, {}};
+        if (match(TokenType::LBracket)) {
+            node.children.push_back(parseExpression());
+            if (!match(TokenType::RBracket)) {
+                throw std::runtime_error("Expected ']' after new T[...] at line " + std::to_string(peek().line));
+            }
+            node.isFixedArray = true;
+        }
+        return node;
+    }
+
+    AstNode parseDeleteStmt() {
+        size_t line = peek().line;
+        if (!match(TokenType::Delete)) {
+            throw std::runtime_error("Expected 'delete' at line " + std::to_string(line));
+        }
+        bool isArray = false;
+        if (match(TokenType::LBracket)) {
+            if (!match(TokenType::RBracket)) {
+                throw std::runtime_error("Expected ']' after 'delete[' at line " + std::to_string(peek().line));
+            }
+            isArray = true;
+        }
+        AstNode expr = parseExpression();
+        if (!match(TokenType::Semicolon)) {
+            throw std::runtime_error("Expected ';' after delete at line " + std::to_string(peek().line));
+        }
+        return {AstNode::Type::StmtDelete, isArray ? "[]" : "", {std::move(expr)}};
     }
 
     AstNode parseStruct() {
@@ -283,6 +384,7 @@ private:
         if (sname == "main") {
             throw std::runtime_error("Invalid struct name 'main' at line " + std::to_string(line));
         }
+        structNames_.insert(sname);
         if (!match(TokenType::LBrace)) {
             throw std::runtime_error("Expected '{' at line " + std::to_string(peek().line));
         }
@@ -326,6 +428,7 @@ private:
         if (ename == "main") {
             throw std::runtime_error("Invalid enum name 'main' at line " + std::to_string(line));
         }
+        enumNames_.insert(ename);
         if (!match(TokenType::LBrace)) {
             throw std::runtime_error("Expected '{' at line " + std::to_string(peek().line));
         }
@@ -797,6 +900,8 @@ private:
                 throw std::runtime_error("std/ui has been removed at line " + std::to_string(t.line));
             } else if (t.type == TokenType::Star) {
                 stmts.push_back(parseDerefAssignment());
+            } else if (t.type == TokenType::Delete) {
+                stmts.push_back(parseDeleteStmt());
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
                        tokens_[pos_ + 1].type == TokenType::LParen) {
                 stmts.push_back(parseFnCall());
@@ -1064,6 +1169,42 @@ private:
         AstNode idx = parseExpression();
         if (!match(TokenType::RBracket)) {
             throw std::runtime_error("Expected ']' at line " + std::to_string(peek().line));
+        }
+        if (peek().type == TokenType::Dot || peek().type == TokenType::Arrow) {
+            AstNode cur{AstNode::Type::ExprArrayIndex, name, {std::move(idx)}};
+            while (peek().type == TokenType::Dot || peek().type == TokenType::Arrow) {
+                bool arrow = peek().type == TokenType::Arrow;
+                advance();
+                const Token& ftok = peek();
+                if (ftok.type != TokenType::Identifier) {
+                    throw std::runtime_error(std::string("Expected field name after '") + (arrow ? "->" : ".") +
+                        "' at line " + std::to_string(ftok.line));
+                }
+                advance();
+                AstNode mem{AstNode::Type::ExprMember, ftok.value, {std::move(cur)}};
+                mem.isArrowMember = arrow;
+                cur = std::move(mem);
+            }
+            std::string op = "=";
+            if (match(TokenType::Assign)) op = "=";
+            else if (match(TokenType::PlusAssign)) op = "+=";
+            else if (match(TokenType::MinusAssign)) op = "-=";
+            else if (match(TokenType::StarAssign)) op = "*=";
+            else if (match(TokenType::SlashAssign)) op = "/=";
+            else if (match(TokenType::PercentAssign)) op = "%=";
+            else if (match(TokenType::BitAndAssign)) op = "&=";
+            else if (match(TokenType::BitOrAssign)) op = "|=";
+            else if (match(TokenType::BitXorAssign)) op = "^=";
+            else if (match(TokenType::ShlAssign)) op = "<<=";
+            else if (match(TokenType::ShrAssign)) op = ">>=";
+            else {
+                throw std::runtime_error("Expected '=' or compound assignment at line " + std::to_string(peek().line));
+            }
+            AstNode expr = parseExpression();
+            if (!match(TokenType::Semicolon)) {
+                throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
+            }
+            return {AstNode::Type::AssnMember, op, {std::move(cur), std::move(expr)}};
         }
         if (!match(TokenType::Assign)) {
             throw std::runtime_error("Expected '=' at line " + std::to_string(peek().line));
@@ -1395,6 +1536,8 @@ private:
                 throw std::runtime_error("std/ui has been removed at line " + std::to_string(t.line));
             } else if (t.type == TokenType::Star) {
                 stmts.push_back(parseDerefAssignment());
+            } else if (t.type == TokenType::Delete) {
+                stmts.push_back(parseDeleteStmt());
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
                        tokens_[pos_ + 1].type == TokenType::LParen) {
                 stmts.push_back(parseFnCall());
@@ -1667,6 +1810,12 @@ private:
         if (match(TokenType::BitAnd)) {
             return {AstNode::Type::ExprAddrOf, "", {parseUnary()}};
         }
+        if (peek().type == TokenType::New) {
+            return parseNewExpr();
+        }
+        if (peek().type == TokenType::Sizeof) {
+            return parseSizeof();
+        }
         return parseFactor();
     }
 
@@ -1872,7 +2021,8 @@ private:
             argTok.type == TokenType::Float || argTok.type == TokenType::Char ||
             argTok.type == TokenType::Star || argTok.type == TokenType::BitAnd ||
             argTok.type == TokenType::Minus || argTok.type == TokenType::Not ||
-            argTok.type == TokenType::BitNot) {
+            argTok.type == TokenType::BitNot || argTok.type == TokenType::New ||
+            argTok.type == TokenType::Sizeof) {
             result.children.push_back(parseExpression());
         } else {
             throw std::runtime_error("Expected string or expression at line " + std::to_string(argTok.line));

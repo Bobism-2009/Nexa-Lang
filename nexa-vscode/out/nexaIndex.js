@@ -36,9 +36,10 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.maskComments = maskComments;
 exports.indexNexaDefinitions = indexNexaDefinitions;
 const vscode = __importStar(require("vscode"));
-const FN_RE = /\bfn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
+const FN_RE = /\b(?:extern\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
 const STRUCT_RE = /\bstruct\s+([A-Za-z_][A-Za-z0-9_]*)\b/g;
 const ENUM_RE = /\benum\s+([A-Za-z_][A-Za-z0-9_]*)\b/g;
+const LET_RE = /^\s*let\s+(?:const\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*(?:[:=;]|$)/gm;
 /** Replace // and / ** / with spaces. Same length as input for offset mapping. */
 function maskComments(s) {
     const a = s.split("");
@@ -86,7 +87,7 @@ function runPattern(doc, masked, re, kind) {
         const defStart = m.index;
         const defStartPos = doc.positionAt(defStart);
         const line = doc.lineAt(defStartPos.line);
-        if (kind === "function" && !/\bfn\s/.test(line.text)) {
+        if (kind === "function" && !/\b(?:extern\s+)?fn\s/.test(line.text)) {
             continue;
         }
         if (kind === "struct" && !/\bstruct\s/.test(line.text)) {
@@ -113,8 +114,30 @@ function indexNexaDefinitions(doc) {
         ...runPattern(doc, masked, FN_RE, "function"),
         ...runPattern(doc, masked, STRUCT_RE, "struct"),
         ...runPattern(doc, masked, ENUM_RE, "enum"),
+        ...indexLetBindings(doc, masked),
     ];
     return uniqueByLine(defs);
+}
+function indexLetBindings(doc, masked) {
+    const out = [];
+    LET_RE.lastIndex = 0;
+    let m;
+    while ((m = LET_RE.exec(masked)) !== null) {
+        const name = m[1];
+        const nameOffset = m.index + m[0].indexOf(name);
+        const defStartPos = doc.positionAt(m.index);
+        const line = doc.lineAt(defStartPos.line);
+        const nameStart = doc.positionAt(nameOffset);
+        const nameEnd = doc.positionAt(nameOffset + name.length);
+        out.push({
+            name,
+            kind: "variable",
+            nameRange: new vscode.Range(nameStart, nameEnd),
+            lineRange: new vscode.Range(defStartPos.line, 0, defStartPos.line, line.text.length),
+            defLine: defStartPos.line,
+        });
+    }
+    return out;
 }
 function uniqueByLine(defs) {
     const seen = new Set();
