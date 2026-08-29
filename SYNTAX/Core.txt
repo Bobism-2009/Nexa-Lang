@@ -24,7 +24,7 @@ STRUCTS
     other: string;
     nested: InnerStruct;   // InnerStruct must be declared earlier in the file
   }
-  - Field types: int, unsigned int, string, bool, float, char, unsigned char, *T pointers, or another struct name
+  - Field types: int, unsigned int, short, unsigned short, long, unsigned long, size_t, string, bool, float, char, unsigned char, *T pointers, or another struct name
   - Optional semicolon after the closing }
 
   Variables:
@@ -37,7 +37,12 @@ STRUCTS
 
   - Reading a struct field in a let initializer requires an explicit type:
     let n: int = p.x;
-  - Fixed-size arrays of structs are not supported
+  - Fixed-size arrays of structs:
+    let pts: Point[10];
+    pts[0].x = 1;
+    pts[1] = pts[0];
+    let p: *Point = &pts[0];
+    Value-initialized (fields zeroed / empty string). No initializer list.
 
 ENUMS
   enum Name {
@@ -102,6 +107,9 @@ VARIABLES
   Types (inferred or explicit):
     int:    let x = 42;  let n: int = -10;  let c: int;
     unsigned int: let u: unsigned int = 42;  let w: unsigned int;
+    short / unsigned short: let s: short = 7;  let us: unsigned short = 9;
+    long / unsigned long:   let L: long = 1000;  let ul: unsigned long;
+    size_t: let n: size_t = 64;   (C++ std::size_t; use for sizes / array lengths)
     string: let s = "hello";  let name: string = io.readln();  let msg: string;
     bool:   let ok = true;  let flag: bool = false;  let b: bool;
     float:  let pi = 3.14;  let x: float = 2.5;  let f: float;
@@ -186,6 +194,7 @@ ARITHMETIC
 CASTS (C-style)
   (int)expr    (float)expr    (char)expr    (bool)expr    (string)expr
   (unsigned char)expr    (unsigned int)expr
+  (short)expr    (unsigned short)expr    (long)expr    (unsigned long)expr    (size_t)expr
   Same precedence as unary operators. Examples:
     let x: float = 3.7;
     let n = (int)x;           // 3
@@ -197,7 +206,8 @@ SIZEOF
   sizeof(T)        - byte size of type T (int)
   sizeof(expr)     - byte size of the expression's type (expr is not evaluated)
   sizeof expr      - same, without parentheses (e.g. sizeof x, sizeof *p)
-  Types: int, unsigned int, char, unsigned char, float, bool, string, *T, structs, enums
+  Types: int, unsigned int, short, unsigned short, long, unsigned long, size_t,
+         char, unsigned char, float, bool, string, *T, structs, enums
   sizeof(void) is not allowed. sizeof(*void) is the size of a pointer.
   sizeof(string) is the size of the string object, not len(s).
   Fixed arrays: sizeof(buf) for let buf: int[4] is 4 * sizeof(int).

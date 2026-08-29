@@ -1,0 +1,46 @@
+#include <std/io>
+
+struct Point {
+    x: int;
+    y: int;
+    label: string;
+}
+
+let gpts: Point[2];
+
+fn bump(p: *Point) {
+    p->x = p->x + 1;
+}
+
+fn main() {
+    let pts: Point[3];
+    pts[0].x = 1;
+    pts[0].y = 2;
+    pts[0].label = "a";
+    pts[1].x = 3;
+    pts[1].label = "b";
+    io.println(pts[0].x);
+    io.println(pts[1].x);
+    io.println(pts[0].label);
+
+    pts[2] = pts[0];
+    io.println(pts[2].x);
+    io.println(pts[2].label);
+
+    let p: *Point = &pts[0];
+    p->x = 9;
+    io.println(pts[0].x);
+    bump(&pts[1]);
+    io.println(pts[1].x);
+
+    gpts[0].x = 5;
+    gpts[0].label = "g";
+    io.println(gpts[0].x);
+    io.println(gpts[0].label);
+
+    if (sizeof(pts) != sizeof(Point) * 3) {
+        io.println("fail sizeof");
+        return 1;
+    }
+    io.println("ok");
+}

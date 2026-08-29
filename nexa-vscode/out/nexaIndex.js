@@ -35,6 +35,11 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.maskComments = maskComments;
 exports.indexNexaDefinitions = indexNexaDefinitions;
+exports.extractIncludes = extractIncludes;
+exports.resolveIncludeUri = resolveIncludeUri;
+exports.collectIncludedDefinitions = collectIncludedDefinitions;
+exports.includeSpecAtPosition = includeSpecAtPosition;
+const path = __importStar(require("path"));
 const vscode = __importStar(require("vscode"));
 const FN_RE = /\b(?:extern\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
 const STRUCT_RE = /\bstruct\s+([A-Za-z_][A-Za-z0-9_]*)\b/g;
@@ -149,4 +154,150 @@ function uniqueByLine(defs) {
         seen.add(k);
         return true;
     });
+}
+const INCLUDE_LINE_RE = /^\s*#include\s*(?:<([^>]+)>|"([^"]+)")/gm;
+function extractIncludes(masked) {
+    const out = [];
+    INCLUDE_LINE_RE.lastIndex = 0;
+    let m;
+    while ((m = INCLUDE_LINE_RE.exec(masked)) !== null) {
+        if (m[2]) {
+            out.push({ kind: "quote", path: m[2] });
+        }
+        else if (m[1]) {
+            out.push({ kind: "angle", path: m[1] });
+        }
+    }
+    return out;
+}
+function shouldFollowInclude(p) {
+    const norm = p.replace(/\\/g, "/");
+    if (norm.startsWith("std/")) {
+        return false;
+    }
+    if (/\.(h|hh|hpp|hxx|c|cc|cpp|cxx)$/i.test(norm)) {
+        return false;
+    }
+    return true;
+}
+async function uriExists(uri) {
+    try {
+        await vscode.workspace.fs.stat(uri);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+function withNxaIfNeeded(p) {
+    const norm = p.replace(/\\/g, "/");
+    if (/\.[A-Za-z0-9]+$/.test(norm)) {
+        return [p];
+    }
+    return [p, `${p}.nxa`];
+}
+function packageSearchRoots(from) {
+    const roots = [];
+    const folder = vscode.workspace.getWorkspaceFolder(from);
+    if (folder) {
+        roots.push(folder.uri);
+        roots.push(vscode.Uri.joinPath(folder.uri, ".nexa", "packages"));
+    }
+    const home = process.env.USERPROFILE || process.env.HOME;
+    if (home) {
+        roots.push(vscode.Uri.file(path.join(home, ".nexa", "packages")));
+    }
+    return roots;
+}
+async function resolveIncludeUri(from, spec) {
+    if (!shouldFollowInclude(spec.path)) {
+        return null;
+    }
+    const parts = spec.path.replace(/\\/g, "/").split("/").filter((p) => p.length > 0);
+    if (parts.length === 0) {
+        return null;
+    }
+    if (spec.kind === "quote") {
+        const baseDir = path.dirname(from.uri.fsPath);
+        for (const rel of withNxaIfNeeded(spec.path)) {
+            const abs = path.isAbsolute(rel)
+                ? path.normalize(rel)
+                : path.normalize(path.join(baseDir, rel));
+            const uri = vscode.Uri.file(abs);
+            if (await uriExists(uri)) {
+                return uri;
+            }
+        }
+        return null;
+    }
+    for (const root of packageSearchRoots(from.uri)) {
+        for (const rel of withNxaIfNeeded(spec.path)) {
+            const relParts = rel.replace(/\\/g, "/").split("/").filter((p) => p.length > 0);
+            const uri = vscode.Uri.joinPath(root, ...relParts);
+            if (await uriExists(uri)) {
+                return uri;
+            }
+        }
+    }
+    return null;
+}
+async function collectIncludedDefinitions(document, token) {
+    const out = [];
+    const visited = new Set([document.uri.toString()]);
+    const queue = [document];
+    let scanned = 0;
+    while (queue.length > 0) {
+        if (token?.isCancellationRequested || scanned > 100) {
+            break;
+        }
+        const current = queue.shift();
+        scanned += 1;
+        const specs = extractIncludes(maskComments(current.getText()));
+        for (const spec of specs) {
+            if (token?.isCancellationRequested) {
+                break;
+            }
+            const uri = await resolveIncludeUri(current, spec);
+            if (!uri) {
+                continue;
+            }
+            const key = uri.toString();
+            if (visited.has(key)) {
+                continue;
+            }
+            visited.add(key);
+            let included;
+            try {
+                included = await vscode.workspace.openTextDocument(uri);
+            }
+            catch {
+                continue;
+            }
+            for (const def of indexNexaDefinitions(included)) {
+                out.push({ def, document: included });
+            }
+            queue.push(included);
+        }
+    }
+    return out;
+}
+function includeSpecAtPosition(document, position) {
+    const line = document.lineAt(position.line).text;
+    const quote = /^\s*#include\s*"([^"]+)"/.exec(line);
+    if (quote) {
+        const start = line.indexOf('"') + 1;
+        const end = start + quote[1].length;
+        if (position.character >= start && position.character <= end) {
+            return { kind: "quote", path: quote[1] };
+        }
+    }
+    const angle = /^\s*#include\s*<([^>]+)>/.exec(line);
+    if (angle) {
+        const start = line.indexOf("<") + 1;
+        const end = start + angle[1].length;
+        if (position.character >= start && position.character <= end) {
+            return { kind: "angle", path: angle[1] };
+        }
+    }
+    return null;
 }

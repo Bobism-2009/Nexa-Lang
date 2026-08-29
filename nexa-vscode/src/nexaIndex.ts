@@ -1,3 +1,4 @@
+import * as path from "path";
 import * as vscode from "vscode";
 
 const FN_RE = /\b(?:extern\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
@@ -146,4 +147,177 @@ function uniqueByLine(defs: IndexedDef[]): IndexedDef[] {
     seen.add(k);
     return true;
   });
+}
+
+export type IncludeKind = "quote" | "angle";
+
+export interface IncludeSpec {
+  kind: IncludeKind;
+  path: string;
+}
+
+export interface LocatedDef {
+  def: IndexedDef;
+  document: vscode.TextDocument;
+}
+
+const INCLUDE_LINE_RE = /^\s*#include\s*(?:<([^>]+)>|"([^"]+)")/gm;
+
+export function extractIncludes(masked: string): IncludeSpec[] {
+  const out: IncludeSpec[] = [];
+  INCLUDE_LINE_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = INCLUDE_LINE_RE.exec(masked)) !== null) {
+    if (m[2]) {
+      out.push({ kind: "quote", path: m[2] });
+    } else if (m[1]) {
+      out.push({ kind: "angle", path: m[1] });
+    }
+  }
+  return out;
+}
+
+function shouldFollowInclude(p: string): boolean {
+  const norm = p.replace(/\\/g, "/");
+  if (norm.startsWith("std/")) {
+    return false;
+  }
+  if (/\.(h|hh|hpp|hxx|c|cc|cpp|cxx)$/i.test(norm)) {
+    return false;
+  }
+  return true;
+}
+
+async function uriExists(uri: vscode.Uri): Promise<boolean> {
+  try {
+    await vscode.workspace.fs.stat(uri);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function withNxaIfNeeded(p: string): string[] {
+  const norm = p.replace(/\\/g, "/");
+  if (/\.[A-Za-z0-9]+$/.test(norm)) {
+    return [p];
+  }
+  return [p, `${p}.nxa`];
+}
+
+function packageSearchRoots(from: vscode.Uri): vscode.Uri[] {
+  const roots: vscode.Uri[] = [];
+  const folder = vscode.workspace.getWorkspaceFolder(from);
+  if (folder) {
+    roots.push(folder.uri);
+    roots.push(vscode.Uri.joinPath(folder.uri, ".nexa", "packages"));
+  }
+  const home = process.env.USERPROFILE || process.env.HOME;
+  if (home) {
+    roots.push(vscode.Uri.file(path.join(home, ".nexa", "packages")));
+  }
+  return roots;
+}
+
+export async function resolveIncludeUri(
+  from: vscode.TextDocument,
+  spec: IncludeSpec
+): Promise<vscode.Uri | null> {
+  if (!shouldFollowInclude(spec.path)) {
+    return null;
+  }
+  const parts = spec.path.replace(/\\/g, "/").split("/").filter((p) => p.length > 0);
+  if (parts.length === 0) {
+    return null;
+  }
+  if (spec.kind === "quote") {
+    const baseDir = path.dirname(from.uri.fsPath);
+    for (const rel of withNxaIfNeeded(spec.path)) {
+      const abs = path.isAbsolute(rel)
+        ? path.normalize(rel)
+        : path.normalize(path.join(baseDir, rel));
+      const uri = vscode.Uri.file(abs);
+      if (await uriExists(uri)) {
+        return uri;
+      }
+    }
+    return null;
+  }
+  for (const root of packageSearchRoots(from.uri)) {
+    for (const rel of withNxaIfNeeded(spec.path)) {
+      const relParts = rel.replace(/\\/g, "/").split("/").filter((p) => p.length > 0);
+      const uri = vscode.Uri.joinPath(root, ...relParts);
+      if (await uriExists(uri)) {
+        return uri;
+      }
+    }
+  }
+  return null;
+}
+
+export async function collectIncludedDefinitions(
+  document: vscode.TextDocument,
+  token?: vscode.CancellationToken
+): Promise<LocatedDef[]> {
+  const out: LocatedDef[] = [];
+  const visited = new Set<string>([document.uri.toString()]);
+  const queue: vscode.TextDocument[] = [document];
+  let scanned = 0;
+  while (queue.length > 0) {
+    if (token?.isCancellationRequested || scanned > 100) {
+      break;
+    }
+    const current = queue.shift()!;
+    scanned += 1;
+    const specs = extractIncludes(maskComments(current.getText()));
+    for (const spec of specs) {
+      if (token?.isCancellationRequested) {
+        break;
+      }
+      const uri = await resolveIncludeUri(current, spec);
+      if (!uri) {
+        continue;
+      }
+      const key = uri.toString();
+      if (visited.has(key)) {
+        continue;
+      }
+      visited.add(key);
+      let included: vscode.TextDocument;
+      try {
+        included = await vscode.workspace.openTextDocument(uri);
+      } catch {
+        continue;
+      }
+      for (const def of indexNexaDefinitions(included)) {
+        out.push({ def, document: included });
+      }
+      queue.push(included);
+    }
+  }
+  return out;
+}
+
+export function includeSpecAtPosition(
+  document: vscode.TextDocument,
+  position: vscode.Position
+): IncludeSpec | null {
+  const line = document.lineAt(position.line).text;
+  const quote = /^\s*#include\s*"([^"]+)"/.exec(line);
+  if (quote) {
+    const start = line.indexOf('"') + 1;
+    const end = start + quote[1]!.length;
+    if (position.character >= start && position.character <= end) {
+      return { kind: "quote", path: quote[1]! };
+    }
+  }
+  const angle = /^\s*#include\s*<([^>]+)>/.exec(line);
+  if (angle) {
+    const start = line.indexOf("<") + 1;
+    const end = start + angle[1]!.length;
+    if (position.character >= start && position.character <= end) {
+      return { kind: "angle", path: angle[1]! };
+    }
+  }
+  return null;
 }

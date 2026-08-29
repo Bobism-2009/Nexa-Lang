@@ -1,0 +1,9 @@
+#include <std/io>
+
+fn main() {
+    io.print("err: ", "windows");
+    io.println("");
+    io.println("[Error] Unsupported OS. | Detected OS: ", "windows");
+    io.println("n=", 7, " ok");
+    io.println("ok");
+}

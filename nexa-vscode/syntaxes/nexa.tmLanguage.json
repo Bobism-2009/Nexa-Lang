@@ -203,7 +203,7 @@
       "patterns": [
         {
           "name": "storage.type.nexa",
-          "match": "\\b(int|string|bool|float|char|void|unsigned\\s+int|unsigned\\s+char)\\b"
+          "match": "\\b(unsigned\\s+int|unsigned\\s+short|unsigned\\s+long|unsigned\\s+char|int|short|long|size_t|string|bool|float|char|void)\\b"
         },
         {
           "name": "storage.type.pointer.nexa",

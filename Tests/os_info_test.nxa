@@ -1,0 +1,147 @@
+#include <std/io>
+#include <std/os>
+
+fn main() {
+    let plat = os.platform();
+    let arch = os.arch();
+    if (arch != "x86_64" && arch != "x86" && arch != "arm64" && arch != "arm") {
+        io.println("fail arch");
+        return 1;
+    }
+    if (os.cpu_count() < 1) {
+        io.println("fail cpu_count");
+        return 1;
+    }
+    let td = os.tempdir();
+    if (td == "") {
+        io.println("fail tempdir");
+        return 1;
+    }
+    let exe = os.executable();
+    if (exe == "") {
+        io.println("fail executable");
+        return 1;
+    }
+    let here = os.cwd();
+    if (here == "") {
+        io.println("fail cwd");
+        return 1;
+    }
+    if (os.chdir(td) != 1) {
+        io.println("fail chdir");
+        return 1;
+    }
+    if (os.chdir(here) != 1) {
+        io.println("fail chdir back");
+        return 1;
+    }
+
+    os.setenv("NEXA_OS_UNSET_TEST", "1");
+    if (os.getenv("NEXA_OS_UNSET_TEST") != "1") {
+        io.println("fail setenv");
+        return 1;
+    }
+    os.unsetenv("NEXA_OS_UNSET_TEST");
+    if (os.getenv("NEXA_OS_UNSET_TEST") != "") {
+        io.println("fail unsetenv");
+        return 1;
+    }
+
+    let found = "";
+    if (plat == "windows") {
+        found = os.which("cmd");
+        if (found == "") {
+            found = os.which("cmd.exe");
+        }
+    } else {
+        found = os.which("sh");
+        if (found == "") {
+            found = os.which("true");
+        }
+    }
+    if (found == "") {
+        io.println("fail which");
+        return 1;
+    }
+
+    if (os.total_mem() < 1) {
+        io.println("fail total_mem");
+        return 1;
+    }
+    if (os.avail_mem() < 1) {
+        io.println("fail avail_mem");
+        return 1;
+    }
+    if (os.page_size() < 1) {
+        io.println("fail page_size");
+        return 1;
+    }
+    if (os.uptime() < 0) {
+        io.println("fail uptime");
+        return 1;
+    }
+    if (os.shell() == "") {
+        io.println("fail shell");
+        return 1;
+    }
+    let nl = os.newline();
+    if (nl != "\n" && nl != "\r\n") {
+        io.println("fail newline");
+        return 1;
+    }
+    let sep = os.path_sep();
+    if (sep != "/" && sep != "\\") {
+        io.println("fail path_sep");
+        return 1;
+    }
+    if (os.lang() == "") {
+        io.println("fail lang");
+        return 1;
+    }
+    let tty = os.isatty();
+    if (tty != 0 && tty != 1) {
+        io.println("fail isatty");
+        return 1;
+    }
+    let end = os.endian();
+    if (end != "little" && end != "big") {
+        io.println("fail endian");
+        return 1;
+    }
+    if (os.config_dir() == "") {
+        io.println("fail config_dir");
+        return 1;
+    }
+    if (os.cache_dir() == "") {
+        io.println("fail cache_dir");
+        return 1;
+    }
+    if (os.desktop() == "") {
+        io.println("fail desktop");
+        return 1;
+    }
+
+    let env = os.environ();
+    if (len(env) < 1) {
+        io.println("fail environ empty");
+        return 1;
+    }
+    if (len(os.env()) != len(env)) {
+        io.println("fail env alias");
+        return 1;
+    }
+    let has_path = 0;
+    for (e in env) {
+        if (e.starts_with("PATH=") || e.starts_with("Path=")) {
+            has_path = 1;
+        }
+    }
+    if (has_path != 1) {
+        io.println("fail environ PATH");
+        return 1;
+    }
+
+    io.println(arch);
+    io.println(os.cpu_count());
+    io.println("ok");
+}

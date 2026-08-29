@@ -152,5 +152,10 @@
     "prefix": "sizeof",
     "body": ["sizeof(${1:int})"],
     "description": "Byte size of a type or expression"
+  },
+  "Nexa: struct array": {
+    "prefix": "sarr",
+    "body": ["let ${1:pts}: ${2:Point}[${3:10}];"],
+    "description": "Fixed-size stack array of structs"
   }
 }

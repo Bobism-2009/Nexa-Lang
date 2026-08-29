@@ -2,8 +2,9 @@ Nexa Standard Modules
 ======================
 
 #include <std/io>
-  io.print(arg)     - Print to stdout, no newline
-  io.println(arg)  - Print to stdout, add newline
+  io.print(arg[, ...])     - Print to stdout, no newline
+  io.println(arg[, ...])  - Print args in order, then a newline
+                    - Multiple args are written back-to-back (no extra spaces)
   io.flush()        - Flush stdout (fflush); use when output must appear immediately
   Strings support escapes: \n \t \r \\ \" \xHH (hex ASCII)
   s += "x";        - string concatenation (compound assign)
@@ -17,8 +18,9 @@ Nexa Standard Modules
   io.to_int(s)      - Parse string expression as decimal int (failure -> 0)
   io.getline(text[, lineNo]) - Return lineNo (1-based, default 1) from string buffer
   io.getline(text, "key")    - Line matching key: (leading ws ok); returns from key through line end
-  arg: one expression (literal, variable, or + chain). If any operand is string-typed or a string
-       literal, + builds text: int/float/bool/char are converted (e.g. io.println("n=" + n);).
+  arg: one or more expressions (literal, variable, or + chain). Comma-separated args print
+       in order. If any + operand is string-typed or a string literal, + builds text:
+       int/float/bool/char are converted (e.g. io.println("n=" + n);).
        Pure int/float + without string stays numeric (arithmetic).
 
 #include <std/os>
@@ -29,6 +31,33 @@ Nexa Standard Modules
                     - On Windows, no console window is created for the child
                     - Example: os.spawn("cmd", "/c", "echo", "hi");
                     - Example: let pid = os.spawn("notepad");
+  os.spawn_wait(prog [, arg...]) - Same as spawn, but wait until the child exits.
+                    - Returns the exit code (int), or -1 on failure
+  os.spawn_at(cwd, prog [, arg...]) - Spawn with working directory `cwd`. Returns pid.
+  os.wait(pid)      - Wait for a child started by spawn/spawn_at; returns exit code (-1 on failure)
+  os.kill(pid)      - Terminate a process by id; returns 1 on success, 0 on failure
+  os.tempdir()      - System temp directory (string)
+  os.arch()         - CPU architecture: "x86_64", "x86", "arm64", "arm", or "unknown"
+  os.cpu_count()    - Number of logical CPUs (int, at least 1)
+  os.which(name)    - Full path of an executable on PATH, or "" if not found
+  os.unsetenv(name) - Remove an environment variable from this process
+  os.executable()   - Full path of the running executable (string)
+  os.cwd()          - Current working directory (string)
+  os.chdir(path)    - Change working directory; returns 1 on success, 0 on failure
+  os.total_mem()    - Physical RAM in bytes (size_t)
+  os.avail_mem()    - Available physical RAM in bytes (size_t)
+  os.page_size()    - OS memory page size in bytes (int)
+  os.uptime()       - Seconds since boot (int)
+  os.shell()        - Default shell path (COMSPEC / SHELL)
+  os.newline()      - Native line ending ("\r\n" on Windows, "\n" elsewhere)
+  os.path_sep()     - Directory separator ("\\" on Windows, "/" elsewhere)
+  os.lang()         - User locale / LANG (string, may be empty)
+  os.isatty()       - 1 if stdout is a terminal, else 0
+  os.environ() / os.env() - Environment as []string of KEY=value
+  os.config_dir()   - Per-user config directory (APPDATA / XDG_CONFIG_HOME / Application Support)
+  os.cache_dir()    - Per-user cache directory (LOCALAPPDATA / XDG_CACHE_HOME / Caches)
+  os.desktop()      - Desktop folder path
+  os.endian()       - "little" or "big"
   os.platform()     - Returns "windows", "linux", "darwin", or "unknown"
   os.getenv(name)   - Get environment variable, returns string (or "")
   os.setenv(name, value) - Set environment variable for this process

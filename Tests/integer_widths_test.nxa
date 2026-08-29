@@ -1,0 +1,86 @@
+#include <std/io>
+
+struct Sized {
+    n: size_t;
+    s: short;
+}
+
+fn add_long(a: long, b: long): long {
+    return a + b;
+}
+
+fn ident_size(n: size_t): size_t {
+    return n;
+}
+
+fn main() {
+    let s: short = 7;
+    let us: unsigned short = 9;
+    let L: long = 1000;
+    let ul: unsigned long = 8;
+    let z: size_t = 64;
+    let z2: size_t;
+    z2 = 3;
+
+    if (s != 7) { io.println("fail short"); return 1; }
+    if (us != 9) { io.println("fail ushort"); return 1; }
+    if (L != 1000) { io.println("fail long"); return 1; }
+    if (ul != 8) { io.println("fail ulong"); return 1; }
+    if (z != 64) { io.println("fail size_t"); return 1; }
+    if (z2 != 3) { io.println("fail size_t uninit"); return 1; }
+
+    if (sizeof(short) > sizeof(int)) {
+        io.println("fail sizeof short");
+        return 1;
+    }
+    if (sizeof(unsigned short) != sizeof(short)) {
+        io.println("fail sizeof ushort");
+        return 1;
+    }
+    if (sizeof(unsigned long) != sizeof(long)) {
+        io.println("fail sizeof ulong");
+        return 1;
+    }
+    if (sizeof(size_t) < 4) {
+        io.println("fail sizeof size_t");
+        return 1;
+    }
+
+    let arr: long[4];
+    arr[0] = 11;
+    arr[1] = 22;
+    if (arr[0] != 11) { io.println("fail arr"); return 1; }
+    if (sizeof(arr) != sizeof(long) * 4) {
+        io.println("fail arr sizeof");
+        return 1;
+    }
+
+    let p: *short = &s;
+    if (*p != 7) { io.println("fail ptr"); return 1; }
+
+    let st: Sized;
+    st.n = 5;
+    st.s = 2;
+    if (st.n != 5) { io.println("fail struct size_t"); return 1; }
+    if (st.s != 2) { io.println("fail struct short"); return 1; }
+
+    if (add_long(10, 20) != 30) { io.println("fail add_long"); return 1; }
+    if (ident_size(4) != 4) { io.println("fail ident_size"); return 1; }
+
+    let from_str: long = (long)"42";
+    if (from_str != 42) { io.println("fail long str"); return 1; }
+    let from_usz: unsigned short = (unsigned short)"12";
+    if (from_usz != 12) { io.println("fail ushort str"); return 1; }
+    let from_z: size_t = (size_t)"99";
+    if (from_z != 99) { io.println("fail size_t str"); return 1; }
+
+    let inferred = (size_t)8;
+    if (inferred != 8) { io.println("fail inferred"); return 1; }
+
+    io.println(s);
+    io.println(us);
+    io.println(L);
+    io.println(ul);
+    io.println(z);
+    io.println("ok");
+}

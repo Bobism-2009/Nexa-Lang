@@ -40,14 +40,14 @@ Install via **Extensions: Install from VSIX...**.
 ## Features
 
 ### Language support
-- **Syntax highlighting** — keywords, types (`unsigned int`, pointers), `extern fn`, `null`, `->`, operators, std modules (`io`, `os`, `file`, `math`, `crypto`, `http`, …), structs, enums, strings/chars, `#include`
+- **Syntax highlighting** — keywords, types (`unsigned int`, `size_t`, pointers), `extern fn`, `null`, `->`, operators, std modules (`io`, `os`, `file`, `math`, `crypto`, `http`, …), structs, enums, strings/chars, `#include`
 - **Snippets** — `main`, `fn`, `extern`, `struct`, `enum`, `forin`, module includes, `inlinecpp`, etc.
 - **Bracket matching** and indent for `{}`, `case`/`default`
 
 ### IntelliSense
-- **Completions** — keywords, types, functions/variables/structs/enums in the file, `module.` member lists (`io.`, `os.`, …), string methods after `.`
-- **Hover** — brief docs for std module calls
-- **Go to definition** — functions (including `extern fn`), structs, enums, `let` bindings
+- **Completions** — keywords, types, functions/variables/structs/enums in the file and in `#include`d `.nxa` files, `module.` member lists (`io.`, `os.`, …), string methods after `.`
+- **Hover** — brief docs for std module calls; definition line for locals and included symbols
+- **Go to definition** — functions (including `extern fn`), structs, enums, `let` bindings, and `#include "file.nxa"` paths
 - **Find references** — workspace-wide for `.nxa` files
 - **Document outline** — symbols in the file tree
 

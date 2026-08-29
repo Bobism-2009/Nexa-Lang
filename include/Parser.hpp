@@ -24,7 +24,9 @@ struct AstNode {
                       OsSetBrightness, OsGetBrightness,
                       OsClipSet, OsClipGet,
                       OsType,
-                      OsNotify, OsOpen, OsSpawn,
+                      OsNotify, OsOpen, OsSpawn, OsWait, OsKill,
+                      OsTempDir, OsArch, OsCpuCount, OsWhich, OsUnsetenv, OsExecutable, OsCwd, OsChdir,
+                      OsInfo,
                       OsExit, OsHostname, OsUsername, OsHome, OsSetenv,
                       DllLoad, DllCall,
                       FileRead, FileWrite, FileAppend, FileExists, FileMkdir, FileCall,
@@ -98,7 +100,7 @@ struct AstNode {
     bool initIsBool = false;       // for Variable: true = let x = true/false
     bool initIsFloat = false;      // for Variable: true = let x = 3.14
     bool initIsChar = false;       // for Variable: true = let x = 'a'
-    std::string declType = "";  // for Variable: "int", "string", "bool", "float", "char", "unsigned char", "unsigned int", or "" (inferred)
+    std::string declType = "";  // for Variable: int/short/long/size_t (and unsigned), string, bool, float, char, or "" (inferred)
     bool isVarRef = false;      // for IoPrint/IoPrintln: true = print variable, false = print string
     bool caseIsString = false;  // for SwitchCase: true = case "str", false = case 42
     bool caseIsEnum = false;    // for SwitchCase: Enum.variant; value = enum name, initValue = variant
@@ -110,6 +112,16 @@ struct AstNode {
     bool isExtern = false;         // Function: true = extern fn (C linkage declaration, no body)
     bool isVariadic = false;       // Function: true = trailing ... (C varargs)
 };
+
+inline bool nexaIsIntegerType(const std::string& t) {
+    return t == "int" || t == "unsigned int" || t == "short" || t == "unsigned short"
+        || t == "long" || t == "unsigned long" || t == "size_t"
+        || t == "char" || t == "unsigned char";
+}
+
+inline bool nexaIsNumericIntType(const std::string& t) {
+    return nexaIsIntegerType(t) && t != "char";
+}
 
 class Parser {
 public:
@@ -173,7 +185,12 @@ private:
     std::set<std::string> enumNames_;
 
     static bool exprProducesString(const AstNode& e) {
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsHostname || e.type == AstNode::Type::OsUsername || e.type == AstNode::Type::OsHome || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall || e.type == AstNode::Type::HttpCall) return true;
+        if (e.type == AstNode::Type::OsInfo) {
+            const std::string& m = e.value;
+            return m == "shell" || m == "newline" || m == "path_sep" || m == "lang"
+                || m == "config_dir" || m == "cache_dir" || m == "desktop" || m == "endian";
+        }
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsExecutable || e.type == AstNode::Type::OsTempDir || e.type == AstNode::Type::OsArch || e.type == AstNode::Type::OsWhich || e.type == AstNode::Type::OsCwd || e.type == AstNode::Type::OsHostname || e.type == AstNode::Type::OsUsername || e.type == AstNode::Type::OsHome || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall || e.type == AstNode::Type::HttpCall) return true;
         if (e.type == AstNode::Type::ExprCast && e.value == "string") return true;
         if (e.type == AstNode::Type::FileCall) {
             const std::string& m = e.value;
@@ -249,7 +266,7 @@ private:
             advance();
             const Token& t2 = peek();
             if (t2.type != TokenType::Identifier) {
-                throw std::runtime_error("Expected 'char' or 'int' after 'unsigned' at line " + std::to_string(t2.line));
+                throw std::runtime_error("Expected 'char', 'int', 'short', or 'long' after 'unsigned' at line " + std::to_string(t2.line));
             }
             if (t2.value == "char") {
                 advance();
@@ -259,7 +276,15 @@ private:
                 advance();
                 return "unsigned int";
             }
-            throw std::runtime_error("Expected 'char' or 'int' after 'unsigned' at line " + std::to_string(t2.line));
+            if (t2.value == "short") {
+                advance();
+                return "unsigned short";
+            }
+            if (t2.value == "long") {
+                advance();
+                return "unsigned long";
+            }
+            throw std::runtime_error("Expected 'char', 'int', 'short', or 'long' after 'unsigned' at line " + std::to_string(t2.line));
         }
         if (t.type != TokenType::Identifier) {
             throw std::runtime_error("Expected type name at line " + std::to_string(t.line));
@@ -267,6 +292,9 @@ private:
         std::string v = t.value;
         advance();
         if (v == "int") return "int";
+        if (v == "short") return "short";
+        if (v == "long") return "long";
+        if (v == "size_t") return "size_t";
         if (v == "string") return "string";
         if (v == "bool") return "bool";
         if (v == "float") return "float";
@@ -290,7 +318,8 @@ private:
         if (t.type == TokenType::Enum) return true;
         if (t.type != TokenType::Identifier) return false;
         const std::string& v = t.value;
-        if (v == "int" || v == "float" || v == "char" || v == "bool" || v == "string" ||
+        if (v == "int" || v == "short" || v == "long" || v == "size_t" ||
+            v == "float" || v == "char" || v == "bool" || v == "string" ||
             v == "void" || v == "unsigned") {
             return true;
         }
@@ -1767,7 +1796,8 @@ private:
             const Token& t2 = tokens_[pos_ + 2];
             if (t1.type == TokenType::Identifier && t2.type == TokenType::RParen) {
                 const std::string& tn = t1.value;
-                if (tn == "int" || tn == "float" || tn == "char" || tn == "bool" || tn == "string") {
+                if (tn == "int" || tn == "short" || tn == "long" || tn == "size_t" ||
+                    tn == "float" || tn == "char" || tn == "bool" || tn == "string") {
                     advance();  // (
                     advance();  // type
                     advance();  // )
@@ -1775,16 +1805,17 @@ private:
                     return {AstNode::Type::ExprCast, tn, {std::move(inner)}};
                 }
             }
-            // (unsigned char)x / (unsigned int)x
+            // (unsigned char|int|short|long)x
             if (t1.type == TokenType::Identifier && t1.value == "unsigned" &&
                 pos_ + 3 < tokens_.size() &&
                 tokens_[pos_ + 2].type == TokenType::Identifier &&
-                (tokens_[pos_ + 2].value == "char" || tokens_[pos_ + 2].value == "int") &&
+                (tokens_[pos_ + 2].value == "char" || tokens_[pos_ + 2].value == "int" ||
+                 tokens_[pos_ + 2].value == "short" || tokens_[pos_ + 2].value == "long") &&
                 tokens_[pos_ + 3].type == TokenType::RParen) {
                 advance();  // (
                 advance();  // unsigned
-                std::string ut = tokens_[pos_].value == "char" ? "unsigned char" : "unsigned int";
-                advance();  // char|int
+                std::string ut = "unsigned " + tokens_[pos_].value;
+                advance();  // char|int|short|long
                 advance();  // )
                 AstNode inner = parseUnary();
                 return {AstNode::Type::ExprCast, ut, {std::move(inner)}};
@@ -1889,7 +1920,19 @@ private:
             if (method == "get_volume") return parseOsGetVolume();
             if (method == "get_brightness") return parseOsGetBrightness();
             if (method == "clip_get") return parseOsClipGet();
-            if (method == "spawn") return parseOsSpawn();
+            if (method == "spawn" || method == "spawn_wait" || method == "spawn_at" ||
+                method == "wait" || method == "kill" ||
+                method == "tempdir" || method == "tmpdir" || method == "arch" ||
+                method == "cpu_count" || method == "nproc" || method == "which" ||
+                method == "unsetenv" || method == "executable" || method == "exe" ||
+                method == "cwd" || method == "chdir" ||
+                method == "total_mem" || method == "avail_mem" || method == "page_size" ||
+                method == "uptime" || method == "shell" || method == "newline" ||
+                method == "path_sep" || method == "lang" || method == "isatty" ||
+                method == "environ" || method == "env" || method == "config_dir" ||
+                method == "cache_dir" || method == "desktop" || method == "endian") {
+                return parseOsCall(false);
+            }
         }
         if (peek().type == TokenType::Identifier && (peek().value == "getprocessid" || peek().value == "getpid") &&
             pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::LParen) {
@@ -2024,6 +2067,9 @@ private:
             argTok.type == TokenType::BitNot || argTok.type == TokenType::New ||
             argTok.type == TokenType::Sizeof) {
             result.children.push_back(parseExpression());
+            while (match(TokenType::Comma)) {
+                result.children.push_back(parseExpression());
+            }
         } else {
             throw std::runtime_error("Expected string or expression at line " + std::to_string(argTok.line));
         }
@@ -2164,20 +2210,81 @@ private:
             finishOsCall(requireSemicolon, peek().line);
             return {AstNode::Type::OsOpen, "", {arg}};
         }
-        if (method == "spawn") {
+        if (method == "spawn" || method == "spawn_wait" || method == "spawn_at") {
             if (!match(TokenType::LParen)) {
-                throw std::runtime_error("Expected '(' after os.spawn at line " + std::to_string(peek().line));
+                throw std::runtime_error("Expected '(' after os." + method + " at line " + std::to_string(peek().line));
             }
-            AstNode node{AstNode::Type::OsSpawn, "", {}};
+            std::string tag = "";
+            if (method == "spawn_wait") tag = "wait";
+            else if (method == "spawn_at") tag = "at";
+            AstNode node{AstNode::Type::OsSpawn, tag, {}};
             node.children.push_back(parseExpression());
             while (match(TokenType::Comma)) {
                 node.children.push_back(parseExpression());
             }
             if (!match(TokenType::RParen)) {
-                throw std::runtime_error("Expected ')' after os.spawn(...) at line " + std::to_string(peek().line));
+                throw std::runtime_error("Expected ')' after os." + method + "(...) at line " + std::to_string(peek().line));
+            }
+            if (node.children.empty()) {
+                throw std::runtime_error("os." + method + " requires a program at line " + std::to_string(methodTok.line));
+            }
+            if (method == "spawn_at" && node.children.size() < 2) {
+                throw std::runtime_error("os.spawn_at(cwd, prog [, arg...]) requires a directory and program at line " + std::to_string(methodTok.line));
             }
             finishOsCall(requireSemicolon, peek().line);
             return node;
+        }
+        if (method == "wait" || method == "kill") {
+            if (!match(TokenType::LParen)) {
+                throw std::runtime_error("Expected '(' after os." + method + " at line " + std::to_string(peek().line));
+            }
+            AstNode arg = parseExpression();
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' after os." + method + "(...) at line " + std::to_string(peek().line));
+            }
+            finishOsCall(requireSemicolon, peek().line);
+            return {method == "wait" ? AstNode::Type::OsWait : AstNode::Type::OsKill, "", {arg}};
+        }
+        if (method == "total_mem" || method == "avail_mem" || method == "page_size" ||
+            method == "uptime" || method == "shell" || method == "newline" ||
+            method == "path_sep" || method == "lang" || method == "isatty" ||
+            method == "environ" || method == "env" || method == "config_dir" ||
+            method == "cache_dir" || method == "desktop" || method == "endian") {
+            if (!match(TokenType::LParen) || !match(TokenType::RParen)) {
+                throw std::runtime_error("Expected '()' after os." + method + " at line " + std::to_string(peek().line));
+            }
+            finishOsCall(requireSemicolon, peek().line);
+            std::string tag = method;
+            if (method == "env") tag = "environ";
+            return {AstNode::Type::OsInfo, tag, {}};
+        }
+        if (method == "tempdir" || method == "tmpdir" || method == "arch" ||
+            method == "cpu_count" || method == "nproc" ||
+            method == "executable" || method == "exe" || method == "cwd") {
+            if (!match(TokenType::LParen) || !match(TokenType::RParen)) {
+                throw std::runtime_error("Expected '()' after os." + method + " at line " + std::to_string(peek().line));
+            }
+            finishOsCall(requireSemicolon, peek().line);
+            AstNode::Type nodeType = AstNode::Type::OsTempDir;
+            if (method == "arch") nodeType = AstNode::Type::OsArch;
+            else if (method == "cpu_count" || method == "nproc") nodeType = AstNode::Type::OsCpuCount;
+            else if (method == "executable" || method == "exe") nodeType = AstNode::Type::OsExecutable;
+            else if (method == "cwd") nodeType = AstNode::Type::OsCwd;
+            return {nodeType, "", {}};
+        }
+        if (method == "which" || method == "unsetenv" || method == "chdir") {
+            if (!match(TokenType::LParen)) {
+                throw std::runtime_error("Expected '(' after os." + method + " at line " + std::to_string(peek().line));
+            }
+            AstNode arg = parseExpression();
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' after os." + method + "(...) at line " + std::to_string(peek().line));
+            }
+            finishOsCall(requireSemicolon, peek().line);
+            AstNode::Type nodeType = AstNode::Type::OsWhich;
+            if (method == "unsetenv") nodeType = AstNode::Type::OsUnsetenv;
+            else if (method == "chdir") nodeType = AstNode::Type::OsChdir;
+            return {nodeType, "", {arg}};
         }
         if (method == "messagebox") {
             if (!match(TokenType::LParen)) {
@@ -3403,9 +3510,10 @@ private:
                 }
                 isFixedArray = true;
                 if (declType == "string" || declType == "bool" || declType == "float" ||
-                    (declType.size() >= 7 && declType.compare(0, 7, "struct:") == 0) ||
-                    (declType.size() >= 5 && declType.compare(0, 5, "enum:") == 0)) {
-                    throw std::runtime_error("Fixed array only supports int, unsigned int, char, or unsigned char at line " + std::to_string(peek().line));
+                    (declType.size() >= 5 && declType.compare(0, 5, "enum:") == 0) ||
+                    (!declType.empty() && declType[0] == '*') ||
+                    declType == "void") {
+                    throw std::runtime_error("Fixed array only supports integer types, char, or structs at line " + std::to_string(peek().line));
                 }
             }
         }
@@ -3419,7 +3527,7 @@ private:
             AstNode node{AstNode::Type::Variable, name, {}};
             node.initUninitialized = true;
             node.declType = declType;
-            node.initIsInt = (declType == "int" || declType == "unsigned int");
+            node.initIsInt = nexaIsNumericIntType(declType);
             node.initIsBool = (declType == "bool");
             node.initIsFloat = (declType == "float");
             node.initIsChar = (declType == "char");
@@ -3493,6 +3601,10 @@ private:
                 node.initFromArray = true;
                 node.initIsInt = false;
                 node.declType = "[]string";
+            } else if (b.type == AstNode::Type::OsInfo && b.value == "environ") {
+                node.initFromArray = true;
+                node.initIsInt = false;
+                node.declType = "[]string";
             } else if (b.type == AstNode::Type::ExprBoolLiteral) {
                 node.initIsBool = true;
             } else if (b.type == AstNode::Type::ExprFloatLiteral) {
@@ -3519,7 +3631,7 @@ private:
         }
         if (!declType.empty()) {
             node.declType = declType;
-            node.initIsInt = (declType == "int" || declType == "unsigned int");
+            node.initIsInt = nexaIsNumericIntType(declType);
             node.initIsBool = (declType == "bool");
             node.initIsFloat = (declType == "float");
             node.initIsChar = (declType == "char");
