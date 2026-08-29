@@ -124,6 +124,8 @@ struct Manifest {
     std::string version;
     std::string entry;   // .nxa entry file for NexaC build (e.g. main.nxa)
     std::string output;  // executable base name or path for NexaC build (-o)
+    std::string dll;       // .nxa to compile as a shared library (Windows .dll / Linux .so)
+    std::string dllOutput; // library base name or path (default: stem of dll)
     // Ordered include-path -> source (source may carry a trailing @ref).
     std::vector<std::pair<std::string, std::string>> deps;
 
@@ -155,6 +157,8 @@ static bool readManifest(const fs::path& path, Manifest& m) {
     m.version = findStringField(content, "version");
     m.entry = findStringField(content, "entry");
     m.output = findStringField(content, "output");
+    m.dll = findStringField(content, "dll");
+    m.dllOutput = findStringField(content, "dllOutput");
 
     m.deps.clear();
     size_t i = content.find("\"dependencies\"");
@@ -185,6 +189,8 @@ static void writeManifest(const fs::path& path, const Manifest& m) {
     if (!m.version.empty()) out << "  \"version\": \"" << jsonEscape(m.version) << "\",\n";
     if (!m.entry.empty()) out << "  \"entry\": \"" << jsonEscape(m.entry) << "\",\n";
     if (!m.output.empty()) out << "  \"output\": \"" << jsonEscape(m.output) << "\",\n";
+    if (!m.dll.empty()) out << "  \"dll\": \"" << jsonEscape(m.dll) << "\",\n";
+    if (!m.dllOutput.empty()) out << "  \"dllOutput\": \"" << jsonEscape(m.dllOutput) << "\",\n";
     out << "  \"dependencies\": {";
     for (size_t k = 0; k < m.deps.size(); k++) {
         out << (k == 0 ? "\n" : ",\n");

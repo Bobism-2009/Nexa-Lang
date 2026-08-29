@@ -227,7 +227,10 @@ PACKAGES (nexapkg)
   #include <pkgname/module>  - Use an installed package
 
   Files:
-    nexapkg.json   - Manifest: { "name", "dependencies": { "include/path": "source" } }
+    nexapkg.json   - Manifest: { "name", "entry", "output", "dll", "dllOutput",
+                     "dependencies": { "include/path": "source" } }
+    dll / dllOutput - Optional. NexaC build also compiles that .nxa as a .dll (Windows)
+                      or .so (Linux), with names preserved for dll.call.
     nexapkg.lock   - Resolved git commit per dependency (commit this for reproducible builds)
 
   Resolution order for #include <pkg/module>:  ./.nexa/packages/  then  ~/.nexa/packages/

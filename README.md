@@ -177,7 +177,7 @@ Use an installed package with an angle-bracket include:
 
 | File | Purpose |
 |------|---------|
-| `nexapkg.json` | Manifest: project `name` + `dependencies` (`"include/path": "source"`) |
+| `nexapkg.json` | Manifest: `name`, `entry`, `output`, optional `dll` / `dllOutput`, `dependencies` |
 | `nexapkg.lock` | Resolved git commit per dependency — commit it for reproducible builds |
 
 A `user/repo@tag` dependency is reproducible by tag; the lockfile additionally records the exact

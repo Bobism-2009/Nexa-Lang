@@ -62,6 +62,46 @@ static std::string findEntryFile(const std::filesystem::path& base) {
     return !foundMain.empty() ? foundMain : foundInit;
 }
 
+static int runNexaCChild(const std::string& extraArgs) {
+    std::string exePath = getExePath();
+#ifdef _WIN32
+    if (exePath.empty()) exePath = "NexaC.exe";
+    std::string cmdLine = "\"" + exePath + "\" " + extraArgs;
+    std::vector<char> mutableCmd(cmdLine.begin(), cmdLine.end());
+    mutableCmd.push_back('\0');
+    STARTUPINFOA si{};
+    PROCESS_INFORMATION pi{};
+    si.cb = sizeof(si);
+    BOOL ok = CreateProcessA(
+        NULL,
+        mutableCmd.data(),
+        NULL,
+        NULL,
+        FALSE,
+        0,
+        NULL,
+        NULL,
+        &si,
+        &pi
+    );
+    if (!ok) {
+        std::cerr << "[Nexa] Error: Failed to launch build command.\n";
+        return 1;
+    }
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD exitCode = 1;
+    GetExitCodeProcess(pi.hProcess, &exitCode);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return (exitCode == 0) ? 0 : 1;
+#else
+    std::string cmd = exePath.empty() ? "NexaC" : ("\"" + exePath + "\"");
+    cmd += " " + extraArgs;
+    int ret = std::system(cmd.c_str());
+    return (ret == 0) ? 0 : 1;
+#endif
+}
+
 static int doBuild(const std::string& dir) {
     namespace fs = std::filesystem;
     fs::path base = dir.empty() ? fs::current_path() : fs::path(dir);
@@ -95,43 +135,32 @@ static int doBuild(const std::string& dir) {
     } else {
         outBase = (base / entryPath.stem()).string();
     }
-    std::string exePath = getExePath();
+    int exeRet = runNexaCChild("\"" + entry + "\" -o \"" + outBase + "\"");
+    if (exeRet != 0) return exeRet;
+
+    if (!manifest.dll.empty()) {
+        fs::path dllSrc = base / manifest.dll;
+        if (!fs::exists(dllSrc)) {
+            std::cerr << "[Nexa] Error: DLL source not found: " << dllSrc.string() << "\n";
+            return 1;
+        }
+        std::string dllOut;
+        if (!manifest.dllOutput.empty()) {
+            fs::path p(manifest.dllOutput);
+            dllOut = p.is_absolute() ? p.string() : (base / p).string();
+        } else {
+            dllOut = (base / dllSrc.stem()).string();
+        }
 #ifdef _WIN32
-    if (exePath.empty()) exePath = "NexaC.exe";
-    std::string cmdLine = "\"" + exePath + "\" \"" + entry + "\" -o \"" + outBase + "\"";
-    std::vector<char> mutableCmd(cmdLine.begin(), cmdLine.end());
-    mutableCmd.push_back('\0');
-    STARTUPINFOA si{};
-    PROCESS_INFORMATION pi{};
-    si.cb = sizeof(si);
-    BOOL ok = CreateProcessA(
-        NULL,
-        mutableCmd.data(),
-        NULL,
-        NULL,
-        FALSE,
-        0,
-        NULL,
-        NULL,
-        &si,
-        &pi
-    );
-    if (!ok) {
-        std::cerr << "[Nexa] Error: Failed to launch build command.\n";
-        return 1;
-    }
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    DWORD exitCode = 1;
-    GetExitCodeProcess(pi.hProcess, &exitCode);
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-    return (exitCode == 0) ? 0 : 1;
+        const char* libFlag = "--dll";
 #else
-    std::string cmd = exePath.empty() ? "NexaC" : ("\"" + exePath + "\"");
-    cmd += " \"" + entry + "\" -o \"" + outBase + "\"";
-    int ret = std::system(cmd.c_str());
-    return (ret == 0) ? 0 : 1;
+        const char* libFlag = "--shared";
 #endif
+        // --preserve-names so dll.call(h, "SaveSettings") uses the Nexa function name.
+        int dllRet = runNexaCChild("\"" + dllSrc.string() + "\" " + libFlag + " --preserve-names -o \"" + dllOut + "\"");
+        if (dllRet != 0) return dllRet;
+    }
+    return 0;
 }
 
 static int doInit(const std::string& dir) {
