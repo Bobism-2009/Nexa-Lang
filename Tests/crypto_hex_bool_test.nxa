@@ -1,0 +1,12 @@
+#include <std/io>
+#include <std/crypto>
+
+fn main() {
+    let flag: bool = true;
+    let h: string = crypto.hex_encode(flag);
+    if (h != "74727565") {
+        io.println("fail hex bool");
+        return 1;
+    }
+    io.println("ok");
+}

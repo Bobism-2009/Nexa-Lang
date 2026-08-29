@@ -2248,6 +2248,15 @@ private:
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
+                std::string lhsT = lookupNexaDecl(child.value);
+                if (lhsT.empty()) {
+                    if (varIsBool.count(child.value) && varIsBool[child.value]) lhsT = "bool";
+                    else if (varIsString.count(child.value) && varIsString[child.value]) lhsT = "string";
+                }
+                std::string rhsT = inferExprNexaType(child.children[0]);
+                if (lhsT == "bool" && rhsT == "string") {
+                    throw std::runtime_error("Cannot assign string to bool '" + child.value + "'");
+                }
                 std::string v = preserveNames_ ? child.value : varMap.at(child.value);
                 out << indent << v << " = " << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::AssnIndex) {
@@ -2930,7 +2939,12 @@ private:
                 }
                 if (fn == "sha256" || fn == "sha1" || fn == "hex_encode" || fn == "hex_decode" ||
                     fn == "base64_encode" || fn == "base64_decode") {
-                    std::string a0 = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    std::map<std::string, bool> emptyM;
+                    const auto& vs = varIsString ? *varIsString : emptyM;
+                    const auto& vf = varIsFloat ? *varIsFloat : emptyM;
+                    const auto& vc = varIsChar ? *varIsChar : emptyM;
+                    const auto& vb = varIsBool ? *varIsBool : emptyM;
+                    std::string a0 = emitConcatOperand(e.children[0], varMap, vs, vf, vc, vb);
                     return "__nexa_crypto_" + fn + "(" + a0 + ")";
                 }
                 if (fn == "random_bytes") {
@@ -2938,8 +2952,13 @@ private:
                     return "__nexa_crypto_random_bytes(" + n + ")";
                 }
                 if (fn == "hmac_sha256") {
-                    std::string key = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
-                    std::string data = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    std::map<std::string, bool> emptyM;
+                    const auto& vs = varIsString ? *varIsString : emptyM;
+                    const auto& vf = varIsFloat ? *varIsFloat : emptyM;
+                    const auto& vc = varIsChar ? *varIsChar : emptyM;
+                    const auto& vb = varIsBool ? *varIsBool : emptyM;
+                    std::string key = emitConcatOperand(e.children[0], varMap, vs, vf, vc, vb);
+                    std::string data = emitConcatOperand(e.children[1], varMap, vs, vf, vc, vb);
                     return "__nexa_crypto_hmac_sha256(" + key + ", " + data + ")";
                 }
                 throw std::runtime_error("Internal: unknown crypto method '" + fn + "'");
