@@ -1,0 +1,7 @@
+#include <std/io>
+#include <std/crypto>
+
+fn main() {
+    let s: string = "hello";
+    io.println(crypto.hex_encode(s));
+}

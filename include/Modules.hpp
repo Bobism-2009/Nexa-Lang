@@ -51,12 +51,25 @@ public:
         bool osHome = false;
         bool osSetenv = false;
         bool file = false;
+        bool fileIo = false;
+        bool fileWrite = false;
+        bool fileRead = false;
+        bool fileFs = false;
         bool random = false;
         bool math = false;
         bool crypto = false;
+        bool cryptoHex = false;
+        bool cryptoXor = false;
+        bool cryptoBase64 = false;
+        bool cryptoSha256 = false;
+        bool cryptoSha1 = false;
+        bool cryptoHmac = false;
+        bool cryptoRandom = false;
         bool http = false;
         bool str = false;
         bool time = false;
+        bool timeSleep = false;
+        bool timeChrono = false;
         bool thread = false;
         bool threadLambda = false;
         bool threadWorker = false;
@@ -609,15 +622,28 @@ public:
             out += "}\n";
         }
         if (hasOs() && usage.osCwd) {
-            out += "#include <filesystem>\n#include <system_error>\n";
+            out += "#ifdef _WIN32\n#include <windows.h>\n#else\n#include <unistd.h>\n#endif\n";
             out += "static std::string __nexa_os_cwd() {\n";
-            out += "  std::error_code __ec;\n";
-            out += "  return std::filesystem::current_path(__ec).string();\n";
+            out += "#ifdef _WIN32\n";
+            out += "  DWORD n = GetCurrentDirectoryA(0, NULL);\n";
+            out += "  if (!n) return std::string();\n";
+            out += "  std::string s(n, 0);\n";
+            out += "  DWORD m = GetCurrentDirectoryA(n, &s[0]);\n";
+            out += "  if (!m) return std::string();\n";
+            out += "  if (m < n) s.resize(m);\n";
+            out += "  return s;\n";
+            out += "#else\n";
+            out += "  char buf[4096];\n";
+            out += "  if (!getcwd(buf, sizeof(buf))) return std::string();\n";
+            out += "  return std::string(buf);\n";
+            out += "#endif\n";
             out += "}\n";
             out += "static int __nexa_os_chdir(const std::string& path) {\n";
-            out += "  std::error_code __ec;\n";
-            out += "  std::filesystem::current_path(path, __ec);\n";
-            out += "  return __ec ? 0 : 1;\n";
+            out += "#ifdef _WIN32\n";
+            out += "  return SetCurrentDirectoryA(path.c_str()) ? 1 : 0;\n";
+            out += "#else\n";
+            out += "  return chdir(path.c_str()) == 0 ? 1 : 0;\n";
+            out += "#endif\n";
             out += "}\n";
         }
         if (hasOs() && usage.osInfo) {
@@ -1184,11 +1210,17 @@ public:
             out += "#endif\n";
             out += "}\n";
         }
-        if (hasFile() && usage.file) {
-            out += "#include <fstream>\n";
-            out += "#include <sstream>\n";
-            out += "#include <filesystem>\n";
-            out += "#include <system_error>\n";
+        if (hasFile() && (usage.fileWrite || usage.fileRead)) {
+            out += "#include <cstdio>\n";
+        }
+        if (hasFile() && usage.fileWrite) {
+            out += fileWriteRuntimeCpp();
+        }
+        if (hasFile() && usage.fileRead) {
+            out += "#include <string>\n";
+            out += fileReadRuntimeCpp();
+        }
+        if (hasFile() && usage.fileFs) {
             out += fileRuntimeCpp();
         }
         if (hasRandom() && usage.random) {
@@ -1203,7 +1235,20 @@ public:
             out += "#include <algorithm>\n";
         }
         if (hasCrypto() && usage.crypto) {
-            out += cryptoRuntimeCpp();
+            CryptoEmit need;
+            need.hex = usage.cryptoHex;
+            need.xorv = usage.cryptoXor;
+            need.base64 = usage.cryptoBase64;
+            need.sha256 = usage.cryptoSha256;
+            need.sha1 = usage.cryptoSha1;
+            need.hmac = usage.cryptoHmac;
+            need.random = usage.cryptoRandom;
+            if (need.hmac) {
+                need.sha256 = true;
+                need.hex = true;
+            }
+            if (need.sha256 || need.sha1) need.hex = true;
+            out += cryptoRuntimeCpp(need);
         }
         if (hasHttp() && usage.http) {
             out += httpRuntimeCpp();
@@ -1213,11 +1258,38 @@ public:
             out += "#include <string>\n";
             out += "#include <cctype>\n";
         }
-        if (hasTime() && usage.time) {
-            out += "#include <thread>\n";
-            out += "#include <chrono>\n";
+        if (hasTime() && usage.timeSleep) {
+            out += "#ifdef _WIN32\n#include <windows.h>\n#else\n#include <time.h>\n#endif\n";
+            out += "static void __nexa_time_sleep_ms(int __ms) {\n";
+            out += "  if (__ms < 0) __ms = 0;\n";
+            out += "#ifdef _WIN32\n";
+            out += "  Sleep(static_cast<DWORD>(__ms));\n";
+            out += "#else\n";
+            out += "  struct timespec __ts;\n";
+            out += "  __ts.tv_sec = __ms / 1000;\n";
+            out += "  __ts.tv_nsec = static_cast<long>((__ms % 1000) * 1000000L);\n";
+            out += "  nanosleep(&__ts, nullptr);\n";
+            out += "#endif\n";
+            out += "}\n";
+        }
+        if (hasTime() && usage.timeChrono) {
+            out += "#ifdef _WIN32\n#include <windows.h>\n#else\n#include <time.h>\n#endif\n";
             out += "static double __nexa_time_now_ms() {\n";
-            out += "  return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();\n";
+            out += "#ifdef _WIN32\n";
+            out += "  static LARGE_INTEGER __freq;\n";
+            out += "  static int __ready = 0;\n";
+            out += "  if (!__ready) {\n";
+            out += "    if (!QueryPerformanceFrequency(&__freq) || __freq.QuadPart == 0) return (double)GetTickCount64();\n";
+            out += "    __ready = 1;\n";
+            out += "  }\n";
+            out += "  LARGE_INTEGER __c;\n";
+            out += "  QueryPerformanceCounter(&__c);\n";
+            out += "  return (double)__c.QuadPart * 1000.0 / (double)__freq.QuadPart;\n";
+            out += "#else\n";
+            out += "  struct timespec __ts;\n";
+            out += "  if (clock_gettime(CLOCK_MONOTONIC, &__ts) != 0) return 0;\n";
+            out += "  return (double)__ts.tv_sec * 1000.0 + (double)__ts.tv_nsec / 1000000.0;\n";
+            out += "#endif\n";
             out += "}\n";
         }
         if (hasThread() && usage.thread) {
@@ -1332,7 +1404,7 @@ public:
         all.osSpawn = true;
         all.osTempDir = all.osArch = all.osCpuCount = all.osWhich = all.osCwd = all.osInfo = true;
         all.osExit = all.osHostname = all.osUsername = all.osHome = all.osSetenv = true;
-        all.file = all.random = all.math = all.time = all.thread = all.dll = true;
+        all.file = all.fileIo = all.fileWrite = all.fileRead = all.fileFs = all.random = all.math = all.time = all.timeSleep = all.timeChrono = all.thread = all.dll = true;
         all.str = true;
         return getCppIncludes(all);
     }

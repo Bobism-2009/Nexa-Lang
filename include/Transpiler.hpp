@@ -121,21 +121,47 @@ public:
                 case AstNode::Type::OsGrepKeys: cppUsage.osGrepKeys = true; break;
                 case AstNode::Type::OsKeyPressed: cppUsage.osKeyPressed = true; break;
                 case AstNode::Type::FileRead:
+                    cppUsage.fileRead = true;
+                    break;
                 case AstNode::Type::FileWrite:
                 case AstNode::Type::FileAppend:
+                    cppUsage.fileWrite = true;
+                    break;
                 case AstNode::Type::FileExists:
                 case AstNode::Type::FileMkdir:
-                case AstNode::Type::FileCall: cppUsage.file = true; break;
+                case AstNode::Type::FileCall:
+                    cppUsage.fileFs = true;
+                    break;
                 case AstNode::Type::RandomInt:
                 case AstNode::Type::RandomSeed: cppUsage.random = true; break;
                 case AstNode::Type::MathCall: cppUsage.math = true; break;
-                case AstNode::Type::CryptoCall: cppUsage.crypto = true; break;
+                case AstNode::Type::CryptoCall: {
+                    const std::string& fn = n.value;
+                    const bool hexLit = (fn == "hex_encode" || fn == "hex_decode") &&
+                        !n.children.empty() && cryptoArgIsLiteral(n.children[0]);
+                    if (!hexLit) cppUsage.crypto = true;
+                    if ((fn == "hex_encode" || fn == "hex_decode") && !hexLit) cppUsage.cryptoHex = true;
+                    else if (fn == "xor") cppUsage.cryptoXor = true;
+                    else if (fn == "base64_encode" || fn == "base64_decode") cppUsage.cryptoBase64 = true;
+                    else if (fn == "sha256") {
+                        cppUsage.cryptoSha256 = true;
+                        cppUsage.cryptoHex = true;
+                    } else if (fn == "sha1") {
+                        cppUsage.cryptoSha1 = true;
+                        cppUsage.cryptoHex = true;
+                    } else if (fn == "hmac_sha256") {
+                        cppUsage.cryptoHmac = true;
+                        cppUsage.cryptoSha256 = true;
+                        cppUsage.cryptoHex = true;
+                    } else if (fn == "random_bytes") cppUsage.cryptoRandom = true;
+                    break;
+                }
                 case AstNode::Type::HttpCall: cppUsage.http = true; break;
-                case AstNode::Type::StrMethod: cppUsage.str = true; break;
-                case AstNode::Type::TimeSleep:
-                case AstNode::Type::TimeSeconds:
-                case AstNode::Type::TimeMilliseconds:
-                case AstNode::Type::TimeNowMs: cppUsage.time = true; break;
+                case AstNode::Type::StrMethod:
+                    if (!tryFoldStrMethodToExpr(n, nullptr)) cppUsage.str = true;
+                    break;
+                case AstNode::Type::TimeSleep: cppUsage.timeSleep = true; break;
+                case AstNode::Type::TimeNowMs: cppUsage.timeChrono = true; break;
                 case AstNode::Type::ThreadSpawn:
                     cppUsage.thread = true;
                     if (!n.children.empty()) cppUsage.threadLambda = true;
@@ -410,11 +436,11 @@ public:
                 out << (buildDll_ ? "extern \"C\" NEXA_EXPORT " : "static ") << retCpp << " " << cppName << "(";
                 for (size_t i = 0; i < node.paramNames.size(); i++) {
                     if (i > 0) out << ", ";
-                    std::string ptype = "int";
+                    std::string nexaT = "int";
                     if (i < node.paramTypes.size() && !node.paramTypes[i].empty()) {
-                        ptype = nexaTypeToCpp(canonicalParamType(node, i));
+                        nexaT = canonicalParamType(node, i);
                     }
-                    out << ptype;
+                    out << (buildDll_ ? dllExportParamCpp(nexaT) : nexaTypeToCpp(nexaT));
                 }
                 out << ");\n";
                 wroteAnyProto = true;
@@ -478,17 +504,27 @@ public:
                 out << (buildDll_ ? "extern \"C\" NEXA_EXPORT " : "static ") << retCpp << " " << cppName << "(";
                 std::map<std::string, std::string> varMap = globalVarMap;
                 int varIdx = 0;
+                std::vector<std::pair<std::string, std::string>> dllStringParams;
                 for (size_t i = 0; i < node.paramNames.size(); i++) {
                     if (i > 0) out << ", ";
                     std::string pname = preserveNames_ ? node.paramNames[i] : ("__nexa_param_" + std::to_string(i));
-                    std::string ptype = "int";
+                    std::string nexaT = "int";
                     if (i < node.paramTypes.size() && !node.paramTypes[i].empty()) {
-                        ptype = nexaTypeToCpp(canonicalParamType(node, i));
+                        nexaT = canonicalParamType(node, i);
                     }
-                    out << ptype << " " << pname;
+                    if (buildDll_ && nexaT == "string") {
+                        std::string cname = "__nexa_c_" + pname;
+                        out << "const char* " << cname;
+                        dllStringParams.push_back({pname, cname});
+                    } else {
+                        out << nexaTypeToCpp(nexaT) << " " << pname;
+                    }
                     varMap[node.paramNames[i]] = pname;
                 }
                 out << ") {\n";
+                for (const auto& sp : dllStringParams) {
+                    out << "    std::string " << sp.first << " = " << sp.second << " ? " << sp.second << " : \"\";\n";
+                }
                 varIdx = static_cast<int>(node.paramNames.size());
                 std::map<std::string, bool> varIsString = globalVarIsString;
                 std::map<std::string, bool> varIsConst = globalVarIsConst;
@@ -1291,6 +1327,12 @@ private:
         }
         throw std::runtime_error("Unknown type: " + t);
     }
+    // C ABI types for values passed through dll.call / exported DLL functions.
+    // std::string cannot cross a statically-linked exe into a shared library.
+    std::string dllExportParamCpp(const std::string& t) const {
+        if (t == "string") return "const char*";
+        return nexaTypeToCpp(t.empty() ? "int" : t);
+    }
     std::string nexaTypeToCppExtern(const std::string& t) const {
         if (isPointerType(t)) {
             std::string pt = pointerPointeeType(t);
@@ -2004,25 +2046,15 @@ private:
             } else if (child.type == AstNode::Type::FileRead) {
                 out << indent << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::FileWrite) {
-                std::string pathExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
-                std::string contentExpr = emitExpr(child.children[1], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
-                out << indent << "{\n";
-                out << indent << "    std::ofstream __f(" << pathExpr << ");\n";
-                out << indent << "    __f << " << contentExpr << ";\n";
-                out << indent << "}\n";
+                emitFileWriteOrAppend(out, indent, child, varMap, varIsString, varIsFloat, varIsChar, varIsBool, 0);
             } else if (child.type == AstNode::Type::FileAppend) {
-                std::string pathExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
-                std::string contentExpr = emitExpr(child.children[1], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
-                out << indent << "{\n";
-                out << indent << "    std::ofstream __f(" << pathExpr << ", std::ios::app);\n";
-                out << indent << "    __f << " << contentExpr << ";\n";
-                out << indent << "}\n";
+                emitFileWriteOrAppend(out, indent, child, varMap, varIsString, varIsFloat, varIsChar, varIsBool, 1);
             } else if (child.type == AstNode::Type::FileExists) {
-                std::string pathExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
-                out << indent << "(void)(std::filesystem::exists(" << pathExpr << ") ? 1 : 0);\n";
+                out << indent << "(void)__nexa_file_exists("
+                    << emitFilePathCStr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ");\n";
             } else if (child.type == AstNode::Type::FileMkdir) {
-                std::string pathExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
-                out << indent << "{ std::error_code __nexa_ec; (void)std::filesystem::create_directories(" << pathExpr << ", __nexa_ec); }\n";
+                out << indent << "(void)__nexa_file_mkdir("
+                    << emitFilePathCStr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ");\n";
             } else if (child.type == AstNode::Type::FileCall) {
                 out << indent << "(void)(" << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ");\n";
             } else if (child.type == AstNode::Type::RandomSeed) {
@@ -2035,14 +2067,14 @@ private:
             } else if (child.type == AstNode::Type::TimeSleep) {
                 const AstNode& dur = child.children[0];
                 if (dur.type == AstNode::Type::TimeSeconds && !dur.children.empty()) {
-                    out << indent << "std::this_thread::sleep_for(std::chrono::seconds("
-                        << emitExpr(dur.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << "));\n";
+                    out << indent << "__nexa_time_sleep_ms(("
+                        << emitExpr(dur.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ") * 1000);\n";
                 } else if (dur.type == AstNode::Type::TimeMilliseconds && !dur.children.empty()) {
-                    out << indent << "std::this_thread::sleep_for(std::chrono::milliseconds("
-                        << emitExpr(dur.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << "));\n";
+                    out << indent << "__nexa_time_sleep_ms("
+                        << emitExpr(dur.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ");\n";
                 } else {
-                    out << indent << "std::this_thread::sleep_for(std::chrono::milliseconds("
-                        << emitExpr(dur, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << "));\n";
+                    out << indent << "__nexa_time_sleep_ms("
+                        << emitExpr(dur, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ");\n";
                 }
             } else if (child.type == AstNode::Type::ThreadJoin) {
                 std::string idxExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
@@ -2056,15 +2088,36 @@ private:
                 out << indent << "__nexa_thread_worker_join(" << idxExpr << ");\n";
             } else if (child.type == AstNode::Type::DllCall) {
                 std::string h = preserveNames_ ? child.children[0].value : varMap.at(child.children[0].value);
+                std::string paramTypes;
+                std::string fnArgs;
+                for (size_t ai = 1; ai < child.children.size(); ai++) {
+                    if (ai > 1) {
+                        paramTypes += ", ";
+                        fnArgs += ", ";
+                    }
+                    const AstNode& arg = child.children[ai];
+                    std::string nexaT = inferExprNexaType(arg);
+                    if (nexaT.empty()) nexaT = exprIsString(arg, varIsString) ? "string" : "int";
+                    std::string expr = emitExpr(arg, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                    if (nexaT == "string") {
+                        // exe is statically linked; DLL is not — std::string cannot cross that boundary.
+                        paramTypes += "const char*";
+                        if (arg.type == AstNode::Type::ExprStringLiteral) fnArgs += expr;
+                        else fnArgs += "(" + expr + ").c_str()";
+                    } else {
+                        paramTypes += nexaTypeToCpp(nexaT);
+                        fnArgs += expr;
+                    }
+                }
 #ifdef _WIN32
                 out << indent << "{\n";
-                out << indent << "    void (*fn)() = (void(*)())GetProcAddress((HMODULE)__nexa_dll_handles[" << h << "], \"" << escapeString(child.value) << "\");\n";
-                out << indent << "    if (fn) fn();\n";
+                out << indent << "    void (*fn)(" << paramTypes << ") = (void(*)(" << paramTypes << "))GetProcAddress((HMODULE)__nexa_dll_handles[" << h << "], \"" << escapeString(child.value) << "\");\n";
+                out << indent << "    if (fn) fn(" << fnArgs << ");\n";
                 out << indent << "}\n";
 #else
                 out << indent << "{\n";
-                out << indent << "    void (*fn)() = (void(*)())dlsym(__nexa_dll_handles[" << h << "], \"" << escapeString(child.value) << "\");\n";
-                out << indent << "    if (fn) fn();\n";
+                out << indent << "    void (*fn)(" << paramTypes << ") = (void(*)(" << paramTypes << "))dlsym(__nexa_dll_handles[" << h << "], \"" << escapeString(child.value) << "\");\n";
+                out << indent << "    if (fn) fn(" << fnArgs << ");\n";
                 out << indent << "}\n";
 #endif
             } else if (child.type == AstNode::Type::OsSystem) {
@@ -2206,6 +2259,8 @@ private:
             } else if (child.type == AstNode::Type::FnCall) {
                 out << indent << emitFnCallCpp(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool)
                     << ";\n";
+            } else if (child.type == AstNode::Type::StrMethod) {
+                out << indent << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::AssnMember) {
                 std::string lhs = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 std::string rhs = emitExpr(child.children[1], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
@@ -2678,16 +2733,22 @@ private:
                          const std::map<std::string, bool>* varIsBool = nullptr) {
         switch (c.type) {
             case AstNode::Type::CondEq:
-                if (c.children.size() >= 2 && c.children[0].type == AstNode::Type::ExprStringLiteral &&
-                    c.children[1].type == AstNode::Type::ExprStringLiteral) {
-                    return (c.children[0].value == c.children[1].value) ? "true" : "false";
+                if (c.children.size() >= 2) {
+                    if (auto L = tryFoldComparableString(c.children[0], varIsString)) {
+                        if (auto R = tryFoldComparableString(c.children[1], varIsString)) {
+                            return (*L == *R) ? "true" : "false";
+                        }
+                    }
                 }
                 return emitExpr(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " == " +
                        emitExpr(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::CondNe:
-                if (c.children.size() >= 2 && c.children[0].type == AstNode::Type::ExprStringLiteral &&
-                    c.children[1].type == AstNode::Type::ExprStringLiteral) {
-                    return (c.children[0].value != c.children[1].value) ? "true" : "false";
+                if (c.children.size() >= 2) {
+                    if (auto L = tryFoldComparableString(c.children[0], varIsString)) {
+                        if (auto R = tryFoldComparableString(c.children[1], varIsString)) {
+                            return (*L != *R) ? "true" : "false";
+                        }
+                    }
                 }
                 return emitExpr(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " != " +
                        emitExpr(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
@@ -2725,8 +2786,7 @@ private:
             case AstNode::Type::ExprVarRef:
                 return emitExpr(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::FileExists: {
-                std::string pathExpr = emitExpr(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
-                return "std::filesystem::exists(" + pathExpr + ")";
+                return "__nexa_file_exists(" + emitFilePathCStr(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             }
             case AstNode::Type::FnCall:
             case AstNode::Type::ExprArrayIndex:
@@ -2849,21 +2909,18 @@ private:
                 return "__nexa_to_int(" + s + ")";
             }
             case AstNode::Type::FileRead: {
-                std::string pathExpr = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
-                return "([&]{ std::ifstream __f(" + pathExpr + "); std::stringstream __ss; __ss << __f.rdbuf(); return __ss.str(); }())";
+                return "__nexa_file_read(" + emitFilePathCStr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             }
             case AstNode::Type::FileExists: {
-                std::string pathExpr = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
-                return "(std::filesystem::exists(" + pathExpr + ") ? 1 : 0)";
+                return "(__nexa_file_exists(" + emitFilePathCStr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + "))";
             }
             case AstNode::Type::FileMkdir: {
-                std::string pathExpr = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
-                return "([]{ std::error_code __ec; std::filesystem::create_directories(" + pathExpr + ", __ec); return __ec ? 0 : 1; }())";
+                return "__nexa_file_mkdir(" + emitFilePathCStr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             }
             case AstNode::Type::FileCall: {
                 const std::string& fn = e.value;
                 if (fn == "cwd") return "__nexa_file_cwd()";
-                std::string a0 = e.children.empty() ? "" : emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                std::string a0 = e.children.empty() ? "" : emitFilePathCStr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 if (fn == "remove") return "__nexa_file_remove(" + a0 + ")";
                 if (fn == "remove_all") return "__nexa_file_remove_all(" + a0 + ")";
                 if (fn == "list") return "__nexa_file_list(" + a0 + ")";
@@ -2876,7 +2933,7 @@ private:
                 if (fn == "basename") return "__nexa_file_basename(" + a0 + ")";
                 if (fn == "extension") return "__nexa_file_extension(" + a0 + ")";
                 if (fn == "rename" || fn == "copy" || fn == "join") {
-                    std::string a1 = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    std::string a1 = emitFilePathCStr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                     if (fn == "rename") return "__nexa_file_rename(" + a0 + ", " + a1 + ")";
                     if (fn == "copy") return "__nexa_file_copy(" + a0 + ", " + a1 + ")";
                     return "__nexa_file_join(" + a0 + ", " + a1 + ")";
@@ -2937,8 +2994,21 @@ private:
                     keys += "}";
                     return "__nexa_crypto_xor(" + data + ", " + keys + ")";
                 }
-                if (fn == "sha256" || fn == "sha1" || fn == "hex_encode" || fn == "hex_decode" ||
-                    fn == "base64_encode" || fn == "base64_decode") {
+                if (fn == "hex_encode" || fn == "hex_decode") {
+                    if (!e.children.empty()) {
+                        if (auto folded = tryFoldCryptoHex(fn, e.children[0], varIsString)) {
+                            return "\"" + escapeString(*folded) + "\"";
+                        }
+                    }
+                    std::map<std::string, bool> emptyM;
+                    const auto& vs = varIsString ? *varIsString : emptyM;
+                    const auto& vf = varIsFloat ? *varIsFloat : emptyM;
+                    const auto& vc = varIsChar ? *varIsChar : emptyM;
+                    const auto& vb = varIsBool ? *varIsBool : emptyM;
+                    std::string a0 = emitConcatOperand(e.children[0], varMap, vs, vf, vc, vb);
+                    return "__nexa_crypto_" + fn + "(" + a0 + ")";
+                }
+                if (fn == "sha256" || fn == "sha1" || fn == "base64_encode" || fn == "base64_decode") {
                     std::map<std::string, bool> emptyM;
                     const auto& vs = varIsString ? *varIsString : emptyM;
                     const auto& vf = varIsFloat ? *varIsFloat : emptyM;
@@ -2974,6 +3044,7 @@ private:
                 throw std::runtime_error("Internal: unknown http method '" + fn + "'");
             }
             case AstNode::Type::StrMethod: {
+                if (auto folded = tryFoldStrMethodToExpr(e, varIsString)) return *folded;
                 const std::string& m = e.value;
                 std::string R = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 std::string A0 = e.children.size() > 1 ? emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) : "";
@@ -3006,11 +3077,11 @@ private:
             }
             case AstNode::Type::TimeSeconds: {
                 std::string n = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
-                return "static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::seconds(" + n + ")).count())";
+                return "((" + n + ") * 1000)";
             }
             case AstNode::Type::TimeMilliseconds: {
                 std::string n = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
-                return "static_cast<int>(std::chrono::milliseconds(" + n + ").count())";
+                return "(" + n + ")";
             }
             case AstNode::Type::TimeNowMs:
                 return "__nexa_time_now_ms()";
@@ -3226,6 +3297,239 @@ private:
         }
     }
 
+    std::string emitFilePathCStr(const AstNode& path,
+                                const std::map<std::string, std::string>& varMap,
+                                const std::map<std::string, bool>* varIsString,
+                                const std::map<std::string, bool>* varIsFloat,
+                                const std::map<std::string, bool>* varIsChar,
+                                const std::map<std::string, bool>* varIsBool) {
+        static const std::map<std::string, bool> empty;
+        const auto& vs = varIsString ? *varIsString : empty;
+        if (auto folded = tryFoldStringLiteralChain(path, vs)) {
+            return "\"" + escapeString(*folded) + "\"";
+        }
+        return "(" + emitExpr(path, varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ").c_str()";
+    }
+
+    void emitFileWriteOrAppend(std::ostringstream& out, const std::string& indent, const AstNode& child,
+                               const std::map<std::string, std::string>& varMap,
+                               const std::map<std::string, bool>& varIsString,
+                               const std::map<std::string, bool>& varIsFloat,
+                               const std::map<std::string, bool>& varIsChar,
+                               const std::map<std::string, bool>& varIsBool,
+                               int append) {
+        std::string path = emitFilePathCStr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+        const AstNode& content = child.children[1];
+        if (auto folded = tryFoldStringLiteralChain(content, varIsString)) {
+            out << indent << "__nexa_file_write(" << path << ", \"" << escapeString(*folded) << "\", "
+                << folded->size() << ", " << append << ");\n";
+            return;
+        }
+        if (exprIsString(content, varIsString)) {
+            out << indent << "{\n";
+            out << indent << "    const std::string& __nexa_fc = "
+                << emitExpr(content, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
+            out << indent << "    __nexa_file_write(" << path << ", __nexa_fc.data(), __nexa_fc.size(), " << append << ");\n";
+            out << indent << "}\n";
+            return;
+        }
+        out << indent << "{\n";
+        out << indent << "    const std::string __nexa_fc = "
+            << emitConcatOperand(content, varMap, varIsString, varIsFloat, varIsChar, varIsBool) << ";\n";
+        out << indent << "    __nexa_file_write(" << path << ", __nexa_fc.data(), __nexa_fc.size(), " << append << ");\n";
+        out << indent << "}\n";
+    }
+
+    static std::optional<int> tryFoldIntLiteral(const AstNode& n) {
+        if (n.type != AstNode::Type::ExprIntLiteral) return std::nullopt;
+        try {
+            return std::stoi(n.value);
+        } catch (...) {
+            return std::nullopt;
+        }
+    }
+
+    std::optional<std::string> tryFoldStrReceiver(const AstNode& n,
+                                                 const std::map<std::string, bool>* varIsString) const {
+        static const std::map<std::string, bool> empty;
+        const auto& vs = varIsString ? *varIsString : empty;
+        if (auto folded = tryFoldStringLiteralChain(n, vs)) return folded;
+        if (n.type == AstNode::Type::ExprBoolLiteral || n.type == AstNode::Type::ExprIntLiteral ||
+            n.type == AstNode::Type::ExprCharLiteral) {
+            return n.value;
+        }
+        return std::nullopt;
+    }
+
+    std::optional<std::string> tryFoldStrMethodToRawString(const AstNode& e,
+                                                          const std::map<std::string, bool>* varIsString) const {
+        if (e.type != AstNode::Type::StrMethod || e.children.empty()) return std::nullopt;
+        const std::string& m = e.value;
+        if (!strMethodReturnsString(m)) return std::nullopt;
+        auto recv = tryFoldStrReceiver(e.children[0], varIsString);
+        if (!recv) return std::nullopt;
+        std::string s = *recv;
+        if (m == "upper") {
+            for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            return s;
+        }
+        if (m == "lower") {
+            for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return s;
+        }
+        if (m == "trim") {
+            const char* ws = " \t\n\r\f\v";
+            size_t a = s.find_first_not_of(ws);
+            if (a == std::string::npos) return std::string();
+            size_t b = s.find_last_not_of(ws);
+            return s.substr(a, b - a + 1);
+        }
+        if (m == "repeat") {
+            if (e.children.size() < 2) return std::nullopt;
+            auto nrep = tryFoldIntLiteral(e.children[1]);
+            if (!nrep) return std::nullopt;
+            std::string out;
+            for (int i = 0; i < *nrep; i++) out += s;
+            return out;
+        }
+        if (m == "replace") {
+            if (e.children.size() < 3) return std::nullopt;
+            auto a0 = tryFoldStrReceiver(e.children[1], varIsString);
+            auto a1 = tryFoldStrReceiver(e.children[2], varIsString);
+            if (!a0 || !a1) return std::nullopt;
+            if (a0->empty()) return s;
+            size_t p = 0;
+            while ((p = s.find(*a0, p)) != std::string::npos) {
+                s.replace(p, a0->size(), *a1);
+                p += a1->size();
+            }
+            return s;
+        }
+        if (m == "substring") {
+            if (e.children.size() < 3) return std::nullopt;
+            auto a = tryFoldIntLiteral(e.children[1]);
+            auto n = tryFoldIntLiteral(e.children[2]);
+            if (!a || !n) return std::nullopt;
+            int start = *a;
+            int count = *n;
+            if (start < 0) start = 0;
+            if (static_cast<size_t>(start) >= s.size()) return std::string();
+            if (count < 0) return s.substr(static_cast<size_t>(start));
+            return s.substr(static_cast<size_t>(start), static_cast<size_t>(count));
+        }
+        return std::nullopt;
+    }
+
+    std::optional<std::string> tryFoldComparableString(const AstNode& n,
+                                                       const std::map<std::string, bool>* varIsString) const {
+        static const std::map<std::string, bool> empty;
+        const auto& vs = varIsString ? *varIsString : empty;
+        if (auto s = tryFoldStringLiteralChain(n, vs)) return s;
+        if (auto s = tryFoldStrMethodToRawString(n, varIsString)) return s;
+        if (n.type == AstNode::Type::CryptoCall && (n.value == "hex_encode" || n.value == "hex_decode") &&
+            !n.children.empty()) {
+            return tryFoldCryptoHex(n.value, n.children[0], varIsString);
+        }
+        return std::nullopt;
+    }
+
+    std::optional<std::string> tryFoldStrMethodToExpr(const AstNode& e,
+                                                      const std::map<std::string, bool>* varIsString) const {
+        if (e.type != AstNode::Type::StrMethod || e.children.empty()) return std::nullopt;
+        if (auto raw = tryFoldStrMethodToRawString(e, varIsString)) {
+            return "\"" + escapeString(*raw) + "\"";
+        }
+        const std::string& m = e.value;
+        if (m == "split") return std::nullopt;
+        auto recv = tryFoldStrReceiver(e.children[0], varIsString);
+        if (!recv) return std::nullopt;
+        std::string s = *recv;
+        if (m == "len") return std::to_string(static_cast<int>(s.size()));
+        if (e.children.size() < 2) return std::nullopt;
+        auto a0 = tryFoldStrReceiver(e.children[1], varIsString);
+        if (m == "contains") {
+            if (!a0) return std::nullopt;
+            return s.find(*a0) != std::string::npos ? "true" : "false";
+        }
+        if (m == "starts_with") {
+            if (!a0) return std::nullopt;
+            return (s.size() >= a0->size() && s.compare(0, a0->size(), *a0) == 0) ? "true" : "false";
+        }
+        if (m == "ends_with") {
+            if (!a0) return std::nullopt;
+            return (s.size() >= a0->size() && s.compare(s.size() - a0->size(), a0->size(), *a0) == 0) ? "true" : "false";
+        }
+        if (m == "index_of") {
+            if (!a0) return std::nullopt;
+            size_t p = s.find(*a0);
+            return p == std::string::npos ? "-1" : std::to_string(static_cast<int>(p));
+        }
+        return std::nullopt;
+    }
+
+    static bool cryptoArgIsLiteral(const AstNode& a) {
+        return a.type == AstNode::Type::ExprStringLiteral ||
+               a.type == AstNode::Type::ExprBoolLiteral ||
+               a.type == AstNode::Type::ExprIntLiteral ||
+               a.type == AstNode::Type::ExprCharLiteral;
+    }
+
+    static std::string cryptoHexEncodeBytes(const std::string& s) {
+        static const char* hex = "0123456789abcdef";
+        std::string out;
+        out.resize(s.size() * 2);
+        for (size_t i = 0; i < s.size(); ++i) {
+            unsigned char c = static_cast<unsigned char>(s[i]);
+            out[i * 2] = hex[c >> 4];
+            out[i * 2 + 1] = hex[c & 0xF];
+        }
+        return out;
+    }
+
+    static std::string cryptoHexDecodeBytes(const std::string& hex) {
+        auto nib = [](char c) -> int {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return -1;
+        };
+        if (hex.size() % 2 != 0) return std::string();
+        std::string out;
+        out.resize(hex.size() / 2);
+        for (size_t i = 0; i < out.size(); ++i) {
+            int hi = nib(hex[i * 2]);
+            int lo = nib(hex[i * 2 + 1]);
+            if (hi < 0 || lo < 0) return std::string();
+            out[i] = static_cast<char>((hi << 4) | lo);
+        }
+        return out;
+    }
+
+    static std::string cryptoLiteralBytes(const AstNode& a) {
+        if (a.type == AstNode::Type::ExprStringLiteral) return a.value;
+        if (a.type == AstNode::Type::ExprBoolLiteral) return a.value;
+        if (a.type == AstNode::Type::ExprIntLiteral) return a.value;
+        if (a.type == AstNode::Type::ExprCharLiteral) return a.value;
+        return std::string();
+    }
+
+    std::optional<std::string> tryFoldCryptoHex(const std::string& fn, const AstNode& arg,
+                                               const std::map<std::string, bool>* varIsString) const {
+        std::string bytes;
+        if (cryptoArgIsLiteral(arg)) {
+            bytes = cryptoLiteralBytes(arg);
+        } else {
+            static const std::map<std::string, bool> empty;
+            const auto& vs = varIsString ? *varIsString : empty;
+            auto folded = tryFoldStringLiteralChain(arg, vs);
+            if (!folded) return std::nullopt;
+            bytes = *folded;
+        }
+        if (fn == "hex_encode") return cryptoHexEncodeBytes(bytes);
+        if (fn == "hex_decode") return cryptoHexDecodeBytes(bytes);
+        return std::nullopt;
+    }
+
     std::optional<std::string> tryFoldStringLiteralChain(const AstNode& n,
                                                          const std::map<std::string, bool>& varIsString) const {
         if (n.type == AstNode::Type::ExprStringLiteral) return n.value;
@@ -3321,7 +3625,7 @@ private:
         out << indent << "}\n";
     }
 
-    std::string escapeString(const std::string& s) {
+    std::string escapeString(const std::string& s) const {
         std::string out;
         for (unsigned char c : s) {
             if (c == '\\') out += "\\\\";

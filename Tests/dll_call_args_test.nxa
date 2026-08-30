@@ -1,0 +1,11 @@
+#include <std/io>
+#include <std/dll>
+#include <std/file>
+
+fn main() {
+    let h = dll.load("dll_call_args_lib.dll");
+    dll.call(h, "WriteArg", "human");
+    io.println(file.read("dll_call_args_out.txt"));
+    dll.call(h, "WriteLines", "human\nAda");
+    io.println(file.read("dll_call_args_lines.txt"));
+}

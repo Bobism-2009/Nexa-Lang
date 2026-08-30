@@ -1,0 +1,21 @@
+#include <std/io>
+
+fn main() {
+    let n = 99;
+    switch (n) {
+        case 1:
+            io.println("one");
+            break;
+        case default:
+            io.println("other");
+    }
+
+    let s = "z";
+    switch (s) {
+        case "a":
+            io.println("a");
+            break;
+        case default:
+            io.println("fallback");
+    }
+}

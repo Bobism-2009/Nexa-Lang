@@ -4,16 +4,35 @@
 
 namespace nexa {
 
-// Self-contained crypto helpers emitted into generated C++ (no OpenSSL).
-inline std::string cryptoRuntimeCpp() {
-    return R"NEXA_CRYPTO(
-#include <string>
-#include <vector>
-#include <cstdint>
-#include <cstring>
-#include <random>
-#include <stdexcept>
+// Which crypto helpers to emit. Hex-only must not pull <random> / SHA / base64 —
+// those headers and objects are what blow a statically-linked exe from ~14KB to ~200KB.
+struct CryptoEmit {
+    bool hex = false;
+    bool xorv = false;
+    bool base64 = false;
+    bool sha256 = false;
+    bool sha1 = false;
+    bool hmac = false;
+    bool random = false;
+};
 
+inline std::string cryptoRuntimeCpp(const CryptoEmit& need) {
+    std::string out;
+    if (need.hex || need.xorv || need.base64 || need.sha256 || need.sha1 || need.hmac || need.random) {
+        out += "#include <string>\n";
+    }
+    if (need.xorv) {
+        out += "#include <vector>\n";
+    }
+    if (need.sha256 || need.sha1 || need.hmac) {
+        out += "#include <cstdint>\n";
+    }
+    if (need.random) {
+        out += "#include <random>\n";
+    }
+
+    if (need.xorv) {
+        out += R"NEXA_CRYPTO(
 static std::string __nexa_crypto_xor(const std::string& __s, const std::vector<int>& __keys) {
   if (__keys.empty()) return __s;
   std::string __out = __s;
@@ -33,7 +52,11 @@ static std::string __nexa_crypto_xor_key(const std::string& __s, const std::stri
   }
   return __out;
 }
+)NEXA_CRYPTO";
+    }
 
+    if (need.hex) {
+        out += R"NEXA_CRYPTO(
 static std::string __nexa_crypto_hex_encode(const std::string& __s) {
   static const char* __hex = "0123456789abcdef";
   std::string __out;
@@ -65,7 +88,11 @@ static std::string __nexa_crypto_hex_decode(const std::string& __hex) {
   }
   return __out;
 }
+)NEXA_CRYPTO";
+    }
 
+    if (need.base64) {
+        out += R"NEXA_CRYPTO(
 static std::string __nexa_crypto_base64_encode(const std::string& __s) {
   static const char* __tbl = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   std::string __out;
@@ -127,7 +154,11 @@ static std::string __nexa_crypto_base64_decode(const std::string& __b64) {
   }
   return __out;
 }
+)NEXA_CRYPTO";
+    }
 
+    if (need.random) {
+        out += R"NEXA_CRYPTO(
 static std::string __nexa_crypto_random_bytes(int __n) {
   if (__n <= 0) return std::string();
   std::string __out;
@@ -138,7 +169,11 @@ static std::string __nexa_crypto_random_bytes(int __n) {
   }
   return __out;
 }
+)NEXA_CRYPTO";
+    }
 
+    if (need.sha256 || need.hmac) {
+        out += R"NEXA_CRYPTO(
 static uint32_t __nexa_rotr32(uint32_t __x, uint32_t __n) { return (__x >> __n) | (__x << (32 - __n)); }
 
 static std::string __nexa_crypto_sha256_raw(const std::string& __msg) {
@@ -198,7 +233,11 @@ static std::string __nexa_crypto_sha256_raw(const std::string& __msg) {
 static std::string __nexa_crypto_sha256(const std::string& __s) {
   return __nexa_crypto_hex_encode(__nexa_crypto_sha256_raw(__s));
 }
+)NEXA_CRYPTO";
+    }
 
+    if (need.sha1) {
+        out += R"NEXA_CRYPTO(
 static uint32_t __nexa_rotl32(uint32_t __x, uint32_t __n) { return (__x << __n) | (__x >> (32 - __n)); }
 
 static std::string __nexa_crypto_sha1_raw(const std::string& __msg) {
@@ -243,7 +282,11 @@ static std::string __nexa_crypto_sha1_raw(const std::string& __msg) {
 static std::string __nexa_crypto_sha1(const std::string& __s) {
   return __nexa_crypto_hex_encode(__nexa_crypto_sha1_raw(__s));
 }
+)NEXA_CRYPTO";
+    }
 
+    if (need.hmac) {
+        out += R"NEXA_CRYPTO(
 static std::string __nexa_crypto_hmac_sha256(const std::string& __key, const std::string& __data) {
   std::string __k = __key;
   if (__k.size() > 64) __k = __nexa_crypto_sha256_raw(__k);
@@ -256,6 +299,9 @@ static std::string __nexa_crypto_hmac_sha256(const std::string& __key, const std
   return __nexa_crypto_hex_encode(__nexa_crypto_sha256_raw(__opad + __nexa_crypto_sha256_raw(__ipad + __data)));
 }
 )NEXA_CRYPTO";
+    }
+
+    return out;
 }
 
 }  // namespace nexa

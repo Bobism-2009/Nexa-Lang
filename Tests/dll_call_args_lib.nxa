@@ -1,0 +1,9 @@
+#include <std/file>
+
+fn WriteArg(value: string) {
+    file.write("dll_call_args_out.txt", value);
+}
+
+fn WriteLines(value: string) {
+    file.write("dll_call_args_lines.txt", value);
+}

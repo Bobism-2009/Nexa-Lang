@@ -41,6 +41,7 @@ SWITCH
     default:
       stmts
   }
+  `case default:` is the same as `default:`.
   - Int switch: expr is int, case values are integer literals
   - String switch: expr is string, case values are string literals
   - Cannot mix int and string cases in same switch

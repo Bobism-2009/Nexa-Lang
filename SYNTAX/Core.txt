@@ -242,6 +242,9 @@ STRING METHODS (core; no #include required)
     io.println("Hello".upper());          // HELLO
     io.println(name.trim().lower());      // chaining is allowed
     if (line.starts_with("#")) { ... }
+    s = s.lower();                        // methods return a new string; assign to keep it
+    s.lower();                            // valid statement; result is discarded
+    Literal receivers (and literal args) fold at compile time, like crypto.hex_encode.
 
   STRING INDEXING
     s[i]           - character at index i (type char); i is 0-based

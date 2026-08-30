@@ -1,0 +1,6 @@
+#include <std/io>
+
+fn main() {
+    let s: string = "hello";
+    io.println(s);
+}

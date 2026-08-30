@@ -1,0 +1,9 @@
+#include <std/io>
+
+fn main() {
+    let s = "Hello";
+    s.lower();
+    io.println(s);
+    s = s.lower();
+    io.println(s);
+}

@@ -180,7 +180,7 @@ export const MODULE_MEMBERS: Record<string, { name: string; detail: string }[]> 
   ],
   dll: [
     { name: "load", detail: "dll.load(path)" },
-    { name: "call", detail: "dll.call(handle, name)" },
+    { name: "call", detail: "dll.call(handle, name, args...)" },
   ],
 };
 

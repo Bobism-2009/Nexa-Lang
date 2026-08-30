@@ -650,10 +650,11 @@ static int printHelp(int page = 1) {
         std::cout << "    path: string literal, e.g. \"./mylib.so\" or \"mylib.dll\"\n";
         std::cout << "    Returns: handle (int) for use with dll.call\n";
         std::cout << "    Use with: let h = dll.load(\"./mylib.so\");\n\n";
-        std::cout << "  dll.call(handle, \"symbol\")\n";
-        std::cout << "    Calls a void function with no args from the loaded library.\n";
+        std::cout << "  dll.call(handle, \"symbol\", args...)\n";
+        std::cout << "    Calls an exported function from the loaded library.\n";
         std::cout << "    handle: variable from dll.load\n";
-        std::cout << "    symbol: string literal, function name to call\n\n";
+        std::cout << "    symbol: string literal, function name to call\n";
+        std::cout << "    args: optional values matching the function parameters\n\n";
         std::cout << "Example:\n";
         std::cout << "  #include <std/dll>\n";
         std::cout << "  #include <std/io>\n\n";

@@ -486,6 +486,31 @@ private:
         return node;
     }
 
+    // ident.method(...) or ident.field.method(...) as a statement (result discarded).
+    // Distinguished from member assignment (ident.field = ...).
+    bool looksLikeDotMethodCallStmt() const {
+        if (pos_ + 1 >= tokens_.size()) return false;
+        if (tokens_[pos_].type != TokenType::Identifier) return false;
+        if (tokens_[pos_ + 1].type != TokenType::Dot && tokens_[pos_ + 1].type != TokenType::Arrow)
+            return false;
+        size_t i = pos_ + 1;
+        while (i + 1 < tokens_.size() &&
+               (tokens_[i].type == TokenType::Dot || tokens_[i].type == TokenType::Arrow)) {
+            if (tokens_[i + 1].type != TokenType::Identifier) return false;
+            i += 2;
+            if (i < tokens_.size() && tokens_[i].type == TokenType::LParen) return true;
+        }
+        return false;
+    }
+
+    AstNode parseExprStatement() {
+        AstNode expr = parseExpression();
+        if (!match(TokenType::Semicolon)) {
+            throw std::runtime_error("Expected ';' after expression at line " + std::to_string(peek().line));
+        }
+        return expr;
+    }
+
     AstNode parseMemberAssignment() {
         size_t line = peek().line;
         const Token& nameTok = peek();
@@ -919,6 +944,8 @@ private:
                     pos_ + 3 < tokens_.size() && tokens_[pos_ + 3].type == TokenType::LParen;
                 if (isPathFile) {
                     stmts.push_back(parsePathVarFileCall());
+                } else if (looksLikeDotMethodCallStmt()) {
+                    stmts.push_back(parseExprStatement());
                 } else {
                     stmts.push_back(parseMemberAssignment());
                 }
@@ -1445,6 +1472,19 @@ private:
                     caseNode.value = fac.children[0].value;
                     caseNode.initValue = fac.value;
                     hasEnumCase = true;
+                } else if (valTok.type == TokenType::Default) {
+                    if (hasDefault) {
+                        throw std::runtime_error("Duplicate default at line " + std::to_string(valTok.line));
+                    }
+                    hasDefault = true;
+                    advance();
+                    if (!match(TokenType::Colon)) {
+                        throw std::runtime_error("Expected ':' after case default at line " + std::to_string(peek().line));
+                    }
+                    AstNode defaultNode{AstNode::Type::SwitchCase, "default", {}};
+                    defaultNode.children = parseSwitchBody();
+                    switchNode.children.push_back(defaultNode);
+                    continue;
                 } else {
                     throw std::runtime_error("case value must be an integer or string literal at line " + std::to_string(valTok.line));
                 }
@@ -1555,6 +1595,8 @@ private:
                     pos_ + 3 < tokens_.size() && tokens_[pos_ + 3].type == TokenType::LParen;
                 if (isPathFile) {
                     stmts.push_back(parsePathVarFileCall());
+                } else if (looksLikeDotMethodCallStmt()) {
+                    stmts.push_back(parseExprStatement());
                 } else {
                     stmts.push_back(parseMemberAssignment());
                 }
@@ -3161,14 +3203,17 @@ private:
             throw std::runtime_error("Expected symbol name string at line " + std::to_string(symTok.line));
         }
         advance();
+        AstNode result{AstNode::Type::DllCall, symTok.value, {}};
+        result.children.push_back({AstNode::Type::ExprVarRef, handleVar, {}});
+        while (match(TokenType::Comma)) {
+            result.children.push_back(parseExpression());
+        }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
         }
         if (!match(TokenType::Semicolon)) {
             throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
         }
-        AstNode result{AstNode::Type::DllCall, symTok.value, {}};
-        result.children.push_back({AstNode::Type::ExprVarRef, handleVar, {}});
         return result;
     }
 

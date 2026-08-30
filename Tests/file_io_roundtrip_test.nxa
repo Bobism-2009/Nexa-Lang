@@ -1,0 +1,20 @@
+#include <std/file>
+#include <std/io>
+
+fn main() {
+    let path: string = "Tests/_io_roundtrip.txt";
+    file.write(path, "hello");
+    file.append(path, "\nworld");
+    let got: string = file.read(path);
+    if (got != "hello\nworld") {
+        io.println("roundtrip fail");
+        return 1;
+    }
+    file.write("Tests/_io_roundtrip.txt", "x");
+    if (file.read("Tests/_io_roundtrip.txt") != "x") {
+        io.println("literal fail");
+        return 2;
+    }
+    io.println("io ok");
+    return 0;
+}

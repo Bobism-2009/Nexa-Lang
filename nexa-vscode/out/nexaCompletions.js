@@ -217,7 +217,7 @@ exports.MODULE_MEMBERS = {
     ],
     dll: [
         { name: "load", detail: "dll.load(path)" },
-        { name: "call", detail: "dll.call(handle, name)" },
+        { name: "call", detail: "dll.call(handle, name, args...)" },
     ],
 };
 exports.STRING_METHODS = [
