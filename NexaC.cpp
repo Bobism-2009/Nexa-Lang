@@ -14,6 +14,10 @@
 #include <filesystem>
 #include <vector>
 
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
+
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -302,8 +306,8 @@ static std::string findWindowsCxx() {
 #endif
 }
 
-// Build the shell command for clang/g++/gcc. Windows (MSVC-target clang) cannot use -fPIC on DLLs
-// and needs an explicit subsystem for console executables; GNU flags (-Wl,--gc-sections, -s) are skipped there.
+// Build the shell command for clang/g++/gcc. Linker flags are selected per object format:
+// PE/COFF on Windows, Mach-O on macOS, and ELF on Linux.
 static std::string nexaBuildCompileCmd(
     const std::string& cxx,
     const std::string& targetFlags,
@@ -377,6 +381,13 @@ static std::string nexaBuildCompileCmd(
         // (ffunction/fdata sections were enabled above; without --gc-sections, .exe stays large).
         cmd += " -Wl,--gc-sections -s";
     }
+#elif defined(__APPLE__)
+    // ld64 uses dead_strip instead of GNU ld's --gc-sections. Apple platforms
+    // provide libc++ as a system library, so static libgcc/libstdc++ flags are invalid.
+    cmd += " -Wl,-dead_strip";
+    if (buildDll || buildShared) {
+        cmd += " -dynamiclib -fPIC";
+    }
 #else
     cmd += " -s -ffunction-sections -fdata-sections -Wl,--gc-sections";
     // Native ELF output (Linux exe or .so), not mingw-cross (PE) builds.
@@ -442,8 +453,10 @@ static std::string nexaBuildCompileCmd(
         cmd += nexaLd;
     }
     cmd += " -o \"" + exePath + "\"";
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__APPLE__)
     if (modulesHasDll && buildShared) cmd += " -ldl";
+#endif
+#ifndef _WIN32
     cmd += " 2>&1";
 #endif
     return cmd;
@@ -778,7 +791,7 @@ static int printHelp(int page = 1) {
     std::cout << "  --preserve-names, --p  Keep function names in generated C++ (default: mangle)\n";
     std::cout << "  --small       Optimize for smaller executable (-Os)\n";
     std::cout << "  --dll     Build Windows .dll (default: -Os + strip for smaller .dll)\n";
-    std::cout << "  --shared  Build Linux .so (default: -Os + strip)\n";
+    std::cout << "  --shared  Build .dylib (macOS) or .so (Linux; default: -Os + strip)\n";
     std::cout << "  --static-lib  Build a static archive (.a Linux / .lib Windows) from a .nxa\n";
     std::cout << "  --link <file>  Statically link an archive/object/lib into the executable\n";
     std::cout << "                 (repeatable; .a/.o are baked in, .so/.dll link dynamically)\n";
@@ -1010,7 +1023,11 @@ int main(int argc, char* argv[]) {
             if (buildDll) {
                 exePath += ".dll";
             } else if (buildShared) {
+#ifdef __APPLE__
+                exePath += ".dylib";
+#else
                 exePath += ".so";
+#endif
             } else if (buildStaticLib) {
 #ifdef _WIN32
                 exePath += ".lib";
@@ -1024,8 +1041,14 @@ int main(int argc, char* argv[]) {
             exePath = outputExe;
             if (buildDll && (exePath.size() < 4 || exePath.substr(exePath.size() - 4) != ".dll")) {
                 exePath += ".dll";
-            } else if (buildShared && (exePath.size() < 3 || exePath.substr(exePath.size() - 3) != ".so")) {
+            } else if (buildShared
+#ifdef __APPLE__
+                       && (exePath.size() < 6 || exePath.substr(exePath.size() - 6) != ".dylib")) {
+                exePath += ".dylib";
+#else
+                       && (exePath.size() < 3 || exePath.substr(exePath.size() - 3) != ".so")) {
                 exePath += ".so";
+#endif
             } else if (buildStaticLib) {
 #ifdef _WIN32
                 if (exePath.size() < 4 || exePath.substr(exePath.size() - 4) != ".lib") exePath += ".lib";

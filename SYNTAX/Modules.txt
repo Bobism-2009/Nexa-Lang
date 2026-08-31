@@ -212,10 +212,10 @@ Nexa Standard Modules
   exists/mkdir/list/cwd and the other path helpers use Win32 / POSIX (no <filesystem>).
 
 #include <std/dll>
-  dll.load(path)    - Load .so/.dll, returns handle (int)
+  dll.load(path)    - Load .so/.dll/.dylib, returns handle (int)
   dll.call(h, "sym") - Call exported fn from loaded library
   dll.call(h, "sym", args...) - Same, passing arguments (must match the fn's parameters)
-  path: string, e.g. "./mylib.so"
+  path: string, e.g. "./mylib.so" or "./mylib.dylib"
   Use with: let h = dll.load("./lib.so");  dll.call(h, "func_name", race);
   A #include copy of a global is not shared with a DLL — pass values in via dll.call.
 
@@ -237,8 +237,8 @@ PACKAGES (nexapkg)
   Files:
     nexapkg.json   - Manifest: { "name", "entry", "output", "dll", "dllOutput",
                      "dependencies": { "include/path": "source" } }
-    dll / dllOutput - Optional. NexaC build also compiles that .nxa as a .dll (Windows)
-                      or .so (Linux), with names preserved for dll.call.
+    dll / dllOutput - Optional. NexaC build also compiles that .nxa as a .dll (Windows),
+                      .dylib (macOS), or .so (Linux), with names preserved for dll.call.
     nexapkg.lock   - Resolved git commit per dependency (commit this for reproducible builds)
 
   Resolution order for #include <pkg/module>:  ./.nexa/packages/  then  ~/.nexa/packages/

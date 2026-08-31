@@ -3,11 +3,15 @@ CXX := $(shell which clang++ 2>/dev/null || which g++ 2>/dev/null || echo "g++")
 CXXFLAGS = -std=c++17 -O2
 PREFIX ?= $(HOME)/.local
 
-# Install build deps (Debian/Ubuntu/Raspberry Pi OS)
+# Install build deps (macOS or Debian/Ubuntu/Raspberry Pi OS)
 install-deps:
-	sudo apt update
-	sudo apt install -y clang g++
-	@echo "Optional for Windows cross-compile: sudo apt install -y mingw-w64"
+	@if [ "$$(uname -s)" = "Darwin" ]; then \
+		xcode-select -p >/dev/null 2>&1 || xcode-select --install; \
+		echo "macOS: Apple Command Line Tools requested/available"; \
+	else \
+		sudo apt update && sudo apt install -y clang g++; \
+		echo "Optional for Windows cross-compile: sudo apt install -y mingw-w64"; \
+	fi
 
 NexaC: NexaC.cpp include/Lexer.hpp include/Parser.hpp include/Transpiler.hpp include/Modules.hpp include/nexapkg.hpp
 	$(CXX) $(CXXFLAGS) NexaC.cpp -o NexaC
@@ -24,13 +28,17 @@ win: NexaC.cpp include/Lexer.hpp include/Parser.hpp include/Transpiler.hpp inclu
 installer: NexaC
 	./NexaC Installer/Installer.nxa -o installer
 
-# Build Tests/plugin.nxa as Windows DLL (requires mingw-w64)
+# Build Tests/dll_call_args_lib.nxa as Windows DLL (requires mingw-w64)
 dll: NexaC
-	./NexaC Tests/plugin.nxa --dll -o Tests/plugin.dll
+	./NexaC Tests/dll_call_args_lib.nxa --dll -o Tests/plugin.dll
 
-# Build Tests/plugin.nxa as Linux .so
+# Build Tests/dll_call_args_lib.nxa as Linux .so
 so: NexaC
-	./NexaC Tests/plugin.nxa --shared -o Tests/plugin.so
+	./NexaC Tests/dll_call_args_lib.nxa --shared -o Tests/plugin.so
+
+# Build Tests/dll_call_args_lib.nxa as a macOS dynamic library
+dylib: NexaC
+	./NexaC Tests/dll_call_args_lib.nxa --shared -o Tests/plugin.dylib
 
 # Build Examples/Number Guessing Game.nxa as Windows .exe (requires mingw-w64)
 win-exe: NexaC
@@ -44,4 +52,4 @@ clean:
 	rm -f NexaC nexapkg
 	$(MAKE) -C WIN clean
 
-.PHONY: install install-deps win installer dll so win-exe clean pkgtest
+.PHONY: install install-deps win installer dll so dylib win-exe clean pkgtest

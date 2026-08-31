@@ -4,6 +4,7 @@
 *.cpp
 *.so
 *.dll
+*.dylib
 
 # Packages
 .nexa/

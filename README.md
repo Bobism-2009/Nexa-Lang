@@ -17,6 +17,7 @@ Current compiler version string: **0.1.8** (`NexaC --version`).
 
 - **Windows:** [LLVM/Clang](https://releases.llvm.org/) or **MinGW-w64** (`clang++` / `g++`) on your `PATH`.
 - **Linux:** `clang++` and normal build tools.
+- **macOS:** Apple Command Line Tools (`xcode-select --install`); see [`MACOS.md`](MACOS.md).
 
 The generated C++ uses the standard library (`std::string`, `std::vector`, threads, chrono, etc.) and platform APIs where modules need them (e.g. `std/os` on Windows).
 
@@ -44,6 +45,16 @@ g++ -std=c++17 -O2 -static -static-libgcc -static-libstdc++ NexaC.cpp -o NexaC.e
 clang++ -std=c++17 -O2 NexaC.cpp -o NexaC
 # Windows: adds .exe — e.g. NexaC.exe
 ```
+
+On macOS, install Apple's Command Line Tools first if needed:
+
+```bash
+xcode-select --install
+make
+make install
+```
+
+This installs `NexaC`, `nexac`, and `nexapkg` to `~/.local/bin` by default. Details: [`MACOS.md`](MACOS.md).
 
 There is also a [WIN/Makefile](WIN/Makefile) for building `NexaC.exe` in the `WIN/` folder (`make` in MSYS2 or similar).
 
@@ -113,7 +124,7 @@ Full detail: [`SYNTAX/CLI.txt`](SYNTAX/CLI.txt) or `NexaC --help`.
 | `NexaC build [dir]` | Build entry `.nxa` in directory |
 | `NexaC --run` / `-r` | Build to temp binary and run |
 | `NexaC -p` / `--preserve-names` | Keep readable C++ symbol names |
-| `NexaC --dll` / `--shared` | Build DLL / `.so` |
+| `NexaC --dll` / `--shared` | Build DLL / `.so` (Linux) / `.dylib` (macOS) |
 | `NexaC --static-lib` | Build a static archive (`.a` Linux / `.lib` Windows) from a `.nxa` |
 | `NexaC file.nxa --link lib.a` | Statically link an archive/object into the executable (repeatable) |
 | `NexaC --no-console` | Windows subsystem without console (executables only) |
@@ -197,6 +208,7 @@ re-copied on every install so edits propagate during development.
 | [`Examples/`](Examples/) | Larger samples |
 | [`nexa-vscode/`](nexa-vscode/) | VS Code extension (syntax / tooling) |
 | [`Installer/`](Installer/) | Installer-related Nexa sources |
+| [`MACOS.md`](MACOS.md) | Native macOS (Apple silicon / Intel) build notes |
 
 ---
 

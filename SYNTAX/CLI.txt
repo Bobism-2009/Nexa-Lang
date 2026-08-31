@@ -16,10 +16,10 @@ OPTIONS
   --preserve-names, -p  Keep function names (readability)
   --small         Optimize for smaller output (-Os)
   --dll     Build Windows .dll (default: -Os; link with strip for size)
-  --shared  Build Linux .so (default: -Os; link with strip for size)
+  --shared  Build .dylib (macOS) or .so (Linux)
   --win     Build Windows .exe (mingw-w64 from Linux)
   --no-console    Build Windows GUI .exe with no console window
-  fn __init__() in a DLL/SO is auto-executed when the library is loaded
+  fn __init__() in a DLL/SO/dylib is auto-executed when the library is loaded
   --run, -r       Compile to temp file and run
   --help, -h      Show help
   --version, -v   Show version

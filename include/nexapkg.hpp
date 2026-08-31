@@ -124,7 +124,7 @@ struct Manifest {
     std::string version;
     std::string entry;   // .nxa entry file for NexaC build (e.g. main.nxa)
     std::string output;  // executable base name or path for NexaC build (-o)
-    std::string dll;       // .nxa to compile as a shared library (Windows .dll / Linux .so)
+    std::string dll;       // .nxa to compile as a shared library (.dll / .so / .dylib)
     std::string dllOutput; // library base name or path (default: stem of dll)
     // Ordered include-path -> source (source may carry a trailing @ref).
     std::vector<std::pair<std::string, std::string>> deps;
