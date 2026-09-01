@@ -2,7 +2,7 @@
 
 **Nexa** is a small systems-friendly language with C++-like surface syntax. **NexaC** is its compiler: it parses `.nxa` files, transpiles to a single C++ translation unit, and invokes **clang++** (or **g++** on Windows as a fallback) to produce a native executable or shared library.
 
-Current compiler version string: **0.1.8** (`NexaC --version`).
+Current compiler version string: **0.1.9** (`NexaC --version`).
 
 | | |
 |---|---|

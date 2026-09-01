@@ -26,7 +26,7 @@ win: NexaC.cpp include/Lexer.hpp include/Parser.hpp include/Transpiler.hpp inclu
 	$(MAKE) -C WIN
 
 installer: NexaC
-	./NexaC Installer/Installer.nxa -o installer
+	./NexaC Installer/main.nxa -o installer
 
 # Build Tests/dll_call_args_lib.nxa as Windows DLL (requires mingw-w64)
 dll: NexaC
