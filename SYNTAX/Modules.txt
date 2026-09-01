@@ -58,7 +58,7 @@ Nexa Standard Modules
   os.cache_dir()    - Per-user cache directory (LOCALAPPDATA / XDG_CACHE_HOME / Caches)
   os.desktop()      - Desktop folder path
   os.endian()       - "little" or "big"
-  os.platform()     - Returns "windows", "linux", "darwin", or "unknown"
+  os.platform()     - Returns "windows", "linux", "darwin", "wasm", or "unknown"
   os.getenv(name)   - Get environment variable, returns string (or "")
   os.setenv(name, value) - Set environment variable for this process
   os.hostname()     - Machine hostname, returns string

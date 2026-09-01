@@ -40,6 +40,10 @@ so: NexaC
 dylib: NexaC
 	./NexaC Tests/dll_call_args_lib.nxa --shared -o Tests/plugin.dylib
 
+# Build Tests/wasm_hello_test.nxa as WebAssembly (requires em++ or WASI-SDK)
+wasm: NexaC
+	./NexaC Tests/wasm_hello_test.nxa --wasm -o Tests/wasm_hello
+
 # Build Examples/Number Guessing Game.nxa as Windows .exe (requires mingw-w64)
 win-exe: NexaC
 	./NexaC "Examples/Number Guessing Game.nxa" --win -o Tests/NumberGuessingGame.exe
@@ -52,4 +56,4 @@ clean:
 	rm -f NexaC nexapkg
 	$(MAKE) -C WIN clean
 
-.PHONY: install install-deps win installer dll so dylib win-exe clean pkgtest
+.PHONY: install install-deps win installer dll so dylib wasm win-exe clean pkgtest

@@ -1,9 +1,0 @@
-#include <std/os>
-#include <std/thread>
-#include <std/time>
-
-fn main() {
-    let t: int = thread.spawn(os.notify("SVC-V3", "Hello from thread"));
-    time.sleep(time.seconds(2));
-    thread.join(t);
-}

@@ -1,0 +1,18 @@
+#include <std/io>
+#include <std/os>
+
+fn main() {
+    if (os.platform() != "wasm") {
+        io.println("fail platform");
+        return 1;
+    }
+    let a = os.arch();
+    if (a != "wasm32" && a != "wasm64") {
+        io.println("fail arch");
+        io.println(a);
+        return 1;
+    }
+    io.println("hello wasm");
+    io.println(os.platform());
+    io.println(a);
+}

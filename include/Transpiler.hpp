@@ -1853,11 +1853,13 @@ private:
                     out << indent << "if (fgets(__nexa_buf, sizeof(__nexa_buf), stdin)) { __nexa_buf[strcspn(__nexa_buf, \"\\n\")] = 0; }\n";
                     out << indent << "std::string " << vname << "(__nexa_buf);\n";
                 } else if (child.initFromDllLoad) {
-#ifdef _WIN32
+                    out << indent << "#ifdef _WIN32\n";
                     out << indent << "__nexa_dll_handles.push_back((void*)LoadLibraryA(\"" << escapeString(child.initValue) << "\"));\n";
-#else
+                    out << indent << "#elif defined(NEXA_WASM) && !defined(__EMSCRIPTEN__)\n";
+                    out << indent << "__nexa_dll_handles.push_back(nullptr);\n";
+                    out << indent << "#else\n";
                     out << indent << "__nexa_dll_handles.push_back(dlopen(\"" << escapeString(child.initValue) << "\", RTLD_LAZY));\n";
-#endif
+                    out << indent << "#endif\n";
                     out << indent << "int " << vname << " = (int)__nexa_dll_handles.size() - 1;\n";
                 } else if (!child.children.empty() && child.children[0].type == AstNode::Type::OsGetenv) {
                     const std::string& envName = child.children[0].value;
@@ -2109,17 +2111,16 @@ private:
                         fnArgs += expr;
                     }
                 }
-#ifdef _WIN32
                 out << indent << "{\n";
+                out << indent << "#ifdef _WIN32\n";
                 out << indent << "    void (*fn)(" << paramTypes << ") = (void(*)(" << paramTypes << "))GetProcAddress((HMODULE)__nexa_dll_handles[" << h << "], \"" << escapeString(child.value) << "\");\n";
-                out << indent << "    if (fn) fn(" << fnArgs << ");\n";
-                out << indent << "}\n";
-#else
-                out << indent << "{\n";
+                out << indent << "#elif defined(NEXA_WASM) && !defined(__EMSCRIPTEN__)\n";
+                out << indent << "    void (*fn)(" << paramTypes << ") = nullptr;\n";
+                out << indent << "#else\n";
                 out << indent << "    void (*fn)(" << paramTypes << ") = (void(*)(" << paramTypes << "))dlsym(__nexa_dll_handles[" << h << "], \"" << escapeString(child.value) << "\");\n";
+                out << indent << "#endif\n";
                 out << indent << "    if (fn) fn(" << fnArgs << ");\n";
                 out << indent << "}\n";
-#endif
             } else if (child.type == AstNode::Type::OsSystem) {
                 out << indent << "fflush(stdout);\n";
                 if (!child.children.empty()) {

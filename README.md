@@ -7,7 +7,7 @@ Current compiler version string: **0.1.8** (`NexaC --version`).
 | | |
 |---|---|
 | **Sources** | `*.nxa` |
-| **Pipeline** | Nexa → C++ → native binary |
+| **Pipeline** | Nexa → C++ → native binary, or **`--wasm`** → WebAssembly |
 | **Host tooling** | C++17 compiler on `PATH` |
 | **Syntax reference** | [`SYNTAX/`](SYNTAX/) (authoritative) |
 
@@ -20,6 +20,8 @@ Current compiler version string: **0.1.8** (`NexaC --version`).
 - **macOS:** Apple Command Line Tools (`xcode-select --install`); see [`MACOS.md`](MACOS.md).
 
 The generated C++ uses the standard library (`std::string`, `std::vector`, threads, chrono, etc.) and platform APIs where modules need them (e.g. `std/os` on Windows).
+
+**`--wasm`** needs [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) (`em++` on `PATH`, or `EMSDK` set). If it is missing, NexaC shows a popup asking to install Emscripten into `~/emsdk` (requires Git). WASI-SDK (`WASI_SDK_PATH`) is a fallback for programs that do not use `std/http` or `std/thread`. Override the compiler with `NEXA_WASM_CXX`. Run with `NexaC file.nxa --wasm --run` (`node` for Emscripten, `wasmtime`/`wasmer` for WASI).
 
 ---
 
@@ -128,6 +130,7 @@ Full detail: [`SYNTAX/CLI.txt`](SYNTAX/CLI.txt) or `NexaC --help`.
 | `NexaC --static-lib` | Build a static archive (`.a` Linux / `.lib` Windows) from a `.nxa` |
 | `NexaC file.nxa --link lib.a` | Statically link an archive/object into the executable (repeatable) |
 | `NexaC --no-console` | Windows subsystem without console (executables only) |
+| `NexaC file.nxa --wasm` | WebAssembly via **em++** (`.js` + `.wasm`) or WASI-SDK (`.wasm`) |
 | `nexapkg <cmd>` / `NexaC nexapkg <cmd>` | Package manager (see [Packages](#packages-nexapkg)) |
 
 ---

@@ -1,7 +1,0 @@
-#include <std/os>
-#include <std/time>
-
-fn main() {
-    time.sleep(time.seconds(3));
-    os.type("Hello from Nexa!\n");
-}

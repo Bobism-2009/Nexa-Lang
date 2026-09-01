@@ -108,6 +108,27 @@ static std::string __nexa_http_request(const std::string& method, const std::str
   CFRelease(stream); CFRelease(req); CFRelease(urlRef); CFRelease(cfMethod); CFRelease(cfUrl);
   return out;
 }
+#elif defined(__EMSCRIPTEN__)
+#include <emscripten/fetch.h>
+#include <cstring>
+static std::string __nexa_http_request(const std::string& method, const std::string& url, const std::string& body) {
+  emscripten_fetch_attr_t attr;
+  emscripten_fetch_attr_init(&attr);
+  std::memset(attr.requestMethod, 0, sizeof(attr.requestMethod));
+  std::strncpy(attr.requestMethod, method.c_str(), sizeof(attr.requestMethod) - 1);
+  attr.attributes = EMSCRIPTEN_FETCH_LOAD_TO_MEMORY | EMSCRIPTEN_FETCH_SYNCHRONOUS;
+  if (!body.empty()) {
+    attr.requestData = body.data();
+    attr.requestDataSize = body.size();
+  }
+  emscripten_fetch_t* fetch = emscripten_fetch(&attr, url.c_str());
+  if (!fetch) return std::string();
+  std::string out;
+  if (fetch->status >= 200 && fetch->status < 300 && fetch->data && fetch->numBytes)
+    out.assign(fetch->data, fetch->numBytes);
+  emscripten_fetch_close(fetch);
+  return out;
+}
 #else
 #include <sys/types.h>
 #include <sys/socket.h>

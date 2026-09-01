@@ -1,7 +1,0 @@
-#include <std/io>
-#include <std/file>
-
-fn main() {
-    file.write("size_file_write.txt", "hello");
-    io.println("ok");
-}

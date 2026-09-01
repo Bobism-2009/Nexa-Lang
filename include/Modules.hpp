@@ -127,6 +127,10 @@ public:
 
     std::string getCppIncludes(const CppUsage& usage) const {
         std::string out;
+        // Emscripten also defines __linux__; check NEXA_WASM before Linux-only headers/syscalls.
+        out += "#if defined(__EMSCRIPTEN__) || defined(__wasi__)\n";
+        out += "#ifndef NEXA_WASM\n#define NEXA_WASM 1\n#endif\n";
+        out += "#endif\n";
         if (usage.exceptions) {
             out += "#include <stdexcept>\n";
         }
@@ -198,9 +202,10 @@ public:
         }
         if (hasOs() && usage.osSpawn) {
             out += "#include <vector>\n";
-            out += "#ifdef _WIN32\n#include <windows.h>\n#else\n#include <unistd.h>\n#include <sys/wait.h>\n#include <signal.h>\n#endif\n";
+            out += "#if defined(NEXA_WASM)\n";
+            out += "#elif defined(_WIN32)\n#include <windows.h>\n#else\n#include <unistd.h>\n#include <sys/wait.h>\n#include <signal.h>\n#endif\n";
             out += "static int __nexa_os_wait_status_code(int st) {\n";
-            out += "#ifndef _WIN32\n";
+            out += "#if !defined(_WIN32) && !defined(NEXA_WASM)\n";
             out += "  if (WIFEXITED(st)) return WEXITSTATUS(st);\n";
             out += "  if (WIFSIGNALED(st)) return 128 + WTERMSIG(st);\n";
             out += "#endif\n";
@@ -228,7 +233,9 @@ public:
             out += "#endif\n";
             out += "static int __nexa_os_spawn(const std::vector<std::string>& args, const std::string& cwd, int do_wait) {\n";
             out += "  if (args.empty() || args[0].empty()) return do_wait ? -1 : 0;\n";
-            out += "#ifdef _WIN32\n";
+            out += "#ifdef NEXA_WASM\n";
+            out += "  (void)cwd; (void)args; return do_wait ? -1 : 0;\n";
+            out += "#elif defined(_WIN32)\n";
             out += "  auto append_arg = [](std::string& cmd, const std::string& arg) {\n";
             out += "    if (!cmd.empty()) cmd.push_back(' ');\n";
             out += "    if (arg.empty()) { cmd += \"\\\"\\\"\"; return; }\n";
@@ -280,7 +287,9 @@ public:
             out += "}\n";
             out += "static int __nexa_os_wait(int pid) {\n";
             out += "  if (pid <= 0) return -1;\n";
-            out += "#ifdef _WIN32\n";
+            out += "#ifdef NEXA_WASM\n";
+            out += "  (void)pid; return -1;\n";
+            out += "#elif defined(_WIN32)\n";
             out += "  HANDLE h = __nexa_os_open_child(pid, SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION);\n";
             out += "  if (!h) h = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_INFORMATION, FALSE, (DWORD)pid);\n";
             out += "  if (!h) return -1;\n";
@@ -296,7 +305,9 @@ public:
             out += "}\n";
             out += "static int __nexa_os_kill(int pid) {\n";
             out += "  if (pid <= 0) return 0;\n";
-            out += "#ifdef _WIN32\n";
+            out += "#ifdef NEXA_WASM\n";
+            out += "  (void)pid; return 0;\n";
+            out += "#elif defined(_WIN32)\n";
             out += "  HANDLE stored = __nexa_os_take_child(pid);\n";
             out += "  HANDLE h = stored ? stored : OpenProcess(PROCESS_TERMINATE, FALSE, (DWORD)pid);\n";
             out += "  if (!h) return 0;\n";
@@ -313,6 +324,9 @@ public:
         }
         if (hasOs() && usage.osExec) {
             out += "static std::string __nexa_os_exec(const std::string& cmd) {\n";
+            out += "#ifdef NEXA_WASM\n";
+            out += "  (void)cmd; return std::string();\n";
+            out += "#else\n";
             out += "  std::string result; char buf[4096]; size_t n;\n";
             out += "#ifdef _WIN32\n";
             out += "  FILE* p = _popen(cmd.c_str(), \"r\");\n";
@@ -327,6 +341,7 @@ public:
             out += "  pclose(p);\n";
             out += "#endif\n";
             out += "  return result;\n";
+            out += "#endif\n";
             out += "}\n";
         }
         if (hasOs() && usage.osGetProcessId) {
@@ -345,7 +360,9 @@ public:
         }
         if (hasOs() && usage.osPlatform) {
             out += "static std::string __nexa_os_platform() {\n";
-            out += "#ifdef _WIN32\n";
+            out += "#ifdef NEXA_WASM\n";
+            out += "  return \"wasm\";\n";
+            out += "#elif defined(_WIN32)\n";
             out += "  return \"windows\";\n";
             out += "#elif defined(__APPLE__)\n";
             out += "  return \"darwin\";\n";
@@ -379,6 +396,11 @@ public:
             out += "  if (GetUserNameA(buf, &n)) return std::string(buf);\n";
             out += "  const char* e = std::getenv(\"USERNAME\");\n";
             out += "  return e ? std::string(e) : std::string();\n";
+            out += "#elif defined(NEXA_WASM)\n";
+            out += "  const char* e = std::getenv(\"USER\");\n";
+            out += "  if (e && e[0]) return std::string(e);\n";
+            out += "  e = std::getenv(\"LOGNAME\");\n";
+            out += "  return (e && e[0]) ? std::string(e) : std::string();\n";
             out += "#else\n";
             out += "  const char* e = std::getenv(\"USER\");\n";
             out += "  if (e && e[0]) return std::string(e);\n";
@@ -467,7 +489,9 @@ public:
         }
         if (hasOs() && usage.osExeDir) {
             out += "static std::string __nexa_exe_dir() {\n";
-            out += "#ifdef __linux__\n";
+            out += "#ifdef NEXA_WASM\n";
+            out += "  return \"./\";\n";
+            out += "#elif defined(__linux__)\n";
             out += "  char buf[4096]; ssize_t n = readlink(\"/proc/self/exe\", buf, sizeof(buf)-1);\n";
             out += "  if (n > 0) { buf[n]=0; std::string s(buf); size_t p=s.find_last_of('/'); return p!=std::string::npos ? s.substr(0,p+1) : \"./\"; }\n";
             out += "#elif defined(_WIN32)\n";
@@ -480,7 +504,9 @@ public:
             out += "  return \"./\";\n";
             out += "}\n";
             out += "static std::string __nexa_os_executable() {\n";
-            out += "#ifdef __linux__\n";
+            out += "#ifdef NEXA_WASM\n";
+            out += "  return std::string();\n";
+            out += "#elif defined(__linux__)\n";
             out += "  char buf[4096]; ssize_t n = readlink(\"/proc/self/exe\", buf, sizeof(buf)-1);\n";
             out += "  if (n > 0) { buf[n]=0; return std::string(buf); }\n";
             out += "#elif defined(_WIN32)\n";
@@ -515,7 +541,11 @@ public:
         }
         if (hasOs() && usage.osArch) {
             out += "static std::string __nexa_os_arch() {\n";
-            out += "#if defined(_M_X64) || defined(__x86_64__)\n";
+            out += "#if defined(__wasm64__)\n";
+            out += "  return \"wasm64\";\n";
+            out += "#elif defined(__wasm32__) || defined(__wasm__)\n";
+            out += "  return \"wasm32\";\n";
+            out += "#elif defined(_M_X64) || defined(__x86_64__)\n";
             out += "  return \"x86_64\";\n";
             out += "#elif defined(_M_IX86) || defined(__i386__)\n";
             out += "  return \"x86\";\n";
@@ -650,9 +680,17 @@ public:
             out += "#include <cstddef>\n#include <cstdlib>\n#include <string>\n#include <vector>\n#include <ctime>\n";
             out += "#ifdef _WIN32\n#include <windows.h>\n#include <io.h>\n#include <cstdio>\n";
             out += "#elif defined(__APPLE__)\n#include <unistd.h>\n#include <sys/types.h>\n#include <sys/sysctl.h>\n#include <sys/time.h>\n#include <mach/mach.h>\n";
+            out += "#elif defined(NEXA_WASM)\n#include <unistd.h>\n";
+            out += "#ifdef __EMSCRIPTEN__\n#include <emscripten.h>\n#endif\n";
             out += "#else\n#include <unistd.h>\n#include <sys/sysinfo.h>\n#endif\n";
             out += "static std::size_t __nexa_os_total_mem() {\n";
-            out += "#ifdef _WIN32\n";
+            out += "#ifdef NEXA_WASM\n";
+            out += "#ifdef __EMSCRIPTEN__\n";
+            out += "  return (std::size_t)EM_ASM_INT({ return HEAP8.length; });\n";
+            out += "#else\n";
+            out += "  return (std::size_t)(__builtin_wasm_memory_size(0) * 65536u);\n";
+            out += "#endif\n";
+            out += "#elif defined(_WIN32)\n";
             out += "  MEMORYSTATUSEX ms; ms.dwLength = sizeof(ms);\n";
             out += "  if (!GlobalMemoryStatusEx(&ms)) return 0;\n";
             out += "  return (std::size_t)ms.ullTotalPhys;\n";
@@ -667,7 +705,15 @@ public:
             out += "#endif\n";
             out += "}\n";
             out += "static std::size_t __nexa_os_avail_mem() {\n";
-            out += "#ifdef _WIN32\n";
+            out += "#ifdef NEXA_WASM\n";
+            out += "#ifdef __EMSCRIPTEN__\n";
+            out += "  std::size_t __used = (std::size_t)EM_ASM_INT({ return HEAP8.length; });\n";
+            out += "  std::size_t __cap = (std::size_t)EM_ASM_INT({ return HEAP8.buffer.byteLength; });\n";
+            out += "  return (__cap > __used) ? (__cap - __used) : 0;\n";
+            out += "#else\n";
+            out += "  return (std::size_t)(__builtin_wasm_memory_size(0) * 65536u);\n";
+            out += "#endif\n";
+            out += "#elif defined(_WIN32)\n";
             out += "  MEMORYSTATUSEX ms; ms.dwLength = sizeof(ms);\n";
             out += "  if (!GlobalMemoryStatusEx(&ms)) return 0;\n";
             out += "  return (std::size_t)ms.ullAvailPhys;\n";
@@ -689,7 +735,13 @@ public:
             out += "#endif\n";
             out += "}\n";
             out += "static int __nexa_os_uptime() {\n";
-            out += "#ifdef _WIN32\n";
+            out += "#ifdef NEXA_WASM\n";
+            out += "#ifdef __EMSCRIPTEN__\n";
+            out += "  return (int)(emscripten_get_now() / 1000.0);\n";
+            out += "#else\n";
+            out += "  return 0;\n";
+            out += "#endif\n";
+            out += "#elif defined(_WIN32)\n";
             out += "  return (int)(GetTickCount64() / 1000ull);\n";
             out += "#elif defined(__APPLE__)\n";
             out += "  struct timeval boot; size_t len = sizeof(boot);\n";
@@ -1086,6 +1138,8 @@ public:
             out += "static std::string __nexa_ps_quote(const std::string& s) {\n";
             out += "  std::string r; for (char c : s) { if (c == '\\'') r += \"''\"; else r += c; } return r;\n";
             out += "}\n";
+            out += "#elif defined(NEXA_WASM)\n";
+            out += "static int __nexa_spawn(const char* const argv[]) { (void)argv; return -1; }\n";
             out += "#else\n";
             out += "#include <unistd.h>\n";
             out += "#include <sys/wait.h>\n";
@@ -1367,11 +1421,12 @@ public:
         }
         if (hasDll() && usage.dll) {
             out += "#include <vector>\n";
-#ifdef _WIN32
+            out += "#ifdef _WIN32\n";
             out += "#include <windows.h>\n";
-#else
+            out += "#elif defined(NEXA_WASM) && !defined(__EMSCRIPTEN__)\n";
+            out += "#else\n";
             out += "#include <dlfcn.h>\n";
-#endif
+            out += "#endif\n";
             out += "static std::vector<void*> __nexa_dll_handles;\n";
         }
         std::set<std::string> seenIncludeLines;

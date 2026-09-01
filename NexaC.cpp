@@ -306,6 +306,420 @@ static std::string findWindowsCxx() {
 #endif
 }
 
+enum class WasmKind { None, Emscripten, Wasi };
+
+struct WasmTool {
+    std::string cxx;
+    WasmKind kind = WasmKind::None;
+    std::string sysroot;
+};
+
+static bool nexaCmdExists(const std::string& name) {
+#ifdef _WIN32
+    return std::system(("where " + name + " >nul 2>&1").c_str()) == 0;
+#else
+    return std::system(("command -v " + name + " >/dev/null 2>&1").c_str()) == 0;
+#endif
+}
+
+static bool nexaPathExists(const std::string& p) {
+    return !p.empty() && std::filesystem::exists(p);
+}
+
+static WasmTool findWasmCxx() {
+    WasmTool w;
+    if (const char* env = std::getenv("NEXA_WASM_CXX")) {
+        if (env[0]) {
+            w.cxx = env;
+            std::string low = env;
+            for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            w.kind = (low.find("em++") != std::string::npos || low.find("emcc") != std::string::npos)
+                ? WasmKind::Emscripten : WasmKind::Wasi;
+            if (const char* sr = std::getenv("WASI_SYSROOT")) w.sysroot = sr;
+            else if (const char* wp = std::getenv("WASI_SDK_PATH")) {
+#ifdef _WIN32
+                w.sysroot = std::string(wp) + "\\share\\wasi-sysroot";
+#else
+                w.sysroot = std::string(wp) + "/share/wasi-sysroot";
+#endif
+            }
+            return w;
+        }
+    }
+
+    auto takeEm = [&](const std::string& p, bool onPath) -> bool {
+        if (p.empty()) return false;
+        if (onPath) {
+            if (!nexaCmdExists(p)) return false;
+        } else if (!nexaPathExists(p)) {
+            return false;
+        }
+        w.cxx = p;
+        w.kind = WasmKind::Emscripten;
+        return true;
+    };
+
+    if (takeEm("em++", true)) return w;
+#ifdef _WIN32
+    if (takeEm("em++.exe", true)) return w;
+    if (takeEm("em++.bat", true)) return w;
+#endif
+
+    auto takeEmAt = [&](const std::string& dir) -> bool {
+        if (dir.empty()) return false;
+#ifdef _WIN32
+        if (takeEm(dir + "\\em++.exe", false)) return true;
+        if (takeEm(dir + "\\em++.bat", false)) return true;
+        if (takeEm(dir + "\\em++", false)) return true;
+#else
+        if (takeEm(dir + "/em++", false)) return true;
+#endif
+        return false;
+    };
+
+    if (const char* emsdk = std::getenv("EMSDK")) {
+        if (emsdk[0]) {
+#ifdef _WIN32
+            if (takeEmAt(std::string(emsdk) + "\\upstream\\emscripten")) return w;
+#else
+            if (takeEmAt(std::string(emsdk) + "/upstream/emscripten")) return w;
+#endif
+        }
+    }
+
+    auto takeEmHome = [&](const char* home) -> bool {
+        if (!home || !home[0]) return false;
+#ifdef _WIN32
+        return takeEmAt(std::string(home) + "\\emsdk\\upstream\\emscripten");
+#else
+        return takeEmAt(std::string(home) + "/emsdk/upstream/emscripten");
+#endif
+    };
+    if (takeEmHome(std::getenv("USERPROFILE"))) return w;
+    if (takeEmHome(std::getenv("HOME"))) return w;
+
+    if (const char* wasi = std::getenv("WASI_SDK_PATH")) {
+        if (wasi[0]) {
+#ifdef _WIN32
+            std::string cxx = std::string(wasi) + "\\bin\\clang++.exe";
+            if (!nexaPathExists(cxx)) cxx = std::string(wasi) + "\\bin\\clang++";
+            std::string root = std::string(wasi) + "\\share\\wasi-sysroot";
+#else
+            std::string cxx = std::string(wasi) + "/bin/clang++";
+            std::string root = std::string(wasi) + "/share/wasi-sysroot";
+#endif
+            if (nexaPathExists(cxx)) {
+                w.cxx = cxx;
+                w.kind = WasmKind::Wasi;
+                if (nexaPathExists(root)) w.sysroot = root;
+                return w;
+            }
+        }
+    }
+    return w;
+}
+
+static std::string nexaUserHome() {
+#ifdef _WIN32
+    const char* p = std::getenv("USERPROFILE");
+    if (!p || !p[0]) p = std::getenv("HOME");
+#else
+    const char* p = std::getenv("HOME");
+    if (!p || !p[0]) p = std::getenv("USERPROFILE");
+#endif
+    return (p && p[0]) ? std::string(p) : std::string();
+}
+
+static std::string nexaDefaultEmsdkDir() {
+    std::string home = nexaUserHome();
+    if (home.empty()) return "";
+#ifdef _WIN32
+    return (std::filesystem::path(home) / "emsdk").string();
+#else
+    return (std::filesystem::path(home) / "emsdk").string();
+#endif
+}
+
+// Yes/No install prompt. Windows uses a real MessageBox; macOS/Linux use the native dialog.
+static bool nexaAskYesNo(const char* title, const char* text) {
+#ifdef _WIN32
+    using MsgBoxFn = int (WINAPI*)(HWND, LPCSTR, LPCSTR, UINT);
+    HMODULE user32 = LoadLibraryA("user32.dll");
+    if (!user32) return false;
+    auto fn = reinterpret_cast<MsgBoxFn>(GetProcAddress(user32, "MessageBoxA"));
+    int r = 0;
+    if (fn) {
+        r = fn(NULL, text, title, MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND | MB_TOPMOST);
+    }
+    FreeLibrary(user32);
+    return r == IDYES;
+#elif defined(__APPLE__)
+    std::string script = "display dialog \"";
+    for (const char* p = text; *p; ++p) {
+        if (*p == '"') script += '\\';
+        if (*p == '\n') script += "\\n";
+        else script += *p;
+    }
+    script += "\" with title \"";
+    script += title;
+    script += "\" buttons {\"Cancel\", \"Install\"} default button \"Install\" with icon caution";
+    std::string cmd = "osascript -e '";
+    cmd += script;
+    cmd += "' >/dev/null 2>&1";
+    return std::system(cmd.c_str()) == 0;
+#else
+    auto shEscape = [](const char* s) {
+        std::string o = "'";
+        for (const char* p = s; *p; ++p) {
+            if (*p == '\'') o += "'\\''";
+            else o += *p;
+        }
+        o += "'";
+        return o;
+    };
+    if (nexaCmdExists("zenity")) {
+        std::string cmd = "zenity --question --title=";
+        cmd += shEscape(title);
+        cmd += " --text=";
+        cmd += shEscape(text);
+        cmd += " --ok-label=Install --cancel-label=Cancel >/dev/null 2>&1";
+        return std::system(cmd.c_str()) == 0;
+    }
+    if (nexaCmdExists("kdialog")) {
+        std::string cmd = "kdialog --title ";
+        cmd += shEscape(title);
+        cmd += " --yesno ";
+        cmd += shEscape(text);
+        cmd += " >/dev/null 2>&1";
+        return std::system(cmd.c_str()) == 0;
+    }
+    if (isatty(STDIN_FILENO)) {
+        std::cerr << title << "\n" << text << " [Y/n] ";
+        std::cerr.flush();
+        std::string line;
+        if (!std::getline(std::cin, line)) return false;
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+        if (line.empty() || line == "y" || line == "Y" || line == "yes" || line == "Yes") return true;
+        return false;
+    }
+    return false;
+#endif
+}
+
+static void nexaAlert(const char* title, const char* text) {
+#ifdef _WIN32
+    using MsgBoxFn = int (WINAPI*)(HWND, LPCSTR, LPCSTR, UINT);
+    HMODULE user32 = LoadLibraryA("user32.dll");
+    if (user32) {
+        auto fn = reinterpret_cast<MsgBoxFn>(GetProcAddress(user32, "MessageBoxA"));
+        if (fn) fn(NULL, text, title, MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST);
+        FreeLibrary(user32);
+    }
+#elif defined(__APPLE__)
+    std::string script = "display dialog \"";
+    for (const char* p = text; *p; ++p) {
+        if (*p == '"') script += '\\';
+        if (*p == '\n') script += "\\n";
+        else script += *p;
+    }
+    script += "\" with title \"";
+    script += title;
+    script += "\" buttons {\"OK\"} default button \"OK\" with icon caution";
+    std::string cmd = "osascript -e '";
+    cmd += script;
+    cmd += "' >/dev/null 2>&1";
+    std::system(cmd.c_str());
+#else
+    if (nexaCmdExists("zenity")) {
+        std::string cmd = "zenity --warning --title='NexaC' --text='";
+        cmd += text;
+        cmd += "' >/dev/null 2>&1";
+        std::system(cmd.c_str());
+    } else if (nexaCmdExists("kdialog")) {
+        std::string cmd = "kdialog --error '";
+        cmd += text;
+        cmd += "' >/dev/null 2>&1";
+        std::system(cmd.c_str());
+    }
+#endif
+    std::cerr << "[Nexa] " << title << ": " << text << "\n";
+}
+
+static void nexaPrintWasmInstallHelp() {
+    std::cerr << "[Nexa] Error: No WebAssembly C++ toolchain found.\n";
+    std::cerr << "  Install Emscripten (em++) and put it on PATH, or set EMSDK:\n";
+    std::cerr << "    https://emscripten.org/docs/getting_started/downloads.html\n";
+    std::cerr << "  Or install WASI-SDK and set WASI_SDK_PATH.\n";
+    std::cerr << "  Override the compiler with NEXA_WASM_CXX.\n";
+}
+
+static bool nexaInstallEmsdk(const std::string& dest) {
+    if (dest.empty()) {
+        nexaAlert("NexaC", "Cannot install Emscripten: no user home directory.");
+        return false;
+    }
+    if (!nexaCmdExists("git")) {
+        nexaAlert("NexaC",
+            "Git is required to install the WASM toolchain.\n"
+            "Install Git from https://git-scm.com/ and try --wasm again.");
+        return false;
+    }
+
+#ifdef _WIN32
+    const std::string launcher = (std::filesystem::path(dest) / "emsdk.bat").string();
+#else
+    const std::string launcher = (std::filesystem::path(dest) / "emsdk").string();
+#endif
+    if (!nexaPathExists(launcher)) {
+        if (nexaPathExists(dest)) {
+            std::error_code ec;
+            if (!std::filesystem::is_empty(dest, ec)) {
+                nexaAlert("NexaC",
+                    ("Cannot install Emscripten: " + dest +
+                     " already exists and is not an emsdk checkout.").c_str());
+                return false;
+            }
+        }
+        std::cout << "[Nexa] Cloning emsdk into " << dest << "...\n";
+        std::cout.flush();
+        std::string clone = "git clone --depth 1 https://github.com/emscripten-core/emsdk.git \"" + dest + "\"";
+        if (std::system(clone.c_str()) != 0) {
+            nexaAlert("NexaC", "Failed to clone emsdk. Check your network and Git install.");
+            return false;
+        }
+    }
+
+    std::cout << "[Nexa] Installing Emscripten (this can take several minutes)...\n";
+    std::cout.flush();
+#ifdef _WIN32
+    std::string install = "\"" + launcher + "\" install latest";
+    std::string activate = "\"" + launcher + "\" activate latest";
+#else
+    std::string install = "\"" + launcher + "\" install latest";
+    std::string activate = "\"" + launcher + "\" activate latest";
+#endif
+    if (std::system(install.c_str()) != 0) {
+        nexaAlert("NexaC", "emsdk install latest failed. See the console output for details.");
+        return false;
+    }
+    if (std::system(activate.c_str()) != 0) {
+        nexaAlert("NexaC", "emsdk activate latest failed. See the console output for details.");
+        return false;
+    }
+    return true;
+}
+
+static bool nexaEnsureWasmTool(WasmTool& tool) {
+    tool = findWasmCxx();
+    if (tool.kind != WasmKind::None) return true;
+
+    const std::string dest = nexaDefaultEmsdkDir();
+    std::string ask =
+        "NexaC needs the Emscripten WASM toolchain (em++) to compile --wasm.\n\n"
+        "Install it now? Emscripten will be downloaded into:\n\n  ";
+    ask += dest.empty() ? std::string("(your home folder)/emsdk") : dest;
+    ask += "\n\nThis can take several minutes and requires Git.";
+
+    std::cout << "[Nexa] WASM toolchain not found.\n";
+    std::cout.flush();
+    if (!nexaAskYesNo("NexaC - Install WASM toolchain?", ask.c_str())) {
+        nexaPrintWasmInstallHelp();
+        return false;
+    }
+    if (!nexaInstallEmsdk(dest)) return false;
+
+    tool = findWasmCxx();
+    if (tool.kind == WasmKind::None) {
+        nexaAlert("NexaC",
+            "Emscripten finished installing, but em++ was still not found.\n"
+            "Open a new terminal, or set EMSDK to your emsdk folder, and retry --wasm.");
+        nexaPrintWasmInstallHelp();
+        return false;
+    }
+    std::cout << "[Nexa] WASM toolchain ready: " << tool.cxx << "\n";
+    std::cout.flush();
+    return true;
+}
+
+// Emscripten treats bare `-s` as a settings flag (not strip). Never reuse the native link line.
+static std::string nexaWasmCompileCmd(
+    const WasmTool& tool,
+    const std::string& cppPath,
+    const std::string& outPath,
+    const std::string& opt,
+    bool noExceptions,
+    bool noRtti,
+    bool linkHttp,
+    bool linkThread,
+    const std::vector<std::string>& linkInputs
+) {
+#ifdef _WIN32
+    std::string cmd = (tool.cxx.find(' ') != std::string::npos) ? ("\"" + tool.cxx + "\"") : tool.cxx;
+#else
+    std::string cmd = "\"" + tool.cxx + "\"";
+#endif
+    cmd += " -std=c++17 ";
+    cmd += opt;
+    cmd += " -DNEXA_WASM=1";
+    if (tool.kind == WasmKind::Emscripten || tool.cxx.find("clang") != std::string::npos) {
+        cmd += " -Wno-parentheses-equality -Wno-return-type-c-linkage";
+    }
+    if (noRtti) cmd += " -fno-rtti";
+    if (noExceptions) cmd += " -fno-exceptions";
+    cmd += " \"" + cppPath + "\"";
+    if (tool.kind == WasmKind::Emscripten) {
+        cmd += " -sALLOW_MEMORY_GROWTH=1 -sEXIT_RUNTIME=1";
+        if (linkHttp) cmd += " -sFETCH=1 -sASYNCIFY";
+        if (linkThread) cmd += " -pthread -sPTHREAD_POOL_SIZE=4";
+    } else {
+        cmd += " --target=wasm32-wasi";
+        if (!tool.sysroot.empty()) {
+            cmd += " --sysroot=\"";
+            cmd += tool.sysroot;
+            cmd += "\"";
+        }
+        cmd += " -ffunction-sections -fdata-sections -Wl,--gc-sections,--strip-all";
+    }
+    if (const char* nexaCxx = std::getenv("NEXA_CXXFLAGS")) {
+        cmd += " ";
+        cmd += nexaCxx;
+    }
+    for (const std::string& li : linkInputs) {
+        cmd += " ";
+        if (!li.empty() && li[0] == '-') cmd += li;
+        else cmd += "\"" + li + "\"";
+    }
+    if (const char* nexaLd = std::getenv("NEXA_LDFLAGS")) {
+        cmd += " ";
+        cmd += nexaLd;
+    }
+    cmd += " -o \"" + outPath + "\"";
+#ifndef _WIN32
+    cmd += " 2>&1";
+#endif
+    return cmd;
+}
+
+static int runWasmOutput(const std::string& path, WasmKind kind) {
+    if (kind == WasmKind::Emscripten) {
+        if (!nexaCmdExists("node")) {
+            std::cerr << "[Nexa] Error: --run --wasm needs node on PATH to execute the Emscripten loader.\n";
+            return 1;
+        }
+        return std::system(("node \"" + path + "\"").c_str());
+    }
+    if (nexaCmdExists("wasmtime")) return std::system(("wasmtime \"" + path + "\"").c_str());
+    if (nexaCmdExists("wasmer")) return std::system(("wasmer run \"" + path + "\"").c_str());
+    std::cerr << "[Nexa] Error: --run --wasm (WASI) needs wasmtime or wasmer on PATH.\n";
+    return 1;
+}
+
+static bool nexaHasExt(const std::string& path, const char* ext) {
+    std::string e = std::filesystem::path(path).extension().string();
+    for (char& c : e) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return e == ext;
+}
+
 // Build the shell command for clang/g++/gcc. Linker flags are selected per object format:
 // PE/COFF on Windows, Mach-O on macOS, and ELF on Linux.
 static std::string nexaBuildCompileCmd(
@@ -631,7 +1045,7 @@ static int printHelp(int page = 1) {
         std::cout << "    cmd: string literal \"...\" or string variable\n";
         std::cout << "    Returns: (exit code from shell, not captured in Nexa)\n\n";
         std::cout << "  os.platform()\n";
-        std::cout << "    Returns OS name: \"windows\", \"linux\", \"darwin\", or \"unknown\".\n";
+        std::cout << "    Returns OS name: \"windows\", \"linux\", \"darwin\", \"wasm\", or \"unknown\".\n";
         std::cout << "    Use: let p = os.platform();  io.println(p);\n\n";
         std::cout << "  os.getenv(name)\n";
         std::cout << "    Returns environment variable value (string) or \"\" if unset.\n\n";
@@ -796,6 +1210,8 @@ static int printHelp(int page = 1) {
     std::cout << "  --link <file>  Statically link an archive/object/lib into the executable\n";
     std::cout << "                 (repeatable; .a/.o are baked in, .so/.dll link dynamically)\n";
     std::cout << "  --win     Build Windows .exe (mingw-w64 from Linux; native on Windows)\n";
+    std::cout << "  --wasm    Build WebAssembly (em++ → .js+.wasm, or WASI .wasm).\n";
+    std::cout << "            If em++ is missing, a popup offers to install Emscripten.\n";
     std::cout << "  --no-console  Build Windows GUI .exe (no console window)\n";
     std::cout << "  --help, -h    Show this help\n";
     std::cout << "  --version, --v, -v  Show version\n";
@@ -850,6 +1266,7 @@ int main(int argc, char* argv[]) {
     bool buildShared = false;  // clang++ -> .so
     bool buildStaticLib = false;  // -> .a (Linux) / .lib (Windows) static archive
     bool buildWin = false;   // mingw -> .exe (cross-compile from Linux)
+    bool buildWasm = false;  // em++ / WASI -> .js+.wasm or .wasm
     bool noConsole = false;  // Windows GUI subsystem
     bool runAfterBuild = false;
     bool pendingSourceOut = false;
@@ -909,6 +1326,8 @@ int main(int argc, char* argv[]) {
             linkInputs.push_back(argv[++i]);
         } else if (arg == "--win" || arg == "--windows") {
             buildWin = true;
+        } else if (arg == "--wasm" || arg == "--wasm32") {
+            buildWasm = true;
         } else if (arg == "--no-console") {
             noConsole = true;
         } else if (arg == "--run" || arg == "-r") {
@@ -958,6 +1377,14 @@ int main(int argc, char* argv[]) {
         std::cerr << "[Nexa] Error: --run cannot be used with --dll, --shared, or --win\n";
         return 1;
     }
+    if (buildWasm && (buildDll || buildShared || buildWin || buildStaticLib)) {
+        std::cerr << "[Nexa] Error: --wasm cannot be combined with --dll, --shared, --win, or --static-lib\n";
+        return 1;
+    }
+    if (buildWasm && noConsole) {
+        std::cerr << "[Nexa] Error: --no-console is only valid for native Windows executables, not --wasm\n";
+        return 1;
+    }
     if (buildDll && buildShared) {
         std::cerr << "[Nexa] Error: --dll and --shared are mutually exclusive\n";
         return 1;
@@ -993,6 +1420,11 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    WasmTool wasmTool;
+    if (buildWasm && !sourceOnly) {
+        if (!nexaEnsureWasmTool(wasmTool)) return 1;
+    }
+
     std::string cppPath;
     std::string exePath;
     bool useTempExe = runAfterBuild;
@@ -1010,9 +1442,13 @@ int main(int argc, char* argv[]) {
         cppPath = (std::filesystem::temp_directory_path() / ("neaxc_" + pidStr + ".cpp")).string();
         if (useTempExe) {
             exePath = (std::filesystem::temp_directory_path() / ("neaxc_" + pidStr)).string();
+            if (buildWasm) {
+                exePath += (wasmTool.kind == WasmKind::Emscripten) ? ".js" : ".wasm";
+            } else {
 #ifdef _WIN32
-            exePath += ".exe";
+                exePath += ".exe";
 #endif
+            }
         } else if (outputExe.empty()) {
             exePath = inputPath;
             if (exePath.size() >= 4 && exePath.substr(exePath.size() - 4) == ".nxa") {
@@ -1020,7 +1456,9 @@ int main(int argc, char* argv[]) {
             } else {
                 exePath += "_out";
             }
-            if (buildDll) {
+            if (buildWasm) {
+                exePath += (wasmTool.kind == WasmKind::Emscripten) ? ".js" : ".wasm";
+            } else if (buildDll) {
                 exePath += ".dll";
             } else if (buildShared) {
 #ifdef __APPLE__
@@ -1060,10 +1498,17 @@ int main(int argc, char* argv[]) {
                 exePath += ".exe";
             }
 #ifdef _WIN32
-            else if (!buildDll && !buildShared && (exePath.size() < 4 || exePath.substr(exePath.size() - 4) != ".exe")) {
+            else if (!buildDll && !buildShared && !buildWasm && (exePath.size() < 4 || exePath.substr(exePath.size() - 4) != ".exe")) {
                 exePath += ".exe";
             }
 #endif
+            if (buildWasm) {
+                std::string ext = std::filesystem::path(exePath).extension().string();
+                for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                if (ext.empty()) {
+                    exePath += (wasmTool.kind == WasmKind::Emscripten) ? ".js" : ".wasm";
+                }
+            }
         }
     }
 
@@ -1125,9 +1570,29 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 
+        std::string wasmOut = exePath;
+        if (buildWasm && wasmTool.kind == WasmKind::Emscripten && nexaHasExt(exePath, ".wasm")) {
+            wasmOut = std::filesystem::path(exePath).replace_extension(".js").string();
+        }
+        if (buildWasm && wasmTool.kind == WasmKind::Wasi) {
+            if (modules.hasHttp() && usage.http) {
+                std::remove(cppPath.c_str());
+                std::cerr << "[Nexa] Error: std/http on WASM requires Emscripten (em++). Install the emsdk and retry --wasm.\n";
+                return 1;
+            }
+            if (modules.hasThread() && usage.thread) {
+                std::remove(cppPath.c_str());
+                std::cerr << "[Nexa] Error: std/thread on WASM requires Emscripten (em++ -pthread). Install the emsdk and retry --wasm.\n";
+                return 1;
+            }
+        }
+
         std::string cxx;
         std::string targetFlags;
-        if (buildDll) {
+        if (buildWasm) {
+            const char* kindName = (wasmTool.kind == WasmKind::Emscripten) ? "Emscripten" : "WASI";
+            std::cout << "[Nexa] Compiling with " << wasmTool.cxx << " (" << kindName << " WASM)...\n";
+        } else if (buildDll) {
 #ifdef _WIN32
             cxx = "clang++";
 #else
@@ -1192,6 +1657,41 @@ int main(int argc, char* argv[]) {
         std::string opt = (optimizeSize || buildDll || buildShared) ? "-Os" : "-O2";
         const bool linkUser32 = modules.hasOs() || modules.hasInlineCpp();
         const bool linkHttp = modules.hasHttp();
+
+        if (buildWasm) {
+            std::string cmd = nexaWasmCompileCmd(wasmTool, cppPath, wasmOut, opt, noExceptions, noRtti,
+                modules.hasHttp() && usage.http, modules.hasThread() && usage.thread, linkInputs);
+            int ret = std::system(cmd.c_str());
+            std::remove(cppPath.c_str());
+            if (ret != 0) {
+                std::cerr << "[Nexa] Compilation failed.\n";
+                return 1;
+            }
+            std::cout << "[Nexa] Build successful!\n";
+            if (wasmTool.kind == WasmKind::Emscripten) {
+                std::string side = std::filesystem::path(wasmOut).replace_extension(".wasm").string();
+                std::cout << "[Nexa] Loader: " << wasmOut << "\n";
+                std::cout << "[Nexa] Module: " << side << "\n";
+                std::cout << "[Nexa] Run: node \"" << wasmOut << "\"  (or include the .js from a page)\n";
+            } else {
+                std::cout << "[Nexa] Module: " << wasmOut << "\n";
+                std::cout << "[Nexa] Run: wasmtime \"" << wasmOut << "\"\n";
+            }
+            std::cout.flush();
+            if (runAfterBuild) {
+                int runRet = runWasmOutput(wasmOut, wasmTool.kind);
+                std::remove(wasmOut.c_str());
+                if (wasmTool.kind == WasmKind::Emscripten) {
+                    std::remove(std::filesystem::path(wasmOut).replace_extension(".wasm").string().c_str());
+                }
+#ifdef _WIN32
+                return runRet;
+#else
+                return WIFEXITED(runRet) ? WEXITSTATUS(runRet) : 127;
+#endif
+            }
+            return 0;
+        }
 
         if (buildStaticLib) {
             std::string objPath = cppPath.substr(0, cppPath.size() - 4) + ".o";

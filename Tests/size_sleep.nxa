@@ -1,7 +1,0 @@
-#include <std/io>
-#include <std/time>
-
-fn main() {
-    time.sleep(1);
-    io.println("ok");
-}

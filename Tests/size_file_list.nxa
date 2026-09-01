@@ -1,7 +1,0 @@
-#include <std/io>
-#include <std/file>
-
-fn main() {
-    let names = file.list(".");
-    io.println(len(names));
-}

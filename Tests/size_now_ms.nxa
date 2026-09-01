@@ -1,6 +1,0 @@
-#include <std/io>
-#include <std/time>
-
-fn main() {
-    io.println(time.now_ms());
-}
