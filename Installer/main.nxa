@@ -27,6 +27,73 @@ let mime_xml: string = R"(<?xml version="1.0" encoding="UTF-8"?>
 </mime-info>
 )";
 
+// Launch Services UTI helper (macOS has no freedesktop MIME database).
+let darwin_uti_plist: string = R"(<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleExecutable</key>
+  <string>NexaC</string>
+  <key>CFBundleIdentifier</key>
+  <string>org.nexa.nxa</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>Nexa Source</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>1.0</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>11.0</string>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Nexa Source File</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>org.nexa.nxa</string>
+      </array>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>nxa</string>
+      </array>
+    </dict>
+  </array>
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>org.nexa.nxa</string>
+      <key>UTTypeDescription</key>
+      <string>Nexa Source File</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.source-code</string>
+        <string>public.plain-text</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>nxa</string>
+        </array>
+      </dict>
+    </dict>
+  </array>
+</dict>
+</plist>
+)";
+
 fn Register_Nxa_Mime_Linux_User() {
     let Home = os.getenv("HOME");
     let MimeDir = Home + "/.local/share/mime/packages";
@@ -40,6 +107,29 @@ fn Register_Nxa_Mime_Linux_System() {
     os.system("sudo mkdir -p /usr/share/mime/packages");
     os.system("sudo cp /tmp/nxa-mime.xml /usr/share/mime/packages/nxa.xml");
     os.system("sudo update-mime-database /usr/share/mime 2>/dev/null");
+}
+
+fn Darwin_Lsregister(AppPath: string) {
+    os.system("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f \"" + AppPath + "\" 2>/dev/null");
+}
+
+fn Register_Nxa_Uti_Darwin_User(NexaCPath: string) {
+    let Home = os.getenv("HOME");
+    let App = Home + "/Library/Application Support/NexaC/Nexa Source.app";
+    let Contents = App + "/Contents";
+    os.system("mkdir -p \"" + Contents + "/MacOS\"");
+    file.write(Contents + "/Info.plist", darwin_uti_plist);
+    os.system("ln -sf \"" + NexaCPath + "\" \"" + Contents + "/MacOS/NexaC\"");
+    Darwin_Lsregister(App);
+}
+
+fn Register_Nxa_Uti_Darwin_System(NexaCPath: string) {
+    let App = "/Library/Application Support/NexaC/Nexa Source.app";
+    file.write("/tmp/nexa-uti-Info.plist", darwin_uti_plist);
+    os.system("sudo mkdir -p \"" + App + "/Contents/MacOS\"");
+    os.system("sudo cp /tmp/nexa-uti-Info.plist \"" + App + "/Contents/Info.plist\"");
+    os.system("sudo ln -sf \"" + NexaCPath + "\" \"" + App + "/Contents/MacOS/NexaC\"");
+    Darwin_Lsregister(App);
 }
 
 fn Register_Nxa_Registry_Windows_User(ExePath: string) {
@@ -78,6 +168,14 @@ fn Add_To_Path_User_Linux() {
     let Home = os.getenv("HOME");
     os.system("grep -q '.local/bin' " + Home + "/.bashrc 2>/dev/null || echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> " + Home + "/.bashrc");
     os.system("grep -q '.local/bin' " + Home + "/.profile 2>/dev/null || echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> " + Home + "/.profile");
+}
+
+fn Add_To_Path_User_Darwin() {
+    let Home = os.getenv("HOME");
+    os.system("touch \"" + Home + "/.zprofile\" \"" + Home + "/.zshrc\" \"" + Home + "/.bash_profile\"");
+    os.system("grep -q '.local/bin' \"" + Home + "/.zprofile\" 2>/dev/null || echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> \"" + Home + "/.zprofile\"");
+    os.system("grep -q '.local/bin' \"" + Home + "/.zshrc\" 2>/dev/null || echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> \"" + Home + "/.zshrc\"");
+    os.system("grep -q '.local/bin' \"" + Home + "/.bash_profile\" 2>/dev/null || echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> \"" + Home + "/.bash_profile\"");
 }
 
 fn Add_To_Path_Windows_User(InstallDir: string) {
@@ -158,10 +256,10 @@ fn Install_System_Wide() {
         os.system("sudo cp \"" + Src + "\" /usr/local/bin/NexaC");
         os.system("sudo ln -sf NexaC /usr/local/bin/nexac");
         os.system("sudo ln -sf NexaC /usr/local/bin/nexapkg");
-        Register_Nxa_Mime_Linux_System();
+        Register_Nxa_Uti_Darwin_System("/usr/local/bin/NexaC");
         io.println("Installing Xcode Command Line Tools (clang)...");
         Install_Clang_Darwin();
-        io.println("NexaC installed to /usr/local/bin (in PATH). .nxa files recognized as Nexa Source File.");
+        io.println("NexaC installed to /usr/local/bin (in PATH). .nxa registered as Nexa Source File (Launch Services UTI).");
         }
         else {
             io.println("Error: Cannot find NexaC. Run installer from folder containing NexaC.");
@@ -230,11 +328,11 @@ fn Install_User() {
         os.system("cp \"" + Src + "\" ~/.local/bin/NexaC");
         os.system("ln -sf NexaC ~/.local/bin/nexac");
         os.system("ln -sf NexaC ~/.local/bin/nexapkg");
-        Register_Nxa_Mime_Linux_User();
+        Register_Nxa_Uti_Darwin_User(os.getenv("HOME") + "/.local/bin/NexaC");
         io.println("Installing Xcode Command Line Tools (clang)...");
         Install_Clang_Darwin();
-        Add_To_Path_User_Linux();
-        io.println("NexaC installed to ~/.local/bin. Added to PATH. Restart terminal or run: source ~/.bashrc");
+        Add_To_Path_User_Darwin();
+        io.println("NexaC installed to ~/.local/bin. Added ~/.local/bin to PATH in ~/.zprofile, ~/.zshrc, and ~/.bash_profile. Restart the terminal.");
         }
         else {
             io.println("Error: Cannot find NexaC. Run installer from folder containing NexaC.");
