@@ -86,6 +86,7 @@ enum class TokenType {
     BitOr,
     BitXor,
     BitNot,
+    Question,
     InlineCpp,
     InlineCppBlock,
     Eof
@@ -179,6 +180,9 @@ public:
                 pos_++;
             } else if (c == ',') {
                 tokens.push_back({TokenType::Comma, ",", line_});
+                pos_++;
+            } else if (c == '?') {
+                tokens.push_back({TokenType::Question, "?", line_});
                 pos_++;
             } else if (c == ':') {
                 tokens.push_back({TokenType::Colon, ":", line_});

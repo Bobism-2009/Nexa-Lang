@@ -29,6 +29,13 @@ LOGICAL OPERATORS
     if (!(x > 0)) { ... }
     if (a || b) { ... }
 
+TERNARY
+  cond ? thenExpr : elseExpr
+  Right-associative. Lower precedence than ||.
+  Works in assignments, arguments, and parenthesized sub-expressions:
+    let label: string = enabled ? "on" : "off";
+    io.println("state: " + (enabled ? "Enabled" : "Disabled"));
+
 SWITCH
   switch (expr) {
     case 0:

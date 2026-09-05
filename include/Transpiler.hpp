@@ -1202,6 +1202,16 @@ private:
                 return "int";
             case AstNode::Type::CondNot:
                 return "bool";
+            case AstNode::Type::ExprTernary:
+                if (e.children.size() >= 3) {
+                    std::string t1 = inferExprNexaType(e.children[1]);
+                    std::string t2 = inferExprNexaType(e.children[2]);
+                    if (t1 == "string" || t2 == "string") return "string";
+                    if (t1 == "float" || t2 == "float") return "float";
+                    if (t1 == "bool" && t2 == "bool") return "bool";
+                    return t1;
+                }
+                return "int";
             default:
                 return "int";
         }
@@ -1581,6 +1591,9 @@ private:
         if (e.type == AstNode::Type::ExprAdd && e.children.size() >= 2) {
             return exprProducesString(e.children[0]) || exprProducesString(e.children[1]);
         }
+        if (e.type == AstNode::Type::ExprTernary && e.children.size() >= 3) {
+            return exprProducesString(e.children[1]) || exprProducesString(e.children[2]);
+        }
         return false;
     }
 
@@ -1649,6 +1662,9 @@ private:
         }
         if (e.type == AstNode::Type::ExprAdd && e.children.size() >= 2) {
             return exprIsString(e.children[0], varIsString) || exprIsString(e.children[1], varIsString);
+        }
+        if (e.type == AstNode::Type::ExprTernary && e.children.size() >= 3) {
+            return exprIsString(e.children[1], varIsString) || exprIsString(e.children[2], varIsString);
         }
         return false;
     }
@@ -2777,6 +2793,8 @@ private:
             }
             case AstNode::Type::CondNot:
                 return "!(" + emitCond(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
+            case AstNode::Type::ExprTernary:
+                return emitExpr(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::ExprBoolLiteral:
                 return c.value;
             case AstNode::Type::StrMethod:
@@ -3284,6 +3302,16 @@ private:
             }
             case AstNode::Type::CondNot:
                 return "(!" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
+            case AstNode::Type::ExprTernary: {
+                std::string cond = emitCond(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                std::string t = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                std::string f = emitExpr(e.children[2], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                if (exprIsString(e, vIsStr) || exprProducesString(e)) {
+                    if (e.children[1].type == AstNode::Type::ExprStringLiteral) t = "std::string(" + t + ")";
+                    if (e.children[2].type == AstNode::Type::ExprStringLiteral) f = "std::string(" + f + ")";
+                }
+                return "((" + cond + ") ? (" + t + ") : (" + f + "))";
+            }
             case AstNode::Type::CondAnd:
             case AstNode::Type::CondOr:
             case AstNode::Type::CondEq:

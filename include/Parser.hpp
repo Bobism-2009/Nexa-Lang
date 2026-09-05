@@ -73,6 +73,7 @@ struct AstNode {
                       ExprSizeof,
                       CondEq, CondNe, CondLt, CondGt, CondLe, CondGe,
                       CondAnd, CondOr, CondNot,
+                      ExprTernary,
                       ExprStringLiteral,
                       ExprLen,
                       ExprTrim,
@@ -134,6 +135,18 @@ public:
           packagePaths_(packagePaths) {}
 
     std::vector<AstNode> parse() {
+        try {
+            return parseProgram();
+        } catch (const std::runtime_error& e) {
+            const std::string msg = e.what();
+            if (!currentFilePath_.empty() && msg.find(currentFilePath_) == std::string::npos) {
+                throw std::runtime_error(currentFilePath_ + ": " + msg);
+            }
+            throw;
+        }
+    }
+
+    std::vector<AstNode> parseProgram() {
         std::vector<AstNode> ast;
         while (pos_ < tokens_.size()) {
             const Token& t = peek();
@@ -203,6 +216,9 @@ private:
         }
         if (e.type == AstNode::Type::ExprAdd && e.children.size() >= 2) {
             return exprProducesString(e.children[0]) || exprProducesString(e.children[1]);
+        }
+        if (e.type == AstNode::Type::ExprTernary && e.children.size() >= 3) {
+            return exprProducesString(e.children[1]) || exprProducesString(e.children[2]);
         }
         return false;
     }
@@ -1383,6 +1399,17 @@ private:
         return left;
     }
 
+    AstNode parseTernary() {
+        AstNode cond = parseLogicalOr();
+        if (!match(TokenType::Question)) return cond;
+        AstNode thenExpr = parseTernary();
+        if (!match(TokenType::Colon)) {
+            throw std::runtime_error("Expected ':' in ternary expression at line " + std::to_string(peek().line));
+        }
+        AstNode elseExpr = parseTernary();
+        return {AstNode::Type::ExprTernary, "", {std::move(cond), std::move(thenExpr), std::move(elseExpr)}};
+    }
+
     AstNode parseLogicalAnd() {
         AstNode left = parseLogicalNot();
         while (match(TokenType::And)) {
@@ -1411,7 +1438,7 @@ private:
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
         }
-        AstNode cond = parseLogicalOr();
+        AstNode cond = parseTernary();
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
         }
@@ -1654,7 +1681,7 @@ private:
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
         }
-        AstNode cond = parseLogicalOr();
+        AstNode cond = parseTernary();
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
         }
@@ -1940,7 +1967,13 @@ private:
         if (peek().type == TokenType::Identifier && peek().value == "io" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
             std::string method = tokens_[pos_ + 2].value;
-            if (method == "readln") return parseIoReadlnExpr();
+            if (method == "readln") {
+                AstNode n = parseIoReadlnExpr();
+                if (peek().type == TokenType::Dot || peek().type == TokenType::Arrow) {
+                    return parseDotChain(std::move(n));
+                }
+                return n;
+            }
             if (method == "read_int") return parseIoReadIntExpr();
             if (method == "getline") return parseIoGetlineExpr();
             if (method == "to_int") return parseIoToIntExpr();
@@ -2048,9 +2081,9 @@ private:
             return cur;
         }
         if (match(TokenType::LParen)) {
-            // Use the full top-level (parseLogicalOr) so parenthesized boolean expressions
-            // such as (a && b) parse correctly even when used in arithmetic contexts.
-            AstNode e = parseLogicalOr();
+            // Use the full top-level (parseTernary) so parenthesized boolean expressions
+            // such as (a && b) and (flag ? "a" : "b") parse in arithmetic contexts.
+            AstNode e = parseTernary();
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
             }
@@ -3625,9 +3658,8 @@ private:
             }
         } else {
             // Any expression (calls, unary ! / ~ / -, string/array/io/file/..., parens, etc.).
-            // parseLogicalOr() also covers comparisons and arithmetic, so bool initializers
-            // like `let pressed: bool = hover && mouse_down(MOUSE_LEFT);` parse correctly.
-            node.children.push_back(parseLogicalOr());
+            // parseTernary() also covers comparisons, arithmetic, and `cond ? a : b`.
+            node.children.push_back(parseTernary());
             AstNode& b = node.children.back();
             if (b.type == AstNode::Type::IoReadln) {
                 node.initFromReadln = true;
