@@ -187,7 +187,9 @@ Nexa Standard Modules
 
 #include <std/gfx>
   Pixel window (Win32, Cocoa, X11, or Emscripten canvas). No extra libraries on Windows.
-  macOS links Cocoa automatically. Linux needs libx11 (NexaC passes -lX11).
+  macOS links Cocoa automatically. Linux executables embed X11 statically
+  (need libx11-dev / libxcb1-dev on the *build* machine). The binary does not
+  need libX11.so at runtime. libc stays dynamic (present on every Linux).
   gfx.open(title, w, h[, scale]) - create a w*h framebuffer scaled up (default scale 12)
   gfx.close()                    - destroy the window
   gfx.poll()                     - process events (call each frame)

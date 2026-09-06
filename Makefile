@@ -13,7 +13,7 @@ install-deps:
 		echo "Optional for Windows cross-compile: sudo apt install -y mingw-w64"; \
 	fi
 
-NexaC: NexaC.cpp include/Lexer.hpp include/Parser.hpp include/Transpiler.hpp include/Modules.hpp include/nexapkg.hpp
+NexaC: NexaC.cpp include/Lexer.hpp include/Parser.hpp include/Transpiler.hpp include/Modules.hpp include/nexapkg.hpp include/PlatformEmit.hpp
 	$(CXX) $(CXXFLAGS) NexaC.cpp -o NexaC
 
 install: NexaC

@@ -326,6 +326,79 @@ static bool nexaPathExists(const std::string& p) {
     return !p.empty() && std::filesystem::exists(p);
 }
 
+#if !defined(_WIN32) && !defined(__APPLE__)
+static std::string nexaPopenTrim(const std::string& cmd) {
+    FILE* f = popen(cmd.c_str(), "r");
+    if (!f) return "";
+    char buf[1024];
+    std::string s;
+    if (fgets(buf, sizeof(buf), f)) s = buf;
+    pclose(f);
+    while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ' || s.back() == '\t')) {
+        s.pop_back();
+    }
+    return s;
+}
+
+static void nexaLinuxCollectLibDirs(std::vector<std::string>& dirs) {
+    auto add = [&](const std::string& d) {
+        if (d.empty()) return;
+        for (const auto& e : dirs) {
+            if (e == d) return;
+        }
+        if (nexaPathExists(d)) dirs.push_back(d);
+    };
+    std::string ma = nexaPopenTrim("gcc -print-multiarch 2>/dev/null");
+    if (ma.empty()) ma = nexaPopenTrim("clang -print-multiarch 2>/dev/null");
+    if (!ma.empty()) {
+        add("/usr/lib/" + ma);
+        add("/lib/" + ma);
+    }
+    add(nexaPopenTrim("pkg-config --variable=libdir x11 2>/dev/null"));
+    add("/usr/lib/x86_64-linux-gnu");
+    add("/usr/lib/aarch64-linux-gnu");
+    add("/usr/lib/arm-linux-gnueabihf");
+    add("/usr/lib64");
+    add("/usr/lib");
+    add("/usr/local/lib");
+}
+
+static std::string nexaFindStaticLib(const std::string& name, const std::vector<std::string>& dirs) {
+    const std::string fn = "lib" + name + ".a";
+    for (const auto& d : dirs) {
+        std::string p = d + "/" + fn;
+        if (nexaPathExists(p)) return p;
+    }
+    return "";
+}
+
+// Embed X11 into a Linux ELF executable (portable; no libX11.so on the target).
+// libc/libpthread/libdl stay dynamic — those are on every Linux.
+static std::string nexaLinuxGfxEmbedFlags() {
+    std::vector<std::string> dirs;
+    nexaLinuxCollectLibDirs(dirs);
+    const char* names[] = {"X11", "xcb", "Xau", "Xdmcp"};
+    std::string out;
+    bool allFound = true;
+    for (const char* n : names) {
+        std::string p = nexaFindStaticLib(n, dirs);
+        if (p.empty()) {
+            allFound = false;
+            break;
+        }
+        out += " \"";
+        out += p;
+        out += "\"";
+    }
+    if (!allFound) {
+        // Linker still prefers .a when -Bstatic is set, if the archives are on -L paths.
+        out = " -Wl,-Bstatic -lX11 -lxcb -lXau -lXdmcp -Wl,-Bdynamic";
+    }
+    out += " -lpthread -ldl";
+    return out;
+}
+#endif
+
 static WasmTool findWasmCxx() {
     WasmTool w;
     if (const char* env = std::getenv("NEXA_WASM_CXX")) {
@@ -865,7 +938,13 @@ static std::string nexaBuildCompileCmd(
     }
 #else
     if (linkGfx) {
-        cmd += " -lX11";
+        const bool elfExe = !buildWin && !buildDll && !buildShared;
+        if (elfExe) {
+            // Bake X11 into the binary so the program runs without libX11.so.
+            cmd += nexaLinuxGfxEmbedFlags();
+        } else {
+            cmd += " -lX11";
+        }
     }
 #endif
     // Extra link inputs (--link): static archives (.a/.lib) are baked in, objects (.o) embedded,
@@ -1569,7 +1648,10 @@ int main(int argc, char* argv[]) {
         std::cout << "[Nexa] Transpiling...\n";
 
         bool isLib = buildDll || buildShared || buildStaticLib;
-        nexa::Transpiler transpiler(ast, modules, preserveNames || isLib, isLib);  // library: preserve + export C names
+        nexa::CppTarget cppTarget = nexa::hostCppTarget();
+        if (buildWasm) cppTarget = nexa::CppTarget::Wasm;
+        else if (buildWin) cppTarget = nexa::CppTarget::Windows;
+        nexa::Transpiler transpiler(ast, modules, preserveNames || isLib, isLib, cppTarget);  // library: preserve + export C names
         std::string cpp = transpiler.transpile();
 
         // Decide which C++ machinery the generated code can safely omit. Exceptions/unwind tables

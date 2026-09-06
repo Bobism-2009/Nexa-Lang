@@ -2,6 +2,7 @@
 
 #include "Parser.hpp"
 #include "Modules.hpp"
+#include "PlatformEmit.hpp"
 #include <string>
 #include <sstream>
 #include <cstdio>
@@ -51,8 +52,9 @@ inline void walkAstForInlineCppIncludes(const AstNode& n, std::vector<std::strin
 // Converts Nexa AST to C++ source code
 class Transpiler {
 public:
-    Transpiler(const std::vector<AstNode>& ast, const Modules& modules, bool preserveNames = false, bool buildDll = false)
-        : ast_(ast), modules_(modules), preserveNames_(preserveNames), buildDll_(buildDll) {}
+    Transpiler(const std::vector<AstNode>& ast, const Modules& modules, bool preserveNames = false, bool buildDll = false,
+              CppTarget target = hostCppTarget())
+        : ast_(ast), modules_(modules), preserveNames_(preserveNames), buildDll_(buildDll), target_(target) {}
 
     // Valid after transpile(): which C++ features the generated code actually uses.
     // Lets the build step drop exception/RTTI machinery when nothing needs it.
@@ -60,6 +62,10 @@ public:
 
     std::string transpile() {
         std::ostringstream out;
+
+        if (target_ == CppTarget::Wasm) {
+            out << "#define NEXA_WASM 1\n";
+        }
 
         Modules::CppUsage& cppUsage = cppUsage_;
         cppUsage = Modules::CppUsage{};
@@ -834,7 +840,7 @@ public:
             }
             filtered << key << "\n";
         }
-        return filtered.str();
+        return stripInactivePlatformGuards(filtered.str(), target_);
     }
 
 private:
@@ -842,6 +848,7 @@ private:
     const Modules& modules_;
     bool preserveNames_;
     bool buildDll_;
+    CppTarget target_;
     Modules::CppUsage cppUsage_;
     // While emitting a function or main body: how bare `return;` / value returns are interpreted
     enum class EmitFnRet { Main, IntFn, VoidFn };

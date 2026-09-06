@@ -42,7 +42,8 @@ endif
 SRCDIR = ..
 SOURCES = $(SRCDIR)/NexaC.cpp
 HEADERS = $(SRCDIR)/include/Lexer.hpp $(SRCDIR)/include/Parser.hpp \
-          $(SRCDIR)/include/Transpiler.hpp $(SRCDIR)/include/Modules.hpp
+          $(SRCDIR)/include/Transpiler.hpp $(SRCDIR)/include/Modules.hpp \
+          $(SRCDIR)/include/PlatformEmit.hpp
 
 NexaC$(SUFFIX): $(SOURCES) $(HEADERS)
 	$(CXX) $(CXXFLAGS) $(SOURCES) -o NexaC$(SUFFIX) || \

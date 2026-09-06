@@ -16,7 +16,9 @@ Current compiler version string: **0.1.10** (`NexaC --version`).
 ## Requirements
 
 - **Windows:** [LLVM/Clang](https://releases.llvm.org/) or **MinGW-w64** (`clang++` / `g++`) on your `PATH`.
-- **Linux:** `clang++` and normal build tools.
+- **Linux:** `clang++` and normal build tools. Executables embed libstdc++, libgcc, and
+  (for `std/gfx`) static X11. Install `libx11-dev` to *build* a gfx program; the
+  resulting binary does not need `libX11.so`. libc stays dynamic.
 - **macOS:** Apple Command Line Tools (`xcode-select --install`); see [`MACOS.md`](MACOS.md).
 
 The generated C++ uses the standard library (`std::string`, `std::vector`, threads, chrono, etc.) and platform APIs where modules need them (e.g. `std/os` on Windows).
