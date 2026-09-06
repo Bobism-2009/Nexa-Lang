@@ -31,7 +31,7 @@ struct AstNode {
                       DllLoad, DllCall,
                       FileRead, FileWrite, FileAppend, FileExists, FileMkdir, FileCall,
                       RandomInt, RandomSeed,
-                      MathCall, CryptoCall, HttpCall,
+                      MathCall, CryptoCall, HttpCall, GfxCall,
                       StrMethod,
                       TimeSleep, TimeSeconds, TimeMilliseconds, TimeNowMs,
                       ThreadSpawn, ThreadJoin, ThreadWorker, ThreadRun, ThreadWorkerJoin,
@@ -952,6 +952,8 @@ private:
                 stmts.push_back(parseTimeCall());
             } else if (t.type == TokenType::Identifier && t.value == "random") {
                 stmts.push_back(parseRandomCall());
+            } else if (t.type == TokenType::Identifier && t.value == "gfx") {
+                stmts.push_back(parseGfxCall(true));
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
                        (tokens_[pos_ + 1].type == TokenType::Dot || tokens_[pos_ + 1].type == TokenType::Arrow)) {
                 const Token& id2 = tokens_[pos_ + 2];
@@ -1614,6 +1616,8 @@ private:
                 stmts.push_back(parseTimeCall());
             } else if (t.type == TokenType::Identifier && t.value == "random") {
                 stmts.push_back(parseRandomCall());
+            } else if (t.type == TokenType::Identifier && t.value == "gfx") {
+                stmts.push_back(parseGfxCall(true));
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
                        (tokens_[pos_ + 1].type == TokenType::Dot || tokens_[pos_ + 1].type == TokenType::Arrow)) {
                 const Token& id2 = tokens_[pos_ + 2];
@@ -2019,6 +2023,10 @@ private:
         if (peek().type == TokenType::Identifier && peek().value == "crypto" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
             return parseCryptoCall();
+        }
+        if (peek().type == TokenType::Identifier && peek().value == "gfx" && pos_ + 2 < tokens_.size() &&
+            tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
+            return parseGfxCall(false);
         }
         if (peek().type == TokenType::Identifier && peek().value == "http" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
@@ -3283,6 +3291,62 @@ private:
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
         }
         if (!match(TokenType::Semicolon)) {
+            throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
+        }
+        return node;
+    }
+
+    AstNode parseGfxCall(bool requireSemicolon) {
+        size_t line = peek().line;
+        if (!modules_.hasGfx()) {
+            throw std::runtime_error("gfx.* requires #include <std/gfx> at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "gfx") {
+            throw std::runtime_error("Expected 'gfx' at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        const Token& methodTok = peek();
+        if (methodTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected gfx method at line " + std::to_string(methodTok.line));
+        }
+        std::string method = methodTok.value;
+        advance();
+        int argc = -1;
+        int argcMax = -1;
+        if (method == "open") { argc = 3; argcMax = 4; }
+        else if (method == "close" || method == "poll" || method == "present" || method == "closed") argc = 0;
+        else if (method == "key") argc = 1;
+        else if (method == "clear") argc = 3;
+        else if (method == "plot") argc = 5;
+        else {
+            throw std::runtime_error("Unknown gfx method 'gfx." + method +
+                "' at line " + std::to_string(methodTok.line) +
+                " (use open, close, poll, closed, clear, plot, present, key)");
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after gfx." + method + " at line " + std::to_string(peek().line));
+        }
+        AstNode node{AstNode::Type::GfxCall, method, {}};
+        if (peek().type != TokenType::RParen) {
+            node.children.push_back(parseExpression());
+            while (match(TokenType::Comma)) {
+                node.children.push_back(parseExpression());
+            }
+        }
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' after gfx." + method + "(...) at line " + std::to_string(peek().line));
+        }
+        int got = (int)node.children.size();
+        if (argcMax >= 0) {
+            if (got < argc || got > argcMax) {
+                throw std::runtime_error("gfx.open(title, w, h[, scale]) at line " + std::to_string(line));
+            }
+        } else if (got != argc) {
+            throw std::runtime_error("gfx." + method + " argument count at line " + std::to_string(line));
+        }
+        if (requireSemicolon && !match(TokenType::Semicolon)) {
             throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
         }
         return node;

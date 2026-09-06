@@ -41,3 +41,10 @@ Linux-only static runtime and GNU linker flags are not passed to Apple Clang.
 
 `std/http` links against the macOS CoreFoundation and CFNetwork frameworks and
 supports HTTP and HTTPS through the operating system networking stack.
+
+## Graphics (`std/gfx`)
+
+`#include <std/gfx>` opens a Cocoa window. NexaC compiles the generated code as
+Objective-C++ (`-x objective-c++ -fobjc-arc`) and links `-framework Cocoa`
+and `-framework ApplicationServices`. `gfx.key` uses the HID key state
+(`CGEventSourceKeyState`).

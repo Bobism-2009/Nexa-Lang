@@ -1,0 +1,25 @@
+#include <std/gfx>
+#include <std/io>
+
+fn main() {
+    if (gfx.open("nexa-gfx-test", 8, 8, 2) != 1) {
+        io.println("fail open");
+        return 1;
+    }
+    gfx.clear(10, 20, 30);
+    gfx.plot(2, 3, 255, 0, 0);
+    gfx.poll();
+    gfx.present();
+    if (gfx.key("escape") != 0 && gfx.key("escape") != 1) {
+        io.println("fail key");
+        gfx.close();
+        return 2;
+    }
+    gfx.close();
+    if (gfx.closed() != 1) {
+        io.println("fail closed");
+        return 3;
+    }
+    io.println("ok");
+    return 0;
+}

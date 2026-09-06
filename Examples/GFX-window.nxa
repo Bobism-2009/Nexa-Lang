@@ -1,0 +1,16 @@
+#include <std/gfx>
+#include <std/time>
+
+fn main() {
+    gfx.open("NexaC GFX Window", 50, 50, 12);
+
+    while (gfx.closed() != 1) {
+        gfx.poll();
+        gfx.clear(0, 0, 0);
+        if (gfx.key("escape") == 1) {
+            gfx.close();
+        }
+        gfx.present();
+        time.sleep(16);
+    }
+}

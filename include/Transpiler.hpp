@@ -159,6 +159,7 @@ public:
                     break;
                 }
                 case AstNode::Type::HttpCall: cppUsage.http = true; break;
+                case AstNode::Type::GfxCall: cppUsage.gfx = true; break;
                 case AstNode::Type::StrMethod:
                     if (!tryFoldStrMethodToExpr(n, nullptr)) cppUsage.str = true;
                     break;
@@ -1150,6 +1151,9 @@ private:
                 return "string";
             case AstNode::Type::HttpCall:
                 return "string";
+            case AstNode::Type::GfxCall:
+                if (e.value == "closed" || e.value == "key" || e.value == "open") return "int";
+                return "void";
             case AstNode::Type::StrMethod:
                 if (strMethodReturnsString(e.value)) return "string";
                 if (strMethodReturnsBool(e.value)) return "bool";
@@ -2079,6 +2083,8 @@ private:
                     << emitFilePathCStr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ");\n";
             } else if (child.type == AstNode::Type::FileCall) {
                 out << indent << "(void)(" << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ");\n";
+            } else if (child.type == AstNode::Type::GfxCall) {
+                out << indent << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::RandomSeed) {
                 std::string seedExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 out << indent << "__nexa_random_seed(" << seedExpr << ");\n";
@@ -3075,6 +3081,24 @@ private:
                     return "__nexa_http_post(" + url + ", " + body + ")";
                 }
                 throw std::runtime_error("Internal: unknown http method '" + fn + "'");
+            }
+            case AstNode::Type::GfxCall: {
+                const std::string& fn = e.value;
+                auto a = [&](size_t i) {
+                    return emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                };
+                if (fn == "open") {
+                    std::string sc = e.children.size() >= 4 ? a(3) : "12";
+                    return "__nexa_gfx_open(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + sc + ")";
+                }
+                if (fn == "close") return "__nexa_gfx_close()";
+                if (fn == "poll") return "__nexa_gfx_poll()";
+                if (fn == "present") return "__nexa_gfx_present()";
+                if (fn == "closed") return "__nexa_gfx_closed()";
+                if (fn == "key") return "__nexa_gfx_key(" + a(0) + ")";
+                if (fn == "clear") return "__nexa_gfx_clear(" + a(0) + ", " + a(1) + ", " + a(2) + ")";
+                if (fn == "plot") return "__nexa_gfx_plot(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + a(4) + ")";
+                throw std::runtime_error("Internal: unknown gfx method '" + fn + "'");
             }
             case AstNode::Type::StrMethod: {
                 if (auto folded = tryFoldStrMethodToExpr(e, varIsString)) return *folded;

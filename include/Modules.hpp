@@ -6,6 +6,7 @@
 #include "CryptoRuntime.hpp"
 #include "FileRuntime.hpp"
 #include "HttpRuntime.hpp"
+#include "GfxRuntime.hpp"
 
 namespace nexa {
 
@@ -77,6 +78,7 @@ public:
         bool threadWorker = false;
         bool dll = false;
         bool exceptions = false;
+        bool gfx = false;
     };
 
     void enable(const std::string& path) {
@@ -125,6 +127,10 @@ public:
 
     bool hasThread() const {
         return enabled_.count("std/thread") > 0;
+    }
+
+    bool hasGfx() const {
+        return enabled_.count("std/gfx") > 0;
     }
 
     std::string getCppIncludes(const CppUsage& usage) const {
@@ -1368,6 +1374,9 @@ public:
         }
         if (hasHttp() && usage.http) {
             out += httpRuntimeCpp();
+        }
+        if (hasGfx() && usage.gfx) {
+            out += gfxRuntimeCpp();
         }
         // Core string methods (value.upper(), value.split(...), ...) need no #include from the user.
         if (usage.str) {

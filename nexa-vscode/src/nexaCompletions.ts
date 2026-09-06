@@ -60,6 +60,7 @@ export const STD_INCLUDES = [
   "std/http",
   "std/time",
   "std/thread",
+  "std/gfx",
   "std/inline",
 ];
 
@@ -183,6 +184,16 @@ export const MODULE_MEMBERS: Record<string, { name: string; detail: string }[]> 
   dll: [
     { name: "load", detail: "dll.load(path)" },
     { name: "call", detail: "dll.call(handle, name, args...)" },
+  ],
+  gfx: [
+    { name: "open", detail: "gfx.open(title, w, h[, scale]) — pixel window" },
+    { name: "close", detail: "gfx.close()" },
+    { name: "poll", detail: "gfx.poll() — process window events" },
+    { name: "closed", detail: "gfx.closed() — 1 if the window was closed" },
+    { name: "clear", detail: "gfx.clear(r, g, b)" },
+    { name: "plot", detail: "gfx.plot(x, y, r, g, b)" },
+    { name: "present", detail: "gfx.present() — blit framebuffer" },
+    { name: "key", detail: "gfx.key(name) — 1 if that key is down" },
   ],
 };
 

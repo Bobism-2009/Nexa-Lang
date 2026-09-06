@@ -735,6 +735,7 @@ static std::string nexaBuildCompileCmd(
     bool noConsole,
     bool linkUser32,
     bool linkHttp,
+    bool linkGfx,
     bool noExceptions,
     bool noRtti,
     const std::vector<std::string>& linkInputs
@@ -745,6 +746,10 @@ static std::string nexaBuildCompileCmd(
     std::string cmd = cxx + targetFlags;
 #else
     std::string cmd = "\"" + cxx + "\"" + targetFlags;
+#endif
+#ifdef __APPLE__
+    // Cocoa backend is Objective-C++; -x must precede the generated .cpp path.
+    if (linkGfx) cmd += " -x objective-c++ -fobjc-arc";
 #endif
     cmd += " \"" + cppPath + "\" " + opt;
     if (cxx.find("clang") != std::string::npos) {
@@ -836,13 +841,16 @@ static std::string nexaBuildCompileCmd(
 #endif
     }
 #ifdef _WIN32
-    if (linkUser32) {
+    if (linkUser32 || linkGfx) {
         // std/os (MessageBoxA, GetConsoleWindow, …) and some inline_cpp; lld does not always pull it implicitly.
         cmd += " -luser32";
         // std/os audio (os.set_volume/get_volume/mute) uses the Core Audio COM API.
         cmd += " -lole32";
         // std/os open uses ShellExecuteA.
         cmd += " -lshell32";
+    }
+    if (linkGfx) {
+        cmd += " -lgdi32";
     }
     if (linkHttp) {
         // std/http uses WinHTTP (OS API; HTTPS via Schannel).
@@ -851,6 +859,13 @@ static std::string nexaBuildCompileCmd(
 #elif defined(__APPLE__)
     if (linkHttp) {
         cmd += " -framework CoreFoundation -framework CFNetwork";
+    }
+    if (linkGfx) {
+        cmd += " -framework Cocoa -framework ApplicationServices";
+    }
+#else
+    if (linkGfx) {
+        cmd += " -lX11";
     }
 #endif
     // Extra link inputs (--link): static archives (.a/.lib) are baked in, objects (.o) embedded,
@@ -1592,6 +1607,11 @@ int main(int argc, char* argv[]) {
                 std::cerr << "[Nexa] Error: std/thread on WASM requires Emscripten (em++ -pthread). Install the emsdk and retry --wasm.\n";
                 return 1;
             }
+            if (modules.hasGfx() && usage.gfx) {
+                std::remove(cppPath.c_str());
+                std::cerr << "[Nexa] Error: std/gfx on WASM requires Emscripten (em++). Install the emsdk and retry --wasm.\n";
+                return 1;
+            }
         }
 
         std::string cxx;
@@ -1664,6 +1684,7 @@ int main(int argc, char* argv[]) {
         std::string opt = (optimizeSize || buildDll || buildShared) ? "-Os" : "-O2";
         const bool linkUser32 = modules.hasOs() || modules.hasInlineCpp();
         const bool linkHttp = modules.hasHttp();
+        const bool linkGfx = modules.hasGfx() && usage.gfx;
 
         if (buildWasm) {
             std::string cmd = nexaWasmCompileCmd(wasmTool, cppPath, wasmOut, opt, noExceptions, noRtti,
@@ -1679,7 +1700,23 @@ int main(int argc, char* argv[]) {
                 std::string side = std::filesystem::path(wasmOut).replace_extension(".wasm").string();
                 std::cout << "[Nexa] Loader: " << wasmOut << "\n";
                 std::cout << "[Nexa] Module: " << side << "\n";
-                std::cout << "[Nexa] Run: node \"" << wasmOut << "\"  (or include the .js from a page)\n";
+                if (modules.hasGfx() && usage.gfx) {
+                    std::filesystem::path jsPath(wasmOut);
+                    std::filesystem::path htmlPath = jsPath;
+                    htmlPath.replace_extension(".html");
+                    std::string jsName = jsPath.filename().string();
+                    std::ofstream html(htmlPath);
+                    html << "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>Nexa</title>\n";
+                    html << "<style>html,body{margin:0;height:100%;background:#111;display:flex;align-items:center;justify-content:center}</style>\n";
+                    html << "</head><body>\n<canvas id=\"canvas\" oncontextmenu=\"event.preventDefault()\"></canvas>\n";
+                    html << "<script>var Module={canvas:document.getElementById('canvas')};</script>\n";
+                    html << "<script src=\"" << jsName << "\"></script>\n</body></html>\n";
+                    html.close();
+                    std::cout << "[Nexa] Page: " << htmlPath.string() << "\n";
+                    std::cout << "[Nexa] Open the .html in a browser for the graphics window.\n";
+                } else {
+                    std::cout << "[Nexa] Run: node \"" << wasmOut << "\"  (or include the .js from a page)\n";
+                }
             } else {
                 std::cout << "[Nexa] Module: " << wasmOut << "\n";
                 std::cout << "[Nexa] Run: wasmtime \"" << wasmOut << "\"\n";
@@ -1716,7 +1753,7 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 
-        std::string cmd = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, noExceptions, noRtti, linkInputs);
+        std::string cmd = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkGfx, noExceptions, noRtti, linkInputs);
         int ret = std::system(cmd.c_str());
 
         if (ret != 0) {
@@ -1745,7 +1782,7 @@ int main(int argc, char* argv[]) {
                 cxx = fallback;
                 targetFlags = "";
                 std::cout.flush();
-                std::string cmd2 = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, noExceptions, noRtti, linkInputs);
+                std::string cmd2 = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkGfx, noExceptions, noRtti, linkInputs);
                 ret = std::system(cmd2.c_str());
             }
         }
