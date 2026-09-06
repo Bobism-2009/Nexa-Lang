@@ -38,6 +38,8 @@ public:
         bool osBrightness = false;
         bool osClipboard = false;
         bool osDesktop = false;
+        bool osLoad = false;
+        bool osPlay = false;
         bool osSpawn = false;
         bool osTempDir = false;
         bool osArch = false;
@@ -187,7 +189,7 @@ public:
         if (hasOs() && (usage.osSystem || usage.osExec || usage.osGetenv || usage.osLock ||
                         usage.osShutdown || usage.osReboot || usage.osSuspend ||
                         usage.osLogout || usage.osAudio || usage.osBrightness ||
-                        usage.osClipboard || usage.osDesktop || usage.osExit ||
+                        usage.osClipboard || usage.osDesktop || usage.osPlay || usage.osExit ||
                         usage.osSetenv || usage.osHome || usage.osUsername || usage.osSpawn ||
                         usage.osTempDir || usage.osWhich || usage.osInfo)) {
             out += "#include <cstdlib>\n";
@@ -197,7 +199,8 @@ public:
         }
         if (hasOs() && (usage.osGetenv || usage.osExec || usage.osPlatform || usage.osExeDir || usage.osMessageBox || usage.osGrepKeys ||
                         usage.osHostname || usage.osUsername || usage.osHome || usage.osSetenv || usage.osSpawn ||
-                        usage.osTempDir || usage.osArch || usage.osWhich || usage.osCwd || usage.osInfo)) {
+                        usage.osTempDir || usage.osArch || usage.osWhich || usage.osCwd || usage.osInfo ||
+                        usage.osLoad || usage.osPlay)) {
             out += "#include <string>\n";
         }
         if (hasOs() && usage.osSpawn) {
@@ -1130,7 +1133,19 @@ public:
             out += "  return out;\n";
             out += "}\n";
         }
-        if (hasOs() && (usage.osDesktop || usage.osType)) {
+        if (hasOs() && usage.osLoad) {
+            out += "#include <cstdio>\n";
+            out += "#include <string>\n";
+            out += "static std::string __nexa_os_load(const std::string& path) {\n";
+            out += "  FILE* f = std::fopen(path.c_str(), \"rb\");\n";
+            out += "  if (!f) return std::string();\n";
+            out += "  std::string out; char buf[4096]; size_t n;\n";
+            out += "  while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) out.append(buf, n);\n";
+            out += "  std::fclose(f);\n";
+            out += "  return out;\n";
+            out += "}\n";
+        }
+        if (hasOs() && (usage.osDesktop || usage.osType || usage.osPlay)) {
             out += "#include <string>\n";
             out += "#ifdef _WIN32\n";
             out += "#include <windows.h>\n";
@@ -1233,6 +1248,53 @@ public:
             out += "  if (__nexa_spawn(a2) == 0) return;\n";
             out += "  const char* a3[] = {\"gvfs-open\", target.c_str(), NULL};\n";
             out += "  (void)__nexa_spawn(a3);\n";
+            out += "#endif\n";
+            out += "}\n";
+        }
+        if (hasOs() && usage.osPlay) {
+            out += "static int __nexa_os_play(const std::string& path) {\n";
+            out += "  if (path.empty()) return 0;\n";
+            out += "#ifdef NEXA_WASM\n";
+            out += "  (void)path; return 0;\n";
+            out += "#elif defined(_WIN32)\n";
+            out += "  HMODULE mm = LoadLibraryA(\"winmm.dll\");\n";
+            out += "  if (!mm) return 0;\n";
+            out += "  typedef unsigned long (__stdcall *MciFn)(const char*, char*, unsigned int, void*);\n";
+            out += "  MciFn mci = (MciFn)GetProcAddress(mm, \"mciSendStringA\");\n";
+            out += "  int ok = 0;\n";
+            out += "  if (mci) {\n";
+            out += "    std::string q; q.reserve(path.size());\n";
+            out += "    for (char c : path) { if (c == '\"') q += '\\\\'; q += c; }\n";
+            out += "    mci(\"close nexa_audio\", NULL, 0, NULL);\n";
+            out += "    std::string openCmd = \"open \\\"\" + q + \"\\\" alias nexa_audio wait\";\n";
+            out += "    if (mci(openCmd.c_str(), NULL, 0, NULL) == 0) {\n";
+            out += "      if (mci(\"play nexa_audio wait\", NULL, 0, NULL) == 0) ok = 1;\n";
+            out += "      mci(\"close nexa_audio\", NULL, 0, NULL);\n";
+            out += "    }\n";
+            out += "  }\n";
+            out += "  if (!ok) {\n";
+            out += "    typedef int (__stdcall *PsFn)(const char*, void*, unsigned long);\n";
+            out += "    PsFn ps = (PsFn)GetProcAddress(mm, \"PlaySoundA\");\n";
+            out += "    if (ps) ok = ps(path.c_str(), NULL, 0x00020002ul) ? 1 : 0;\n";
+            out += "  }\n";
+            out += "  FreeLibrary(mm);\n";
+            out += "  return ok;\n";
+            out += "#elif defined(__APPLE__)\n";
+            out += "  const char* argv[] = {\"afplay\", path.c_str(), NULL};\n";
+            out += "  return __nexa_spawn(argv) == 0 ? 1 : 0;\n";
+            out += "#else\n";
+            out += "  const char* a1[] = {\"paplay\", path.c_str(), NULL};\n";
+            out += "  if (__nexa_spawn(a1) == 0) return 1;\n";
+            out += "  const char* a2[] = {\"pw-play\", path.c_str(), NULL};\n";
+            out += "  if (__nexa_spawn(a2) == 0) return 1;\n";
+            out += "  const char* a3[] = {\"aplay\", path.c_str(), NULL};\n";
+            out += "  if (__nexa_spawn(a3) == 0) return 1;\n";
+            out += "  const char* a4[] = {\"ffplay\", \"-nodisp\", \"-autoexit\", \"-loglevel\", \"quiet\", path.c_str(), NULL};\n";
+            out += "  if (__nexa_spawn(a4) == 0) return 1;\n";
+            out += "  const char* a5[] = {\"mpv\", \"--no-video\", \"--really-quiet\", path.c_str(), NULL};\n";
+            out += "  if (__nexa_spawn(a5) == 0) return 1;\n";
+            out += "  const char* a6[] = {\"mpg123\", \"-q\", path.c_str(), NULL};\n";
+            out += "  return __nexa_spawn(a6) == 0 ? 1 : 0;\n";
             out += "#endif\n";
             out += "}\n";
         }
@@ -1456,6 +1518,8 @@ public:
         all.osBrightness = true;
         all.osClipboard = true;
         all.osDesktop = true;
+        all.osLoad = true;
+        all.osPlay = true;
         all.osSpawn = true;
         all.osTempDir = all.osArch = all.osCpuCount = all.osWhich = all.osCwd = all.osInfo = true;
         all.osExit = all.osHostname = all.osUsername = all.osHome = all.osSetenv = true;

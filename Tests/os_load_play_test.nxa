@@ -1,0 +1,32 @@
+#include <std/file>
+#include <std/io>
+#include <std/os>
+
+fn main() {
+    let dir: string = os.tempdir();
+    let path: string = file.join(dir, "_nexa_os_load.bin");
+    file.write(path, "hello-bin-ok");
+    let got: string = os.load(path);
+    if (got != "hello-bin-ok") {
+        io.println("fail load content");
+        return 1;
+    }
+    if (len(got) != 12) {
+        io.println("fail load len");
+        return 2;
+    }
+    if (os.load(file.join(dir, "_nexa_os_load_missing_xyz.bin")) != "") {
+        io.println("fail missing");
+        return 3;
+    }
+    if (os.play("") != 0) {
+        io.println("fail play empty");
+        return 4;
+    }
+    if (os.play(file.join(dir, "_nexa_os_play_missing_xyz.wav")) != 0) {
+        io.println("fail play missing");
+        return 5;
+    }
+    io.println("ok");
+    return 0;
+}

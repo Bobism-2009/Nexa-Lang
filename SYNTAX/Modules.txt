@@ -93,6 +93,11 @@ Nexa Standard Modules
                       macOS uses pbcopy/pbpaste; Windows uses clip/Get-Clipboard.
   os.notify(title, message) - Show a desktop notification
   os.open(target)        - Open a file, folder, or URL with the default app
+  os.load(path)          - Read an entire file as binary, returns string ("" if missing)
+  os.play(path)          - Play an audio file and wait until it finishes (int, 1/0)
+                      Windows: MCI (wav/mp3/wma/...), then PlaySound for WAV.
+                      macOS: afplay. Linux: paplay, pw-play, aplay, ffplay, mpv, mpg123.
+                      Returns 0 if the file cannot be played (or on wasm).
                       Linux notify: notify-send, then zenity, then kdialog.
                       Linux open: xdg-open, then gio, then gvfs-open.
                       macOS uses osascript/open; Windows uses a tray balloon /

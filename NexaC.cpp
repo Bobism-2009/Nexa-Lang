@@ -1058,6 +1058,13 @@ static int printHelp(int page = 1) {
         std::cout << "  os.keypressed()\n";
         std::cout << "    Non-blocking: returns 1 if a key is waiting, 0 otherwise (Windows).\n";
         std::cout << "    Use: if (os.keypressed()) { let key = os.grepkeys(); }\n\n";
+        std::cout << "  os.load(path)\n";
+        std::cout << "    Reads an entire file as binary. Returns string, or \"\" if missing.\n";
+        std::cout << "    Use: let data = os.load(\"song.wav\");\n\n";
+        std::cout << "  os.play(path)\n";
+        std::cout << "    Plays an audio file and waits until it finishes. Returns 1 on success, 0 on failure.\n";
+        std::cout << "    Windows: MCI then PlaySound. macOS: afplay. Linux: paplay/aplay/ffplay/mpv.\n";
+        std::cout << "    Use: os.play(\"song.mp3\");\n\n";
         std::cout << "Variables used:\n";
         std::cout << "  - string: command to run, e.g. let cmd = \"ls -la\";\n\n";
         std::cout << "Example:\n";

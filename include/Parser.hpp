@@ -24,7 +24,7 @@ struct AstNode {
                       OsSetBrightness, OsGetBrightness,
                       OsClipSet, OsClipGet,
                       OsType,
-                      OsNotify, OsOpen, OsSpawn, OsWait, OsKill,
+                      OsNotify, OsOpen, OsLoad, OsPlay, OsSpawn, OsWait, OsKill,
                       OsTempDir, OsArch, OsCpuCount, OsWhich, OsUnsetenv, OsExecutable, OsCwd, OsChdir,
                       OsInfo,
                       OsExit, OsHostname, OsUsername, OsHome, OsSetenv,
@@ -203,7 +203,7 @@ private:
             return m == "shell" || m == "newline" || m == "path_sep" || m == "lang"
                 || m == "config_dir" || m == "cache_dir" || m == "desktop" || m == "endian";
         }
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsExecutable || e.type == AstNode::Type::OsTempDir || e.type == AstNode::Type::OsArch || e.type == AstNode::Type::OsWhich || e.type == AstNode::Type::OsCwd || e.type == AstNode::Type::OsHostname || e.type == AstNode::Type::OsUsername || e.type == AstNode::Type::OsHome || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall || e.type == AstNode::Type::HttpCall) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsExecutable || e.type == AstNode::Type::OsTempDir || e.type == AstNode::Type::OsArch || e.type == AstNode::Type::OsWhich || e.type == AstNode::Type::OsCwd || e.type == AstNode::Type::OsHostname || e.type == AstNode::Type::OsUsername || e.type == AstNode::Type::OsHome || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::OsLoad || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall || e.type == AstNode::Type::HttpCall) return true;
         if (e.type == AstNode::Type::ExprCast && e.value == "string") return true;
         if (e.type == AstNode::Type::FileCall) {
             const std::string& m = e.value;
@@ -1995,19 +1995,9 @@ private:
             if (method == "get_volume") return parseOsGetVolume();
             if (method == "get_brightness") return parseOsGetBrightness();
             if (method == "clip_get") return parseOsClipGet();
-            if (method == "spawn" || method == "spawn_wait" || method == "spawn_at" ||
-                method == "wait" || method == "kill" ||
-                method == "tempdir" || method == "tmpdir" || method == "arch" ||
-                method == "cpu_count" || method == "nproc" || method == "which" ||
-                method == "unsetenv" || method == "executable" || method == "exe" ||
-                method == "cwd" || method == "chdir" ||
-                method == "total_mem" || method == "avail_mem" || method == "page_size" ||
-                method == "uptime" || method == "shell" || method == "newline" ||
-                method == "path_sep" || method == "lang" || method == "isatty" ||
-                method == "environ" || method == "env" || method == "config_dir" ||
-                method == "cache_dir" || method == "desktop" || method == "endian") {
-                return parseOsCall(false);
-            }
+            // Any other os.* expression (load, play, spawn, cwd, ...) goes through parseOsCall.
+            // Do not fall through to identifier + parseDotChain — that treats os.load as a string method.
+            return parseOsCall(false);
         }
         if (peek().type == TokenType::Identifier && (peek().value == "getprocessid" || peek().value == "getpid") &&
             pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::LParen) {
@@ -2284,6 +2274,17 @@ private:
             }
             finishOsCall(requireSemicolon, peek().line);
             return {AstNode::Type::OsOpen, "", {arg}};
+        }
+        if (method == "load" || method == "play") {
+            if (!match(TokenType::LParen)) {
+                throw std::runtime_error("Expected '(' after os." + method + " at line " + std::to_string(peek().line));
+            }
+            AstNode arg = parseExpression();
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' after os." + method + "(...) at line " + std::to_string(peek().line));
+            }
+            finishOsCall(requireSemicolon, peek().line);
+            return {method == "load" ? AstNode::Type::OsLoad : AstNode::Type::OsPlay, "", {arg}};
         }
         if (method == "spawn" || method == "spawn_wait" || method == "spawn_at") {
             if (!match(TokenType::LParen)) {

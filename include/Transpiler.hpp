@@ -101,6 +101,8 @@ public:
                 case AstNode::Type::OsType: cppUsage.osType = true; break;
                 case AstNode::Type::OsNotify:
                 case AstNode::Type::OsOpen: cppUsage.osDesktop = true; break;
+                case AstNode::Type::OsLoad: cppUsage.osLoad = true; break;
+                case AstNode::Type::OsPlay: cppUsage.osPlay = true; break;
                 case AstNode::Type::OsSpawn:
                 case AstNode::Type::OsWait:
                 case AstNode::Type::OsKill: cppUsage.osSpawn = true; break;
@@ -1160,6 +1162,7 @@ private:
             case AstNode::Type::OsCpuCount: return "int";
             case AstNode::Type::OsChdir: return "int";
             case AstNode::Type::OsGetVolume: return "int";
+            case AstNode::Type::OsPlay: return "int";
             case AstNode::Type::OsGetBrightness: return "int";
             case AstNode::Type::OsHostname:
             case AstNode::Type::OsUsername:
@@ -1173,6 +1176,7 @@ private:
             case AstNode::Type::OsCwd:
             case AstNode::Type::OsGetenv:
             case AstNode::Type::OsExec:
+            case AstNode::Type::OsLoad:
                 return "string";
             case AstNode::Type::OsInfo: {
                 const std::string& m = e.value;
@@ -1581,7 +1585,7 @@ private:
             return m == "shell" || m == "newline" || m == "path_sep" || m == "lang"
                 || m == "config_dir" || m == "cache_dir" || m == "desktop" || m == "endian";
         }
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsExecutable || e.type == AstNode::Type::OsTempDir || e.type == AstNode::Type::OsArch || e.type == AstNode::Type::OsWhich || e.type == AstNode::Type::OsCwd || e.type == AstNode::Type::OsHostname || e.type == AstNode::Type::OsUsername || e.type == AstNode::Type::OsHome || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall || e.type == AstNode::Type::HttpCall) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsExecutable || e.type == AstNode::Type::OsTempDir || e.type == AstNode::Type::OsArch || e.type == AstNode::Type::OsWhich || e.type == AstNode::Type::OsCwd || e.type == AstNode::Type::OsHostname || e.type == AstNode::Type::OsUsername || e.type == AstNode::Type::OsHome || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::OsLoad || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall || e.type == AstNode::Type::HttpCall) return true;
         if (e.type == AstNode::Type::ExprCast && e.value == "string") return true;
         if (e.type == AstNode::Type::FileCall) {
             const std::string& m = e.value;
@@ -1651,7 +1655,7 @@ private:
             return m == "shell" || m == "newline" || m == "path_sep" || m == "lang"
                 || m == "config_dir" || m == "cache_dir" || m == "desktop" || m == "endian";
         }
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsExecutable || e.type == AstNode::Type::OsTempDir || e.type == AstNode::Type::OsArch || e.type == AstNode::Type::OsWhich || e.type == AstNode::Type::OsCwd || e.type == AstNode::Type::OsHostname || e.type == AstNode::Type::OsUsername || e.type == AstNode::Type::OsHome || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall || e.type == AstNode::Type::HttpCall) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsExecutable || e.type == AstNode::Type::OsTempDir || e.type == AstNode::Type::OsArch || e.type == AstNode::Type::OsWhich || e.type == AstNode::Type::OsCwd || e.type == AstNode::Type::OsHostname || e.type == AstNode::Type::OsUsername || e.type == AstNode::Type::OsHome || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::OsLoad || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall || e.type == AstNode::Type::HttpCall) return true;
         if (e.type == AstNode::Type::FileCall) {
             const std::string& m = e.value;
             return m == "cwd" || m == "abspath" || m == "join" || m == "dirname" || m == "basename" || m == "extension";
@@ -2214,6 +2218,12 @@ private:
                 std::string e = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 std::string arg = exprIsString(child.children[0], varIsString) ? ("std::string(" + e + ")") : ("std::to_string(" + e + ")");
                 out << indent << "__nexa_os_open(" << arg << ");\n";
+            } else if (child.type == AstNode::Type::OsLoad) {
+                std::string p = emitOsStringArg(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                out << indent << "(void)__nexa_os_load(" << p << ");\n";
+            } else if (child.type == AstNode::Type::OsPlay) {
+                std::string p = emitOsStringArg(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                out << indent << "(void)__nexa_os_play(" << p << ");\n";
             } else if (child.type == AstNode::Type::OsSpawn) {
                 out << indent << "(void)" << emitOsSpawnCall(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::OsWait) {
@@ -2908,6 +2918,10 @@ private:
                 return "__nexa_os_get_brightness()";
             case AstNode::Type::OsClipGet:
                 return "__nexa_os_clip_get()";
+            case AstNode::Type::OsLoad:
+                return "__nexa_os_load(" + emitOsStringArg(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
+            case AstNode::Type::OsPlay:
+                return "__nexa_os_play(" + emitOsStringArg(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::IoReadln: {
                 return "([]{ fflush(stdout); char __b[4096]; if (fgets(__b, sizeof(__b), stdin)) __b[strcspn(__b, \"\\n\")] = 0; return std::string(__b); }())";
             }

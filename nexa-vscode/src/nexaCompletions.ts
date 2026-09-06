@@ -118,6 +118,8 @@ export const MODULE_MEMBERS: Record<string, { name: string; detail: string }[]> 
     { name: "clip_set", detail: "os.clip_set(text)" },
     { name: "notify", detail: "os.notify(title, message)" },
     { name: "open", detail: "os.open(target)" },
+    { name: "load", detail: "os.load(path) — read entire file as binary string" },
+    { name: "play", detail: "os.play(path) — play an audio file (blocks until done)" },
     { name: "lock", detail: "os.lock() — lock the session" },
     { name: "set_volume", detail: "os.set_volume(percent)" },
     { name: "get_volume", detail: "os.get_volume()" },
