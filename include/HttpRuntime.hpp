@@ -4,10 +4,10 @@
 
 namespace nexa {
 
-// OS-API HTTP client (no third-party libs).
+// OS-API HTTP client (no third-party libs bundled).
 // Windows: WinHTTP (HTTP + HTTPS via Schannel)
 // macOS:   CFNetwork (HTTP + HTTPS)
-// Linux:   POSIX sockets (HTTP only; HTTPS returns an error string)
+// Linux:   POSIX sockets; HTTPS via system libssl.so (dlopen, not linked)
 inline std::string httpRuntimeCpp() {
     return R"NEXA_HTTP(
 #include <string>
@@ -134,6 +134,80 @@ static std::string __nexa_http_request(const std::string& method, const std::str
 #include <sys/socket.h>
 #include <netdb.h>
 #include <unistd.h>
+#include <dlfcn.h>
+struct __nexa_SslApi {
+  void* lib;
+  int (*OPENSSL_init_ssl)(unsigned long, const void*);
+  int (*SSL_library_init)();
+  const void* (*TLS_client_method)();
+  void* (*SSL_CTX_new)(const void*);
+  void (*SSL_CTX_free)(void*);
+  int (*SSL_CTX_set_default_verify_paths)(void*);
+  void* (*SSL_new)(void*);
+  int (*SSL_set_fd)(void*, int);
+  int (*SSL_connect)(void*);
+  int (*SSL_write)(void*, const void*, int);
+  int (*SSL_read)(void*, void*, int);
+  int (*SSL_shutdown)(void*);
+  void (*SSL_free)(void*);
+  void (*SSL_set_verify)(void*, int, void*);
+  long (*SSL_get_verify_result)(const void*);
+  long (*SSL_ctrl)(void*, int, long, void*);
+  int (*SSL_set1_host)(void*, const char*);
+};
+static int __nexa_ssl_sym(void* lib, void** out, const char* name) {
+  *out = dlsym(lib, name);
+  return *out != nullptr;
+}
+static const __nexa_SslApi* __nexa_ssl_api() {
+  static __nexa_SslApi a;
+  static int once = 0;
+  if (once) return a.lib ? &a : nullptr;
+  once = 1;
+  const char* crypto[] = { "libcrypto.so.3", "libcrypto.so.1.1", "libcrypto.so", nullptr };
+  for (int i = 0; crypto[i]; i++) {
+    if (dlopen(crypto[i], RTLD_LAZY | RTLD_GLOBAL)) break;
+  }
+  const char* ssl[] = { "libssl.so.3", "libssl.so.1.1", "libssl.so", nullptr };
+  for (int i = 0; ssl[i]; i++) {
+    a.lib = dlopen(ssl[i], RTLD_LAZY | RTLD_LOCAL);
+    if (a.lib) break;
+  }
+  if (!a.lib) return nullptr;
+  void* p = nullptr;
+  if (__nexa_ssl_sym(a.lib, &p, "OPENSSL_init_ssl")) a.OPENSSL_init_ssl = (int (*)(unsigned long, const void*))p;
+  if (__nexa_ssl_sym(a.lib, &p, "SSL_library_init")) a.SSL_library_init = (int (*)())p;
+  if (!__nexa_ssl_sym(a.lib, &p, "TLS_client_method")) {
+    if (!__nexa_ssl_sym(a.lib, &p, "SSLv23_client_method")) { dlclose(a.lib); a.lib = nullptr; return nullptr; }
+  }
+  a.TLS_client_method = (const void* (*)())p;
+  if (!__nexa_ssl_sym(a.lib, &p, "SSL_CTX_new")) { dlclose(a.lib); a.lib = nullptr; return nullptr; }
+  a.SSL_CTX_new = (void* (*)(const void*))p;
+  if (!__nexa_ssl_sym(a.lib, &p, "SSL_CTX_free")) { dlclose(a.lib); a.lib = nullptr; return nullptr; }
+  a.SSL_CTX_free = (void (*)(void*))p;
+  if (__nexa_ssl_sym(a.lib, &p, "SSL_CTX_set_default_verify_paths"))
+    a.SSL_CTX_set_default_verify_paths = (int (*)(void*))p;
+  if (!__nexa_ssl_sym(a.lib, &p, "SSL_new")) { dlclose(a.lib); a.lib = nullptr; return nullptr; }
+  a.SSL_new = (void* (*)(void*))p;
+  if (!__nexa_ssl_sym(a.lib, &p, "SSL_set_fd")) { dlclose(a.lib); a.lib = nullptr; return nullptr; }
+  a.SSL_set_fd = (int (*)(void*, int))p;
+  if (!__nexa_ssl_sym(a.lib, &p, "SSL_connect")) { dlclose(a.lib); a.lib = nullptr; return nullptr; }
+  a.SSL_connect = (int (*)(void*))p;
+  if (!__nexa_ssl_sym(a.lib, &p, "SSL_write")) { dlclose(a.lib); a.lib = nullptr; return nullptr; }
+  a.SSL_write = (int (*)(void*, const void*, int))p;
+  if (!__nexa_ssl_sym(a.lib, &p, "SSL_read")) { dlclose(a.lib); a.lib = nullptr; return nullptr; }
+  a.SSL_read = (int (*)(void*, void*, int))p;
+  if (__nexa_ssl_sym(a.lib, &p, "SSL_shutdown")) a.SSL_shutdown = (int (*)(void*))p;
+  if (!__nexa_ssl_sym(a.lib, &p, "SSL_free")) { dlclose(a.lib); a.lib = nullptr; return nullptr; }
+  a.SSL_free = (void (*)(void*))p;
+  if (__nexa_ssl_sym(a.lib, &p, "SSL_set_verify")) a.SSL_set_verify = (void (*)(void*, int, void*))p;
+  if (__nexa_ssl_sym(a.lib, &p, "SSL_get_verify_result")) a.SSL_get_verify_result = (long (*)(const void*))p;
+  if (__nexa_ssl_sym(a.lib, &p, "SSL_ctrl")) a.SSL_ctrl = (long (*)(void*, int, long, void*))p;
+  if (__nexa_ssl_sym(a.lib, &p, "SSL_set1_host")) a.SSL_set1_host = (int (*)(void*, const char*))p;
+  if (a.OPENSSL_init_ssl) a.OPENSSL_init_ssl(0, nullptr);
+  else if (a.SSL_library_init) a.SSL_library_init();
+  return &a;
+}
 static bool __nexa_http_parse_url(const std::string& url, std::string& scheme, std::string& host, int& port, std::string& path) {
   scheme.clear(); host.clear(); path = "/"; port = 80;
   size_t sp = url.find("://");
@@ -143,23 +217,39 @@ static bool __nexa_http_parse_url(const std::string& url, std::string& scheme, s
   size_t slash = url.find('/', start);
   std::string hostport = (slash == std::string::npos) ? url.substr(start) : url.substr(start, slash - start);
   if (slash != std::string::npos) path = url.substr(slash);
-  size_t colon = hostport.find(':');
-  if (colon == std::string::npos) {
-    host = hostport;
-    port = (scheme == "https") ? 443 : 80;
-  } else {
+  size_t colon = hostport.rfind(':');
+  size_t bracket = hostport.find(']');
+  if (colon != std::string::npos && (hostport[0] != '[' || (bracket != std::string::npos && colon > bracket))) {
     host = hostport.substr(0, colon);
     port = std::atoi(hostport.c_str() + colon + 1);
+  } else {
+    host = hostport;
+    port = (scheme == "https") ? 443 : 80;
   }
+  if (host.size() >= 2 && host[0] == '[' && host.back() == ']') host = host.substr(1, host.size() - 2);
   return !host.empty();
+}
+static int __nexa_http_io_write(int fd, void* ssl, const __nexa_SslApi* api, const char* p, size_t n) {
+  while (n > 0) {
+    int chunk = n > 0x7fffffff ? 0x7fffffff : (int)n;
+    int k = ssl ? api->SSL_write(ssl, p, chunk) : (int)send(fd, p, (size_t)chunk, 0);
+    if (k <= 0) return 0;
+    p += k;
+    n -= (size_t)k;
+  }
+  return 1;
 }
 static std::string __nexa_http_request(const std::string& method, const std::string& url, const std::string& body) {
   std::string scheme, host, path; int port = 80;
   if (!__nexa_http_parse_url(url, scheme, host, port, path)) return std::string();
-  if (scheme == "https") {
-    return std::string("HTTPS requires OS TLS (available on Windows/macOS); use http:// on Linux or switch platforms");
+  int tls = 0;
+  if (scheme == "https") tls = 1;
+  else if (scheme != "http") return std::string();
+  const __nexa_SslApi* api = nullptr;
+  if (tls) {
+    api = __nexa_ssl_api();
+    if (!api) return std::string();
   }
-  if (scheme != "http") return std::string();
   addrinfo hints; memset(&hints, 0, sizeof(hints));
   hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_STREAM;
   addrinfo* res = nullptr;
@@ -174,25 +264,64 @@ static std::string __nexa_http_request(const std::string& method, const std::str
   }
   freeaddrinfo(res);
   if (fd < 0) return std::string();
-  std::string req = method + " " + path + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n";
+  void* ctx = nullptr;
+  void* ssl = nullptr;
+  if (tls) {
+    const void* meth = api->TLS_client_method();
+    ctx = meth ? api->SSL_CTX_new(meth) : nullptr;
+    if (!ctx) { close(fd); return std::string(); }
+    if (api->SSL_CTX_set_default_verify_paths) api->SSL_CTX_set_default_verify_paths(ctx);
+    ssl = api->SSL_new(ctx);
+    if (!ssl) { api->SSL_CTX_free(ctx); close(fd); return std::string(); }
+    if (api->SSL_set_verify) api->SSL_set_verify(ssl, 1, nullptr);
+    if (api->SSL_set1_host) api->SSL_set1_host(ssl, host.c_str());
+    if (api->SSL_ctrl) api->SSL_ctrl(ssl, 55, 0, (void*)host.c_str());
+    if (!api->SSL_set_fd(ssl, fd) || api->SSL_connect(ssl) != 1) {
+      api->SSL_free(ssl);
+      api->SSL_CTX_free(ctx);
+      close(fd);
+      return std::string();
+    }
+    if (api->SSL_get_verify_result && api->SSL_get_verify_result(ssl) != 0) {
+      if (api->SSL_shutdown) api->SSL_shutdown(ssl);
+      api->SSL_free(ssl);
+      api->SSL_CTX_free(ctx);
+      close(fd);
+      return std::string();
+    }
+  }
+  std::string hostHdr = host;
+  if (!((scheme == "http" && port == 80) || (scheme == "https" && port == 443))) {
+    hostHdr += ":";
+    hostHdr += std::to_string(port);
+  }
+  std::string req = method + " " + path + " HTTP/1.1\r\nHost: " + hostHdr + "\r\nConnection: close\r\n";
   if (!body.empty()) {
     req += "Content-Length: " + std::to_string(body.size()) + "\r\n";
     req += "Content-Type: application/octet-stream\r\n";
   }
   req += "\r\n";
   req += body;
-  size_t sent = 0;
-  while (sent < req.size()) {
-    ssize_t n = send(fd, req.data() + sent, req.size() - sent, 0);
-    if (n <= 0) { close(fd); return std::string(); }
-    sent += (size_t)n;
+  if (!__nexa_http_io_write(fd, ssl, api, req.data(), req.size())) {
+    if (ssl) {
+      if (api->SSL_shutdown) api->SSL_shutdown(ssl);
+      api->SSL_free(ssl);
+      api->SSL_CTX_free(ctx);
+    }
+    close(fd);
+    return std::string();
   }
   std::string raw;
   char buf[4096];
   for (;;) {
-    ssize_t n = recv(fd, buf, sizeof(buf), 0);
+    int n = ssl ? api->SSL_read(ssl, buf, (int)sizeof(buf)) : (int)recv(fd, buf, sizeof(buf), 0);
     if (n <= 0) break;
     raw.append(buf, (size_t)n);
+  }
+  if (ssl) {
+    if (api->SSL_shutdown) api->SSL_shutdown(ssl);
+    api->SSL_free(ssl);
+    api->SSL_CTX_free(ctx);
   }
   close(fd);
   size_t hdr = raw.find("\r\n\r\n");

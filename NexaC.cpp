@@ -938,6 +938,10 @@ static std::string nexaBuildCompileCmd(
         cmd += " -framework Cocoa -framework ApplicationServices -framework ImageIO";
     }
 #else
+    if (linkHttp) {
+        // std/http HTTPS dlopens system libssl; dlopen lives in libdl.
+        cmd += " -ldl";
+    }
     if (linkGfx) {
         const bool elfExe = !buildWin && !buildDll && !buildShared;
         if (elfExe) {

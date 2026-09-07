@@ -8,7 +8,7 @@ namespace nexa {
 inline std::string fileWriteRuntimeCpp() {
     return R"NEXA_FILE_WR(
 static void __nexa_file_write(const char* __path, const char* __data, size_t __n, int __append) {
-  FILE* __f = std::fopen(__path, __append ? "a" : "w");
+  FILE* __f = std::fopen(__path, __append ? "ab" : "wb");
   if (!__f) return;
   if (__n && __data) std::fwrite(__data, 1, __n, __f);
   std::fclose(__f);
@@ -20,7 +20,7 @@ static void __nexa_file_write(const char* __path, const char* __data, size_t __n
 inline std::string fileReadRuntimeCpp() {
     return R"NEXA_FILE_RD(
 static std::string __nexa_file_read(const char* __path) {
-  FILE* __f = std::fopen(__path, "r");
+  FILE* __f = std::fopen(__path, "rb");
   if (!__f) return std::string();
   std::string __out;
   char __buf[4096];

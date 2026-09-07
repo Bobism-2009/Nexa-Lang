@@ -75,8 +75,36 @@ FUNCTIONS
   - In main(), `return;` is compiled as `return 0;`
   - Use --preserve-names to keep names in output (default: mangle)
 
-EXTERN (C FFI — core)
-  Declare C library functions with typed signatures; no body, no #include required.
+C / C++ HEADERS (call functions from a header — no extern fn, no inline_cpp)
+  #include <string.h>
+  #include <cmath>
+  #include "mylib.h"
+  #include "mylib.hpp"
+
+  After a C or C++ header include (.h / .hpp / .hxx / .hh, or <cstring>, <iostream>,
+  <vector>, …), call those functions like Nexa functions. The header’s declarations
+  are used. Nexa does not emit extern "C" (C++ names stay C++-mangled).
+
+    let n = strlen("hello");
+    printf("n=%d\n", n);
+    let a = cpp_add(2, 3);
+    let b = ns::mul(3, 4);
+    let s = std::abs(-4);
+    let box: ns::Box = ns::make_box(7);
+    box.set(9);
+    io.println(box.get());
+    io.println(box.v);
+
+  Namespaces use `::` (same as C++). Methods and fields on header types use `.` / `->`.
+  Give header types an explicit type: let x: ns::Box = …  or  let p: Point = …
+  Nexa strings passed into C/C++ become .c_str(). String literals are already C strings.
+  char* APIs (getenv, …) become a Nexa string (null → "").
+  Unknown names still compile — Clang type-checks against the header.
+  Link extra libraries with --link (libc / libstdc++ are already linked).
+  A Nexa `fn` with the same name wins over the header symbol.
+
+EXTERN (C FFI — when there is no header)
+  Declare a C symbol yourself; no body.
   extern fn strlen(s: *char): int;
   extern fn printf(fmt: *char, ...): int;
   extern fn free(p: *void): void;
@@ -85,7 +113,8 @@ EXTERN (C FFI — core)
   - Nexa string variables are passed as .c_str() automatically when the param is *char.
   - Explicit return type required (: int, : void, : *T, etc.). No default parameters.
   - Emits extern "C" ...; and calls the symbol by its real C name.
-  - Pair with #include <cstring> or a C header if needed for your toolchain;
+  - Prefer #include <foo.h> when you have a header; use extern fn for --link archives
+    that ship no .h, or for a symbol the header does not declare.
   - DLL builds (--dll): exported fn definitions already use extern "C"; extern fn is for
     importing C APIs, not exporting your own code.
 
@@ -161,7 +190,8 @@ HEAP ALLOCATION (no GC — manual, C-style)
     delete[] pts;
   Cannot new void. new *T allocates a pointer-sized cell (type **T).
 
-  String escapes: \n \t \r \\ \" \xHH (hex ASCII, e.g. \x41 = 'A')
+  String escapes: \n \t \r \\ \" \xHH (exactly two hex digits, e.g. \x41 = 'A', \x00 = NUL)
+  \xHH keeps the raw byte; high bytes (\\x80..\\xFF) survive into the binary and file I/O.
   Raw strings: R"()" or R"delim(...)delim" - no escapes, can contain newlines and "
 
   Initializers:

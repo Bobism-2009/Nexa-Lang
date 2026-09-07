@@ -256,6 +256,32 @@ private:
         return ext == ".h" || ext == ".hpp" || ext == ".hxx" || ext == ".hh";
     }
 
+    // C/C++ std headers with no extension: #include <cstring>
+    static bool isBareCppStdHeader(const std::string& path) {
+        if (path.empty() || path.find('/') != std::string::npos || path.find('\\') != std::string::npos) {
+            return false;
+        }
+        if (path.find('.') != std::string::npos) return false;
+        static const char* kNames[] = {
+            "cstring", "cstdio", "cstdlib", "cmath", "ctime", "cstdint", "cstddef",
+            "cctype", "cerrno", "climits", "cfloat", "csignal", "csetjmp", "cstdarg",
+            "cstdbool", "cwchar", "cwctype", "cuchar", "cassert", "cinttypes",
+            "iostream", "iomanip", "fstream", "sstream", "string", "string_view",
+            "vector", "array", "deque", "list", "map", "set", "unordered_map",
+            "unordered_set", "queue", "stack", "algorithm", "functional", "memory",
+            "utility", "optional", "variant", "any", "tuple", "iterator", "numeric",
+            "limits", "type_traits", "chrono", "thread", "mutex", "atomic", "future",
+            "filesystem", "regex", "complex", "bitset", "stdexcept", "exception",
+            "new", "typeinfo", "locale", "span", "ranges", "format", "concepts",
+            "compare", "numbers", "bit", "initializer_list",
+            nullptr
+        };
+        for (int i = 0; kNames[i]; i++) {
+            if (path == kNames[i]) return true;
+        }
+        return false;
+    }
+
     static bool astHasMemberAccess(const AstNode& e) {
         if (e.type == AstNode::Type::ExprMember) return true;
         for (const AstNode& c : e.children) {
@@ -307,6 +333,18 @@ private:
         }
         std::string v = t.value;
         advance();
+        if (peek().type == TokenType::ColonColon) {
+            while (match(TokenType::ColonColon)) {
+                const Token& part = peek();
+                if (part.type != TokenType::Identifier) {
+                    throw std::runtime_error("Expected name after '::' in type at line " + std::to_string(part.line));
+                }
+                v += "::";
+                v += part.value;
+                advance();
+            }
+            return "cpp:" + v;
+        }
         if (v == "int") return "int";
         if (v == "short") return "short";
         if (v == "long") return "long";
@@ -333,6 +371,7 @@ private:
         if (t.type == TokenType::Star) return looksLikeTypeAt(p + 1);
         if (t.type == TokenType::Enum) return true;
         if (t.type != TokenType::Identifier) return false;
+        if (p + 1 < tokens_.size() && tokens_[p + 1].type == TokenType::ColonColon) return true;
         const std::string& v = t.value;
         if (v == "int" || v == "short" || v == "long" || v == "size_t" ||
             v == "float" || v == "char" || v == "bool" || v == "string" ||
@@ -606,7 +645,8 @@ private:
                 modules_.enable(path);
                 return {{AstNode::Type::Include, path, {}}};
             }
-            if (isCppHeaderIncludePath(path)) {
+            if (isCppHeaderIncludePath(path) || isBareCppStdHeader(path)) {
+                modules_.noteCppHeader();
                 return {{AstNode::Type::CppHeaderInclude, trimIncludeRaw(raw), {}}};
             }
             // #include <pkg/module> - package
@@ -655,6 +695,7 @@ private:
                     if (includedFiles_->count(absPath)) return {};
                     includedFiles_->insert(absPath);
                 }
+                modules_.noteCppHeader();
                 std::string gen = std::string("#include \"") + std::filesystem::path(absPath).generic_string() + "\"";
                 return {{AstNode::Type::CppHeaderInclude, gen, {}}};
             }
@@ -976,8 +1017,9 @@ private:
                 stmts.push_back(parseDerefAssignment());
             } else if (t.type == TokenType::Delete) {
                 stmts.push_back(parseDeleteStmt());
-            } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
-                       tokens_[pos_ + 1].type == TokenType::LParen) {
+            } else if (looksLikeQualifiedFnCall() ||
+                       (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
+                        tokens_[pos_ + 1].type == TokenType::LParen)) {
                 stmts.push_back(parseFnCall());
             } else if (t.type == TokenType::Goto) {
                 stmts.push_back(parseGoto());
@@ -1065,10 +1107,44 @@ private:
         return node;
     }
 
-    AstNode parseFnCallExpr() {
-        const Token& nameTok = peek();
+    bool looksLikeQualifiedFnCall() const {
+        size_t p = pos_;
+        if (p < tokens_.size() && tokens_[p].type == TokenType::ColonColon) p++;
+        if (p >= tokens_.size() || tokens_[p].type != TokenType::Identifier) return false;
+        p++;
+        bool qualified = (pos_ < tokens_.size() && tokens_[pos_].type == TokenType::ColonColon);
+        while (p < tokens_.size() && tokens_[p].type == TokenType::ColonColon) {
+            qualified = true;
+            p++;
+            if (p >= tokens_.size() || tokens_[p].type != TokenType::Identifier) return false;
+            p++;
+        }
+        return qualified && p < tokens_.size() && tokens_[p].type == TokenType::LParen;
+    }
+
+    std::string parseCppQualifiedName() {
+        std::string name;
+        if (match(TokenType::ColonColon)) name = "::";
+        const Token& first = peek();
+        if (first.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected name after '::' at line " + std::to_string(first.line));
+        }
+        name += first.value;
         advance();
-        std::string name = nameTok.value;
+        while (match(TokenType::ColonColon)) {
+            const Token& part = peek();
+            if (part.type != TokenType::Identifier) {
+                throw std::runtime_error("Expected name after '::' at line " + std::to_string(part.line));
+            }
+            name += "::";
+            name += part.value;
+            advance();
+        }
+        return name;
+    }
+
+    AstNode parseFnCallExpr() {
+        std::string name = parseCppQualifiedName();
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
         }
@@ -1640,8 +1716,9 @@ private:
                 stmts.push_back(parseDerefAssignment());
             } else if (t.type == TokenType::Delete) {
                 stmts.push_back(parseDeleteStmt());
-            } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
-                       tokens_[pos_ + 1].type == TokenType::LParen) {
+            } else if (looksLikeQualifiedFnCall() ||
+                       (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
+                        tokens_[pos_ + 1].type == TokenType::LParen)) {
                 stmts.push_back(parseFnCall());
             } else if (t.type == TokenType::Goto) {
                 stmts.push_back(parseGoto());
@@ -1752,20 +1829,39 @@ private:
                     {"replace", 2}, {"substring", 2}
                 };
                 auto mit = strMethods.find(m);
-                if (mit == strMethods.end()) {
+                if (mit != strMethods.end()) {
+                    advance();  // consume '('
+                    AstNode call{AstNode::Type::StrMethod, m, {std::move(cur)}};
+                    for (int i = 0; i < mit->second; i++) {
+                        if (i > 0 && !match(TokenType::Comma)) {
+                            throw std::runtime_error("Expected ',' in ." + m + "(...) at line " + std::to_string(peek().line));
+                        }
+                        call.children.push_back(parseExpression());
+                    }
+                    if (!match(TokenType::RParen)) {
+                        throw std::runtime_error("Expected ')' after ." + m + "(...) at line " + std::to_string(peek().line));
+                    }
+                    cur = std::move(call);
+                    continue;
+                }
+                if (!modules_.hasCppHeader()) {
                     throw std::runtime_error("Unknown method '." + m + "()' at line " + std::to_string(ftok.line) +
                         " (string methods: upper, lower, trim, len, contains, starts_with, ends_with, index_of, repeat, split, replace, substring)");
                 }
-                advance();  // consume '('
-                AstNode call{AstNode::Type::StrMethod, m, {std::move(cur)}};
-                for (int i = 0; i < mit->second; i++) {
-                    if (i > 0 && !match(TokenType::Comma)) {
-                        throw std::runtime_error("Expected ',' in ." + m + "(...) at line " + std::to_string(peek().line));
+            }
+            if (peek().type == TokenType::LParen && modules_.hasCppHeader()) {
+                advance();
+                AstNode call{AstNode::Type::FnCall, ftok.value, {}};
+                call.initValue = arrow ? "->" : ".";
+                call.children.push_back(std::move(cur));
+                if (peek().type != TokenType::RParen) {
+                    for (;;) {
+                        call.children.push_back(parseExpression());
+                        if (!match(TokenType::Comma)) break;
                     }
-                    call.children.push_back(parseExpression());
                 }
                 if (!match(TokenType::RParen)) {
-                    throw std::runtime_error("Expected ')' after ." + m + "(...) at line " + std::to_string(peek().line));
+                    throw std::runtime_error("Expected ')' after ." + ftok.value + "(...) at line " + std::to_string(peek().line));
                 }
                 cur = std::move(call);
                 continue;
@@ -2056,8 +2152,9 @@ private:
             tokens_[pos_ + 1].type == TokenType::LParen) {
             return parseTrimExpr();
         }
-        if (peek().type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
-            tokens_[pos_ + 1].type == TokenType::LParen) {
+        if (looksLikeQualifiedFnCall() ||
+            (peek().type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
+             tokens_[pos_ + 1].type == TokenType::LParen)) {
             return parseFnCallExpr();
         }
         if (match(TokenType::Identifier)) {

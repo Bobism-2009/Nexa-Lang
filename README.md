@@ -16,9 +16,12 @@ Current compiler version string: **0.1.10** (`NexaC --version`).
 ## Requirements
 
 - **Windows:** [LLVM/Clang](https://releases.llvm.org/) or **MinGW-w64** (`clang++` / `g++`) on your `PATH`.
-- **Linux:** `clang++` and normal build tools. Executables embed libstdc++, libgcc, and
-  (for `std/gfx`) static X11. Install `libx11-dev` to *build* a gfx program; the
-  resulting binary does not need `libX11.so`. libc stays dynamic.
+- **Linux:** `clang++` and normal build tools. The installer / `make install-deps`
+  installs compile-time packages only (compiler, git, X11 *headers/static libs*
+  for `std/gfx`). It does **not** install the wasm toolchain. Executables embed
+  libstdc++, libgcc, and static X11; the resulting binary does not need
+  `libX11.so`. libc stays dynamic. HTTPS uses the system `libssl.so` at run time
+  (`dlopen`), so no OpenSSL headers are required to compile.
 - **macOS:** Apple Command Line Tools (`xcode-select --install`); see [`MACOS.md`](MACOS.md).
 
 The generated C++ uses the standard library (`std::string`, `std::vector`, threads, chrono, etc.) and platform APIs where modules need them (e.g. `std/os` on Windows).
@@ -149,18 +152,22 @@ NexaC mathlib.nxa --static-lib -o libmath.a
 NexaC app.nxa --link libmath.a -o app
 ```
 
-Library `fn`s are exported as `extern "C"` symbols. Call them from the executable through a
-file-scope `inline_cpp!` block (an `extern "C"` declaration must be at file scope, not inside `fn main`):
+Library `fn`s are exported as `extern "C"` symbols. If you have a C header, include it and call
+the functions directly. Otherwise declare the symbol with `extern fn` (no `inline_cpp!`):
 
 ```nexa
-#include <std/inline>
-
-inline_cpp! {
-extern "C" int add(int, int);
-}
+#include "mathlib.h"
 
 fn main() {
-    inline_cpp! { add(2, 3); }
+    let n = add(2, 3);
+}
+```
+
+```nexa
+extern fn add(a: int, b: int): int;
+
+fn main() {
+    let n = add(2, 3);
 }
 ```
 

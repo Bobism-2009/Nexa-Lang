@@ -1,0 +1,33 @@
+#include "cpp_lib.hpp"
+#include <cmath>
+#include <std/io>
+
+fn main() {
+    let a = cpp_add(2, 3);
+    if (a != 5) {
+        io.println("fail add");
+        return 1;
+    }
+    let b = nexa_cpp::mul(3, 4);
+    if (b != 12) {
+        io.println("fail mul");
+        return 2;
+    }
+    let box: nexa_cpp::Box = nexa_cpp::make_box(7);
+    if (box.get() != 7) {
+        io.println("fail get");
+        return 3;
+    }
+    box.set(9);
+    if (box.v != 9) {
+        io.println("fail field");
+        return 4;
+    }
+    let s = std::abs(-4);
+    if (s != 4) {
+        io.println("fail abs");
+        return 5;
+    }
+    io.println("ok");
+    return 0;
+}

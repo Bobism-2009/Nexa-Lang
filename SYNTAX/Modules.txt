@@ -159,7 +159,8 @@ Nexa Standard Modules
   OS APIs only (no curl/OpenSSL bundled).
   Windows: WinHTTP (HTTP + HTTPS via Schannel)
   macOS:   CFNetwork (HTTP + HTTPS)
-  Linux:   POSIX sockets (HTTP only; HTTPS returns an error message)
+  Linux:   POSIX sockets + HTTPS via system libssl.so (dlopen; needs
+           libssl1.1/libssl3 at runtime, usual on desktop/server Linux)
   http.get(url)           - GET request; returns response body string ("" on failure)
   http.post(url, body)    - POST request; returns response body string ("" on failure)
   Use: let html = http.get("https://example.com/");
@@ -231,9 +232,9 @@ Nexa Standard Modules
   Use only when Nexa has no API for this; body is not parsed by Nexa (brace matching only; } in strings can break).
 
 #include <std/file>
-  file.read(path)       - Read entire file, returns string
-  file.write(path, c)   - Write content to file (overwrites)
-  file.append(path, c)  - Append content to file
+  file.read(path)       - Read entire file as binary, returns string
+  file.write(path, c)   - Write bytes to file (overwrites, binary)
+  file.append(path, c)  - Append bytes to file (binary)
   file.exists(path)     - Returns 1 if exists, 0 otherwise
   file.mkdir(path)      - Create directory (and parents); statement or returns 1/0
   file.remove(path) / file.delete(path) - Delete a file or empty directory; returns 1/0
@@ -254,7 +255,9 @@ Nexa Standard Modules
   pathVar.Append(c)     - Append to path in variable
   path, content: string or variable
   Only I/O helpers (read/write/append) are emitted unless you call a path/list API.
-  write/read/append use C stdio — a write-only program stays hello-world sized.
+  write/read/append use C stdio in binary mode (no CR/LF translation).
+  Bytes from \\xHH and os.load survive a write/read roundtrip.
+  A write-only program stays hello-world sized.
   exists/mkdir/list/cwd and the other path helpers use Win32 / POSIX (no <filesystem>).
 
 #include <std/dll>

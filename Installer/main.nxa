@@ -144,9 +144,13 @@ fn Register_Nxa_Registry_Windows_System(ExePath: string) {
     os.system("reg add \"HKLM\\Software\\Classes\\NexaC.SourceFile\\DefaultIcon\" /ve /d \"" + ExePath + ",0\" /f");
 }
 
-fn Install_Clang_Linux() {
-    // clang front-end + g++/libstdc++ so generated C++ links on a clean machine
-    os.system("which clang++ >/dev/null 2>&1 && which g++ >/dev/null 2>&1 || (which apt-get >/dev/null 2>&1 && sudo apt-get update && sudo apt-get install -y clang g++ build-essential) || (which dnf >/dev/null 2>&1 && sudo dnf install -y clang gcc-c++) || (which pacman >/dev/null 2>&1 && sudo pacman -S --noconfirm clang gcc) || true");
+fn Install_Linux_Build_Deps() {
+    // Build-machine packages only (compile NexaC output). Not shipped with user binaries.
+    // Skip wasm/emscripten — that is on-demand via NexaC --wasm.
+    // gfx statically embeds X11, so the *dev* archives/headers are required here.
+    // HTTPS dlopens system libssl at run time; no libssl-dev needed to compile.
+    io.println("Installing Linux build dependencies (compiler, git, X11 headers)...");
+    os.system("if command -v apt-get >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y clang g++ build-essential git libx11-dev libxcb1-dev libxau-dev libxdmcp-dev; elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y clang gcc-c++ make git libX11-devel libxcb-devel libXau-devel libXdmcp-devel; elif command -v pacman >/dev/null 2>&1; then sudo pacman -S --noconfirm --needed base-devel clang gcc git libx11 libxcb libxau libxdmcp; elif command -v zypper >/dev/null 2>&1; then sudo zypper --non-interactive install clang gcc-c++ make git libX11-devel libxcb-devel libXau-devel libXdmcp-devel; elif command -v apk >/dev/null 2>&1; then sudo apk add clang g++ make git libx11-dev libxcb-dev libxau-dev libxdmcp-dev; else echo 'NexaC: no supported package manager (apt, dnf, pacman, zypper, apk)'; fi");
 }
 
 fn Install_Clang_Darwin() {
@@ -236,8 +240,7 @@ fn Install_System_Wide() {
         os.system("sudo ln -sf NexaC /usr/local/bin/nexac");
         os.system("sudo ln -sf NexaC /usr/local/bin/nexapkg");
         Register_Nxa_Mime_Linux_System();
-        io.println("Installing C++ toolchain (clang + g++)...");
-        Install_Clang_Linux();
+        Install_Linux_Build_Deps();
         io.println("NexaC installed to /usr/local/bin (in PATH). .nxa files recognized as Nexa Source File.");
         }
         else {
@@ -307,8 +310,7 @@ fn Install_User() {
         os.system("ln -sf NexaC ~/.local/bin/nexac");
         os.system("ln -sf NexaC ~/.local/bin/nexapkg");
         Register_Nxa_Mime_Linux_User();
-        io.println("Installing C++ toolchain (clang + g++)...");
-        Install_Clang_Linux();
+        Install_Linux_Build_Deps();
         Add_To_Path_User_Linux();
         io.println("NexaC installed to ~/.local/bin. Added to PATH in ~/.bashrc and ~/.profile. Restart terminal or run: source ~/.bashrc");
         }

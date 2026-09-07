@@ -1,0 +1,101 @@
+#include <std/file>
+#include <std/io>
+#include <std/os>
+
+fn main() {
+    let magic: string = "\x89PNG";
+    if (len(magic) != 4) {
+        io.println("fail \\x89PNG len");
+        return 1;
+    }
+    if (magic[0] != '\x89' || magic[1] != 'P' || magic[2] != 'N' || magic[3] != 'G') {
+        io.println("fail \\x89PNG bytes");
+        return 2;
+    }
+
+    let a: string = "\x41B";
+    if (a != "AB") {
+        io.println("fail \\x41B");
+        return 3;
+    }
+    let cr0: string = "\x0d0";
+    if (len(cr0) != 2 || cr0[0] != '\r' || cr0[1] != '0') {
+        io.println("fail \\x0d0 hex-run");
+        return 15;
+    }
+    let ffF: string = "\xffF";
+    if (len(ffF) != 2 || ffF[0] != '\xff' || ffF[1] != 'F') {
+        io.println("fail \\xffF hex-run");
+        return 16;
+    }
+
+    let raw: string = "\x00\x0a\x0d\xff";
+    if (len(raw) != 4) {
+        io.println("fail raw len");
+        return 4;
+    }
+    if (raw[0] != '\x00' || raw[1] != '\n' || raw[2] != '\r' || raw[3] != '\xff') {
+        io.println("fail raw bytes");
+        return 5;
+    }
+
+    let dir: string = os.tempdir();
+    let path: string = file.join(dir, "_nexa_binary_survive.bin");
+    file.write(path, raw);
+    let got: string = file.read(path);
+    if (got != raw || len(got) != 4) {
+        io.println("fail file raw roundtrip");
+        return 6;
+    }
+    if (os.load(path) != raw) {
+        io.println("fail os.load raw");
+        return 7;
+    }
+
+    file.write(path, "AB");
+    file.append(path, "\x00\xff");
+    let ap: string = file.read(path);
+    if (len(ap) != 4 || ap[0] != 'A' || ap[1] != 'B' || ap[2] != '\x00' || ap[3] != '\xff') {
+        io.println("fail file append binary");
+        return 8;
+    }
+
+    file.write(path, magic);
+    if (file.read(path) != magic) {
+        io.println("fail file magic roundtrip");
+        return 9;
+    }
+
+    let pngPath: string = "Tests/gfx_2x2.png";
+    let png: string = os.load(pngPath);
+    if (png == "") {
+        pngPath = "gfx_2x2.png";
+        png = os.load(pngPath);
+    }
+    if (len(png) < 8) {
+        io.println("fail png fixture");
+        return 10;
+    }
+    if (png[0] != '\x89' || png[1] != 'P' || png[2] != 'N' || png[3] != 'G') {
+        io.println("fail png magic");
+        return 11;
+    }
+    file.write(path, png);
+    let pngBack: string = file.read(path);
+    if (pngBack != png || len(pngBack) != len(png)) {
+        io.println("fail png file roundtrip");
+        return 12;
+    }
+    if (os.load(path) != png) {
+        io.println("fail png os.load after write");
+        return 13;
+    }
+    if (file.size(path) != len(png)) {
+        io.println("fail png file.size");
+        return 14;
+    }
+
+    file.remove(path);
+    io.println("ok");
+    return 0;
+}

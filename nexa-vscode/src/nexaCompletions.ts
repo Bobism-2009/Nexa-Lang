@@ -130,7 +130,7 @@ export const MODULE_MEMBERS: Record<string, { name: string; detail: string }[]> 
   ],
   file: [
     { name: "read", detail: "file.read(path)" },
-    { name: "write", detail: "file.write(path, content)" },
+    { name: "write", detail: "file.write(path, content) — binary write" },
     { name: "append", detail: "file.append(path, content)" },
     { name: "exists", detail: "file.exists(path)" },
     { name: "mkdir", detail: "file.mkdir(path)" },

@@ -1,0 +1,26 @@
+#include "c_add.h"
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <std/io>
+
+fn main() {
+    let n = strlen("hello");
+    if (n != 5) {
+        io.println("fail strlen");
+        return 1;
+    }
+    let s = nexa_c_add(2, 3);
+    if (s != 5) {
+        io.println("fail add");
+        return 2;
+    }
+    let p = getenv("PATH");
+    if (len(p) == 0) {
+        io.println("fail getenv");
+        return 3;
+    }
+    printf("c-ok %d\n", n);
+    io.println("ok");
+    return 0;
+}

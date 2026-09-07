@@ -85,6 +85,14 @@ public:
         enabled_.insert(path);
     }
 
+    void noteCppHeader() {
+        hasCppHeader_ = true;
+    }
+
+    bool hasCppHeader() const {
+        return hasCppHeader_;
+    }
+
     bool hasIo() const {
         return enabled_.count("std/io") > 0;
     }
@@ -1539,6 +1547,7 @@ public:
 
 private:
     std::set<std::string> enabled_;
+    bool hasCppHeader_ = false;
 };
 
 }  // namespace nexa
