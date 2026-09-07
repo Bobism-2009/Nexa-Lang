@@ -33,6 +33,13 @@ struct __nexa_Gfx {
     int scale;
     int closed;
     int ready;
+    int mx;
+    int my;
+    int min;
+    int mlb;
+    int mmb;
+    int mrb;
+    int text_scale;
     unsigned char* fb;
 #ifdef _WIN32
     HWND hwnd;
@@ -55,6 +62,38 @@ struct __nexa_Gfx {
 };
 
 static __nexa_Gfx __nexa_g = {};
+
+static int __nexa_gfx_map_mouse(int px, int py, int cw, int ch, int* ox, int* oy) {
+    if (cw < 1 || ch < 1 || __nexa_g.w < 1 || __nexa_g.h < 1) return 0;
+    if (px < 0 || py < 0 || px >= cw || py >= ch) return 0;
+    int x = px * __nexa_g.w / cw;
+    int y = py * __nexa_g.h / ch;
+    if (x >= __nexa_g.w) x = __nexa_g.w - 1;
+    if (y >= __nexa_g.h) y = __nexa_g.h - 1;
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    *ox = x;
+    *oy = y;
+    return 1;
+}
+
+static void __nexa_gfx_mouse_refresh();
+
+static void __nexa_gfx_mouse_apply(int x, int y, int inside, int left, int middle, int right) {
+    if (inside) {
+        __nexa_g.mx = x;
+        __nexa_g.my = y;
+        __nexa_g.min = 1;
+        __nexa_g.mlb = left ? 1 : 0;
+        __nexa_g.mmb = middle ? 1 : 0;
+        __nexa_g.mrb = right ? 1 : 0;
+    } else {
+        __nexa_g.min = 0;
+        __nexa_g.mlb = 0;
+        __nexa_g.mmb = 0;
+        __nexa_g.mrb = 0;
+    }
+}
 
 #ifdef __APPLE__
 @interface __NexaGfxDelegate : NSObject <NSWindowDelegate>
@@ -142,6 +181,10 @@ static void __nexa_gfx_free() {
     __nexa_gfx_delegate = nil;
 #endif
     __nexa_g.ready = 0;
+    __nexa_g.min = 0;
+    __nexa_g.mlb = 0;
+    __nexa_g.mmb = 0;
+    __nexa_g.mrb = 0;
 }
 
 #ifdef _WIN32
@@ -180,20 +223,102 @@ static EM_BOOL __nexa_gfx_ekey(int type, const EmscriptenKeyboardEvent* e, void*
     if (code == 27 && !down) __nexa_g.closed = 1;
     return EM_TRUE;
 }
+
+static EM_BOOL __nexa_gfx_emouse(int type, const EmscriptenMouseEvent* e, void*) {
+    if (type == EMSCRIPTEN_EVENT_MOUSELEAVE) {
+        __nexa_gfx_mouse_apply(0, 0, 0, 0, 0, 0);
+        return EM_TRUE;
+    }
+    double css_w = 0, css_h = 0;
+    emscripten_get_element_css_size("#canvas", &css_w, &css_h);
+    int cw = (int)css_w;
+    int ch = (int)css_h;
+    if (cw < 1) cw = __nexa_g.w;
+    if (ch < 1) ch = __nexa_g.h;
+    int ox = 0, oy = 0;
+    int inside = __nexa_gfx_map_mouse((int)e->targetX, (int)e->targetY, cw, ch, &ox, &oy);
+    unsigned short bt = e->buttons;
+    __nexa_gfx_mouse_apply(ox, oy, inside, (bt & 1) != 0, (bt & 4) != 0, (bt & 2) != 0);
+    return EM_TRUE;
+}
 #endif
 
+static const int __nexa_gfx_max = 4096;
+
+static void __nexa_gfx_clamp_whs(int* w, int* h, int* scale, int defaultScale) {
+    if (*w < 1) *w = 1;
+    if (*h < 1) *h = 1;
+    if (*w > __nexa_gfx_max) *w = __nexa_gfx_max;
+    if (*h > __nexa_gfx_max) *h = __nexa_gfx_max;
+    if (*scale < 1) *scale = defaultScale < 1 ? 12 : defaultScale;
+    if (*scale > 64) *scale = 64;
+}
+
+static void __nexa_gfx_drop_x11_image() {
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+    if (__nexa_g.img) {
+        __nexa_g.img->data = nullptr;
+        XDestroyImage(__nexa_g.img);
+        __nexa_g.img = nullptr;
+    }
+    delete[] __nexa_g.xbuf;
+    __nexa_g.xbuf = nullptr;
+    __nexa_g.xbw = 0;
+    __nexa_g.xbh = 0;
+#endif
+}
+
+static void __nexa_gfx_apply_window_size(int w, int h, int scale) {
+#ifdef __EMSCRIPTEN__
+    EM_ASM(({
+        var c = Module['canvas'] || document.getElementById('canvas');
+        if (!c) return;
+        c.width = $0;
+        c.height = $1;
+        c.style.width = ($0 * $2) + 'px';
+        c.style.height = ($1 * $2) + 'px';
+    }), w, h, scale);
+#elif defined(_WIN32)
+    if (!__nexa_g.hwnd) return;
+    __nexa_g.bmi.bmiHeader.biWidth = w;
+    __nexa_g.bmi.bmiHeader.biHeight = -h;
+    DWORD style = (DWORD)GetWindowLongA(__nexa_g.hwnd, GWL_STYLE);
+    RECT wr = {0, 0, w * scale, h * scale};
+    AdjustWindowRect(&wr, style, FALSE);
+    SetWindowPos(__nexa_g.hwnd, nullptr, 0, 0, wr.right - wr.left, wr.bottom - wr.top,
+        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    InvalidateRect(__nexa_g.hwnd, nullptr, FALSE);
+#elif defined(__APPLE__)
+    if (!__nexa_gfx_nswin) return;
+    NSSize sz = NSMakeSize((CGFloat)(w * scale), (CGFloat)(h * scale));
+    [__nexa_gfx_nswin setContentSize:sz];
+    if (__nexa_gfx_nsview) {
+        [__nexa_gfx_nsview setFrame:NSMakeRect(0, 0, sz.width, sz.height)];
+        [__nexa_gfx_nsview setNeedsDisplay:YES];
+    }
+#elif defined(__linux__)
+    __nexa_gfx_drop_x11_image();
+    if (__nexa_g.dpy && __nexa_g.win) {
+        XResizeWindow(__nexa_g.dpy, __nexa_g.win, (unsigned)(w * scale), (unsigned)(h * scale));
+        XFlush(__nexa_g.dpy);
+    }
+#endif
+}
+
 static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
-    if (w < 1) w = 1;
-    if (h < 1) h = 1;
-    if (w > 2048) w = 2048;
-    if (h > 2048) h = 2048;
-    if (scale < 1) scale = 12;
-    if (scale > 64) scale = 64;
+    __nexa_gfx_clamp_whs(&w, &h, &scale, 12);
     __nexa_gfx_free();
     __nexa_g.w = w;
     __nexa_g.h = h;
     __nexa_g.scale = scale;
     __nexa_g.closed = 0;
+    __nexa_g.mx = 0;
+    __nexa_g.my = 0;
+    __nexa_g.min = 0;
+    __nexa_g.mlb = 0;
+    __nexa_g.mmb = 0;
+    __nexa_g.mrb = 0;
+    if (__nexa_g.text_scale < 1) __nexa_g.text_scale = 1;
     __nexa_g.fb = new unsigned char[(size_t)w * (size_t)h * 4];
     std::memset(__nexa_g.fb, 0, (size_t)w * (size_t)h * 4);
 #ifdef __EMSCRIPTEN__
@@ -216,6 +341,10 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
         c.style.background = '#000';
         document.title = UTF8ToString($3);
     }), w, h, scale, title.c_str());
+    emscripten_set_mousemove_callback("#canvas", 0, 1, __nexa_gfx_emouse);
+    emscripten_set_mousedown_callback("#canvas", 0, 1, __nexa_gfx_emouse);
+    emscripten_set_mouseup_callback("#canvas", 0, 1, __nexa_gfx_emouse);
+    emscripten_set_mouseleave_callback("#canvas", 0, 1, __nexa_gfx_emouse);
     __nexa_g.ready = 1;
     return 1;
 #elif defined(_WIN32)
@@ -285,7 +414,9 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
     Atom wm = XInternAtom(__nexa_g.dpy, "WM_DELETE_WINDOW", False);
     XSetWMProtocols(__nexa_g.dpy, __nexa_g.win, &wm, 1);
     __nexa_g.wm_delete = (int)wm;
-    XSelectInput(__nexa_g.dpy, __nexa_g.win, ExposureMask | KeyPressMask | KeyReleaseMask | StructureNotifyMask);
+    XSelectInput(__nexa_g.dpy, __nexa_g.win,
+        ExposureMask | KeyPressMask | KeyReleaseMask | StructureNotifyMask |
+        PointerMotionMask | ButtonPressMask | ButtonReleaseMask);
     __nexa_g.gc = DefaultGC(__nexa_g.dpy, scr);
     XMapWindow(__nexa_g.dpy, __nexa_g.win);
     XFlush(__nexa_g.dpy);
@@ -296,6 +427,42 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
     __nexa_g.closed = 1;
     return 0;
 #endif
+}
+
+static int __nexa_gfx_resize(int w, int h, int scale) {
+    if (!__nexa_g.ready || !__nexa_g.fb) return 0;
+    __nexa_gfx_clamp_whs(&w, &h, &scale, __nexa_g.scale);
+    if (w != __nexa_g.w || h != __nexa_g.h) {
+        unsigned char* nfb = new unsigned char[(size_t)w * (size_t)h * 4];
+        std::memset(nfb, 0, (size_t)w * (size_t)h * 4);
+        int cw = w < __nexa_g.w ? w : __nexa_g.w;
+        int ch = h < __nexa_g.h ? h : __nexa_g.h;
+        for (int y = 0; y < ch; y++) {
+            std::memcpy(nfb + (size_t)y * (size_t)w * 4,
+                __nexa_g.fb + (size_t)y * (size_t)__nexa_g.w * 4, (size_t)cw * 4);
+        }
+        delete[] __nexa_g.fb;
+        __nexa_g.fb = nfb;
+    }
+    __nexa_g.w = w;
+    __nexa_g.h = h;
+    __nexa_g.scale = scale;
+    if (__nexa_g.mx >= w) __nexa_g.mx = w > 0 ? w - 1 : 0;
+    if (__nexa_g.my >= h) __nexa_g.my = h > 0 ? h - 1 : 0;
+    __nexa_gfx_apply_window_size(w, h, scale);
+    return 1;
+}
+
+static int __nexa_gfx_width() {
+    return __nexa_g.ready ? __nexa_g.w : 0;
+}
+
+static int __nexa_gfx_height() {
+    return __nexa_g.ready ? __nexa_g.h : 0;
+}
+
+static int __nexa_gfx_scale() {
+    return __nexa_g.ready ? __nexa_g.scale : 0;
 }
 
 static void __nexa_gfx_close() {
@@ -331,10 +498,80 @@ static void __nexa_gfx_poll() {
         if (ev.type == DestroyNotify) __nexa_g.closed = 1;
     }
 #endif
+    __nexa_gfx_mouse_refresh();
 }
 
 static int __nexa_gfx_closed() {
     return __nexa_g.closed;
+}
+
+static void __nexa_gfx_mouse_refresh() {
+    if (!__nexa_g.ready) return;
+#ifdef _WIN32
+    if (!__nexa_g.hwnd) return;
+    POINT p;
+    if (!GetCursorPos(&p)) return;
+    if (!ScreenToClient(__nexa_g.hwnd, &p)) return;
+    RECT rc;
+    if (!GetClientRect(__nexa_g.hwnd, &rc)) return;
+    int ox = 0, oy = 0;
+    int inside = __nexa_gfx_map_mouse((int)p.x, (int)p.y, (int)rc.right, (int)rc.bottom, &ox, &oy);
+    int swap = GetSystemMetrics(SM_SWAPBUTTON);
+    int leftVk = swap ? VK_RBUTTON : VK_LBUTTON;
+    int rightVk = swap ? VK_LBUTTON : VK_RBUTTON;
+    int left = (GetAsyncKeyState(leftVk) & 0x8000) ? 1 : 0;
+    int right = (GetAsyncKeyState(rightVk) & 0x8000) ? 1 : 0;
+    int middle = (GetAsyncKeyState(VK_MBUTTON) & 0x8000) ? 1 : 0;
+    __nexa_gfx_mouse_apply(ox, oy, inside, left, middle, right);
+#elif defined(__APPLE__)
+    if (!__nexa_gfx_nswin) return;
+    NSPoint s = [NSEvent mouseLocation];
+    NSRect wr = [__nexa_gfx_nswin frame];
+    NSRect cr = [__nexa_gfx_nswin contentRectForFrameRect:wr];
+    int cw = (int)cr.size.width;
+    int ch = (int)cr.size.height;
+    int px = (int)(s.x - cr.origin.x);
+    int py = (int)(cr.size.height - (s.y - cr.origin.y));
+    int ox = 0, oy = 0;
+    int inside = __nexa_gfx_map_mouse(px, py, cw, ch, &ox, &oy);
+    NSUInteger bt = [NSEvent pressedMouseButtons];
+    __nexa_gfx_mouse_apply(ox, oy, inside, (bt & 1) != 0, (bt & 4) != 0, (bt & 2) != 0);
+#elif defined(__linux__)
+    if (!__nexa_g.dpy || !__nexa_g.win) return;
+    Window root = 0, child = 0;
+    int rx = 0, ry = 0, wx = 0, wy = 0;
+    unsigned mask = 0;
+    if (!XQueryPointer(__nexa_g.dpy, __nexa_g.win, &root, &child, &rx, &ry, &wx, &wy, &mask)) return;
+    XWindowAttributes wa;
+    if (!XGetWindowAttributes(__nexa_g.dpy, __nexa_g.win, &wa)) return;
+    int ox = 0, oy = 0;
+    int inside = __nexa_gfx_map_mouse(wx, wy, wa.width, wa.height, &ox, &oy);
+    __nexa_gfx_mouse_apply(ox, oy, inside,
+        (mask & Button1Mask) != 0, (mask & Button2Mask) != 0, (mask & Button3Mask) != 0);
+#endif
+}
+
+static int __nexa_gfx_mouse_x() {
+    if (!__nexa_g.ready) return 0;
+    __nexa_gfx_mouse_refresh();
+    return __nexa_g.mx;
+}
+
+static int __nexa_gfx_mouse_y() {
+    if (!__nexa_g.ready) return 0;
+    __nexa_gfx_mouse_refresh();
+    return __nexa_g.my;
+}
+
+static int __nexa_gfx_mouse(const std::string& name) {
+    if (!__nexa_g.ready) return 0;
+    __nexa_gfx_mouse_refresh();
+    std::string s = name;
+    for (char& c : s) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    if (s == "left" || s == "lmb" || s == "l") return __nexa_g.mlb;
+    if (s == "right" || s == "rmb" || s == "r") return __nexa_g.mrb;
+    if (s == "middle" || s == "mmb" || s == "m") return __nexa_g.mmb;
+    return 0;
 }
 
 static void __nexa_gfx_put(int i, unsigned char R, unsigned char G, unsigned char B) {
@@ -367,6 +604,238 @@ static void __nexa_gfx_plot(int x, int y, int r, int g, int b) {
     unsigned char G = (unsigned char)(g < 0 ? 0 : (g > 255 ? 255 : g));
     unsigned char B = (unsigned char)(b < 0 ? 0 : (b > 255 ? 255 : b));
     __nexa_gfx_put((y * __nexa_g.w + x) * 4, R, G, B);
+}
+
+static int __nexa_gfx_get(int x, int y) {
+    if (!__nexa_g.fb || !__nexa_g.ready) return -1;
+    if (x < 0 || y < 0 || x >= __nexa_g.w || y >= __nexa_g.h) return -1;
+    const unsigned char* p = __nexa_g.fb + ((size_t)y * (size_t)__nexa_g.w + (size_t)x) * 4;
+#ifdef _WIN32
+    int r = p[2];
+    int g = p[1];
+    int b = p[0];
+#else
+    int r = p[0];
+    int g = p[1];
+    int b = p[2];
+#endif
+    return (r << 16) | (g << 8) | b;
+}
+
+static unsigned char __nexa_gfx_u8(int v) {
+    if (v < 0) return 0;
+    if (v > 255) return 255;
+    return (unsigned char)v;
+}
+
+static void __nexa_gfx_fill(int x, int y, int w, int h, int r, int g, int b) {
+    if (!__nexa_g.fb) return;
+    if (w < 0) { x += w; w = -w; }
+    if (h < 0) { y += h; h = -h; }
+    if (w < 1 || h < 1) return;
+    int x0 = x;
+    int y0 = y;
+    int x1 = x + w;
+    int y1 = y + h;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > __nexa_g.w) x1 = __nexa_g.w;
+    if (y1 > __nexa_g.h) y1 = __nexa_g.h;
+    if (x0 >= x1 || y0 >= y1) return;
+    unsigned char R = __nexa_gfx_u8(r);
+    unsigned char G = __nexa_gfx_u8(g);
+    unsigned char B = __nexa_gfx_u8(b);
+    for (int yy = y0; yy < y1; yy++) {
+        int row = yy * __nexa_g.w;
+        for (int xx = x0; xx < x1; xx++) {
+            __nexa_gfx_put((row + xx) * 4, R, G, B);
+        }
+    }
+}
+
+static int __nexa_gfx_outcode(int x, int y) {
+    int c = 0;
+    if (x < 0) c |= 1;
+    else if (x >= __nexa_g.w) c |= 2;
+    if (y < 0) c |= 4;
+    else if (y >= __nexa_g.h) c |= 8;
+    return c;
+}
+
+static int __nexa_gfx_clip_line(int* x0, int* y0, int* x1, int* y1) {
+    if (__nexa_g.w < 1 || __nexa_g.h < 1) return 0;
+    int xmin = 0, ymin = 0, xmax = __nexa_g.w - 1, ymax = __nexa_g.h - 1;
+    int c0 = __nexa_gfx_outcode(*x0, *y0);
+    int c1 = __nexa_gfx_outcode(*x1, *y1);
+    for (;;) {
+        if (!(c0 | c1)) return 1;
+        if (c0 & c1) return 0;
+        int c = c0 ? c0 : c1;
+        int dx = *x1 - *x0;
+        int dy = *y1 - *y0;
+        long long x = 0, y = 0;
+        if (c & 8) {
+            x = (long long)*x0 + (dy != 0 ? (long long)dx * (ymax - *y0) / dy : 0);
+            y = ymax;
+        } else if (c & 4) {
+            x = (long long)*x0 + (dy != 0 ? (long long)dx * (ymin - *y0) / dy : 0);
+            y = ymin;
+        } else if (c & 2) {
+            y = (long long)*y0 + (dx != 0 ? (long long)dy * (xmax - *x0) / dx : 0);
+            x = xmax;
+        } else {
+            y = (long long)*y0 + (dx != 0 ? (long long)dy * (xmin - *x0) / dx : 0);
+            x = xmin;
+        }
+        if (x < -2147483647ll) x = -2147483647ll;
+        if (x > 2147483647ll) x = 2147483647ll;
+        if (y < -2147483647ll) y = -2147483647ll;
+        if (y > 2147483647ll) y = 2147483647ll;
+        if (c == c0) {
+            *x0 = (int)x;
+            *y0 = (int)y;
+            c0 = __nexa_gfx_outcode(*x0, *y0);
+        } else {
+            *x1 = (int)x;
+            *y1 = (int)y;
+            c1 = __nexa_gfx_outcode(*x1, *y1);
+        }
+    }
+}
+
+static void __nexa_gfx_line(int x0, int y0, int x1, int y1, int r, int g, int b) {
+    if (!__nexa_g.fb) return;
+    if (!__nexa_gfx_clip_line(&x0, &y0, &x1, &y1)) return;
+    unsigned char R = __nexa_gfx_u8(r);
+    unsigned char G = __nexa_gfx_u8(g);
+    unsigned char B = __nexa_gfx_u8(b);
+    int dx = x1 - x0;
+    if (dx < 0) dx = -dx;
+    int dy = y1 - y0;
+    if (dy < 0) dy = -dy;
+    int sx = x0 < x1 ? 1 : -1;
+    int sy = y0 < y1 ? 1 : -1;
+    int err = dx - dy;
+    int x = x0;
+    int y = y0;
+    for (;;) {
+        if (x >= 0 && y >= 0 && x < __nexa_g.w && y < __nexa_g.h) {
+            __nexa_gfx_put((y * __nexa_g.w + x) * 4, R, G, B);
+        }
+        if (x == x1 && y == y1) break;
+        int e2 = err + err;
+        if (e2 > -dy) { err -= dy; x += sx; }
+        if (e2 < dx) { err += dx; y += sy; }
+    }
+}
+
+// 5x7, columns left-to-right, bit 0 = top. Printable ASCII 32..126.
+static const unsigned char __nexa_gfx_font5x7[95][5] = {
+    {0x00,0x00,0x00,0x00,0x00}, {0x00,0x00,0x5F,0x00,0x00}, {0x00,0x07,0x00,0x07,0x00},
+    {0x14,0x7F,0x14,0x7F,0x14}, {0x24,0x2A,0x7F,0x2A,0x12}, {0x23,0x13,0x08,0x64,0x62},
+    {0x36,0x49,0x56,0x20,0x50}, {0x00,0x08,0x07,0x03,0x00}, {0x00,0x1C,0x22,0x41,0x00},
+    {0x00,0x41,0x22,0x1C,0x00}, {0x2A,0x1C,0x7F,0x1C,0x2A}, {0x08,0x08,0x3E,0x08,0x08},
+    {0x00,0x80,0x70,0x30,0x00}, {0x08,0x08,0x08,0x08,0x08}, {0x00,0x00,0x60,0x60,0x00},
+    {0x20,0x10,0x08,0x04,0x02}, {0x3E,0x51,0x49,0x45,0x3E}, {0x00,0x42,0x7F,0x40,0x00},
+    {0x72,0x49,0x49,0x49,0x46}, {0x21,0x41,0x49,0x4D,0x33}, {0x18,0x14,0x12,0x7F,0x10},
+    {0x27,0x45,0x45,0x45,0x39}, {0x3C,0x4A,0x49,0x49,0x31}, {0x41,0x21,0x11,0x09,0x07},
+    {0x36,0x49,0x49,0x49,0x36}, {0x46,0x49,0x49,0x29,0x1E}, {0x00,0x00,0x14,0x00,0x00},
+    {0x00,0x40,0x34,0x00,0x00}, {0x00,0x08,0x14,0x22,0x41}, {0x14,0x14,0x14,0x14,0x14},
+    {0x00,0x41,0x22,0x14,0x08}, {0x02,0x01,0x59,0x09,0x06}, {0x3E,0x41,0x5D,0x59,0x4E},
+    {0x7C,0x12,0x11,0x12,0x7C}, {0x7F,0x49,0x49,0x49,0x36}, {0x3E,0x41,0x41,0x41,0x22},
+    {0x7F,0x41,0x41,0x22,0x1C}, {0x7F,0x49,0x49,0x49,0x41}, {0x7F,0x09,0x09,0x09,0x01},
+    {0x3E,0x41,0x41,0x51,0x73}, {0x7F,0x08,0x08,0x08,0x7F}, {0x00,0x41,0x7F,0x41,0x00},
+    {0x20,0x40,0x41,0x3F,0x01}, {0x7F,0x08,0x14,0x22,0x41}, {0x7F,0x40,0x40,0x40,0x40},
+    {0x7F,0x02,0x1C,0x02,0x7F}, {0x7F,0x04,0x08,0x10,0x7F}, {0x3E,0x41,0x41,0x41,0x3E},
+    {0x7F,0x09,0x09,0x09,0x06}, {0x3E,0x41,0x51,0x21,0x5E}, {0x7F,0x09,0x19,0x29,0x46},
+    {0x26,0x49,0x49,0x49,0x32}, {0x01,0x01,0x7F,0x01,0x01}, {0x3F,0x40,0x40,0x40,0x3F},
+    {0x1F,0x20,0x40,0x20,0x1F}, {0x3F,0x40,0x38,0x40,0x3F}, {0x63,0x14,0x08,0x14,0x63},
+    {0x03,0x04,0x78,0x04,0x03}, {0x61,0x51,0x49,0x45,0x43}, {0x00,0x7F,0x41,0x41,0x41},
+    {0x02,0x04,0x08,0x10,0x20}, {0x00,0x41,0x41,0x41,0x7F}, {0x04,0x02,0x01,0x02,0x04},
+    {0x40,0x40,0x40,0x40,0x40}, {0x00,0x03,0x07,0x08,0x00}, {0x20,0x54,0x54,0x54,0x78},
+    {0x7F,0x48,0x44,0x44,0x38}, {0x38,0x44,0x44,0x44,0x20}, {0x38,0x44,0x44,0x48,0x7F},
+    {0x38,0x54,0x54,0x54,0x18}, {0x08,0x7E,0x09,0x01,0x02}, {0x18,0xA4,0xA4,0xA4,0x7C},
+    {0x7F,0x08,0x04,0x04,0x78}, {0x00,0x44,0x7D,0x40,0x00}, {0x40,0x80,0x84,0x7D,0x00},
+    {0x7F,0x10,0x28,0x44,0x00}, {0x00,0x41,0x7F,0x40,0x00}, {0x7C,0x04,0x78,0x04,0x78},
+    {0x7C,0x08,0x04,0x04,0x78}, {0x38,0x44,0x44,0x44,0x38}, {0xFC,0x18,0x24,0x24,0x18},
+    {0x18,0x24,0x24,0x18,0xFC}, {0x7C,0x08,0x04,0x04,0x08}, {0x48,0x54,0x54,0x54,0x24},
+    {0x04,0x3F,0x44,0x40,0x20}, {0x3C,0x40,0x40,0x20,0x7C}, {0x1C,0x20,0x40,0x20,0x1C},
+    {0x3C,0x40,0x30,0x40,0x3C}, {0x44,0x28,0x10,0x28,0x44}, {0x1C,0xA0,0xA0,0xA0,0x7C},
+    {0x44,0x64,0x54,0x4C,0x44}, {0x00,0x08,0x36,0x41,0x00}, {0x00,0x00,0x77,0x00,0x00},
+    {0x00,0x41,0x36,0x08,0x00}, {0x08,0x04,0x08,0x10,0x08}
+};
+
+static void __nexa_gfx_glyph(int x, int y, int ch, unsigned char R, unsigned char G, unsigned char B, int scale) {
+    if (ch < 32 || ch > 126) ch = '?';
+    if (scale < 1) scale = 1;
+    const unsigned char* col = __nexa_gfx_font5x7[ch - 32];
+    for (int i = 0; i < 5; i++) {
+        unsigned char bits = col[i];
+        for (int j = 0; j < 8; j++) {
+            if (!(bits & (1u << j))) continue;
+            for (int sy = 0; sy < scale; sy++) {
+                int py = y + j * scale + sy;
+                if (py < 0 || py >= __nexa_g.h) continue;
+                int row = py * __nexa_g.w;
+                for (int sx = 0; sx < scale; sx++) {
+                    int px = x + i * scale + sx;
+                    if (px < 0 || px >= __nexa_g.w) continue;
+                    __nexa_gfx_put((row + px) * 4, R, G, B);
+                }
+            }
+        }
+    }
+}
+
+static int __nexa_gfx_text_scale() {
+    int s = __nexa_g.text_scale;
+    if (s < 1) s = 1;
+    if (s > 64) s = 64;
+    return s;
+}
+
+static int __nexa_gfx_text_size_set(int n) {
+    if (n < 1) n = 1;
+    if (n > 64) n = 64;
+    __nexa_g.text_scale = n;
+    return n;
+}
+
+static int __nexa_gfx_text(int x, int y, const std::string& s, int r, int g, int b, int scale) {
+    if (!__nexa_g.fb) return 0;
+    if (scale < 1) scale = __nexa_gfx_text_scale();
+    if (scale > 64) scale = 64;
+    unsigned char R = __nexa_gfx_u8(r);
+    unsigned char G = __nexa_gfx_u8(g);
+    unsigned char B = __nexa_gfx_u8(b);
+    int cx = x;
+    int cy = y;
+    int maxw = 0;
+    const int adv = 6 * scale;
+    const int lh = 8 * scale;
+    const int tab = 24 * scale;
+    for (size_t i = 0; i < s.size(); i++) {
+        unsigned char ch = (unsigned char)s[i];
+        if (ch == '\n') {
+            int w = cx - x;
+            if (w > maxw) maxw = w;
+            cx = x;
+            cy += lh;
+            continue;
+        }
+        if (ch == '\t') {
+            int cell = cx - x;
+            if (cell < 0) cell = 0;
+            int next = ((cell / tab) + 1) * tab;
+            cx = x + next;
+            continue;
+        }
+        __nexa_gfx_glyph(cx, cy, (int)ch, R, G, B, scale);
+        cx += adv;
+    }
+    int w = cx - x;
+    if (w > maxw) maxw = w;
+    return maxw;
 }
 
 #if defined(__linux__) && !defined(__EMSCRIPTEN__)

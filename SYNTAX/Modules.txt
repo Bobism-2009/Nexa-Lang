@@ -191,13 +191,25 @@ Nexa Standard Modules
   (need libx11-dev / libxcb1-dev on the *build* machine). The binary does not
   need libX11.so at runtime. libc stays dynamic (present on every Linux).
   gfx.open(title, w, h[, scale]) - create a w*h framebuffer scaled up (default scale 12)
+  gfx.resize(w, h[, scale])      - change framebuffer size at runtime (keeps scale if omitted)
+  gfx.width() / height() / scale() - current framebuffer size and integer scale (0 if closed)
   gfx.close()                    - destroy the window
   gfx.poll()                     - process events (call each frame)
   gfx.closed()                   - 1 if the user closed the window
   gfx.clear(r, g, b)             - fill the framebuffer
   gfx.plot(x, y, r, g, b)        - set one pixel (0..255)
+  gfx.get(x, y)                  - pixel as 0xRRGGBB, or -1 if out of bounds / closed
+  gfx.fill(x, y, w, h, r, g, b)  - filled rectangle, clipped (negative w/h flip)
+  gfx.line(x1, y1, x2, y2, r, g, b) - clipped line (0..255)
+  gfx.text(x, y, s, r, g, b[, scale]) - 5x7 ASCII (32..126); optional scale 1..64
+                                   omits scale: uses gfx.text_size(); 6x8 cell * scale; \\n / \\t
+                                   returns pixel width of the longest line (int)
+  gfx.text_size() / text_size(n)     - get or set default text scale (1..64), lasts until changed
   gfx.present()                  - blit framebuffer to the window
   gfx.key(name)                  - 1 if that key is down ("w", "1", "escape", "space", "up", ...)
+  gfx.mouse_x() / gfx.mouse_y()  - cursor in framebuffer pixels (last in-window position)
+  gfx.mouse(button)              - 1 if that button is down in the window ("left", "right", "middle")
+  Buffer is 1..4096 on each side. scale 1 is 1:1 window pixels; default 12 is chunky.
   --wasm + gfx writes a sibling .html to open in a browser.
 
 #include <std/inline>

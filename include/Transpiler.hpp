@@ -1159,7 +1159,10 @@ private:
             case AstNode::Type::HttpCall:
                 return "string";
             case AstNode::Type::GfxCall:
-                if (e.value == "closed" || e.value == "key" || e.value == "open") return "int";
+                if (e.value == "closed" || e.value == "key" || e.value == "open" || e.value == "resize"
+                    || e.value == "mouse_x" || e.value == "mouse_y" || e.value == "mouse"
+                    || e.value == "width" || e.value == "height" || e.value == "scale"
+                    || e.value == "text_size" || e.value == "text" || e.value == "get") return "int";
                 return "void";
             case AstNode::Type::StrMethod:
                 if (strMethodReturnsString(e.value)) return "string";
@@ -3099,12 +3102,33 @@ private:
                     return "__nexa_gfx_open(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + sc + ")";
                 }
                 if (fn == "close") return "__nexa_gfx_close()";
+                if (fn == "resize") {
+                    std::string sc = e.children.size() >= 3 ? a(2) : "-1";
+                    return "__nexa_gfx_resize(" + a(0) + ", " + a(1) + ", " + sc + ")";
+                }
+                if (fn == "width") return "__nexa_gfx_width()";
+                if (fn == "height") return "__nexa_gfx_height()";
+                if (fn == "scale") return "__nexa_gfx_scale()";
                 if (fn == "poll") return "__nexa_gfx_poll()";
                 if (fn == "present") return "__nexa_gfx_present()";
                 if (fn == "closed") return "__nexa_gfx_closed()";
                 if (fn == "key") return "__nexa_gfx_key(" + a(0) + ")";
+                if (fn == "mouse_x") return "__nexa_gfx_mouse_x()";
+                if (fn == "mouse_y") return "__nexa_gfx_mouse_y()";
+                if (fn == "mouse") return "__nexa_gfx_mouse(" + a(0) + ")";
                 if (fn == "clear") return "__nexa_gfx_clear(" + a(0) + ", " + a(1) + ", " + a(2) + ")";
                 if (fn == "plot") return "__nexa_gfx_plot(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + a(4) + ")";
+                if (fn == "get") return "__nexa_gfx_get(" + a(0) + ", " + a(1) + ")";
+                if (fn == "fill") return "__nexa_gfx_fill(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + a(4) + ", " + a(5) + ", " + a(6) + ")";
+                if (fn == "line") return "__nexa_gfx_line(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + a(4) + ", " + a(5) + ", " + a(6) + ")";
+                if (fn == "text") {
+                    std::string sc = e.children.size() >= 7 ? a(6) : "__nexa_gfx_text_scale()";
+                    return "__nexa_gfx_text(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + a(4) + ", " + a(5) + ", " + sc + ")";
+                }
+                if (fn == "text_size") {
+                    if (e.children.empty()) return "__nexa_gfx_text_scale()";
+                    return "__nexa_gfx_text_size_set(" + a(0) + ")";
+                }
                 throw std::runtime_error("Internal: unknown gfx method '" + fn + "'");
             }
             case AstNode::Type::StrMethod: {

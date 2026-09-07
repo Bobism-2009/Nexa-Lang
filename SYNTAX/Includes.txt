@@ -9,7 +9,7 @@ MODULE INCLUDES (angle brackets)
   #include <std/dll>
   #include <std/time>
   #include <std/thread>
-  #include <std/gfx>      - Pixel window (Win32 / Cocoa / X11 / wasm): gfx.open/plot/present/key
+  #include <std/gfx>      - Pixel window (Win32 / Cocoa / X11 / wasm): gfx.open/plot/get/fill/line/text/present/key/mouse
   #include <std/inline>   - Enables inline_cpp! { ... } (raw C++ pasted into generated code; use sparingly)
   - Standard library modules
 

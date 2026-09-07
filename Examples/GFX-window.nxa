@@ -7,6 +7,7 @@ fn main() {
     while (gfx.closed() != 1) {
         gfx.poll();
         gfx.clear(0, 0, 0);
+        gfx.plot(gfx.mouse_x(), gfx.mouse_y(), 255, 255, 255);
         if (gfx.key("escape") == 1) {
             gfx.close();
         }

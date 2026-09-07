@@ -8,14 +8,116 @@ fn main() {
     }
     gfx.clear(10, 20, 30);
     gfx.plot(2, 3, 255, 0, 0);
+    gfx.fill(0, 0, 3, 2, 0, 255, 0);
+    gfx.fill(6, 1, -2, 2, 0, 0, 255);
+    gfx.line(0, 0, 7, 7, 255, 255, 0);
+    gfx.line(-4, 3, 20, 3, 255, 0, 255);
     gfx.poll();
     gfx.present();
+    gfx.plot(1, 6, 1, 2, 3);
+    if (gfx.get(1, 6) != 66051) {
+        io.println("fail get plot");
+        gfx.close();
+        return 19;
+    }
+    if (gfx.get(7, 0) != 660510) {
+        io.println("fail get clear");
+        gfx.close();
+        return 20;
+    }
+    if (gfx.get(-1, 0) != -1 || gfx.get(8, 0) != -1) {
+        io.println("fail get oob");
+        gfx.close();
+        return 21;
+    }
     if (gfx.key("escape") != 0 && gfx.key("escape") != 1) {
         io.println("fail key");
         gfx.close();
         return 2;
     }
+    let mx: int = gfx.mouse_x();
+    let my: int = gfx.mouse_y();
+    if (mx < 0 || my < 0 || mx >= 8 || my >= 8) {
+        io.println("fail mouse pos");
+        gfx.close();
+        return 4;
+    }
+    if (gfx.mouse("left") != 0 && gfx.mouse("left") != 1) {
+        io.println("fail mouse left");
+        gfx.close();
+        return 5;
+    }
+    if (gfx.mouse("right") != 0 && gfx.mouse("right") != 1) {
+        io.println("fail mouse right");
+        gfx.close();
+        return 6;
+    }
+    if (gfx.mouse("middle") != 0 && gfx.mouse("middle") != 1) {
+        io.println("fail mouse middle");
+        gfx.close();
+        return 7;
+    }
+    if (gfx.mouse("nope") != 0) {
+        io.println("fail mouse unknown");
+        gfx.close();
+        return 8;
+    }
+    if (gfx.width() != 8 || gfx.height() != 8 || gfx.scale() != 2) {
+        io.println("fail size open");
+        gfx.close();
+        return 10;
+    }
+    if (gfx.resize(32, 16) != 1) {
+        io.println("fail resize keep scale");
+        gfx.close();
+        return 11;
+    }
+    if (gfx.width() != 32 || gfx.height() != 16 || gfx.scale() != 2) {
+        io.println("fail size after resize");
+        gfx.close();
+        return 12;
+    }
+    if (gfx.resize(64, 48, 1) != 1) {
+        io.println("fail resize scale");
+        gfx.close();
+        return 13;
+    }
+    if (gfx.width() != 64 || gfx.height() != 48 || gfx.scale() != 1) {
+        io.println("fail size after scale");
+        gfx.close();
+        return 14;
+    }
+    if (gfx.text(1, 1, "Ok", 255, 255, 255) != 12) {
+        io.println("fail text width");
+        gfx.close();
+        return 18;
+    }
+    gfx.text(1, 10, "A\nB", 200, 200, 200);
+    gfx.text(1, 28, "Hi", 255, 255, 0, 2);
+    if (gfx.text_size() != 1) {
+        io.println("fail text_size default");
+        gfx.close();
+        return 16;
+    }
+    if (gfx.text_size(3) != 3 || gfx.text_size() != 3) {
+        io.println("fail text_size set");
+        gfx.close();
+        return 17;
+    }
+    gfx.text(20, 1, "Sz", 255, 0, 255);
     gfx.close();
+    if (gfx.resize(10, 10) != 0 || gfx.width() != 0 || gfx.height() != 0 || gfx.scale() != 0) {
+        io.println("fail size after close");
+        return 15;
+    }
+    if (gfx.mouse_x() != 0 || gfx.mouse_y() != 0 || gfx.mouse("left") != 0) {
+        io.println("fail mouse after close");
+        return 9;
+    }
+    if (gfx.get(0, 0) != -1) {
+        io.println("fail get after close");
+        return 22;
+    }
     if (gfx.closed() != 1) {
         io.println("fail closed");
         return 3;
