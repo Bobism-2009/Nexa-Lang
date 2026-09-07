@@ -41,6 +41,7 @@ struct __nexa_Gfx {
     int mrb;
     int text_scale;
     unsigned char* fb;
+    std::string title;
 #ifdef _WIN32
     HWND hwnd;
     BITMAPINFO bmi;
@@ -319,6 +320,7 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
     __nexa_g.mmb = 0;
     __nexa_g.mrb = 0;
     if (__nexa_g.text_scale < 1) __nexa_g.text_scale = 1;
+    __nexa_g.title = title;
     __nexa_g.fb = new unsigned char[(size_t)w * (size_t)h * 4];
     std::memset(__nexa_g.fb, 0, (size_t)w * (size_t)h * 4);
 #ifdef __EMSCRIPTEN__
@@ -463,6 +465,33 @@ static int __nexa_gfx_height() {
 
 static int __nexa_gfx_scale() {
     return __nexa_g.ready ? __nexa_g.scale : 0;
+}
+
+static std::string __nexa_gfx_title_get() {
+    return __nexa_g.title;
+}
+
+static int __nexa_gfx_title_set(const std::string& s) {
+    __nexa_g.title = s;
+    if (!__nexa_g.ready) return 0;
+#ifdef __EMSCRIPTEN__
+    EM_ASM({ document.title = UTF8ToString($0); }, s.c_str());
+    return 1;
+#elif defined(_WIN32)
+    if (!__nexa_g.hwnd) return 0;
+    return SetWindowTextA(__nexa_g.hwnd, s.c_str()) ? 1 : 0;
+#elif defined(__APPLE__)
+    if (!__nexa_gfx_nswin) return 0;
+    [__nexa_gfx_nswin setTitle:[NSString stringWithUTF8String:s.c_str()]];
+    return 1;
+#elif defined(__linux__)
+    if (!__nexa_g.dpy || !__nexa_g.win) return 0;
+    XStoreName(__nexa_g.dpy, __nexa_g.win, s.c_str());
+    XFlush(__nexa_g.dpy);
+    return 1;
+#else
+    return 0;
+#endif
 }
 
 static void __nexa_gfx_close() {
@@ -799,6 +828,57 @@ static int __nexa_gfx_text_size_set(int n) {
     if (n > 64) n = 64;
     __nexa_g.text_scale = n;
     return n;
+}
+
+static int __nexa_gfx_clamp_text_scale(int scale) {
+    if (scale < 1) scale = __nexa_gfx_text_scale();
+    if (scale > 64) scale = 64;
+    return scale;
+}
+
+static void __nexa_gfx_text_dims(const std::string& s, int scale, int* out_w, int* out_h) {
+    scale = __nexa_gfx_clamp_text_scale(scale);
+    const int adv = 6 * scale;
+    const int lh = 8 * scale;
+    const int tab = 24 * scale;
+    if (s.empty()) {
+        if (out_w) *out_w = 0;
+        if (out_h) *out_h = 0;
+        return;
+    }
+    int cx = 0;
+    int maxw = 0;
+    int lines = 1;
+    for (size_t i = 0; i < s.size(); i++) {
+        unsigned char ch = (unsigned char)s[i];
+        if (ch == '\n') {
+            if (cx > maxw) maxw = cx;
+            cx = 0;
+            lines++;
+            continue;
+        }
+        if (ch == '\t') {
+            int next = ((cx / tab) + 1) * tab;
+            cx = next;
+            continue;
+        }
+        cx += adv;
+    }
+    if (cx > maxw) maxw = cx;
+    if (out_w) *out_w = maxw;
+    if (out_h) *out_h = lines * lh;
+}
+
+static int __nexa_gfx_text_width(const std::string& s, int scale) {
+    int w = 0, h = 0;
+    __nexa_gfx_text_dims(s, scale, &w, &h);
+    return w;
+}
+
+static int __nexa_gfx_text_height(const std::string& s, int scale) {
+    int w = 0, h = 0;
+    __nexa_gfx_text_dims(s, scale, &w, &h);
+    return h;
 }
 
 static int __nexa_gfx_text(int x, int y, const std::string& s, int r, int g, int b, int scale) {

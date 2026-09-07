@@ -3328,10 +3328,12 @@ private:
         else if (method == "line") argc = 7;
         else if (method == "text") { argc = 6; argcMax = 7; }
         else if (method == "text_size") { argc = 0; argcMax = 1; }
+        else if (method == "text_width" || method == "text_height") { argc = 1; argcMax = 2; }
+        else if (method == "title") { argc = 0; argcMax = 1; }
         else {
             throw std::runtime_error("Unknown gfx method 'gfx." + method +
                 "' at line " + std::to_string(methodTok.line) +
-                " (use open, close, resize, width, height, scale, poll, closed, clear, plot, fill, line, text, text_size, get, present, key, mouse_x, mouse_y, mouse)");
+                " (use open, close, resize, width, height, scale, title, poll, closed, clear, plot, fill, line, text, text_size, text_width, text_height, get, present, key, mouse_x, mouse_y, mouse)");
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after gfx." + method + " at line " + std::to_string(peek().line));
@@ -3357,6 +3359,15 @@ private:
                 }
                 if (method == "text_size") {
                     throw std::runtime_error("gfx.text_size() or gfx.text_size(n) at line " + std::to_string(line));
+                }
+                if (method == "text_width") {
+                    throw std::runtime_error("gfx.text_width(s[, scale]) at line " + std::to_string(line));
+                }
+                if (method == "text_height") {
+                    throw std::runtime_error("gfx.text_height(s[, scale]) at line " + std::to_string(line));
+                }
+                if (method == "title") {
+                    throw std::runtime_error("gfx.title() or gfx.title(s) at line " + std::to_string(line));
                 }
                 throw std::runtime_error("gfx.open(title, w, h[, scale]) at line " + std::to_string(line));
             }

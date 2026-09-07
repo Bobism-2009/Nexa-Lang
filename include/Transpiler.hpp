@@ -1159,10 +1159,12 @@ private:
             case AstNode::Type::HttpCall:
                 return "string";
             case AstNode::Type::GfxCall:
+                if (e.value == "title") return e.children.empty() ? "string" : "int";
                 if (e.value == "closed" || e.value == "key" || e.value == "open" || e.value == "resize"
                     || e.value == "mouse_x" || e.value == "mouse_y" || e.value == "mouse"
                     || e.value == "width" || e.value == "height" || e.value == "scale"
-                    || e.value == "text_size" || e.value == "text" || e.value == "get") return "int";
+                    || e.value == "text_size" || e.value == "text" || e.value == "text_width"
+                    || e.value == "text_height" || e.value == "get") return "int";
                 return "void";
             case AstNode::Type::StrMethod:
                 if (strMethodReturnsString(e.value)) return "string";
@@ -3128,6 +3130,18 @@ private:
                 if (fn == "text_size") {
                     if (e.children.empty()) return "__nexa_gfx_text_scale()";
                     return "__nexa_gfx_text_size_set(" + a(0) + ")";
+                }
+                if (fn == "text_width") {
+                    std::string sc = e.children.size() >= 2 ? a(1) : "-1";
+                    return "__nexa_gfx_text_width(" + a(0) + ", " + sc + ")";
+                }
+                if (fn == "text_height") {
+                    std::string sc = e.children.size() >= 2 ? a(1) : "-1";
+                    return "__nexa_gfx_text_height(" + a(0) + ", " + sc + ")";
+                }
+                if (fn == "title") {
+                    if (e.children.empty()) return "__nexa_gfx_title_get()";
+                    return "__nexa_gfx_title_set(" + a(0) + ")";
                 }
                 throw std::runtime_error("Internal: unknown gfx method '" + fn + "'");
             }

@@ -193,6 +193,7 @@ Nexa Standard Modules
   gfx.open(title, w, h[, scale]) - create a w*h framebuffer scaled up (default scale 12)
   gfx.resize(w, h[, scale])      - change framebuffer size at runtime (keeps scale if omitted)
   gfx.width() / height() / scale() - current framebuffer size and integer scale (0 if closed)
+  gfx.title() / title(s)             - get or set the window title (set returns 1/0)
   gfx.close()                    - destroy the window
   gfx.poll()                     - process events (call each frame)
   gfx.closed()                   - 1 if the user closed the window
@@ -205,6 +206,8 @@ Nexa Standard Modules
                                    omits scale: uses gfx.text_size(); 6x8 cell * scale; \\n / \\t
                                    returns pixel width of the longest line (int)
   gfx.text_size() / text_size(n)     - get or set default text scale (1..64), lasts until changed
+  gfx.text_width(s[, scale])         - pixel width of longest line (does not draw)
+  gfx.text_height(s[, scale])        - pixel height including \\n (does not draw)
   gfx.present()                  - blit framebuffer to the window
   gfx.key(name)                  - 1 if that key is down ("w", "1", "escape", "space", "up", ...)
   gfx.mouse_x() / gfx.mouse_y()  - cursor in framebuffer pixels (last in-window position)

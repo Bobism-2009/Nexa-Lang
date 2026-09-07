@@ -6,6 +6,21 @@ fn main() {
         io.println("fail open");
         return 1;
     }
+    if (gfx.title() != "nexa-gfx-test") {
+        io.println("fail title get");
+        gfx.close();
+        return 26;
+    }
+    if (gfx.title("nexa-gfx-renamed") != 1) {
+        io.println("fail title set");
+        gfx.close();
+        return 27;
+    }
+    if (gfx.title() != "nexa-gfx-renamed") {
+        io.println("fail title after set");
+        gfx.close();
+        return 28;
+    }
     gfx.clear(10, 20, 30);
     gfx.plot(2, 3, 255, 0, 0);
     gfx.fill(0, 0, 3, 2, 0, 255, 0);
@@ -86,6 +101,21 @@ fn main() {
         io.println("fail size after scale");
         gfx.close();
         return 14;
+    }
+    if (gfx.text_width("Ok") != 12 || gfx.text_height("Ok") != 8) {
+        io.println("fail text measure");
+        gfx.close();
+        return 23;
+    }
+    if (gfx.text_width("A\nBB") != 12 || gfx.text_height("A\nB") != 16) {
+        io.println("fail text measure nl");
+        gfx.close();
+        return 24;
+    }
+    if (gfx.text_width("Hi", 2) != 24 || gfx.text_height("Hi", 2) != 16) {
+        io.println("fail text measure scale");
+        gfx.close();
+        return 25;
     }
     if (gfx.text(1, 1, "Ok", 255, 255, 255) != 12) {
         io.println("fail text width");
