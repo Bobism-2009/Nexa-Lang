@@ -1,5 +1,6 @@
 #include <std/gfx>
 #include <std/io>
+#include <std/os>
 
 fn main() {
     if (gfx.open("nexa-gfx-test", 8, 8, 2) != 1) {
@@ -49,6 +50,21 @@ fn main() {
         io.println("fail key");
         gfx.close();
         return 2;
+    }
+    if (gfx.key("shift") != 0 && gfx.key("shift") != 1) {
+        io.println("fail key shift");
+        gfx.close();
+        return 29;
+    }
+    if (gfx.pressed("escape") != 0 && gfx.pressed("escape") != 1) {
+        io.println("fail pressed");
+        gfx.close();
+        return 30;
+    }
+    if (gfx.pressed("nope") != 0) {
+        io.println("fail pressed unknown");
+        gfx.close();
+        return 31;
     }
     let mx: int = gfx.mouse_x();
     let my: int = gfx.mouse_y();
@@ -135,6 +151,86 @@ fn main() {
         return 17;
     }
     gfx.text(20, 1, "Sz", 255, 0, 255);
+    if (gfx.decode("not-an-image") != 0) {
+        io.println("fail decode junk");
+        gfx.close();
+        return 32;
+    }
+    if (gfx.image("nexa_missing_image_xyz.png") != 0) {
+        io.println("fail image missing");
+        gfx.close();
+        return 33;
+    }
+    let pngPath: string = "Tests/gfx_2x2.png";
+    if (os.load(pngPath) == "") {
+        pngPath = "gfx_2x2.png";
+    }
+    let img: int = gfx.decode(os.load(pngPath));
+    if (img == 0 || gfx.image_w(img) != 2 || gfx.image_h(img) != 2) {
+        io.println("fail decode png size");
+        gfx.close();
+        return 34;
+    }
+    gfx.clear(0, 0, 0);
+    if (gfx.blit(0, 0, img) != 1) {
+        io.println("fail blit png");
+        gfx.close();
+        return 35;
+    }
+    if (gfx.get(0, 0) != 16711680 || gfx.get(1, 0) != 65280 || gfx.get(0, 1) != 255 || gfx.get(1, 1) != 16777215) {
+        io.println("fail blit png pixels");
+        gfx.close();
+        return 36;
+    }
+    let bmpPath: string = "Tests/gfx_2x2.bmp";
+    if (os.load(bmpPath) == "") {
+        bmpPath = "gfx_2x2.bmp";
+    }
+    let imgBmp: int = gfx.decode(os.load(bmpPath));
+    if (imgBmp == 0 || gfx.image_w(imgBmp) != 2 || gfx.image_h(imgBmp) != 2) {
+        io.println("fail decode bmp size");
+        gfx.close();
+        return 37;
+    }
+    gfx.clear(0, 0, 0);
+    gfx.blit(10, 10, imgBmp);
+    if (gfx.get(10, 10) != 16711680 || gfx.get(11, 11) != 16777215) {
+        io.println("fail blit bmp pixels");
+        gfx.close();
+        return 38;
+    }
+    let filePng: int = gfx.image(pngPath);
+    if (filePng == 0 || gfx.image_w(filePng) != 2 || gfx.image_h(filePng) != 2) {
+        io.println("fail image png file");
+        gfx.close();
+        return 39;
+    }
+    let jpgPath: string = "Tests/gfx_2x2.jpg";
+    if (os.load(jpgPath) == "") {
+        jpgPath = "gfx_2x2.jpg";
+    }
+    let fileJpg: int = gfx.image(jpgPath);
+    if (fileJpg == 0 || gfx.image_w(fileJpg) != 2 || gfx.image_h(fileJpg) != 2) {
+        io.println("fail image jpg file");
+        gfx.close();
+        return 40;
+    }
+    gfx.clear(0, 0, 0);
+    if (gfx.blit(0, 0, img, 4, 4) != 1) {
+        io.println("fail blit scale");
+        gfx.close();
+        return 41;
+    }
+    if (gfx.get(0, 0) != 16711680 || gfx.get(1, 0) != 16711680 || gfx.get(2, 0) != 65280 || gfx.get(3, 3) != 16777215) {
+        io.println("fail blit scale pixels");
+        gfx.close();
+        return 42;
+    }
+    if (gfx.image_w(0) != 0 || gfx.image_h(-1) != 0) {
+        io.println("fail image size invalid");
+        gfx.close();
+        return 43;
+    }
     gfx.close();
     if (gfx.resize(10, 10) != 0 || gfx.width() != 0 || gfx.height() != 0 || gfx.scale() != 0) {
         io.println("fail size after close");
@@ -147,6 +243,14 @@ fn main() {
     if (gfx.get(0, 0) != -1) {
         io.println("fail get after close");
         return 22;
+    }
+    if (gfx.image_w(img) != 2 || gfx.image_h(img) != 2) {
+        io.println("fail image after close");
+        return 44;
+    }
+    if (gfx.blit(0, 0, img) != 0) {
+        io.println("fail blit after close");
+        return 45;
     }
     if (gfx.closed() != 1) {
         io.println("fail closed");

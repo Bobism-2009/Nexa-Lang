@@ -3320,7 +3320,7 @@ private:
         else if (method == "close" || method == "poll" || method == "present" || method == "closed"
                  || method == "mouse_x" || method == "mouse_y"
                  || method == "width" || method == "height" || method == "scale") argc = 0;
-        else if (method == "key" || method == "mouse") argc = 1;
+        else if (method == "key" || method == "pressed" || method == "mouse") argc = 1;
         else if (method == "get") argc = 2;
         else if (method == "clear") argc = 3;
         else if (method == "plot") argc = 5;
@@ -3330,10 +3330,12 @@ private:
         else if (method == "text_size") { argc = 0; argcMax = 1; }
         else if (method == "text_width" || method == "text_height") { argc = 1; argcMax = 2; }
         else if (method == "title") { argc = 0; argcMax = 1; }
+        else if (method == "image" || method == "decode" || method == "image_w" || method == "image_h") argc = 1;
+        else if (method == "blit") { argc = 3; argcMax = 5; }
         else {
             throw std::runtime_error("Unknown gfx method 'gfx." + method +
                 "' at line " + std::to_string(methodTok.line) +
-                " (use open, close, resize, width, height, scale, title, poll, closed, clear, plot, fill, line, text, text_size, text_width, text_height, get, present, key, mouse_x, mouse_y, mouse)");
+                " (use open, close, resize, width, height, scale, title, poll, closed, clear, plot, fill, line, text, text_size, text_width, text_height, get, present, image, decode, image_w, image_h, blit, key, pressed, mouse_x, mouse_y, mouse)");
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after gfx." + method + " at line " + std::to_string(peek().line));
@@ -3350,6 +3352,9 @@ private:
         }
         int got = (int)node.children.size();
         if (argcMax >= 0) {
+            if (method == "blit" && got != 3 && got != 5) {
+                throw std::runtime_error("gfx.blit(x, y, src[, w, h]) at line " + std::to_string(line));
+            }
             if (got < argc || got > argcMax) {
                 if (method == "resize") {
                     throw std::runtime_error("gfx.resize(w, h[, scale]) at line " + std::to_string(line));

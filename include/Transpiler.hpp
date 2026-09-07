@@ -3,6 +3,7 @@
 #include "Parser.hpp"
 #include "Modules.hpp"
 #include "PlatformEmit.hpp"
+#include "StbImageRuntime.hpp"
 #include <string>
 #include <sstream>
 #include <cstdio>
@@ -840,7 +841,11 @@ public:
             }
             filtered << key << "\n";
         }
-        return stripInactivePlatformGuards(filtered.str(), target_);
+        std::string src = stripInactivePlatformGuards(filtered.str(), target_);
+        if (cppUsage_.gfx && (target_ == CppTarget::Linux || target_ == CppTarget::Wasm)) {
+            src += gfxStbImageRuntimeCpp();
+        }
+        return src;
     }
 
 private:
@@ -1160,11 +1165,13 @@ private:
                 return "string";
             case AstNode::Type::GfxCall:
                 if (e.value == "title") return e.children.empty() ? "string" : "int";
-                if (e.value == "closed" || e.value == "key" || e.value == "open" || e.value == "resize"
+                if (e.value == "closed" || e.value == "key" || e.value == "pressed" || e.value == "open" || e.value == "resize"
                     || e.value == "mouse_x" || e.value == "mouse_y" || e.value == "mouse"
                     || e.value == "width" || e.value == "height" || e.value == "scale"
                     || e.value == "text_size" || e.value == "text" || e.value == "text_width"
-                    || e.value == "text_height" || e.value == "get") return "int";
+                    || e.value == "text_height" || e.value == "get"
+                    || e.value == "image" || e.value == "decode" || e.value == "image_w"
+                    || e.value == "image_h" || e.value == "blit") return "int";
                 return "void";
             case AstNode::Type::StrMethod:
                 if (strMethodReturnsString(e.value)) return "string";
@@ -3115,6 +3122,7 @@ private:
                 if (fn == "present") return "__nexa_gfx_present()";
                 if (fn == "closed") return "__nexa_gfx_closed()";
                 if (fn == "key") return "__nexa_gfx_key(" + a(0) + ")";
+                if (fn == "pressed") return "__nexa_gfx_pressed(" + a(0) + ")";
                 if (fn == "mouse_x") return "__nexa_gfx_mouse_x()";
                 if (fn == "mouse_y") return "__nexa_gfx_mouse_y()";
                 if (fn == "mouse") return "__nexa_gfx_mouse(" + a(0) + ")";
@@ -3142,6 +3150,18 @@ private:
                 if (fn == "title") {
                     if (e.children.empty()) return "__nexa_gfx_title_get()";
                     return "__nexa_gfx_title_set(" + a(0) + ")";
+                }
+                if (fn == "image") return "__nexa_gfx_image(" + a(0) + ")";
+                if (fn == "decode") return "__nexa_gfx_decode(" + a(0) + ")";
+                if (fn == "image_w") return "__nexa_gfx_image_w(" + a(0) + ")";
+                if (fn == "image_h") return "__nexa_gfx_image_h(" + a(0) + ")";
+                if (fn == "blit") {
+                    std::string dw = e.children.size() >= 5 ? a(3) : "0";
+                    std::string dh = e.children.size() >= 5 ? a(4) : "0";
+                    if (inferExprNexaType(e.children[2]) == "string") {
+                        return "__nexa_gfx_blit_path(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + dw + ", " + dh + ")";
+                    }
+                    return "__nexa_gfx_blit(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + dw + ", " + dh + ")";
                 }
                 throw std::runtime_error("Internal: unknown gfx method '" + fn + "'");
             }

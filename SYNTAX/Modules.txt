@@ -209,10 +209,21 @@ Nexa Standard Modules
   gfx.text_width(s[, scale])         - pixel width of longest line (does not draw)
   gfx.text_height(s[, scale])        - pixel height including \\n (does not draw)
   gfx.present()                  - blit framebuffer to the window
-  gfx.key(name)                  - 1 if that key is down ("w", "1", "escape", "space", "up", ...)
+  gfx.image(path)                - load PNG/JPEG/BMP/GIF (and OS formats); handle, or 0
+  gfx.decode(bytes)              - same decode from a string (os.load / http.get)
+  gfx.image_w(id) / image_h(id)  - pixel size of a loaded image (0 if invalid)
+  gfx.blit(x, y, src[, w, h])    - draw image at x,y; src is handle or path
+                                   omit w,h for native size; nearest-neighbor scale;
+                                   PNG alpha blends onto the buffer
+  gfx.key(name)                  - 1 if that key is down ("w", "1", "escape", "space", "up",
+                                   "shift", "ctrl", "alt", "tab", "backspace", "delete", ...)
+  gfx.pressed(name)              - 1 if that key went down since the last gfx.poll()
   gfx.mouse_x() / gfx.mouse_y()  - cursor in framebuffer pixels (last in-window position)
   gfx.mouse(button)              - 1 if that button is down in the window ("left", "right", "middle")
   Buffer is 1..4096 on each side. scale 1 is 1:1 window pixels; default 12 is chunky.
+  Images are 1..4096 on each side. Windows uses WIC (PNG/JPEG/BMP/GIF/TIFF/ICO, plus
+  WebP/HEIF when the OS has the codec). macOS uses ImageIO. Linux/wasm decode
+  PNG, JPEG (including progressive), BMP, and GIF.
   --wasm + gfx writes a sibling .html to open in a browser.
 
 #include <std/inline>

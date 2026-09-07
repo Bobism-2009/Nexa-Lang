@@ -7,9 +7,11 @@ namespace nexa {
 inline std::string gfxRuntimeCpp() {
     return R"NEXA_GFX(
 #include <string>
+#include <vector>
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
+#include <cstdio>
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #include <emscripten/html5.h>
@@ -18,9 +20,12 @@ inline std::string gfxRuntimeCpp() {
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <objbase.h>
+#include <wincodec.h>
 #elif defined(__APPLE__)
 #import <Cocoa/Cocoa.h>
 #include <CoreGraphics/CoreGraphics.h>
+#include <ImageIO/ImageIO.h>
 #elif defined(__linux__)
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -42,6 +47,8 @@ struct __nexa_Gfx {
     int text_scale;
     unsigned char* fb;
     std::string title;
+    int k_now[64];
+    int k_prev[64];
 #ifdef _WIN32
     HWND hwnd;
     BITMAPINFO bmi;
@@ -79,6 +86,7 @@ static int __nexa_gfx_map_mouse(int px, int py, int cw, int ch, int* ox, int* oy
 }
 
 static void __nexa_gfx_mouse_refresh();
+static void __nexa_gfx_key_snapshot();
 
 static void __nexa_gfx_mouse_apply(int x, int y, int inside, int left, int middle, int right) {
     if (inside) {
@@ -321,6 +329,8 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
     __nexa_g.mrb = 0;
     if (__nexa_g.text_scale < 1) __nexa_g.text_scale = 1;
     __nexa_g.title = title;
+    std::memset(__nexa_g.k_now, 0, sizeof(__nexa_g.k_now));
+    std::memset(__nexa_g.k_prev, 0, sizeof(__nexa_g.k_prev));
     __nexa_g.fb = new unsigned char[(size_t)w * (size_t)h * 4];
     std::memset(__nexa_g.fb, 0, (size_t)w * (size_t)h * 4);
 #ifdef __EMSCRIPTEN__
@@ -528,6 +538,7 @@ static void __nexa_gfx_poll() {
     }
 #endif
     __nexa_gfx_mouse_refresh();
+    __nexa_gfx_key_snapshot();
 }
 
 static int __nexa_gfx_closed() {
@@ -1022,11 +1033,17 @@ static int __nexa_gfx_vk(const std::string& name) {
     }
     if (s == "escape") return GetAsyncKeyState(VK_ESCAPE) & 0x8000 ? 1 : 0;
     if (s == "space") return GetAsyncKeyState(VK_SPACE) & 0x8000 ? 1 : 0;
-    if (s == "enter") return GetAsyncKeyState(VK_RETURN) & 0x8000 ? 1 : 0;
+    if (s == "enter" || s == "return") return GetAsyncKeyState(VK_RETURN) & 0x8000 ? 1 : 0;
     if (s == "up") return GetAsyncKeyState(VK_UP) & 0x8000 ? 1 : 0;
     if (s == "down") return GetAsyncKeyState(VK_DOWN) & 0x8000 ? 1 : 0;
     if (s == "left") return GetAsyncKeyState(VK_LEFT) & 0x8000 ? 1 : 0;
     if (s == "right") return GetAsyncKeyState(VK_RIGHT) & 0x8000 ? 1 : 0;
+    if (s == "shift") return GetAsyncKeyState(VK_SHIFT) & 0x8000 ? 1 : 0;
+    if (s == "ctrl" || s == "control") return GetAsyncKeyState(VK_CONTROL) & 0x8000 ? 1 : 0;
+    if (s == "alt") return GetAsyncKeyState(VK_MENU) & 0x8000 ? 1 : 0;
+    if (s == "tab") return GetAsyncKeyState(VK_TAB) & 0x8000 ? 1 : 0;
+    if (s == "backspace" || s == "bksp") return GetAsyncKeyState(VK_BACK) & 0x8000 ? 1 : 0;
+    if (s == "delete" || s == "del") return GetAsyncKeyState(VK_DELETE) & 0x8000 ? 1 : 0;
 #elif defined(__EMSCRIPTEN__)
     auto down = [&](int code) -> int {
         return (code >= 0 && code < 512) ? __nexa_g.keys[code] : 0;
@@ -1038,11 +1055,17 @@ static int __nexa_gfx_vk(const std::string& name) {
     }
     if (s == "escape") return down(27);
     if (s == "space") return down(32);
-    if (s == "enter") return down(13);
+    if (s == "enter" || s == "return") return down(13);
     if (s == "up") return down(38);
     if (s == "down") return down(40);
     if (s == "left") return down(37);
     if (s == "right") return down(39);
+    if (s == "shift") return down(16);
+    if (s == "ctrl" || s == "control") return down(17);
+    if (s == "alt") return down(18);
+    if (s == "tab") return down(9);
+    if (s == "backspace" || s == "bksp") return down(8);
+    if (s == "delete" || s == "del") return down(46);
 #elif defined(__APPLE__)
     static const unsigned char letters[26] = {
         0x00, 0x0B, 0x08, 0x02, 0x0E, 0x03, 0x05, 0x04, 0x22, 0x26,
@@ -1059,11 +1082,17 @@ static int __nexa_gfx_vk(const std::string& name) {
     }
     if (s == "escape") return __nexa_gfx_mac_held(0x35);
     if (s == "space") return __nexa_gfx_mac_held(0x31);
-    if (s == "enter") return __nexa_gfx_mac_held(0x24);
+    if (s == "enter" || s == "return") return __nexa_gfx_mac_held(0x24);
     if (s == "up") return __nexa_gfx_mac_held(0x7E);
     if (s == "down") return __nexa_gfx_mac_held(0x7D);
     if (s == "left") return __nexa_gfx_mac_held(0x7B);
     if (s == "right") return __nexa_gfx_mac_held(0x7C);
+    if (s == "shift") return (__nexa_gfx_mac_held(0x38) || __nexa_gfx_mac_held(0x3C)) ? 1 : 0;
+    if (s == "ctrl" || s == "control") return (__nexa_gfx_mac_held(0x3B) || __nexa_gfx_mac_held(0x3E)) ? 1 : 0;
+    if (s == "alt") return (__nexa_gfx_mac_held(0x3A) || __nexa_gfx_mac_held(0x3D)) ? 1 : 0;
+    if (s == "tab") return __nexa_gfx_mac_held(0x30);
+    if (s == "backspace" || s == "bksp") return __nexa_gfx_mac_held(0x33);
+    if (s == "delete" || s == "del") return __nexa_gfx_mac_held(0x75);
 #elif defined(__linux__)
     if (!__nexa_g.dpy) return 0;
     char keys[32];
@@ -1080,18 +1109,362 @@ static int __nexa_gfx_vk(const std::string& name) {
     }
     if (s == "escape") return held(XK_Escape);
     if (s == "space") return held(XK_space);
-    if (s == "enter") return held(XK_Return);
+    if (s == "enter" || s == "return") return held(XK_Return);
     if (s == "up") return held(XK_Up);
     if (s == "down") return held(XK_Down);
     if (s == "left") return held(XK_Left);
     if (s == "right") return held(XK_Right);
+    if (s == "shift") return (held(XK_Shift_L) || held(XK_Shift_R)) ? 1 : 0;
+    if (s == "ctrl" || s == "control") return (held(XK_Control_L) || held(XK_Control_R)) ? 1 : 0;
+    if (s == "alt") return (held(XK_Alt_L) || held(XK_Alt_R) || held(XK_Meta_L) || held(XK_Meta_R)) ? 1 : 0;
+    if (s == "tab") return held(XK_Tab);
+    if (s == "backspace" || s == "bksp") return held(XK_BackSpace);
+    if (s == "delete" || s == "del") return held(XK_Delete);
 #endif
     return 0;
+}
+
+static const char* const __nexa_gfx_key_names[] = {
+    "0","1","2","3","4","5","6","7","8","9",
+    "a","b","c","d","e","f","g","h","i","j","k","l","m",
+    "n","o","p","q","r","s","t","u","v","w","x","y","z",
+    "escape","space","enter","up","down","left","right",
+    "shift","ctrl","alt","tab","backspace","delete"
+};
+
+static int __nexa_gfx_key_slot(const std::string& name) {
+    std::string s = name;
+    for (char& c : s) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    if (s == "return") s = "enter";
+    if (s == "control") s = "ctrl";
+    if (s == "bksp") s = "backspace";
+    if (s == "del") s = "delete";
+    const int n = (int)(sizeof(__nexa_gfx_key_names) / sizeof(__nexa_gfx_key_names[0]));
+    for (int i = 0; i < n; i++) {
+        if (s == __nexa_gfx_key_names[i]) return i;
+    }
+    return -1;
+}
+
+static void __nexa_gfx_key_snapshot() {
+    if (!__nexa_g.ready) return;
+    const int n = (int)(sizeof(__nexa_gfx_key_names) / sizeof(__nexa_gfx_key_names[0]));
+    for (int i = 0; i < n; i++) {
+        __nexa_g.k_prev[i] = __nexa_g.k_now[i];
+        __nexa_g.k_now[i] = __nexa_gfx_vk(__nexa_gfx_key_names[i]);
+    }
 }
 
 static int __nexa_gfx_key(const std::string& name) {
     if (!__nexa_g.ready) return 0;
     return __nexa_gfx_vk(name);
+}
+
+static int __nexa_gfx_pressed(const std::string& name) {
+    if (!__nexa_g.ready) return 0;
+    int slot = __nexa_gfx_key_slot(name);
+    if (slot < 0) return 0;
+    return (__nexa_g.k_now[slot] && !__nexa_g.k_prev[slot]) ? 1 : 0;
+}
+
+struct __nexa_GfxImg {
+    int w;
+    int h;
+    unsigned char* px;
+};
+
+static std::vector<__nexa_GfxImg> __nexa_imgs;
+static std::vector<std::string> __nexa_img_paths;
+
+static int __nexa_gfx_pixels_ok(int w, int h) {
+    if (w < 1 || h < 1 || w > 4096 || h > 4096) return 0;
+    return 1;
+}
+
+#if defined(__linux__) || defined(__EMSCRIPTEN__)
+unsigned char* __nexa_gfx_stbi_load_rgba(const unsigned char* p, int n, int* w, int* h);
+void __nexa_gfx_stbi_free(void* p);
+#endif
+
+#ifdef _WIN32
+static void __nexa_gfx_com_once() {
+    static int once = 0;
+    if (once) return;
+    once = 1;
+    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+}
+
+static int __nexa_gfx_wic_decode(const unsigned char* data, int n, int* ow, int* oh, unsigned char** out) {
+    if (!data || n < 8 || !ow || !oh || !out) return 0;
+    __nexa_gfx_com_once();
+    IWICImagingFactory* fac = NULL;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&fac))) || !fac) {
+        return 0;
+    }
+    IWICStream* stream = NULL;
+    if (FAILED(fac->CreateStream(&stream)) || !stream) {
+        fac->Release();
+        return 0;
+    }
+    if (FAILED(stream->InitializeFromMemory((BYTE*)data, (DWORD)n))) {
+        stream->Release();
+        fac->Release();
+        return 0;
+    }
+    IWICBitmapDecoder* dec = NULL;
+    HRESULT hr = fac->CreateDecoderFromStream(stream, NULL, WICDecodeMetadataCacheOnLoad, &dec);
+    stream->Release();
+    if (FAILED(hr) || !dec) {
+        fac->Release();
+        return 0;
+    }
+    IWICBitmapFrameDecode* frame = NULL;
+    if (FAILED(dec->GetFrame(0, &frame)) || !frame) {
+        dec->Release();
+        fac->Release();
+        return 0;
+    }
+    IWICFormatConverter* conv = NULL;
+    if (FAILED(fac->CreateFormatConverter(&conv)) || !conv) {
+        frame->Release();
+        dec->Release();
+        fac->Release();
+        return 0;
+    }
+    hr = conv->Initialize(frame, GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, NULL, 0.0, WICBitmapPaletteTypeCustom);
+    UINT w = 0, h = 0;
+    if (FAILED(hr) || FAILED(conv->GetSize(&w, &h)) || !__nexa_gfx_pixels_ok((int)w, (int)h)) {
+        conv->Release();
+        frame->Release();
+        dec->Release();
+        fac->Release();
+        return 0;
+    }
+    unsigned char* px = new unsigned char[(size_t)w * (size_t)h * 4];
+    hr = conv->CopyPixels(NULL, w * 4, w * h * 4, px);
+    conv->Release();
+    frame->Release();
+    dec->Release();
+    fac->Release();
+    if (FAILED(hr)) {
+        delete[] px;
+        return 0;
+    }
+    *ow = (int)w;
+    *oh = (int)h;
+    *out = px;
+    return 1;
+}
+#endif
+
+#ifdef __APPLE__
+static int __nexa_gfx_cg_decode(const unsigned char* data, int n, int* ow, int* oh, unsigned char** out) {
+    if (!data || n < 8 || !ow || !oh || !out) return 0;
+    CFDataRef cf = CFDataCreate(kCFAllocatorDefault, data, (CFIndex)n);
+    if (!cf) return 0;
+    CGImageSourceRef src = CGImageSourceCreateWithData(cf, NULL);
+    CFRelease(cf);
+    if (!src) return 0;
+    CGImageRef img = CGImageSourceCreateImageAtIndex(src, 0, NULL);
+    CFRelease(src);
+    if (!img) return 0;
+    size_t w = CGImageGetWidth(img);
+    size_t h = CGImageGetHeight(img);
+    if (!__nexa_gfx_pixels_ok((int)w, (int)h)) {
+        CGImageRelease(img);
+        return 0;
+    }
+    unsigned char* px = new unsigned char[w * h * 4];
+    std::memset(px, 0, w * h * 4);
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    if (!cs) {
+        delete[] px;
+        CGImageRelease(img);
+        return 0;
+    }
+    CGContextRef ctx = CGBitmapContextCreate(
+        px, w, h, 8, w * 4, cs,
+        (CGBitmapInfo)kCGImageAlphaPremultipliedLast | (CGBitmapInfo)kCGBitmapByteOrder32Big);
+    CGColorSpaceRelease(cs);
+    if (!ctx) {
+        delete[] px;
+        CGImageRelease(img);
+        return 0;
+    }
+    CGContextTranslateCTM(ctx, 0, (CGFloat)h);
+    CGContextScaleCTM(ctx, 1.0, -1.0);
+    CGContextSetBlendMode(ctx, kCGBlendModeCopy);
+    CGContextDrawImage(ctx, CGRectMake(0, 0, (CGFloat)w, (CGFloat)h), img);
+    CGContextRelease(ctx);
+    CGImageRelease(img);
+    for (size_t i = 0; i < w * h; i++) {
+        unsigned char a = px[i * 4 + 3];
+        if (a == 0 || a == 255) continue;
+        px[i * 4 + 0] = (unsigned char)((px[i * 4 + 0] * 255 + a / 2) / a);
+        px[i * 4 + 1] = (unsigned char)((px[i * 4 + 1] * 255 + a / 2) / a);
+        px[i * 4 + 2] = (unsigned char)((px[i * 4 + 2] * 255 + a / 2) / a);
+    }
+    *ow = (int)w;
+    *oh = (int)h;
+    *out = px;
+    return 1;
+}
+#endif
+
+static int __nexa_gfx_decode_rgba(const unsigned char* data, int n, int* ow, int* oh, unsigned char** out) {
+#ifdef _WIN32
+    return __nexa_gfx_wic_decode(data, n, ow, oh, out);
+#elif defined(__APPLE__)
+    return __nexa_gfx_cg_decode(data, n, ow, oh, out);
+#else
+    if (!data || n < 8 || !ow || !oh || !out) return 0;
+    int w = 0, h = 0;
+    unsigned char* px = __nexa_gfx_stbi_load_rgba(data, n, &w, &h);
+    if (!px) return 0;
+    if (!__nexa_gfx_pixels_ok(w, h)) {
+        __nexa_gfx_stbi_free(px);
+        return 0;
+    }
+    unsigned char* copy = new unsigned char[(size_t)w * (size_t)h * 4];
+    std::memcpy(copy, px, (size_t)w * (size_t)h * 4);
+    __nexa_gfx_stbi_free(px);
+    *ow = w;
+    *oh = h;
+    *out = copy;
+    return 1;
+#endif
+}
+
+static std::string __nexa_gfx_read_file(const std::string& path) {
+    if (path.empty()) return std::string();
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return std::string();
+    std::string out;
+    char buf[4096];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) {
+        if (out.size() + n > (size_t)80 * 1024 * 1024) {
+            std::fclose(f);
+            return std::string();
+        }
+        out.append(buf, n);
+    }
+    std::fclose(f);
+    return out;
+}
+
+static int __nexa_gfx_store_img(int w, int h, unsigned char* px, const std::string& key) {
+    if (__nexa_imgs.empty()) {
+        __nexa_GfxImg z;
+        z.w = 0;
+        z.h = 0;
+        z.px = NULL;
+        __nexa_imgs.push_back(z);
+        __nexa_img_paths.push_back("");
+    }
+    __nexa_GfxImg im;
+    im.w = w;
+    im.h = h;
+    im.px = px;
+    __nexa_imgs.push_back(im);
+    __nexa_img_paths.push_back(key);
+    return (int)__nexa_imgs.size() - 1;
+}
+
+static int __nexa_gfx_decode(const std::string& bytes) {
+    int w = 0, h = 0;
+    unsigned char* px = NULL;
+    if (!__nexa_gfx_decode_rgba((const unsigned char*)bytes.data(), (int)bytes.size(), &w, &h, &px) || !px) {
+        return 0;
+    }
+    return __nexa_gfx_store_img(w, h, px, "");
+}
+
+static int __nexa_gfx_image(const std::string& path) {
+    if (path.empty()) return 0;
+    for (size_t i = 1; i < __nexa_img_paths.size(); i++) {
+        if (__nexa_img_paths[i] == path && __nexa_imgs[i].px) return (int)i;
+    }
+    std::string bytes = __nexa_gfx_read_file(path);
+    if (bytes.empty()) return 0;
+    int w = 0, h = 0;
+    unsigned char* px = NULL;
+    if (!__nexa_gfx_decode_rgba((const unsigned char*)bytes.data(), (int)bytes.size(), &w, &h, &px) || !px) {
+        return 0;
+    }
+    return __nexa_gfx_store_img(w, h, px, path);
+}
+
+static int __nexa_gfx_image_w(int id) {
+    if (id < 1 || id >= (int)__nexa_imgs.size() || !__nexa_imgs[(size_t)id].px) return 0;
+    return __nexa_imgs[(size_t)id].w;
+}
+
+static int __nexa_gfx_image_h(int id) {
+    if (id < 1 || id >= (int)__nexa_imgs.size() || !__nexa_imgs[(size_t)id].px) return 0;
+    return __nexa_imgs[(size_t)id].h;
+}
+
+static void __nexa_gfx_put_a(int i, unsigned char R, unsigned char G, unsigned char B, unsigned char A) {
+    if (!__nexa_g.fb || A == 0) return;
+    unsigned char* d = __nexa_g.fb + i;
+#ifdef _WIN32
+    if (A == 255) {
+        d[0] = B;
+        d[1] = G;
+        d[2] = R;
+        d[3] = 255;
+        return;
+    }
+    d[0] = (unsigned char)((B * A + d[0] * (255 - A) + 127) / 255);
+    d[1] = (unsigned char)((G * A + d[1] * (255 - A) + 127) / 255);
+    d[2] = (unsigned char)((R * A + d[2] * (255 - A) + 127) / 255);
+    d[3] = 255;
+#else
+    if (A == 255) {
+        d[0] = R;
+        d[1] = G;
+        d[2] = B;
+        d[3] = 255;
+        return;
+    }
+    d[0] = (unsigned char)((R * A + d[0] * (255 - A) + 127) / 255);
+    d[1] = (unsigned char)((G * A + d[1] * (255 - A) + 127) / 255);
+    d[2] = (unsigned char)((B * A + d[2] * (255 - A) + 127) / 255);
+    d[3] = 255;
+#endif
+}
+
+static int __nexa_gfx_blit(int x, int y, int id, int dw, int dh) {
+    if (!__nexa_g.fb || !__nexa_g.ready) return 0;
+    if (id < 1 || id >= (int)__nexa_imgs.size()) return 0;
+    const __nexa_GfxImg& im = __nexa_imgs[(size_t)id];
+    if (!im.px || im.w < 1 || im.h < 1) return 0;
+    if (dw < 1) dw = im.w;
+    if (dh < 1) dh = im.h;
+    int drew = 0;
+    for (int yy = 0; yy < dh; yy++) {
+        int py = y + yy;
+        if (py < 0 || py >= __nexa_g.h) continue;
+        int sy = yy * im.h / dh;
+        if (sy < 0) sy = 0;
+        if (sy >= im.h) sy = im.h - 1;
+        for (int xx = 0; xx < dw; xx++) {
+            int px = x + xx;
+            if (px < 0 || px >= __nexa_g.w) continue;
+            int sx = xx * im.w / dw;
+            if (sx < 0) sx = 0;
+            if (sx >= im.w) sx = im.w - 1;
+            const unsigned char* s = im.px + ((size_t)sy * (size_t)im.w + (size_t)sx) * 4;
+            __nexa_gfx_put_a((py * __nexa_g.w + px) * 4, s[0], s[1], s[2], s[3]);
+            drew = 1;
+        }
+    }
+    return drew;
+}
+
+static int __nexa_gfx_blit_path(int x, int y, const std::string& path, int dw, int dh) {
+    return __nexa_gfx_blit(x, y, __nexa_gfx_image(path), dw, dh);
 }
 )NEXA_GFX";
 }

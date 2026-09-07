@@ -924,6 +924,7 @@ static std::string nexaBuildCompileCmd(
     }
     if (linkGfx) {
         cmd += " -lgdi32";
+        cmd += " -lwindowscodecs";
     }
     if (linkHttp) {
         // std/http uses WinHTTP (OS API; HTTPS via Schannel).
@@ -934,7 +935,7 @@ static std::string nexaBuildCompileCmd(
         cmd += " -framework CoreFoundation -framework CFNetwork";
     }
     if (linkGfx) {
-        cmd += " -framework Cocoa -framework ApplicationServices";
+        cmd += " -framework Cocoa -framework ApplicationServices -framework ImageIO";
     }
 #else
     if (linkGfx) {
