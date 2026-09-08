@@ -25,7 +25,7 @@
 #include <sys/wait.h>
 #endif
 
-#define NEXAC_VERSION "0.1.10"
+#define NEXAC_VERSION "0.1.11"
 
 static std::string getExePath() {
 #ifdef __linux__
@@ -215,9 +215,15 @@ fn main() {
     }
 }
 
+#ifdef _WIN32
+static void nexaRefreshWindowsCompilerPath();
+#endif
+static bool nexaHasPython();
+
 // On Windows native: find clang, g++, or gcc (MinGW/MSYS2). Returns compiler name or empty.
 static std::string findWindowsCxxNative() {
 #ifdef _WIN32
+    nexaRefreshWindowsCompilerPath();
     const char* candidates[] = {"clang++", "clang", "g++", "gcc"};
     for (const char* cxx : candidates) {
         std::string cmd = "where ";
@@ -324,6 +330,209 @@ static bool nexaCmdExists(const std::string& name) {
 
 static bool nexaPathExists(const std::string& p) {
     return !p.empty() && std::filesystem::exists(p);
+}
+
+static std::string nexaPopenAll(const std::string& cmd) {
+#ifdef _WIN32
+    FILE* f = _popen(cmd.c_str(), "r");
+#else
+    FILE* f = popen(cmd.c_str(), "r");
+#endif
+    if (!f) return "";
+    std::string s;
+    char buf[512];
+    while (fgets(buf, sizeof(buf), f)) s += buf;
+#ifdef _WIN32
+    _pclose(f);
+#else
+    pclose(f);
+#endif
+    return s;
+}
+
+static void nexaPrependProcessPath(const std::string& dir) {
+    if (dir.empty() || !nexaPathExists(dir)) return;
+    const char* cur = std::getenv("PATH");
+    std::string path = cur ? cur : "";
+#ifdef _WIN32
+    const char sep = ';';
+#else
+    const char sep = ':';
+#endif
+    std::string token = dir;
+    if (path.find(token) != std::string::npos) return;
+    std::string next = token + sep + path;
+#ifdef _WIN32
+    SetEnvironmentVariableA("PATH", next.c_str());
+    _putenv_s("PATH", next.c_str());
+#else
+    setenv("PATH", next.c_str(), 1);
+#endif
+}
+
+#ifdef _WIN32
+static void nexaAddDirIfExe(const std::filesystem::path& dir, const char* exe) {
+    std::error_code ec;
+    if (std::filesystem::exists(dir / exe, ec)) {
+        nexaPrependProcessPath(dir.string());
+    }
+}
+
+static void nexaScanForExe(const std::filesystem::path& root, const char* exe, int depth) {
+    std::error_code ec;
+    if (depth < 0 || !std::filesystem::exists(root, ec) || !std::filesystem::is_directory(root, ec)) return;
+    nexaAddDirIfExe(root, exe);
+    if (depth == 0) return;
+    for (std::filesystem::directory_iterator it(root, ec), end; it != end && !ec; it.increment(ec)) {
+        if (it->is_directory(ec)) nexaScanForExe(it->path(), exe, depth - 1);
+    }
+}
+
+// Pick up winget/LLVM/MinGW locations that `where` misses (legacy C:\mingw64 vs WinGet Packages).
+// Cheap on the common path: WinGet Links + known dirs. Recurse Packages only if still missing.
+static void nexaRefreshWindowsCompilerPath() {
+    const char* la = std::getenv("LOCALAPPDATA");
+    const char* pf = std::getenv("ProgramFiles");
+    const char* pfx = std::getenv("ProgramFiles(x86)");
+    if (la && la[0]) {
+        std::filesystem::path local(la);
+        nexaPrependProcessPath((local / "Microsoft" / "WinGet" / "Links").string());
+        nexaAddDirIfExe(local / "Programs" / "LLVM" / "bin", "clang++.exe");
+        nexaAddDirIfExe(local / "Programs" / "WinLibs" / "mingw64" / "bin", "g++.exe");
+    }
+    if (pf && pf[0]) {
+        nexaAddDirIfExe(std::filesystem::path(pf) / "LLVM" / "bin", "clang++.exe");
+    }
+    if (pfx && pfx[0]) {
+        nexaAddDirIfExe(std::filesystem::path(pfx) / "LLVM" / "bin", "clang++.exe");
+    }
+    nexaAddDirIfExe("C:\\mingw64\\bin", "g++.exe");
+    nexaAddDirIfExe("C:\\WinLibs\\mingw64\\bin", "g++.exe");
+    nexaAddDirIfExe("C:\\tools\\winlibs\\mingw64\\bin", "g++.exe");
+    nexaAddDirIfExe("C:\\msys64\\ucrt64\\bin", "g++.exe");
+    nexaAddDirIfExe("C:\\msys64\\mingw64\\bin", "g++.exe");
+    if (la && la[0] && !nexaCmdExists("g++") && !nexaCmdExists("clang++") && !nexaCmdExists("g++.exe")) {
+        std::filesystem::path pkgs = std::filesystem::path(la) / "Microsoft" / "WinGet" / "Packages";
+        nexaScanForExe(pkgs, "g++.exe", 5);
+        if (!nexaCmdExists("g++") && !nexaCmdExists("g++.exe")) nexaScanForExe(pkgs, "clang++.exe", 5);
+    }
+}
+
+static void nexaRefreshWindowsToolPath() {
+    nexaRefreshWindowsCompilerPath();
+    const char* la = std::getenv("LOCALAPPDATA");
+    const char* pf = std::getenv("ProgramFiles");
+    if (la && la[0]) {
+        std::filesystem::path local(la);
+        nexaAddDirIfExe(local / "Programs" / "Git" / "cmd", "git.exe");
+        nexaAddDirIfExe(local / "Programs" / "Python" / "Python312", "python.exe");
+        nexaAddDirIfExe(local / "Programs" / "Python" / "Python313", "python.exe");
+        nexaAddDirIfExe(local / "Programs" / "Python" / "Python314", "python.exe");
+        nexaAddDirIfExe(local / "Programs" / "Python" / "Launcher", "py.exe");
+        nexaScanForExe(local / "Programs" / "Python", "python.exe", 2);
+        nexaAddDirIfExe(local / "Programs" / "nodejs", "node.exe");
+    }
+    if (pf && pf[0]) {
+        std::filesystem::path prog(pf);
+        nexaAddDirIfExe(prog / "Git" / "cmd", "git.exe");
+        nexaAddDirIfExe(prog / "nodejs", "node.exe");
+        nexaScanForExe(prog / "Python312", "python.exe", 1);
+        nexaScanForExe(prog / "Python313", "python.exe", 1);
+    }
+    if (la && la[0]) {
+        std::filesystem::path pkgs = std::filesystem::path(la) / "Microsoft" / "WinGet" / "Packages";
+        if (!nexaCmdExists("git")) nexaScanForExe(pkgs, "git.exe", 5);
+        if (!nexaHasPython()) nexaScanForExe(pkgs, "python.exe", 5);
+        if (!nexaCmdExists("node")) nexaScanForExe(pkgs, "node.exe", 5);
+    }
+}
+
+static bool nexaWingetHasId(const std::string& id) {
+    if (!nexaCmdExists("winget")) return false;
+    std::string out = nexaPopenAll("winget list -e --id " + id + " --disable-interactivity 2>nul");
+    if (out.find("No installed package found") != std::string::npos) return false;
+    return out.find(id) != std::string::npos;
+}
+
+// Install only if the package is not already present. Never upgrades.
+static bool nexaWingetInstallMissing(const std::string& id) {
+    if (nexaWingetHasId(id)) return true;
+    if (!nexaCmdExists("winget")) return false;
+    std::cout << "[Nexa] Installing " << id << " (missing; will not upgrade existing tools)...\n";
+    std::cout.flush();
+    std::string cmd = "winget install --id " + id +
+        " -e --accept-package-agreements --accept-source-agreements --disable-interactivity --no-upgrade --scope user";
+    if (std::system(cmd.c_str()) == 0) {
+        nexaRefreshWindowsToolPath();
+        return true;
+    }
+    cmd = "winget install --id " + id +
+        " -e --accept-package-agreements --accept-source-agreements --disable-interactivity --no-upgrade";
+    int rc = std::system(cmd.c_str());
+    nexaRefreshWindowsToolPath();
+    return rc == 0;
+}
+#endif
+
+// `where python` hits the Windows Store stub and is not a real interpreter.
+static bool nexaHasPython() {
+#ifdef _WIN32
+    if (std::system("python -c \"import sys\" >nul 2>&1") == 0) return true;
+    if (std::system("py -3 -c \"import sys\" >nul 2>&1") == 0) return true;
+    if (std::system("python3 -c \"import sys\" >nul 2>&1") == 0) return true;
+    return false;
+#else
+    return std::system("python3 -c \"import sys\" >/dev/null 2>&1") == 0
+        || std::system("python -c \"import sys\" >/dev/null 2>&1") == 0;
+#endif
+}
+
+// When the user asked NexaC to fetch a toolchain, install missing host tools.
+// Skip anything already on PATH or already registered with winget.
+static bool nexaEnsureHostTool(const std::string& cmd, const char* wingetId, const char* aptPkg) {
+#ifdef _WIN32
+    nexaRefreshWindowsToolPath();
+#endif
+    if (cmd == "python" || cmd == "python3") {
+        if (nexaHasPython()) return true;
+    } else if (nexaCmdExists(cmd)) {
+        return true;
+    }
+#ifdef _WIN32
+    if (wingetId && wingetId[0]) {
+        if (!nexaWingetInstallMissing(wingetId)) return false;
+        nexaRefreshWindowsToolPath();
+        if (cmd == "python" || cmd == "python3") return nexaHasPython();
+        return nexaCmdExists(cmd);
+    }
+    return false;
+#else
+    (void)wingetId;
+    if (!aptPkg || !aptPkg[0]) return false;
+#if defined(__APPLE__)
+    if (nexaCmdExists("brew")) {
+        std::cout << "[Nexa] Installing " << aptPkg << " with Homebrew...\n";
+        std::cout.flush();
+        return std::system((std::string("brew list ") + aptPkg + " >/dev/null 2>&1 || brew install " + aptPkg).c_str()) == 0
+            && nexaCmdExists(cmd);
+    }
+    return false;
+#else
+    if (nexaCmdExists("apt-get")) {
+        std::cout << "[Nexa] Installing " << aptPkg << "...\n";
+        std::cout.flush();
+        return std::system((std::string("sudo apt-get install -y --no-upgrade ") + aptPkg).c_str()) == 0
+            && nexaCmdExists(cmd);
+    }
+    if (nexaCmdExists("dnf")) {
+        std::string check = std::string("rpm -q ") + aptPkg + " >/dev/null 2>&1";
+        if (std::system(check.c_str()) == 0) return nexaCmdExists(cmd);
+        return std::system((std::string("sudo dnf install -y ") + aptPkg).c_str()) == 0
+            && nexaCmdExists(cmd);
+    }
+    return false;
+#endif
+#endif
 }
 
 #if !defined(_WIN32) && !defined(__APPLE__)
@@ -626,23 +835,78 @@ static void nexaPrintWasmInstallHelp() {
     std::cerr << "  Override the compiler with NEXA_WASM_CXX.\n";
 }
 
+static bool nexaEmsdkHasToolchain(const std::string& dest) {
+    std::filesystem::path em = std::filesystem::path(dest) / "upstream" / "emscripten";
+#ifdef _WIN32
+    return nexaPathExists((em / "em++.bat").string()) || nexaPathExists((em / "em++.exe").string())
+        || nexaPathExists((em / "em++").string());
+#else
+    return nexaPathExists((em / "em++").string());
+#endif
+}
+
+static void nexaPrependEmsdkRuntime(const std::string& dest) {
+    if (dest.empty() || !nexaPathExists(dest)) return;
+#ifdef _WIN32
+    SetEnvironmentVariableA("EMSDK", dest.c_str());
+    _putenv_s("EMSDK", dest.c_str());
+#else
+    setenv("EMSDK", dest.c_str(), 1);
+#endif
+    std::filesystem::path root(dest);
+    nexaPrependProcessPath((root / "upstream" / "emscripten").string());
+    std::error_code ec;
+    std::filesystem::path nodeRoot = root / "node";
+    if (std::filesystem::exists(nodeRoot, ec) && std::filesystem::is_directory(nodeRoot, ec)) {
+        for (std::filesystem::directory_iterator it(nodeRoot, ec), end; it != end && !ec; it.increment(ec)) {
+            if (!it->is_directory(ec)) continue;
+#ifdef _WIN32
+            nexaAddDirIfExe(it->path(), "node.exe");
+            nexaAddDirIfExe(it->path() / "bin", "node.exe");
+#else
+            nexaPrependProcessPath((it->path() / "bin").string());
+#endif
+        }
+    }
+}
+
 static bool nexaInstallEmsdk(const std::string& dest) {
     if (dest.empty()) {
         nexaAlert("NexaC", "Cannot install Emscripten: no user home directory.");
         return false;
     }
-    if (!nexaCmdExists("git")) {
-        nexaAlert("NexaC",
-            "Git is required to install the WASM toolchain.\n"
-            "Install Git from https://git-scm.com/ and try --wasm again.");
-        return false;
-    }
+#ifdef _WIN32
+    nexaRefreshWindowsToolPath();
+#endif
 
 #ifdef _WIN32
     const std::string launcher = (std::filesystem::path(dest) / "emsdk.bat").string();
 #else
     const std::string launcher = (std::filesystem::path(dest) / "emsdk").string();
 #endif
+
+    // Already have a working SDK in ~/emsdk — reuse it (do not pull "latest").
+    if (nexaEmsdkHasToolchain(dest)) {
+        std::cout << "[Nexa] Using existing Emscripten in " << dest << " (not upgrading).\n";
+        std::cout.flush();
+        nexaPrependEmsdkRuntime(dest);
+        return true;
+    }
+
+    if (!nexaEnsureHostTool("git", "Git.Git", "git")) {
+        nexaAlert("NexaC",
+            "Git is required to install the WASM toolchain, and NexaC could not install it.\n"
+            "Install Git, then retry --wasm.");
+        return false;
+    }
+    if (!nexaEnsureHostTool("python", "Python.Python.3.12", "python3") &&
+        !nexaHasPython()) {
+        nexaAlert("NexaC",
+            "Python is required by emsdk, and NexaC could not install it.\n"
+            "Install Python 3, then retry --wasm.");
+        return false;
+    }
+
     if (!nexaPathExists(launcher)) {
         if (nexaPathExists(dest)) {
             std::error_code ec;
@@ -662,36 +926,47 @@ static bool nexaInstallEmsdk(const std::string& dest) {
         }
     }
 
-    std::cout << "[Nexa] Installing Emscripten (this can take several minutes)...\n";
+    if (nexaEmsdkHasToolchain(dest)) {
+        nexaPrependEmsdkRuntime(dest);
+        return true;
+    }
+
+    std::cout << "[Nexa] Installing Emscripten (first-time download; later --wasm reuses this)...\n";
     std::cout.flush();
-#ifdef _WIN32
     std::string install = "\"" + launcher + "\" install latest";
     std::string activate = "\"" + launcher + "\" activate latest";
-#else
-    std::string install = "\"" + launcher + "\" install latest";
-    std::string activate = "\"" + launcher + "\" activate latest";
-#endif
     if (std::system(install.c_str()) != 0) {
-        nexaAlert("NexaC", "emsdk install latest failed. See the console output for details.");
+        nexaAlert("NexaC", "emsdk install failed. See the console output for details.");
         return false;
     }
     if (std::system(activate.c_str()) != 0) {
-        nexaAlert("NexaC", "emsdk activate latest failed. See the console output for details.");
+        nexaAlert("NexaC", "emsdk activate failed. See the console output for details.");
         return false;
     }
+    nexaPrependEmsdkRuntime(dest);
     return true;
 }
 
 static bool nexaEnsureWasmTool(WasmTool& tool) {
+#ifdef _WIN32
+    nexaRefreshWindowsToolPath();
+#endif
+    {
+        const std::string dest = nexaDefaultEmsdkDir();
+        if (!dest.empty()) nexaPrependEmsdkRuntime(dest);
+    }
     tool = findWasmCxx();
-    if (tool.kind != WasmKind::None) return true;
+    if (tool.kind != WasmKind::None) {
+        nexaPrependEmsdkRuntime(nexaDefaultEmsdkDir());
+        return true;
+    }
 
     const std::string dest = nexaDefaultEmsdkDir();
     std::string ask =
         "NexaC needs the Emscripten WASM toolchain (em++) to compile --wasm.\n\n"
-        "Install it now? Emscripten will be downloaded into:\n\n  ";
+        "Install it now? Missing Git/Python will be installed too.\n"
+        "An existing emsdk checkout is reused (not upgraded).\n\n  ";
     ask += dest.empty() ? std::string("(your home folder)/emsdk") : dest;
-    ask += "\n\nThis can take several minutes and requires Git.";
 
     std::cout << "[Nexa] WASM toolchain not found.\n";
     std::cout.flush();
@@ -701,6 +976,7 @@ static bool nexaEnsureWasmTool(WasmTool& tool) {
     }
     if (!nexaInstallEmsdk(dest)) return false;
 
+    nexaPrependEmsdkRuntime(dest);
     tool = findWasmCxx();
     if (tool.kind == WasmKind::None) {
         nexaAlert("NexaC",
@@ -724,6 +1000,7 @@ static std::string nexaWasmCompileCmd(
     bool noRtti,
     bool linkHttp,
     bool linkThread,
+    bool linkGfx,
     const std::vector<std::string>& linkInputs
 ) {
 #ifdef _WIN32
@@ -744,6 +1021,7 @@ static std::string nexaWasmCompileCmd(
         cmd += " -sALLOW_MEMORY_GROWTH=1 -sEXIT_RUNTIME=1";
         if (linkHttp) cmd += " -sFETCH=1 -sASYNCIFY";
         if (linkThread) cmd += " -pthread -sPTHREAD_POOL_SIZE=4";
+        if (linkGfx) cmd += " -sFORCE_FILESYSTEM=1";
     } else {
         cmd += " --target=wasm32-wasi";
         if (!tool.sysroot.empty()) {
@@ -775,8 +1053,12 @@ static std::string nexaWasmCompileCmd(
 
 static int runWasmOutput(const std::string& path, WasmKind kind) {
     if (kind == WasmKind::Emscripten) {
-        if (!nexaCmdExists("node")) {
-            std::cerr << "[Nexa] Error: --run --wasm needs node on PATH to execute the Emscripten loader.\n";
+#ifdef _WIN32
+        nexaRefreshWindowsToolPath();
+#endif
+        nexaPrependEmsdkRuntime(nexaDefaultEmsdkDir());
+        if (!nexaCmdExists("node") && !nexaEnsureHostTool("node", "OpenJS.NodeJS.LTS", "nodejs")) {
+            std::cerr << "[Nexa] Error: --run --wasm needs node. NexaC could not find or install it.\n";
             return 1;
         }
         return std::system(("node \"" + path + "\"").c_str());
@@ -925,6 +1207,7 @@ static std::string nexaBuildCompileCmd(
     if (linkGfx) {
         cmd += " -lgdi32";
         cmd += " -lwindowscodecs";
+        cmd += " -lcomdlg32";
     }
     if (linkHttp) {
         // std/http uses WinHTTP (OS API; HTTPS via Schannel).
@@ -1316,8 +1599,9 @@ static int printHelp(int page = 1) {
     std::cout << "  --link <file>  Statically link an archive/object/lib into the executable\n";
     std::cout << "                 (repeatable; .a/.o are baked in, .so/.dll link dynamically)\n";
     std::cout << "  --win     Build Windows .exe (mingw-w64 from Linux; native on Windows)\n";
-    std::cout << "  --wasm    Build WebAssembly (em++ → .js+.wasm, or WASI .wasm).\n";
-    std::cout << "            If em++ is missing, a popup offers to install Emscripten.\n";
+        std::cout << "  --wasm    Build WebAssembly (em++ → .js+.wasm, or WASI .wasm).\n";
+        std::cout << "            If em++ is missing, a popup offers to install Emscripten\n";
+        std::cout << "            (also installs missing Git/Python; reuses an existing emsdk).\n";
     std::cout << "  --no-console  Build Windows GUI .exe (no console window)\n";
     std::cout << "  --help, -h    Show this help\n";
     std::cout << "  --version, --v, -v  Show version\n";
@@ -1775,7 +2059,8 @@ int main(int argc, char* argv[]) {
 
         if (buildWasm) {
             std::string cmd = nexaWasmCompileCmd(wasmTool, cppPath, wasmOut, opt, noExceptions, noRtti,
-                modules.hasHttp() && usage.http, modules.hasThread() && usage.thread, linkInputs);
+                modules.hasHttp() && usage.http, modules.hasThread() && usage.thread,
+                modules.hasGfx() && usage.gfx, linkInputs);
             int ret = std::system(cmd.c_str());
             std::remove(cppPath.c_str());
             if (ret != 0) {

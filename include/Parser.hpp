@@ -3415,7 +3415,7 @@ private:
         if (method == "open") { argc = 3; argcMax = 4; }
         else if (method == "resize") { argc = 2; argcMax = 3; }
         else if (method == "close" || method == "poll" || method == "present" || method == "closed"
-                 || method == "mouse_x" || method == "mouse_y"
+                 || method == "mouse_x" || method == "mouse_y" || method == "drop"
                  || method == "width" || method == "height" || method == "scale") argc = 0;
         else if (method == "key" || method == "pressed" || method == "mouse") argc = 1;
         else if (method == "get") argc = 2;
@@ -3427,6 +3427,7 @@ private:
         else if (method == "text_size") { argc = 0; argcMax = 1; }
         else if (method == "text_width" || method == "text_height") { argc = 1; argcMax = 2; }
         else if (method == "title") { argc = 0; argcMax = 1; }
+        else if (method == "opendialog" || method == "openfile") { argc = 0; argcMax = 1; if (method == "openfile") method = "opendialog"; }
         else if (method == "image" || method == "decode" || method == "image_w" || method == "image_h") argc = 1;
         else if (method == "blit") { argc = 3; argcMax = 5; }
         else {
@@ -3470,6 +3471,9 @@ private:
                 }
                 if (method == "title") {
                     throw std::runtime_error("gfx.title() or gfx.title(s) at line " + std::to_string(line));
+                }
+                if (method == "opendialog") {
+                    throw std::runtime_error("gfx.opendialog([filter]) at line " + std::to_string(line));
                 }
                 throw std::runtime_error("gfx.open(title, w, h[, scale]) at line " + std::to_string(line));
             }

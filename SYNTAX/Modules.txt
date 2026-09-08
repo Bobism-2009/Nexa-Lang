@@ -221,6 +221,10 @@ Nexa Standard Modules
   gfx.pressed(name)              - 1 if that key went down since the last gfx.poll()
   gfx.mouse_x() / gfx.mouse_y()  - cursor in framebuffer pixels (last in-window position)
   gfx.mouse(button)              - 1 if that button is down in the window ("left", "right", "middle")
+  gfx.drop()                     - path of a file dropped on the window (consumes; empty if none)
+  gfx.opendialog([filter])       - native file picker; filter like "*.ch8;*.hex" (empty if cancelled)
+                                   alias: gfx.openfile([filter])
+                                   wasm: opens the browser file picker; the path arrives via gfx.drop()
   Buffer is 1..4096 on each side. scale 1 is 1:1 window pixels; default 12 is chunky.
   Images are 1..4096 on each side. Windows uses WIC (PNG/JPEG/BMP/GIF/TIFF/ICO, plus
   WebP/HEIF when the OS has the codec). macOS uses ImageIO. Linux/wasm decode

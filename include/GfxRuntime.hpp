@@ -20,6 +20,8 @@ inline std::string gfxRuntimeCpp() {
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <shellapi.h>
+#include <commdlg.h>
 #include <objbase.h>
 #include <wincodec.h>
 #elif defined(__APPLE__)
@@ -47,6 +49,7 @@ struct __nexa_Gfx {
     int text_scale;
     unsigned char* fb;
     std::string title;
+    std::string drop_path;
     int k_now[64];
     int k_prev[64];
 #ifdef _WIN32
@@ -120,6 +123,25 @@ static void __nexa_gfx_mouse_apply(int x, int y, int inside, int left, int middl
 @implementation __NexaGfxView
 - (BOOL)isOpaque { return YES; }
 - (BOOL)acceptsFirstResponder { return YES; }
+- (instancetype)initWithFrame:(NSRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        [self registerForDraggedTypes:@[NSFilenamesPboardType]];
+    }
+    return self;
+}
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+    (void)sender;
+    return NSDragOperationCopy;
+}
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+    NSArray* files = [[sender draggingPasteboard] propertyListForType:NSFilenamesPboardType];
+    if ([files count] < 1) return NO;
+    NSString* p = [files objectAtIndex:0];
+    if (!p) return NO;
+    __nexa_g.drop_path = [p UTF8String];
+    return YES;
+}
 - (void)drawRect:(NSRect)dirtyRect {
     (void)dirtyRect;
     if (!__nexa_g.fb || __nexa_g.w < 1 || __nexa_g.h < 1) return;
@@ -205,6 +227,13 @@ static LRESULT CALLBACK __nexa_gfx_wndproc(HWND hwnd, UINT msg, WPARAM wParam, L
     }
     if (msg == WM_DESTROY) {
         if (__nexa_g.hwnd == hwnd) __nexa_g.hwnd = nullptr;
+        return 0;
+    }
+    if (msg == WM_DROPFILES) {
+        HDROP drop = (HDROP)wParam;
+        char path[MAX_PATH];
+        if (DragQueryFileA(drop, 0, path, MAX_PATH) > 0) __nexa_g.drop_path = path;
+        DragFinish(drop);
         return 0;
     }
     if (msg == WM_ERASEBKGND) return 1;
@@ -329,6 +358,7 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
     __nexa_g.mrb = 0;
     if (__nexa_g.text_scale < 1) __nexa_g.text_scale = 1;
     __nexa_g.title = title;
+    __nexa_g.drop_path.clear();
     std::memset(__nexa_g.k_now, 0, sizeof(__nexa_g.k_now));
     std::memset(__nexa_g.k_prev, 0, sizeof(__nexa_g.k_prev));
     __nexa_g.fb = new unsigned char[(size_t)w * (size_t)h * 4];
@@ -352,6 +382,42 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
         c.style.imageRendering = 'pixelated';
         c.style.background = '#000';
         document.title = UTF8ToString($3);
+        Module['nexaDropPath'] = '';
+        var cnv = Module['canvas'] || document.getElementById('canvas');
+        var inp = document.getElementById('nexa-file');
+        if (!inp) {
+            inp = document.createElement('input');
+            inp.type = 'file';
+            inp.id = 'nexa-file';
+            inp.style.display = 'none';
+            document.body.appendChild(inp);
+        }
+        function nexaTakeFile(f) {
+            if (!f) return;
+            var r = new FileReader();
+            r.onload = function() {
+                var u8 = new Uint8Array(r.result);
+                var name = '/tmp/' + f.name;
+                if (typeof FS !== 'undefined' && FS.writeFile) FS.writeFile(name, u8);
+                Module['nexaDropPath'] = name;
+            };
+            r.readAsArrayBuffer(f);
+        }
+        inp.onchange = function() {
+            nexaTakeFile(inp.files && inp.files[0]);
+            inp.value = '';
+        };
+        function nexaBindDrop(el) {
+            if (!el || el.getAttribute('data-nexa-drop')) return;
+            el.setAttribute('data-nexa-drop', '1');
+            el.addEventListener('dragover', function(e) { e.preventDefault(); });
+            el.addEventListener('drop', function(e) {
+                e.preventDefault();
+                nexaTakeFile(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]);
+            });
+        }
+        nexaBindDrop(cnv);
+        nexaBindDrop(document.body);
     }), w, h, scale, title.c_str());
     emscripten_set_mousemove_callback("#canvas", 0, 1, __nexa_gfx_emouse);
     emscripten_set_mousedown_callback("#canvas", 0, 1, __nexa_gfx_emouse);
@@ -381,6 +447,7 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
     __nexa_g.bmi.bmiHeader.biBitCount = 32;
     __nexa_g.bmi.bmiHeader.biCompression = BI_RGB;
     __nexa_g.ready = __nexa_g.hwnd ? 1 : 0;
+    if (__nexa_g.hwnd) DragAcceptFiles(__nexa_g.hwnd, TRUE);
     if (!__nexa_g.hwnd) __nexa_g.closed = 1;
     return __nexa_g.ready;
 #elif defined(__APPLE__)
@@ -535,6 +602,19 @@ static void __nexa_gfx_poll() {
         XNextEvent(__nexa_g.dpy, &ev);
         if (ev.type == ClientMessage && (int)ev.xclient.data.l[0] == __nexa_g.wm_delete) __nexa_g.closed = 1;
         if (ev.type == DestroyNotify) __nexa_g.closed = 1;
+    }
+#endif
+#ifdef __EMSCRIPTEN__
+    {
+        char buf[1024];
+        int got = EM_ASM_INT(({
+            var p = Module['nexaDropPath'] || '';
+            if (!p.length) return 0;
+            stringToUTF8(p, $0, $1);
+            Module['nexaDropPath'] = '';
+            return 1;
+        }), buf, 1024);
+        if (got) __nexa_g.drop_path = buf;
     }
 #endif
     __nexa_gfx_mouse_refresh();
@@ -1465,6 +1545,98 @@ static int __nexa_gfx_blit(int x, int y, int id, int dw, int dh) {
 
 static int __nexa_gfx_blit_path(int x, int y, const std::string& path, int dw, int dh) {
     return __nexa_gfx_blit(x, y, __nexa_gfx_image(path), dw, dh);
+}
+
+static std::string __nexa_gfx_filter_safe(const std::string& spec) {
+    std::string o;
+    for (char c : spec) {
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+            || c == '*' || c == '.' || c == ';' || c == ',' || c == ' ' || c == '|') {
+            o += c;
+        }
+    }
+    return o;
+}
+
+static std::string __nexa_gfx_drop() {
+#ifdef __EMSCRIPTEN__
+    __nexa_gfx_poll();
+#endif
+    std::string p = __nexa_g.drop_path;
+    __nexa_g.drop_path.clear();
+    return p;
+}
+
+static std::string __nexa_gfx_opendialog(const std::string& spec) {
+#ifdef __EMSCRIPTEN__
+    EM_ASM(({
+        var i = document.getElementById('nexa-file');
+        if (i) i.click();
+    }));
+    return std::string();
+#elif defined(_WIN32)
+    char file[MAX_PATH];
+    file[0] = 0;
+    std::string filt = "Files";
+    filt.push_back('\0');
+    std::string pat = __nexa_gfx_filter_safe(spec);
+    if (pat.empty()) pat = "*.*";
+    filt += pat;
+    filt.push_back('\0');
+    filt += "All files";
+    filt.push_back('\0');
+    filt += "*.*";
+    filt.push_back('\0');
+    filt.push_back('\0');
+    OPENFILENAMEA ofn;
+    std::memset(&ofn, 0, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = __nexa_g.hwnd;
+    ofn.lpstrFilter = filt.c_str();
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrTitle = "Open";
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_HIDEREADONLY;
+    if (GetOpenFileNameA(&ofn)) return std::string(file);
+    return std::string();
+#elif defined(__APPLE__)
+    @autoreleasepool {
+        NSOpenPanel* panel = [NSOpenPanel openPanel];
+        [panel setCanChooseFiles:YES];
+        [panel setCanChooseDirectories:NO];
+        [panel setAllowsMultipleSelection:NO];
+        [panel setTitle:@"Open"];
+        if ([panel runModal] != NSModalResponseOK) return std::string();
+        NSURL* url = [[panel URLs] firstObject];
+        if (!url) return std::string();
+        NSString* p = [url path];
+        if (!p) return std::string();
+        return std::string([p UTF8String]);
+    }
+#elif defined(__linux__)
+    std::string pat = __nexa_gfx_filter_safe(spec);
+    for (char& c : pat) if (c == ';') c = ' ';
+    std::string cmd;
+    if (std::system("command -v zenity >/dev/null 2>&1") == 0) {
+        cmd = "zenity --file-selection --title='Open'";
+        if (!pat.empty()) cmd += " --file-filter='Files | " + pat + "'";
+    } else if (std::system("command -v kdialog >/dev/null 2>&1") == 0) {
+        cmd = "kdialog --getopenfilename . '" + (pat.empty() ? std::string("*") : pat) + "'";
+    } else {
+        return std::string();
+    }
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if (!pipe) return std::string();
+    char buf[4096];
+    std::string out;
+    while (fgets(buf, sizeof(buf), pipe)) out += buf;
+    pclose(pipe);
+    while (!out.empty() && (out.back() == '\n' || out.back() == '\r')) out.pop_back();
+    return out;
+#else
+    (void)spec;
+    return std::string();
+#endif
 }
 )NEXA_GFX";
 }

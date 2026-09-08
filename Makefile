@@ -10,7 +10,7 @@ install-deps:
 		xcode-select -p >/dev/null 2>&1 || xcode-select --install; \
 		echo "macOS: Apple Command Line Tools requested/available"; \
 	elif command -v apt-get >/dev/null 2>&1; then \
-		sudo apt-get update && sudo apt-get install -y clang g++ build-essential git \
+		sudo apt-get update && sudo apt-get install -y --no-upgrade clang g++ build-essential git \
 			libx11-dev libxcb1-dev libxau-dev libxdmcp-dev; \
 		echo "Optional Windows cross-compile: sudo apt-get install -y mingw-w64"; \
 	elif command -v dnf >/dev/null 2>&1; then \

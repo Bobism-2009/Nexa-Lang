@@ -2,7 +2,7 @@
 
 **Nexa** is a small systems-friendly language with C++-like surface syntax. **NexaC** is its compiler: it parses `.nxa` files, transpiles to a single C++ translation unit, and invokes **clang++** (or **g++** on Windows as a fallback) to produce a native executable or shared library.
 
-Current compiler version string: **0.1.10** (`NexaC --version`).
+Current compiler version string: **0.1.11** (`NexaC --version`).
 
 | | |
 |---|---|
@@ -15,7 +15,7 @@ Current compiler version string: **0.1.10** (`NexaC --version`).
 
 ## Requirements
 
-- **Windows:** [LLVM/Clang](https://releases.llvm.org/) or **MinGW-w64** (`clang++` / `g++`) on your `PATH`.
+- **Windows:** [LLVM/Clang](https://releases.llvm.org/) or **MinGW-w64** (`clang++` / `g++`) on your `PATH`. The installer finds winget-installed compilers (WinGet Links / Packages / LLVM) and only installs a package if it is missing — it will not upgrade tools you already have.
 - **Linux:** `clang++` and normal build tools. The installer / `make install-deps`
   installs compile-time packages only (compiler, git, X11 *headers/static libs*
   for `std/gfx`). It does **not** install the wasm toolchain. Executables embed
@@ -26,7 +26,7 @@ Current compiler version string: **0.1.10** (`NexaC --version`).
 
 The generated C++ uses the standard library (`std::string`, `std::vector`, threads, chrono, etc.) and platform APIs where modules need them (e.g. `std/os` on Windows).
 
-**`--wasm`** needs [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) (`em++` on `PATH`, or `EMSDK` set). If it is missing, NexaC shows a popup asking to install Emscripten into `~/emsdk` (requires Git). WASI-SDK (`WASI_SDK_PATH`) is a fallback for programs that do not use `std/http` or `std/thread`. Override the compiler with `NEXA_WASM_CXX`. Run with `NexaC file.nxa --wasm --run` (`node` for Emscripten, `wasmtime`/`wasmer` for WASI).
+**`--wasm`** needs [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) (`em++` on `PATH`, or `EMSDK` set). If it is missing, NexaC asks to install Emscripten into `~/emsdk` and will also install missing Git/Python (and Node for `--run`). An existing `~/emsdk` or winget/LLVM/MinGW install is reused — NexaC does not upgrade tools that are already present. WASI-SDK (`WASI_SDK_PATH`) is a fallback for programs that do not use `std/http` or `std/thread`. Override the compiler with `NEXA_WASM_CXX`. Run with `NexaC file.nxa --wasm --run` (`node` for Emscripten, `wasmtime`/`wasmer` for WASI).
 
 ---
 

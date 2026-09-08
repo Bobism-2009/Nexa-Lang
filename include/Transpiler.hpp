@@ -1265,6 +1265,7 @@ private:
                 return "string";
             case AstNode::Type::GfxCall:
                 if (e.value == "title") return e.children.empty() ? "string" : "int";
+                if (e.value == "drop" || e.value == "opendialog" || e.value == "openfile") return "string";
                 if (e.value == "closed" || e.value == "key" || e.value == "pressed" || e.value == "open" || e.value == "resize"
                     || e.value == "mouse_x" || e.value == "mouse_y" || e.value == "mouse"
                     || e.value == "width" || e.value == "height" || e.value == "scale"
@@ -3309,6 +3310,11 @@ private:
                 if (fn == "title") {
                     if (e.children.empty()) return "__nexa_gfx_title_get()";
                     return "__nexa_gfx_title_set(" + a(0) + ")";
+                }
+                if (fn == "drop") return "__nexa_gfx_drop()";
+                if (fn == "opendialog" || fn == "openfile") {
+                    std::string f = e.children.empty() ? "std::string()" : a(0);
+                    return "__nexa_gfx_opendialog(" + f + ")";
                 }
                 if (fn == "image") return "__nexa_gfx_image(" + a(0) + ")";
                 if (fn == "decode") return "__nexa_gfx_decode(" + a(0) + ")";

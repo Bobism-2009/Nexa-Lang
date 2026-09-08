@@ -215,6 +215,9 @@ export const MODULE_MEMBERS: Record<string, { name: string; detail: string }[]> 
     { name: "mouse_x", detail: "gfx.mouse_x() — cursor X in framebuffer pixels" },
     { name: "mouse_y", detail: "gfx.mouse_y() — cursor Y in framebuffer pixels" },
     { name: "mouse", detail: "gfx.mouse(button) — 1 if left/right/middle is down" },
+    { name: "drop", detail: "gfx.drop() — path of a file dropped on the window" },
+    { name: "opendialog", detail: "gfx.opendialog([filter]) — file explorer picker" },
+    { name: "openfile", detail: "gfx.openfile([filter]) — alias for gfx.opendialog" },
   ],
 };
 
