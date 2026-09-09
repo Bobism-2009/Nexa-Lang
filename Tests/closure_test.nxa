@@ -1,0 +1,34 @@
+#include <std/io>
+
+fn apply(cb: fn(int): int, x: int): int {
+    return cb(x);
+}
+
+fn add1(x: int): int {
+    return x + 1;
+}
+
+fn main() {
+    let f = fn (x: int): int { return x + 10; };
+    io.println(f(3));
+    io.println(apply(f, 5));
+    io.println(apply(add1, 5));
+    io.println(apply(fn (x: int): int { return x * 2; }, 7));
+
+    let n = 4;
+    let g = fn (): int { return n; };
+    io.println(g());
+    n = 9;
+    io.println(g());
+
+    let acc = 0;
+    let bump = fn () { acc = acc + 1; };
+    bump();
+    bump();
+    io.println(acc);
+
+    io.println((fn (x: int): int { return x - 1; })(8));
+
+    let h: fn(int): int = add1;
+    io.println(h(1));
+}

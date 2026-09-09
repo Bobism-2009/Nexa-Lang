@@ -367,6 +367,7 @@ public:
             if (needsCstddef) break;
         }
         bool needsMap = false;
+        bool needsFunctional = false;
         std::function<void(const std::string&)> noteContainerType = [&](const std::string& t) {
             if (nexaIsSliceType(t)) {
                 needsVector = true;
@@ -378,6 +379,14 @@ public:
                     noteContainerType(k);
                     noteContainerType(v);
                 }
+            } else if (nexaIsFnType(t)) {
+                needsFunctional = true;
+                std::vector<std::string> params;
+                std::string ret;
+                if (nexaSplitFnType(t, params, ret)) {
+                    for (const std::string& p : params) noteContainerType(p);
+                    noteContainerType(ret);
+                }
             } else if (t == "string" || (t.size() >= 7 && t.compare(0, 7, "[]strin") == 0)) {
                 needsString = true;
             }
@@ -386,6 +395,7 @@ public:
             noteContainerType(n.declType);
             noteContainerType(n.fnReturnType);
             for (const std::string& pt : n.paramTypes) noteContainerType(pt);
+            if (n.type == AstNode::Type::ExprLambda) needsFunctional = true;
             if (n.type == AstNode::Type::FnCall && (n.value == "push" || n.value == "pop" || n.value == "clear")) {
                 needsVector = true;
             }
@@ -398,11 +408,12 @@ public:
         if (needsString && moduleCppIncludes.find("#include <string>\n") == std::string::npos) out << "#include <string>\n";
         if (needsVector && moduleCppIncludes.find("#include <vector>\n") == std::string::npos) out << "#include <vector>\n";
         if (needsMap && moduleCppIncludes.find("#include <map>\n") == std::string::npos) out << "#include <map>\n";
+        if (needsFunctional && moduleCppIncludes.find("#include <functional>\n") == std::string::npos) out << "#include <functional>\n";
         // Float->string helper that matches io.print's "%g" formatting (e.g. 12.0 -> "12", not "12.000000").
         if (needsString && moduleCppIncludes.find("#include <cstdio>\n") == std::string::npos) out << "#include <cstdio>\n";
         if (needsCstdlib && moduleCppIncludes.find("#include <cstdlib>\n") == std::string::npos) out << "#include <cstdlib>\n";
         if (needsCstddef && moduleCppIncludes.find("#include <cstddef>\n") == std::string::npos) out << "#include <cstddef>\n";
-        if (!moduleCppIncludes.empty() || !inlineCppHoisted.empty() || needsString || needsVector || needsMap || needsCstdlib || needsCstddef) out << "\n";
+        if (!moduleCppIncludes.empty() || !inlineCppHoisted.empty() || needsString || needsVector || needsMap || needsFunctional || needsCstdlib || needsCstddef) out << "\n";
         if (needsString) out << "[[maybe_unused]] static std::string __nexa_f2s(double __v) { char __b[32]; std::snprintf(__b, sizeof(__b), \"%g\", __v); return std::string(__b); }\n\n";
         if (needsCstr) out << "[[maybe_unused]] static std::string __nexa_cstr(const char* __p) { return __p ? std::string(__p) : std::string(); }\n\n";
 
@@ -784,7 +795,7 @@ public:
                     std::string en = enumNameFromDecl(node.declType);
                     std::string cpp = enumCppNames_.at(en);
                     out << c << cpp << " " << vname << " = " << cpp << "::" << enumFirstVariant_.at(en) << ";\n";
-                } else if (!node.declType.empty() && (nexaIsSliceType(node.declType) || nexaIsMapType(node.declType))) {
+                } else if (!node.declType.empty() && (nexaIsSliceType(node.declType) || nexaIsMapType(node.declType) || nexaIsFnType(node.declType))) {
                     out << c << nexaTypeToCpp(node.declType) << " " << vname << ";\n";
                 } else {
                     out << c << "std::string " << vname << ";\n";
@@ -806,6 +817,8 @@ public:
                 } else if (!node.declType.empty() && isStructDeclType(node.declType)) {
                     out << c << nexaTypeToCpp(node.declType) << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
                 } else if (!node.declType.empty() && isCppDeclType(node.declType)) {
+                    out << c << nexaTypeToCpp(node.declType) << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
+                } else if (!node.declType.empty() && (nexaIsSliceType(node.declType) || nexaIsMapType(node.declType) || nexaIsFnType(node.declType))) {
                     out << c << nexaTypeToCpp(node.declType) << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
                 } else {
                     bool useBool = !node.declType.empty() ? (node.declType == "bool") : node.initIsBool;
@@ -834,6 +847,8 @@ public:
                     if (!inferred.empty() && isPointerType(inferred)) {
                         out << c << nexaTypeToCpp(inferred) << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
                     } else if (!inferred.empty() && nexaIsNumericIntType(inferred)) {
+                        out << c << nexaTypeToCpp(inferred) << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
+                    } else if (!inferred.empty() && (nexaIsFnType(inferred) || nexaIsSliceType(inferred) || nexaIsMapType(inferred) || isStructDeclType(inferred))) {
                         out << c << nexaTypeToCpp(inferred) << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
                     } else {
                         std::string cppType = c + (useBool ? "bool " : useFloat ? "double " : useChar ? "char " : (useInt ? "int " : "std::string "));
@@ -1045,6 +1060,56 @@ private:
         return false;
     }
 
+    std::string fnTypeFromFnAst(const AstNode& fn) const {
+        std::vector<std::string> params;
+        for (size_t i = 0; i < fn.paramNames.size(); i++) {
+            params.push_back(canonicalParamType(fn, i));
+        }
+        return nexaMakeFnType(params, inferReturnNexaType(fn));
+    }
+
+    std::string uniqueNamedFnType(const std::string& name) const {
+        int n = 0;
+        size_t slot = 0;
+        for (size_t s = 0; s < fnOverloadSlots_.size(); ++s) {
+            if (fnOverloadSlots_[s].name == name) {
+                n++;
+                slot = s;
+            }
+        }
+        if (n != 1) return "";
+        return fnTypeFromFnAst(ast_[fnOverloadSlots_[slot].astIndex]);
+    }
+
+    size_t uniqueNamedFnSlot(const std::string& name) const {
+        int n = 0;
+        size_t slot = 0;
+        for (size_t s = 0; s < fnOverloadSlots_.size(); ++s) {
+            if (fnOverloadSlots_[s].name == name) {
+                n++;
+                slot = s;
+            }
+        }
+        if (n != 1) {
+            throw std::runtime_error("Cannot use overloaded function '" + name + "' as a value");
+        }
+        return slot;
+    }
+
+    std::string fnTypeFromLambdaAst(const AstNode& e) const {
+        std::vector<std::string> params;
+        for (size_t i = 0; i < e.paramNames.size(); i++) {
+            params.push_back(i < e.paramTypes.size() && !e.paramTypes[i].empty() ? e.paramTypes[i] : "int");
+        }
+        std::string ret = e.fnReturnType;
+        if (ret.empty()) {
+            bool hasValRet = false, hasVoidRet = false;
+            stmtsClassifyReturns(e.children, hasValRet, hasVoidRet);
+            ret = hasValRet ? "int" : "void";
+        }
+        return nexaMakeFnType(params, ret);
+    }
+
     bool isHeaderImportedCall(const std::string& name) const {
         return modules_.hasCppHeader() && !hasNexaFnNamed(name);
     }
@@ -1215,8 +1280,22 @@ private:
             case AstNode::Type::ExprVarRef: {
                 std::string t = lookupNexaDecl(e.value);
                 if (!t.empty()) return t;
+                std::string fnT = uniqueNamedFnType(e.value);
+                if (!fnT.empty()) return fnT;
                 auto enIt = enumCppNames_.find(e.value);
                 if (enIt != enumCppNames_.end()) return "enum:" + e.value;
+                return "int";
+            }
+            case AstNode::Type::ExprLambda:
+                return fnTypeFromLambdaAst(e);
+            case AstNode::Type::ExprCall: {
+                if (e.children.empty()) return "int";
+                std::string ct = inferExprNexaType(e.children[0]);
+                if (nexaIsFnType(ct)) {
+                    std::vector<std::string> params;
+                    std::string ret;
+                    if (nexaSplitFnType(ct, params, ret)) return ret;
+                }
                 return "int";
             }
             case AstNode::Type::ExprMember:
@@ -1253,6 +1332,12 @@ private:
                 }
                 if (isHeaderImportedCall(e.value)) {
                     return libcHeaderReturnHint(e.value);
+                }
+                std::string varT = lookupNexaDecl(e.value);
+                if (nexaIsFnType(varT)) {
+                    std::vector<std::string> params;
+                    std::string ret;
+                    if (nexaSplitFnType(varT, params, ret)) return ret;
                 }
                 std::vector<std::string> argT;
                 argT.reserve(e.children.size());
@@ -1537,6 +1622,18 @@ private:
         if (isHeaderImportedCall(e.value)) {
             return emitHeaderImportedCall(e, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
         }
+        std::string calleeDecl = lookupNexaDecl(e.value);
+        if (nexaIsFnType(calleeDecl)) {
+            auto it = varMap.find(e.value);
+            std::string recv = (it != varMap.end()) ? it->second : e.value;
+            std::string s = recv + "(";
+            for (size_t i = 0; i < e.children.size(); i++) {
+                if (i) s += ", ";
+                s += emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+            }
+            s += ")";
+            return s;
+        }
         std::vector<std::string> argT;
         argT.reserve(e.children.size());
         for (const AstNode& a : e.children) argT.push_back(inferExprNexaType(a));
@@ -1651,6 +1748,18 @@ private:
             std::string k, v;
             if (!nexaSplitMapType(t, k, v)) throw std::runtime_error("Invalid map type: " + t);
             return "std::map<" + nexaTypeToCpp(k) + ", " + nexaTypeToCpp(v) + ">";
+        }
+        if (nexaIsFnType(t)) {
+            std::vector<std::string> params;
+            std::string ret;
+            if (!nexaSplitFnType(t, params, ret)) throw std::runtime_error("Invalid fn type: " + t);
+            std::string s = "std::function<" + nexaTypeToCpp(ret) + "(";
+            for (size_t i = 0; i < params.size(); i++) {
+                if (i) s += ", ";
+                s += nexaTypeToCpp(params[i]);
+            }
+            s += ")>";
+            return s;
         }
         if (isCppDeclType(t)) return cppNameFromDecl(t);
         if (t.size() >= 7 && t.compare(0, 7, "struct:") == 0) {
@@ -2091,7 +2200,7 @@ private:
         } else if (isEnumDeclType(nexaType)) {
             std::string en = enumNameFromDecl(nexaType);
             out << "    return " << enumCppNames_.at(en) << "::" << enumFirstVariant_.at(en) << ";\n";
-        } else if (nexaIsSliceType(nexaType) || nexaIsMapType(nexaType)) {
+        } else if (nexaIsSliceType(nexaType) || nexaIsMapType(nexaType) || nexaIsFnType(nexaType)) {
             out << "    return " << nexaTypeToCpp(nexaType) << "{};\n";
         } else {
             out << "    return 0;\n";
@@ -2346,7 +2455,7 @@ private:
                         std::string en = enumNameFromDecl(child.declType);
                         std::string cpp = enumCppNames_.at(en);
                         out << indent << c << cpp << " " << vname << " = " << cpp << "::" << enumFirstVariant_.at(en) << ";\n";
-                    } else if (!child.declType.empty() && (nexaIsSliceType(child.declType) || nexaIsMapType(child.declType))) {
+                    } else if (!child.declType.empty() && (nexaIsSliceType(child.declType) || nexaIsMapType(child.declType) || nexaIsFnType(child.declType))) {
                         out << indent << c << nexaTypeToCpp(child.declType) << " " << vname << ";\n";
                     } else {
                         out << indent << c << "std::string " << vname << ";\n";
@@ -2361,7 +2470,7 @@ private:
                     if (!nexaIsSliceType(decl)) decl = arrayInitProducesString(child.children[0], varIsString) ? "[]string" : "[]int";
                     out << indent << c << nexaTypeToCpp(decl) << " " << vname << " = " << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
                 } else if (!child.children.empty() && !child.declType.empty() &&
-                           (nexaIsSliceType(child.declType) || nexaIsMapType(child.declType))) {
+                           (nexaIsSliceType(child.declType) || nexaIsMapType(child.declType) || nexaIsFnType(child.declType))) {
                     std::string c = child.isConst ? "const " : "";
                     out << indent << c << nexaTypeToCpp(child.declType) << " " << vname << " = "
                         << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
@@ -2392,7 +2501,7 @@ private:
                             inferredPtr = it;
                         } else if (nexaIsNumericIntType(it)) {
                             inferredInt = it;
-                        } else if (isStructDeclType(it) || nexaIsSliceType(it) || nexaIsMapType(it) || isEnumDeclType(it) || isCppDeclType(it)) {
+                        } else if (isStructDeclType(it) || nexaIsSliceType(it) || nexaIsMapType(it) || nexaIsFnType(it) || isEnumDeclType(it) || isCppDeclType(it)) {
                             inferredOther = it;
                         } else if (it == "char") {
                                 useChar = true;
@@ -2720,6 +2829,8 @@ private:
             } else if (child.type == AstNode::Type::FnCall) {
                 out << indent << emitFnCallCpp(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool)
                     << ";\n";
+            } else if (child.type == AstNode::Type::ExprCall || child.type == AstNode::Type::ExprLambda) {
+                out << indent << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::StrMethod) {
                 out << indent << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::AssnMember) {
@@ -3272,12 +3383,68 @@ private:
                 return "__nexa_file_exists(" + emitFilePathCStr(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             }
             case AstNode::Type::FnCall:
+            case AstNode::Type::ExprCall:
+            case AstNode::Type::ExprLambda:
             case AstNode::Type::ExprArrayIndex:
             case AstNode::Type::ExprMember:
                 return emitExpr(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             default:
                 return "false";
         }
+    }
+
+    std::string emitLambdaExpr(const AstNode& e,
+                              const std::map<std::string, std::string>& varMap,
+                              const std::map<std::string, bool>* varIsString,
+                              const std::map<std::string, bool>* varIsFloat,
+                              const std::map<std::string, bool>* varIsChar,
+                              const std::map<std::string, bool>* varIsBool) {
+        std::string ty = fnTypeFromLambdaAst(e);
+        std::vector<std::string> pts;
+        std::string ret;
+        if (!nexaSplitFnType(ty, pts, ret)) {
+            throw std::runtime_error("Internal: invalid lambda type");
+        }
+        std::map<std::string, std::string> localMap = varMap;
+        std::map<std::string, bool> localStr = varIsString ? *varIsString : std::map<std::string, bool>{};
+        std::map<std::string, bool> localConst;
+        std::map<std::string, bool> localFloat = varIsFloat ? *varIsFloat : std::map<std::string, bool>{};
+        std::map<std::string, bool> localChar = varIsChar ? *varIsChar : std::map<std::string, bool>{};
+        std::map<std::string, bool> localBool = varIsBool ? *varIsBool : std::map<std::string, bool>{};
+        std::map<std::string, bool> localEnum;
+        int varIdx = 10000;
+        nexaDeclStack_.push_back({});
+        varStructPush();
+        std::string sig;
+        for (size_t i = 0; i < e.paramNames.size(); i++) {
+            if (i) sig += ", ";
+            std::string nexaT = (i < pts.size()) ? pts[i] : "int";
+            std::string pname = preserveNames_ ? e.paramNames[i] : ("__nexa_lam_" + std::to_string(i));
+            sig += nexaTypeToCpp(nexaT) + " " + pname;
+            localMap[e.paramNames[i]] = pname;
+            localStr[e.paramNames[i]] = (nexaT == "string");
+            localFloat[e.paramNames[i]] = (nexaT == "float");
+            localChar[e.paramNames[i]] = (nexaT == "char");
+            localBool[e.paramNames[i]] = (nexaT == "bool");
+            localEnum[e.paramNames[i]] = isEnumDeclType(nexaT);
+            nexaDeclStack_.back()[e.paramNames[i]] = nexaT;
+            if (isStructDeclType(nexaT)) {
+                varStructDeclare(e.paramNames[i], structNameFromDecl(nexaT));
+            }
+        }
+        bool hasValRet = false, hasVoidRet = false;
+        stmtsClassifyReturns(e.children, hasValRet, hasVoidRet);
+        bool voidFn = (ret == "void");
+        EmitFnRet savedRet = emitFnRet_;
+        emitFnRet_ = voidFn ? EmitFnRet::VoidFn : EmitFnRet::IntFn;
+        std::ostringstream body;
+        emitBlockStatements(body, e.children, localMap, varIdx, localStr, localConst, localFloat,
+                            localChar, localBool, localEnum);
+        emitImplicitFnTail(body, e, hasValRet);
+        emitFnRet_ = savedRet;
+        varStructPop();
+        nexaDeclStack_.pop_back();
+        return nexaTypeToCpp(ty) + "([&](" + sig + ") -> " + nexaTypeToCpp(ret) + " {\n" + body.str() + "})";
     }
 
     std::string emitExpr(const AstNode& e, const std::map<std::string, std::string>& varMap,
@@ -3657,7 +3824,23 @@ private:
             case AstNode::Type::ExprVarRef: {
                 if (e.value == "self" && !methodSelfType_.empty()) return "(*this)";
                 auto it = varMap.find(e.value);
-                return (it != varMap.end()) ? it->second : e.value;
+                if (it != varMap.end()) return it->second;
+                if (lookupNexaDecl(e.value).empty() && !uniqueNamedFnType(e.value).empty()) {
+                    return cppFnNameForSlot(uniqueNamedFnSlot(e.value));
+                }
+                return e.value;
+            }
+            case AstNode::Type::ExprLambda:
+                return emitLambdaExpr(e, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+            case AstNode::Type::ExprCall: {
+                if (e.children.empty()) return "0";
+                std::string s = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + "(";
+                for (size_t i = 1; i < e.children.size(); i++) {
+                    if (i > 1) s += ", ";
+                    s += emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                }
+                s += ")";
+                return s;
             }
             case AstNode::Type::ExprArrayLiteral: {
                 std::string elemT = "int";

@@ -90,6 +90,7 @@ exports.NEXA_TYPES = [
     "[]int",
     "[]string",
     "map",
+    "fn",
 ];
 exports.STD_INCLUDES = [
     "std/io",

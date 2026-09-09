@@ -77,6 +77,25 @@ FUNCTIONS
   - In main(), `return;` is compiled as `return 0;`
   - Use --preserve-names to keep names in output (default: mangle)
 
+CLOSURES (function values)
+  Type:   fn(T, U): Ret     (return type is required on a type)
+  Value:  fn (a: T): Ret { ... }
+
+    let f = fn (x: int): int { return x + 1; };
+    io.println(f(3));
+    fn apply(cb: fn(int): int, x: int): int { return cb(x); }
+    io.println(apply(f, 5));
+    io.println(apply(add1, 5));              // named fn as a value (one overload)
+    io.println((fn (x: int): int { return x * 2; })(7));
+
+  - Parameters default to int, same as named fns. Return type is inferred (int if
+    `return expr;`, else void) unless you write `: Ret`.
+  - Closures capture the current frame by reference (`[&]`). Mutating an outer
+    `let` is visible to the caller. Do not return a closure that uses locals
+    after those locals die (same rule as pointers).
+  - Empty `let f: fn(int): int;` is an empty std::function; calling it is undefined.
+  - Overload sets cannot be used as values.
+
 C / C++ HEADERS (call functions from a header — no extern fn, no inline_cpp)
   #include <string.h>
   #include <cmath>

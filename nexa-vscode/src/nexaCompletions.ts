@@ -51,6 +51,7 @@ export const NEXA_TYPES = [
   "[]int",
   "[]string",
   "map",
+  "fn",
 ];
 
 export const STD_INCLUDES = [

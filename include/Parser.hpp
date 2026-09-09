@@ -74,6 +74,8 @@ struct AstNode {
                       CondEq, CondNe, CondLt, CondGt, CondLe, CondGe,
                       CondAnd, CondOr, CondNot,
                       ExprTernary,
+                      ExprLambda,
+                      ExprCall,
                       ExprStringLiteral,
                       ExprLen,
                       ExprTrim,
@@ -152,6 +154,48 @@ inline bool nexaSplitMapType(const std::string& t, std::string& key, std::string
         }
     }
     return false;
+}
+
+inline bool nexaIsFnType(const std::string& t) {
+    return t.size() >= 3 && t.compare(0, 3, "fn(") == 0;
+}
+
+inline std::string nexaMakeFnType(const std::vector<std::string>& params, const std::string& ret) {
+    std::string s = "fn(";
+    for (size_t i = 0; i < params.size(); i++) {
+        if (i) s += ",";
+        s += params[i];
+    }
+    s += "):";
+    s += ret.empty() ? "int" : ret;
+    return s;
+}
+
+inline bool nexaSplitFnType(const std::string& t, std::vector<std::string>& params, std::string& ret) {
+    if (!nexaIsFnType(t)) return false;
+    params.clear();
+    size_t i = 3;
+    int depth = 1;
+    size_t start = 3;
+    while (i < t.size() && depth > 0) {
+        char c = t[i];
+        if (c == '(') depth++;
+        else if (c == ')') {
+            depth--;
+            if (depth == 0) {
+                if (i > start) params.push_back(t.substr(start, i - start));
+                i++;
+                break;
+            }
+        } else if (c == ',' && depth == 1) {
+            params.push_back(t.substr(start, i - start));
+            start = i + 1;
+        }
+        i++;
+    }
+    if (depth != 0 || i >= t.size() || t[i] != ':') return false;
+    ret = t.substr(i + 1);
+    return !ret.empty();
 }
 
 class Parser {
@@ -340,6 +384,26 @@ private:
             advance();
             return "enum:" + t.value;
         }
+        if (match(TokenType::Fn)) {
+            if (!match(TokenType::LParen)) {
+                throw std::runtime_error("Expected '(' after fn in type at line " + std::to_string(peek().line));
+            }
+            std::vector<std::string> params;
+            if (peek().type != TokenType::RParen) {
+                for (;;) {
+                    params.push_back(parseTypeName());
+                    if (!match(TokenType::Comma)) break;
+                }
+            }
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' in fn(...) type at line " + std::to_string(peek().line));
+            }
+            if (!match(TokenType::Colon)) {
+                throw std::runtime_error("Expected ': Ret' after fn(...) type at line " + std::to_string(peek().line));
+            }
+            std::string ret = parseTypeName();
+            return nexaMakeFnType(params, ret);
+        }
         const Token& t = peek();
         if (t.type == TokenType::Identifier && t.value == "unsigned") {
             advance();
@@ -424,6 +488,7 @@ private:
             return false;
         }
         if (t.type == TokenType::Enum) return true;
+        if (t.type == TokenType::Fn) return true;
         if (t.type != TokenType::Identifier) return false;
         if (p + 1 < tokens_.size() && tokens_[p + 1].type == TokenType::ColonColon) return true;
         const std::string& v = t.value;
@@ -1113,6 +1178,8 @@ private:
                 stmts.push_back(parseDerefAssignment());
             } else if (t.type == TokenType::Delete) {
                 stmts.push_back(parseDeleteStmt());
+            } else if (t.type == TokenType::LParen || t.type == TokenType::Fn) {
+                stmts.push_back(parseExprStatement());
             } else if (looksLikeQualifiedFnCall() ||
                        (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
                         tokens_[pos_ + 1].type == TokenType::LParen)) {
@@ -1241,6 +1308,76 @@ private:
             advance();
         }
         return name;
+    }
+
+    AstNode parseLambda() {
+        size_t line = peek().line;
+        if (!match(TokenType::Fn)) {
+            throw std::runtime_error("Expected 'fn' at line " + std::to_string(line));
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after fn at line " + std::to_string(peek().line));
+        }
+        std::vector<std::string> params;
+        std::vector<std::string> types;
+        if (peek().type != TokenType::RParen) {
+            for (;;) {
+                const Token& p = peek();
+                if (p.type != TokenType::Identifier) {
+                    throw std::runtime_error("Expected parameter name at line " + std::to_string(p.line));
+                }
+                params.push_back(p.value);
+                advance();
+                std::string ptype = "int";
+                if (match(TokenType::Colon)) {
+                    ptype = parseTypeName();
+                }
+                types.push_back(ptype);
+                if (match(TokenType::Assign)) {
+                    throw std::runtime_error("Lambda parameters cannot have defaults at line " + std::to_string(p.line));
+                }
+                if (!match(TokenType::Comma)) break;
+            }
+        }
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' after lambda parameters at line " + std::to_string(peek().line));
+        }
+        std::string fnReturnType;
+        if (match(TokenType::Colon)) {
+            fnReturnType = parseTypeName();
+        }
+        if (!match(TokenType::LBrace)) {
+            throw std::runtime_error("Expected '{' after lambda signature at line " + std::to_string(peek().line));
+        }
+        AstNode node{AstNode::Type::ExprLambda, "", {}};
+        node.fnReturnType = std::move(fnReturnType);
+        node.paramNames = std::move(params);
+        node.paramTypes = std::move(types);
+        node.children = parseBlock();
+        if (!match(TokenType::RBrace)) {
+            throw std::runtime_error("Expected '}' after lambda body at line " + std::to_string(peek().line));
+        }
+        return node;
+    }
+
+    AstNode parsePostfixCalls(AstNode e) {
+        while (peek().type == TokenType::LParen) {
+            advance();
+            AstNode call{AstNode::Type::ExprCall, "", {}};
+            call.children.push_back(std::move(e));
+            if (peek().type != TokenType::RParen) {
+                for (;;) {
+                    call.children.push_back(parseExpression());
+                    if (!match(TokenType::Comma)) break;
+                }
+            }
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' after call at line " + std::to_string(peek().line));
+            }
+            e = std::move(call);
+        }
+        if (peek().type == TokenType::Dot || peek().type == TokenType::Arrow) return parseDotChain(std::move(e));
+        return e;
     }
 
     AstNode parseFnCallExpr() {
@@ -1816,6 +1953,8 @@ private:
                 stmts.push_back(parseDerefAssignment());
             } else if (t.type == TokenType::Delete) {
                 stmts.push_back(parseDeleteStmt());
+            } else if (t.type == TokenType::LParen || t.type == TokenType::Fn) {
+                stmts.push_back(parseExprStatement());
             } else if (looksLikeQualifiedFnCall() ||
                        (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
                         tokens_[pos_ + 1].type == TokenType::LParen)) {
@@ -2137,6 +2276,9 @@ private:
     }
 
     AstNode parseFactor() {
+        if (peek().type == TokenType::Fn) {
+            return parsePostfixCalls(parseLambda());
+        }
         if (peek().type == TokenType::LBracket) {
             return parseArrayLiteral();
         }
@@ -2282,8 +2424,7 @@ private:
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
             }
-            if (peek().type == TokenType::Dot || peek().type == TokenType::Arrow) return parseDotChain(std::move(e));
-            return e;
+            return parsePostfixCalls(std::move(e));
         }
         throw std::runtime_error("Expected number, variable, or (expression) at line " + std::to_string(peek().line));
     }
@@ -3922,6 +4063,12 @@ private:
                 node.initIsFloat = false;
                 node.initIsChar = false;
             }
+            if (nexaIsFnType(declType)) {
+                node.initIsInt = false;
+                node.initIsBool = false;
+                node.initIsFloat = false;
+                node.initIsChar = false;
+            }
             return node;
         }
         if (isFixedArray) {
@@ -3998,6 +4145,8 @@ private:
                 node.initIsBool = true;
             } else if (b.type == AstNode::Type::ExprCharLiteral) {
                 node.initIsChar = true;
+            } else if (b.type == AstNode::Type::ExprLambda) {
+                node.initIsInt = false;
             } else {
                 node.initIsInt = !exprProducesString(b);
             }
@@ -4018,6 +4167,12 @@ private:
                 node.initIsChar = false;
             }
             if (declType.size() >= 5 && declType.compare(0, 5, "enum:") == 0) {
+                node.initIsInt = false;
+                node.initIsBool = false;
+                node.initIsFloat = false;
+                node.initIsChar = false;
+            }
+            if (nexaIsFnType(declType) || nexaIsSliceType(declType) || nexaIsMapType(declType)) {
                 node.initIsInt = false;
                 node.initIsBool = false;
                 node.initIsFloat = false;
