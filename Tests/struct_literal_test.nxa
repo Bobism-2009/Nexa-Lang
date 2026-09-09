@@ -1,0 +1,59 @@
+#include <std/io>
+
+struct Point {
+    x: int;
+    y: int;
+
+    fn add(q: Point): Point {
+        return Point { x: self.x + q.x, y: self.y + q.y };
+    }
+}
+
+struct Rect {
+    origin: Point;
+    w: int;
+    h: int;
+}
+
+fn use(p: Point): int {
+    return p.x + p.y;
+}
+
+fn main() {
+    let a = Point { x: 1, y: 2 };
+    io.println(a.x);
+    io.println(a.y);
+
+    let b: Point = Point { y: 4, x: 3 };
+    io.println(b.x);
+    io.println(b.y);
+
+    let c = Point {};
+    io.println(c.x);
+    io.println(c.y);
+
+    let d = Point { x: 9, };
+    io.println(d.x);
+    io.println(d.y);
+
+    let s = a.add(b);
+    io.println(s.x);
+    io.println(s.y);
+
+    let t = Point { x: 1, y: 2 }.add(Point { x: 3, y: 4 });
+    io.println(t.x);
+    io.println(t.y);
+
+    io.println(use(Point { x: 5, y: 6 }));
+
+    let pts: []Point;
+    pts.push(Point { x: 7, y: 8 });
+    io.println(pts[0].x);
+    io.println(pts[0].y);
+
+    let r = Rect { origin: Point { x: 10, y: 11 }, w: 12, h: 13 };
+    io.println(r.origin.x);
+    io.println(r.origin.y);
+    io.println(r.w);
+    io.println(r.h);
+}

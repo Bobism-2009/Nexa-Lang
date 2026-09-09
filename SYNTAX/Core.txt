@@ -32,10 +32,24 @@ STRUCTS
   Variables:
     let p: Point;           - value-initialized (fields zeroed / empty string)
     let q: Point = p;       - copy from another value of the same struct type
+    let r = Point { x: 1, y: 2 };   - struct literal (type inferred)
+    let s: Point = Point { y: 4 };  - omitted fields are zero / empty
   Field access (expression):  p.x   p.label
   Field assignment:           p.x = 10;   p.label += "suffix";
   Through pointer:            ptr->x   ptr->x = 10;   (same as (*ptr).x)
   Function parameters:       fn use(pt: Point) { ... }
+
+  Struct literals:
+    Point { x: 1, y: 2 }
+    Point { y: 2, x: 1 }     - field order does not matter
+    Point { x: 1, }          - trailing comma allowed
+    Point {}                 - all fields zeroed / empty
+    Rect { origin: Point { x: 0, y: 0 }, w: 10 }
+    pts.push(Point { x: 1, y: 2 });
+    return Point { x: self.x + q.x, y: self.y + q.y };
+    Point { x: 1, y: 2 }.add(q)
+    Unknown or duplicate field names are errors. Nested structs must already
+    be declared. Omitted fields are value-initialized (0, "", empty slice/map).
 
   - Reading a struct field in a let initializer requires an explicit type:
     let n: int = p.x;

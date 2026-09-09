@@ -76,6 +76,7 @@ struct AstNode {
                       ExprTernary,
                       ExprLambda,
                       ExprCall,
+                      ExprStructLit,
                       ExprStringLiteral,
                       ExprLen,
                       ExprTrim,
@@ -269,6 +270,7 @@ private:
     std::set<std::string>* includedFiles_;
     const std::vector<std::string>* packagePaths_;
     std::set<std::string> structNames_;
+    std::map<std::string, std::set<std::string>> structFieldNames_;
     std::set<std::string> enumNames_;
 
     static bool exprProducesString(const AstNode& e) {
@@ -470,9 +472,16 @@ private:
         return "struct:" + v;
     }
 
+    void noteStructFields(const AstNode& n) {
+        if (n.type != AstNode::Type::StructDef) return;
+        structNames_.insert(n.value);
+        std::set<std::string>& fields = structFieldNames_[n.value];
+        for (const std::string& f : n.paramNames) fields.insert(f);
+    }
+
     void noteTypeDefs(const std::vector<AstNode>& nodes) {
         for (const AstNode& n : nodes) {
-            if (n.type == AstNode::Type::StructDef) structNames_.insert(n.value);
+            if (n.type == AstNode::Type::StructDef) noteStructFields(n);
             else if (n.type == AstNode::Type::EnumDef) enumNames_.insert(n.value);
         }
     }
@@ -588,6 +597,7 @@ private:
             throw std::runtime_error("Invalid struct name 'main' at line " + std::to_string(line));
         }
         structNames_.insert(sname);
+        structFieldNames_[sname];
         if (!match(TokenType::LBrace)) {
             throw std::runtime_error("Expected '{' at line " + std::to_string(peek().line));
         }
@@ -620,6 +630,7 @@ private:
             }
             advance();
             node.paramNames.push_back(fieldTok.value);
+            structFieldNames_[sname].insert(fieldTok.value);
             if (!match(TokenType::Colon)) {
                 throw std::runtime_error("Expected ':' after field name at line " + std::to_string(peek().line));
             }
@@ -1180,6 +1191,8 @@ private:
                 stmts.push_back(parseDeleteStmt());
             } else if (t.type == TokenType::LParen || t.type == TokenType::Fn) {
                 stmts.push_back(parseExprStatement());
+            } else if (looksLikeStructLiteral()) {
+                stmts.push_back(parseExprStatement());
             } else if (looksLikeQualifiedFnCall() ||
                        (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
                         tokens_[pos_ + 1].type == TokenType::LParen)) {
@@ -1308,6 +1321,56 @@ private:
             advance();
         }
         return name;
+    }
+
+    bool looksLikeStructLiteral() const {
+        if (peek().type != TokenType::Identifier) return false;
+        if (!structNames_.count(peek().value)) return false;
+        return pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::LBrace;
+    }
+
+    AstNode parseStructLiteral() {
+        const Token& nameTok = peek();
+        if (nameTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected struct name at line " + std::to_string(nameTok.line));
+        }
+        std::string sname = nameTok.value;
+        size_t line = nameTok.line;
+        advance();
+        if (!match(TokenType::LBrace)) {
+            throw std::runtime_error("Expected '{' after struct name at line " + std::to_string(peek().line));
+        }
+        AstNode node{AstNode::Type::ExprStructLit, sname, {}};
+        std::set<std::string> seen;
+        auto fieldsIt = structFieldNames_.find(sname);
+        while (peek().type != TokenType::RBrace) {
+            if (peek().type == TokenType::Eof) {
+                throw std::runtime_error("Unclosed struct literal starting at line " + std::to_string(line));
+            }
+            const Token& ftok = peek();
+            if (ftok.type != TokenType::Identifier) {
+                throw std::runtime_error("Expected field name in " + sname + " literal at line " + std::to_string(ftok.line));
+            }
+            std::string fname = ftok.value;
+            if (fieldsIt != structFieldNames_.end() && !fieldsIt->second.count(fname)) {
+                throw std::runtime_error("Unknown field '" + fname + "' in " + sname + " at line " + std::to_string(ftok.line));
+            }
+            if (!seen.insert(fname).second) {
+                throw std::runtime_error("Duplicate field '" + fname + "' in " + sname + " literal at line " + std::to_string(ftok.line));
+            }
+            advance();
+            if (!match(TokenType::Colon)) {
+                throw std::runtime_error("Expected ':' after field '" + fname + "' at line " + std::to_string(peek().line));
+            }
+            node.paramNames.push_back(std::move(fname));
+            node.children.push_back(parseTernary());
+            if (match(TokenType::Comma)) continue;
+            break;
+        }
+        if (!match(TokenType::RBrace)) {
+            throw std::runtime_error("Expected '}' after struct literal at line " + std::to_string(peek().line));
+        }
+        return node;
     }
 
     AstNode parseLambda() {
@@ -1955,6 +2018,8 @@ private:
                 stmts.push_back(parseDeleteStmt());
             } else if (t.type == TokenType::LParen || t.type == TokenType::Fn) {
                 stmts.push_back(parseExprStatement());
+            } else if (looksLikeStructLiteral()) {
+                stmts.push_back(parseExprStatement());
             } else if (looksLikeQualifiedFnCall() ||
                        (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
                         tokens_[pos_ + 1].type == TokenType::LParen)) {
@@ -2278,6 +2343,9 @@ private:
     AstNode parseFactor() {
         if (peek().type == TokenType::Fn) {
             return parsePostfixCalls(parseLambda());
+        }
+        if (looksLikeStructLiteral()) {
+            return parsePostfixCalls(parseStructLiteral());
         }
         if (peek().type == TokenType::LBracket) {
             return parseArrayLiteral();
@@ -4145,13 +4213,15 @@ private:
                 node.initIsBool = true;
             } else if (b.type == AstNode::Type::ExprCharLiteral) {
                 node.initIsChar = true;
-            } else if (b.type == AstNode::Type::ExprLambda) {
+            } else if (b.type == AstNode::Type::ExprLambda || b.type == AstNode::Type::ExprStructLit) {
                 node.initIsInt = false;
             } else {
                 node.initIsInt = !exprProducesString(b);
             }
         }
-        if (declType.empty() && !node.children.empty() && astHasMemberAccess(node.children.back())) {
+        if (declType.empty() && !node.children.empty() && astHasMemberAccess(node.children.back()) &&
+            node.children.back().type != AstNode::Type::ExprStructLit &&
+            node.children.back().type != AstNode::Type::ExprLambda) {
             throw std::runtime_error("let with '.' access requires an explicit type (e.g. let x: int = s.field or let x: enum E = E.A) at line " + std::to_string(line));
         }
         if (!declType.empty()) {

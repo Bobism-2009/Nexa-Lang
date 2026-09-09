@@ -212,6 +212,7 @@ public:
         for (const AstNode& node : ast_) walkAstForInlineCppIncludes(node, inlineCppHoisted, inlineCppSeen);
         for (const std::string& inc : inlineCppHoisted) out << inc << "\n";
         structFields_.clear();
+        structFieldOrder_.clear();
         structCppNames_.clear();
         enumCppNames_.clear();
         enumVariants_.clear();
@@ -227,6 +228,7 @@ public:
                 for (size_t i = 0; i < node.paramNames.size(); i++) {
                     structFields_[node.value][node.paramNames[i]] = node.paramTypes[i];
                 }
+                structFieldOrder_[node.value] = node.paramNames;
                 for (const AstNode& meth : node.children) {
                     if (meth.type == AstNode::Type::Function) {
                         structMethods_[node.value][meth.value] = &meth;
@@ -453,13 +455,12 @@ public:
 
         varStructScopes_.clear();
         varStructScopes_.push_back({});
-        for (const AstNode& node : ast_) {
-            if (node.type == AstNode::Type::Variable && isStructDeclType(node.declType)) {
-                varStructScopes_[0][node.value] = structNameFromDecl(node.declType);
+        buildFnOverloadTableAndInitGlobalNexaDecl();
+        for (const auto& kv : globalNexaDecl_) {
+            if (isStructDeclType(kv.second)) {
+                varStructScopes_[0][kv.first] = structNameFromDecl(kv.second);
             }
         }
-
-        buildFnOverloadTableAndInitGlobalNexaDecl();
 
         auto fnNameInitOnly = [&](const std::string& name) -> std::string {
             if (preserveNames_) return name;
@@ -953,6 +954,7 @@ private:
     enum class EmitFnRet { Main, IntFn, VoidFn };
     mutable EmitFnRet emitFnRet_ = EmitFnRet::Main;
     std::map<std::string, std::map<std::string, std::string>> structFields_;
+    std::map<std::string, std::vector<std::string>> structFieldOrder_;
     std::map<std::string, std::string> structCppNames_;
     std::map<std::string, std::string> enumCppNames_;
     std::map<std::string, std::set<std::string>> enumVariants_;
@@ -1286,6 +1288,8 @@ private:
                 if (enIt != enumCppNames_.end()) return "enum:" + e.value;
                 return "int";
             }
+            case AstNode::Type::ExprStructLit:
+                return std::string("struct:") + e.value;
             case AstNode::Type::ExprLambda:
                 return fnTypeFromLambdaAst(e);
             case AstNode::Type::ExprCall: {
@@ -1970,6 +1974,7 @@ private:
     }
     std::string structTypeOfExprValue(const AstNode& e) const {
         if (e.type == AstNode::Type::ExprVarRef) return varStructLookup(e.value);
+        if (e.type == AstNode::Type::ExprStructLit) return e.value;
         if (e.type == AstNode::Type::ExprArrayIndex) {
             std::string t = lookupNexaDecl(e.value);
             if (isPointerType(t)) {
@@ -2388,8 +2393,11 @@ private:
                     }
                 }
                 varIsString[child.value] = isStr || isStrArr;
-                if (!child.declType.empty() && isStructDeclType(child.declType) && !child.isFixedArray) {
-                    varStructDeclare(child.value, structNameFromDecl(child.declType));
+                {
+                    std::string declForStruct = child.declType.empty() ? nexaDeclFromVariableAst(child) : child.declType;
+                    if (isStructDeclType(declForStruct) && !child.isFixedArray) {
+                        varStructDeclare(child.value, structNameFromDecl(declForStruct));
+                    }
                 }
                 if (!nexaDeclStack_.empty()) {
                     nexaDeclStack_.back()[child.value] = nexaDeclFromVariableAst(child);
@@ -2829,7 +2837,8 @@ private:
             } else if (child.type == AstNode::Type::FnCall) {
                 out << indent << emitFnCallCpp(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool)
                     << ";\n";
-            } else if (child.type == AstNode::Type::ExprCall || child.type == AstNode::Type::ExprLambda) {
+            } else if (child.type == AstNode::Type::ExprCall || child.type == AstNode::Type::ExprLambda ||
+                       child.type == AstNode::Type::ExprStructLit) {
                 out << indent << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::StrMethod) {
                 out << indent << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
@@ -3385,12 +3394,48 @@ private:
             case AstNode::Type::FnCall:
             case AstNode::Type::ExprCall:
             case AstNode::Type::ExprLambda:
+            case AstNode::Type::ExprStructLit:
             case AstNode::Type::ExprArrayIndex:
             case AstNode::Type::ExprMember:
                 return emitExpr(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             default:
                 return "false";
         }
+    }
+
+    std::string emitStructLiteral(const AstNode& e,
+                                 const std::map<std::string, std::string>& varMap,
+                                 const std::map<std::string, bool>* varIsString,
+                                 const std::map<std::string, bool>* varIsFloat,
+                                 const std::map<std::string, bool>* varIsChar,
+                                 const std::map<std::string, bool>* varIsBool) {
+        auto oit = structFieldOrder_.find(e.value);
+        if (oit == structFieldOrder_.end()) {
+            throw std::runtime_error("Unknown struct type: " + e.value);
+        }
+        std::map<std::string, const AstNode*> provided;
+        for (size_t i = 0; i < e.paramNames.size(); i++) {
+            if (i < e.children.size()) provided[e.paramNames[i]] = &e.children[i];
+        }
+        const auto& fields = structFields_[e.value];
+        for (const auto& kv : provided) {
+            if (!fields.count(kv.first)) {
+                throw std::runtime_error("Unknown field '" + kv.first + "' in " + e.value);
+            }
+        }
+        std::string s = nexaTypeToCpp("struct:" + e.value) + "{";
+        const std::vector<std::string>& order = oit->second;
+        for (size_t i = 0; i < order.size(); i++) {
+            if (i) s += ", ";
+            auto pit = provided.find(order[i]);
+            if (pit == provided.end()) {
+                s += "{}";
+            } else {
+                s += emitExpr(*pit->second, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+            }
+        }
+        s += "}";
+        return s;
     }
 
     std::string emitLambdaExpr(const AstNode& e,
@@ -3832,6 +3877,8 @@ private:
             }
             case AstNode::Type::ExprLambda:
                 return emitLambdaExpr(e, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+            case AstNode::Type::ExprStructLit:
+                return emitStructLiteral(e, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::ExprCall: {
                 if (e.children.empty()) return "0";
                 std::string s = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + "(";
