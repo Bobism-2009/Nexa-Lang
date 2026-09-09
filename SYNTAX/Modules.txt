@@ -166,6 +166,26 @@ Nexa Standard Modules
   Use: let html = http.get("https://example.com/");
   Use: let r = http.post("https://httpbin.org/post", "{\"a\":1}");
 
+#include <std/json>
+  Nested JSON objects and arrays (not a flat string map).
+  Type: Json  (also accepted as json)
+  json.parse(s)              - Parse text; on failure .ok() is false and .as_string() is the error
+  json.stringify(v)          - Compact JSON text
+  json.stringify(v, indent)  - Pretty-print when indent > 0
+  json.of(x)                 - int / float / bool / string / Json / []T / map[string]T to Json
+  json.null()  json.bool(b)  json.int(n)  json.float(x)  json.string(s)
+  json.array()  json.object()
+  v.ok()  v.kind()           - kind is "null"/"bool"/"number"/"string"/"array"/"object"/"error"
+  v.is_null() / is_bool() / is_number() / is_string() / is_array() / is_object() / is_error()
+  v.as_bool()  v.as_int()  v.as_float()  v.as_string()
+  v.len()  v.has(key)  v.get(key)  v.get(i)  v.keys()
+  v.set(key, val)  v.push(val)  v.remove(key)
+  v["name"]  v[0]  v["name"] = 1
+  Valid JSON null is kind null. A parse error is kind error (ok() is false).
+  Use: let v: Json = json.parse("{\"a\":1,\"b\":[true,\"x\"]}");
+  Use: io.println(v.get("a").as_int());
+  Use: let t = json.stringify(v, 2);
+
 #include <std/time>
   time.sleep(duration)      - Sleep (ms, or seconds()/milliseconds() helpers). Uses Sleep/nanosleep — no <thread>.
   time.seconds(n)           - n*1000 milliseconds

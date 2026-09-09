@@ -9,6 +9,7 @@ MODULE INCLUDES (angle brackets)
   #include <std/dll>
   #include <std/time>
   #include <std/thread>
+  #include <std/json>     - Nested JSON parse/stringify (type Json)
   #include <std/gfx>      - Pixel window: gfx.open/plot/text/mouse/drop/opendialog/present
   #include <std/inline>   - Enables inline_cpp! { ... } (raw C++ pasted into generated code; use sparingly)
   - Standard library modules

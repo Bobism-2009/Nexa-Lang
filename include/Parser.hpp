@@ -31,7 +31,7 @@ struct AstNode {
                       DllLoad, DllCall,
                       FileRead, FileWrite, FileAppend, FileExists, FileMkdir, FileCall,
                       RandomInt, RandomSeed,
-                      MathCall, CryptoCall, HttpCall, GfxCall,
+                      MathCall, CryptoCall, HttpCall, GfxCall, JsonCall,
                       StrMethod,
                       TimeSleep, TimeSeconds, TimeMilliseconds, TimeNowMs,
                       ThreadSpawn, ThreadJoin, ThreadWorker, ThreadRun, ThreadWorkerJoin,
@@ -280,6 +280,7 @@ private:
                 || m == "config_dir" || m == "cache_dir" || m == "desktop" || m == "endian";
         }
         if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsExecutable || e.type == AstNode::Type::OsTempDir || e.type == AstNode::Type::OsArch || e.type == AstNode::Type::OsWhich || e.type == AstNode::Type::OsCwd || e.type == AstNode::Type::OsHostname || e.type == AstNode::Type::OsUsername || e.type == AstNode::Type::OsHome || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::OsLoad || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall || e.type == AstNode::Type::HttpCall) return true;
+        if (e.type == AstNode::Type::JsonCall && e.value == "stringify") return true;
         if (e.type == AstNode::Type::ExprCast && e.value == "string") return true;
         if (e.type == AstNode::Type::FileCall) {
             const std::string& m = e.value;
@@ -468,6 +469,12 @@ private:
         if (v == "float") return "float";
         if (v == "char") return "char";
         if (v == "void") return "void";
+        if (v == "Json" || v == "json") {
+            if (!modules_.hasJson()) {
+                throw std::runtime_error("Json requires #include <std/json>");
+            }
+            return "json";
+        }
         if (enumNames_.count(v)) return "enum:" + v;
         return "struct:" + v;
     }
@@ -503,7 +510,7 @@ private:
         const std::string& v = t.value;
         if (v == "int" || v == "short" || v == "long" || v == "size_t" ||
             v == "float" || v == "char" || v == "bool" || v == "string" ||
-            v == "void" || v == "unsigned" || v == "map") {
+            v == "void" || v == "unsigned" || v == "map" || v == "Json" || v == "json") {
             return true;
         }
         return structNames_.count(v) != 0 || enumNames_.count(v) != 0;
@@ -2438,6 +2445,10 @@ private:
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
             return parseHttpCall();
         }
+        if (peek().type == TokenType::Identifier && peek().value == "json" && pos_ + 2 < tokens_.size() &&
+            tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
+            return parseDotChain(parseJsonCall());
+        }
         if (peek().type == TokenType::Identifier && peek().value == "time" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
             std::string method = tokens_[pos_ + 2].value;
@@ -3618,6 +3629,50 @@ private:
         return node;
     }
 
+    AstNode parseJsonCall() {
+        size_t line = peek().line;
+        if (!modules_.hasJson()) {
+            throw std::runtime_error("json.* requires #include <std/json> at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "json") {
+            throw std::runtime_error("Expected 'json' at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        const Token& methodTok = peek();
+        if (methodTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected json method at line " + std::to_string(methodTok.line));
+        }
+        std::string method = methodTok.value;
+        advance();
+        if (method != "parse" && method != "stringify" && method != "of" && method != "null" &&
+            method != "bool" && method != "int" && method != "float" && method != "string" &&
+            method != "array" && method != "object") {
+            throw std::runtime_error("Unknown json function 'json." + method +
+                "' at line " + std::to_string(methodTok.line) +
+                " (use parse, stringify, of, null, bool, int, float, string, array, object)");
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after json." + method + " at line " + std::to_string(peek().line));
+        }
+        AstNode node{AstNode::Type::JsonCall, method, {}};
+        if (method == "null" || method == "array" || method == "object") {
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' after json." + method + "() at line " + std::to_string(peek().line));
+            }
+            return node;
+        }
+        node.children.push_back(parseExpression());
+        if (method == "stringify" && match(TokenType::Comma)) {
+            node.children.push_back(parseExpression());
+        }
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' after json." + method + "(...) at line " + std::to_string(peek().line));
+        }
+        return node;
+    }
+
     AstNode parseDllCall() {
         size_t line = peek().line;
         if (!modules_.hasDll()) {
@@ -4131,7 +4186,7 @@ private:
                 node.initIsFloat = false;
                 node.initIsChar = false;
             }
-            if (nexaIsFnType(declType)) {
+            if (nexaIsFnType(declType) || declType == "json") {
                 node.initIsInt = false;
                 node.initIsBool = false;
                 node.initIsFloat = false;
@@ -4215,6 +4270,8 @@ private:
                 node.initIsChar = true;
             } else if (b.type == AstNode::Type::ExprLambda || b.type == AstNode::Type::ExprStructLit) {
                 node.initIsInt = false;
+            } else if (b.type == AstNode::Type::JsonCall) {
+                node.initIsInt = false;
             } else {
                 node.initIsInt = !exprProducesString(b);
             }
@@ -4242,7 +4299,7 @@ private:
                 node.initIsFloat = false;
                 node.initIsChar = false;
             }
-            if (nexaIsFnType(declType) || nexaIsSliceType(declType) || nexaIsMapType(declType)) {
+            if (nexaIsFnType(declType) || nexaIsSliceType(declType) || nexaIsMapType(declType) || declType == "json") {
                 node.initIsInt = false;
                 node.initIsBool = false;
                 node.initIsFloat = false;

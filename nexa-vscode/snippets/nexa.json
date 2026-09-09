@@ -73,6 +73,11 @@
     "body": ["#include <std/http>"],
     "description": "HTTP module"
   },
+  "Nexa: include std/json": {
+    "prefix": "incjson",
+    "body": ["#include <std/json>"],
+    "description": "JSON module"
+  },
   "Nexa: include std/thread": {
     "prefix": "incthread",
     "body": ["#include <std/thread>"],

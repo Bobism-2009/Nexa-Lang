@@ -7,6 +7,7 @@
 #include "FileRuntime.hpp"
 #include "HttpRuntime.hpp"
 #include "GfxRuntime.hpp"
+#include "JsonRuntime.hpp"
 
 namespace nexa {
 
@@ -79,6 +80,7 @@ public:
         bool dll = false;
         bool exceptions = false;
         bool gfx = false;
+        bool json = false;
     };
 
     void enable(const std::string& path) {
@@ -139,6 +141,10 @@ public:
 
     bool hasGfx() const {
         return enabled_.count("std/gfx") > 0;
+    }
+
+    bool hasJson() const {
+        return enabled_.count("std/json") > 0;
     }
 
     std::string getCppIncludes(const CppUsage& usage) const {
@@ -1385,6 +1391,9 @@ public:
         }
         if (hasGfx() && usage.gfx) {
             out += gfxRuntimeCpp();
+        }
+        if (hasJson() && usage.json) {
+            out += jsonRuntimeCpp();
         }
         // Core string methods (value.upper(), value.split(...), ...) need no #include from the user.
         if (usage.str) {

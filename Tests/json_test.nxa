@@ -1,0 +1,93 @@
+#include <std/io>
+#include <std/json>
+
+fn main() {
+    let src = "{\"a\":1,\"b\":[true,\"x\"],\"c\":null,\"d\":{\"k\":\"v\"}}";
+    let v: Json = json.parse(src);
+    io.println(v.ok());
+    io.println(v.kind());
+    io.println(v.is_object());
+    io.println(v.has("a"));
+    io.println(v.get("a").as_int());
+    io.println(v.get("b").is_array());
+    io.println(v.get("b").len());
+    io.println(v.get("b").get(0).as_bool());
+    io.println(v.get("b").get(1).as_string());
+    io.println(v.get("c").is_null());
+    io.println(v.get("d").get("k").as_string());
+    io.println(v["a"].as_int());
+    io.println(v["b"].get(1).as_string());
+
+    let compact = json.stringify(v);
+    let again = json.parse(compact);
+    io.println(again.get("a").as_int());
+    io.println(again.get("b").get(1).as_string());
+
+    let pretty = json.stringify(v, 2);
+    io.println(pretty.contains("\n"));
+    io.println(json.parse(pretty).get("d").get("k").as_string());
+
+    let n = json.parse("null");
+    io.println(n.ok());
+    io.println(n.is_null());
+    io.println(n.kind());
+
+    let bad = json.parse("{");
+    io.println(bad.ok());
+    io.println(bad.is_error());
+    io.println(bad.kind());
+    io.println((bad.as_string().len() > 0));
+
+    let trail = json.parse("true junk");
+    io.println(trail.ok());
+
+    let esc = json.parse("\"hello\\n\\u0041\"");
+    io.println(esc.as_string());
+
+    let pair = json.parse("\"\\uD83D\\uDE00\"");
+    io.println((pair.as_string().len() > 0));
+
+    let nums = json.parse("[0,-12,3.5,1e2]");
+    io.println(nums.get(0).as_int());
+    io.println(nums.get(1).as_int());
+    io.println(nums.get(2).as_float());
+    io.println(nums.get(3).as_int());
+
+    let o = json.object();
+    o.set("name", json.string("ada"));
+    o.set("n", json.int(7));
+    o["flag"] = true;
+    io.println(o.get("name").as_string());
+    io.println(o.get("n").as_int());
+    io.println(o.get("flag").as_bool());
+    o.remove("n");
+    io.println(o.has("n"));
+
+    let arr = json.array();
+    arr.push(1);
+    arr.push("z");
+    arr.push(json.bool(false));
+    io.println(arr.len());
+    io.println(arr.get(0).as_int());
+    io.println(arr.get(1).as_string());
+    io.println(arr.get(2).as_bool());
+
+    let xs: []int = [1, 2, 3];
+    let fromSlice = json.of(xs);
+    io.println(fromSlice.len());
+    io.println(fromSlice.get(2).as_int());
+
+    let m: map[string]int;
+    m["q"] = 9;
+    let fromMap = json.of(m);
+    io.println(fromMap.get("q").as_int());
+
+    let built = json.of(42);
+    io.println(built.as_int());
+    io.println(json.stringify(json.of(true)));
+    io.println(json.null().is_null());
+    io.println(json.parse("false").as_bool());
+
+    let keys = v.keys();
+    io.println(len(keys));
+}

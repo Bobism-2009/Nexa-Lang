@@ -91,6 +91,7 @@ exports.NEXA_TYPES = [
     "[]string",
     "map",
     "fn",
+    "Json",
 ];
 exports.STD_INCLUDES = [
     "std/io",
@@ -101,6 +102,7 @@ exports.STD_INCLUDES = [
     "std/math",
     "std/crypto",
     "std/http",
+    "std/json",
     "std/time",
     "std/thread",
     "std/gfx",
@@ -210,6 +212,18 @@ exports.MODULE_MEMBERS = {
         { name: "get", detail: "http.get(url)" },
         { name: "post", detail: "http.post(url, body)" },
     ],
+    json: [
+        { name: "parse", detail: "json.parse(s) — nested JSON; .ok() is false on error" },
+        { name: "stringify", detail: "json.stringify(v[, indent]) — compact or pretty" },
+        { name: "of", detail: "json.of(x) — int/float/bool/string/[]T/map[string]T to Json" },
+        { name: "null", detail: "json.null()" },
+        { name: "bool", detail: "json.bool(b)" },
+        { name: "int", detail: "json.int(n)" },
+        { name: "float", detail: "json.float(x)" },
+        { name: "string", detail: "json.string(s)" },
+        { name: "array", detail: "json.array()" },
+        { name: "object", detail: "json.object()" },
+    ],
     time: [
         { name: "sleep", detail: "time.sleep(ms)" },
         { name: "seconds", detail: "time.seconds(n)" },
@@ -282,6 +296,9 @@ exports.STRING_METHODS = [
     "remove",
 ];
 exports.HOVER_DOCS = {
+    "json.parse": "Parse JSON text into a Json value. On failure .ok() is false and .as_string() is the error.",
+    "json.stringify": "Serialize Json (or a native value via json.of) to text. Optional indent pretty-prints.",
+    "json.of": "Convert int, float, bool, string, Json, []T, or map[string]T to Json.",
     "io.println": "Print to stdout with a trailing newline.",
     "io.readln": "Read one line from stdin; returns string.",
     "os.spawn": "Start a program directly (no shell). Returns process id or 0.",

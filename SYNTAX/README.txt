@@ -9,7 +9,7 @@ Files:
   README.txt    - This file
   Core.txt      - Entry point, functions, variables, expressions
   ControlFlow.txt - if/else, while, comparisons, logical operators
-  Modules.txt   - std/io, std/os, std/dll, std/file, std/random, std/math, std/crypto, std/http, std/time, std/thread, std/inline
+  Modules.txt   - std/io, std/os, std/dll, std/file, std/random, std/math, std/crypto, std/http, std/json, std/time, std/thread, std/inline
   Inline.txt    - inline_cpp! and #include <std/inline>
   (Editor: nexa-vscode/ — VS Code/Cursor extension v0.2.0)
   Includes.txt  - #include for modules and .nxa files
