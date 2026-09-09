@@ -24,7 +24,9 @@ STRUCTS
     other: string;
     nested: InnerStruct;   // InnerStruct must be declared earlier in the file
   }
-  - Field types: int, unsigned int, short, unsigned short, long, unsigned long, size_t, string, bool, float, char, unsigned char, *T pointers, or another struct name
+  - Field types: int, unsigned int, short, unsigned short, long, unsigned long, size_t, string, bool, float, char, unsigned char, *T pointers, []T, map[K]V, or another struct name
+  - Methods: `fn name(args): Ret { ... }` inside the struct. Use `self.field` (self is the receiver).
+    Call as `p.name(args)`. Return type is required when it is not int/void.
   - Optional semicolon after the closing }
 
   Variables:
@@ -199,8 +201,10 @@ HEAP ALLOCATION (no GC — manual, C-style)
     - Float:      let pi = 3.14;  let x = .5;
     - Char:       let c = 'A';  let nl = '\n';
     - String:     let s = "hi";  s[i] returns char;  s[i] = 'x';
-    - Array:      let arr = [1, 2, 3];  arr[i] = x;  (int elements)
+    - Array:      let arr = [1, 2, 3];  arr[i] = x;  (grows; type []int)
     - String array: let names = ["bob", "jessica"];  names[i] returns string
+    - Typed slice: let xs: []int;  let pts: []Point;  let grid: [][]int;
+    - Map:        let scores: map[string]int;  scores["ada"] = 9;
     - io.readln:  let s = io.readln();
     - io.getline: let s = io.getline(file.read("data.txt"), 2);
     - file.read:  let s = file.read("path");  (requires std/file)
@@ -285,3 +289,30 @@ STRING METHODS (core; no #include required)
 
   Note: index directly into a split result via a variable
   (let parts = s.split(","); parts[0]), not s.split(",")[0].
+
+SLICES ([]T)
+  Growable arrays. Emitted as std::vector. Distinct from fixed `let buf: int[4]` (C array).
+
+    let xs: []int = [1, 2];
+    xs.push(3);            // append
+    let n: int = xs.pop(); // remove and return last
+    xs.clear();
+    io.println(len(xs));
+    xs[0] = 9;
+    for (x in xs) { ... }
+
+  Element type can be anything parseTypeName accepts: []string, []Point, [][]int, []*int.
+  `fn f(xs: []int)` and struct fields work the same way.
+  Empty: `let xs: []int;` (length 0).
+
+MAPS (map[K]V)
+    let scores: map[string]int;
+    scores["ada"] = 9;           // insert / assign
+    let n: int = scores["ada"];  // read (missing key is the zero value)
+    if (scores.has("ada")) { ... }
+    scores.remove("ada");
+    scores.clear();
+    for (k in scores) { ... }    // iterates keys
+
+  Keys and values can be any Nexa type (string, int, structs, ...).
+  Emitted as std::map. Missing-key read default-constructs the value (same as C++ []).

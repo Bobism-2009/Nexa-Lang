@@ -112,6 +112,7 @@ struct AstNode {
     std::string fnReturnType = ""; // Function / MainFunction: explicit ": type" before `{`; empty = infer from returns
     bool isExtern = false;         // Function: true = extern fn (C linkage declaration, no body)
     bool isVariadic = false;       // Function: true = trailing ... (C varargs)
+    std::string receiverType = ""; // Function: "struct:Point" when this is a method inside a struct
 };
 
 inline bool nexaIsIntegerType(const std::string& t) {
@@ -122,6 +123,35 @@ inline bool nexaIsIntegerType(const std::string& t) {
 
 inline bool nexaIsNumericIntType(const std::string& t) {
     return nexaIsIntegerType(t) && t != "char";
+}
+
+inline bool nexaIsSliceType(const std::string& t) {
+    return t.size() >= 2 && t[0] == '[' && t[1] == ']';
+}
+
+inline std::string nexaSliceElem(const std::string& t) {
+    return nexaIsSliceType(t) ? t.substr(2) : std::string();
+}
+
+inline bool nexaIsMapType(const std::string& t) {
+    return t.size() >= 4 && t.compare(0, 4, "map[") == 0;
+}
+
+inline bool nexaSplitMapType(const std::string& t, std::string& key, std::string& val) {
+    if (!nexaIsMapType(t)) return false;
+    int depth = 0;
+    for (size_t i = 4; i < t.size(); i++) {
+        if (t[i] == '[') depth++;
+        else if (t[i] == ']') {
+            if (depth == 0) {
+                key = t.substr(4, i - 4);
+                val = t.substr(i + 1);
+                return !key.empty() && !val.empty();
+            }
+            depth--;
+        }
+    }
+    return false;
 }
 
 class Parser {
@@ -295,6 +325,13 @@ private:
         if (match(TokenType::Star)) {
             return std::string("*") + parseTypeName();
         }
+        // Growable slice: []T, [][]int, []*Point
+        if (match(TokenType::LBracket)) {
+            if (!match(TokenType::RBracket)) {
+                throw std::runtime_error("Expected ']' in []T at line " + std::to_string(peek().line));
+            }
+            return "[]" + parseTypeName();
+        }
         if (match(TokenType::Enum)) {
             const Token& t = peek();
             if (t.type != TokenType::Identifier) {
@@ -345,6 +382,17 @@ private:
             }
             return "cpp:" + v;
         }
+        if (v == "map") {
+            if (!match(TokenType::LBracket)) {
+                throw std::runtime_error("Expected '[' after map at line " + std::to_string(peek().line));
+            }
+            std::string key = parseTypeName();
+            if (!match(TokenType::RBracket)) {
+                throw std::runtime_error("Expected ']' after map key type at line " + std::to_string(peek().line));
+            }
+            std::string val = parseTypeName();
+            return "map[" + key + "]" + val;
+        }
         if (v == "int") return "int";
         if (v == "short") return "short";
         if (v == "long") return "long";
@@ -369,13 +417,19 @@ private:
         if (p >= tokens_.size()) return false;
         const Token& t = tokens_[p];
         if (t.type == TokenType::Star) return looksLikeTypeAt(p + 1);
+        if (t.type == TokenType::LBracket) {
+            if (p + 1 < tokens_.size() && tokens_[p + 1].type == TokenType::RBracket) {
+                return looksLikeTypeAt(p + 2);
+            }
+            return false;
+        }
         if (t.type == TokenType::Enum) return true;
         if (t.type != TokenType::Identifier) return false;
         if (p + 1 < tokens_.size() && tokens_[p + 1].type == TokenType::ColonColon) return true;
         const std::string& v = t.value;
         if (v == "int" || v == "short" || v == "long" || v == "size_t" ||
             v == "float" || v == "char" || v == "bool" || v == "string" ||
-            v == "void" || v == "unsigned") {
+            v == "void" || v == "unsigned" || v == "map") {
             return true;
         }
         return structNames_.count(v) != 0 || enumNames_.count(v) != 0;
@@ -477,9 +531,27 @@ private:
             if (peek().type == TokenType::Eof) {
                 throw std::runtime_error("Unclosed struct body starting at line " + std::to_string(line));
             }
+            if (peek().type == TokenType::Fn) {
+                AstNode meth = parseFunction();
+                if (meth.value == "self") {
+                    throw std::runtime_error("Invalid method name 'self' at line " + std::to_string(line));
+                }
+                for (const std::string& f : node.paramNames) {
+                    if (f == meth.value) {
+                        throw std::runtime_error("Method '" + meth.value + "' collides with field '" + f +
+                            "' at line " + std::to_string(line));
+                    }
+                }
+                meth.receiverType = "struct:" + sname;
+                node.children.push_back(std::move(meth));
+                continue;
+            }
             const Token& fieldTok = peek();
             if (fieldTok.type != TokenType::Identifier) {
-                throw std::runtime_error("Expected field name at line " + std::to_string(fieldTok.line));
+                throw std::runtime_error("Expected field name or method at line " + std::to_string(fieldTok.line));
+            }
+            if (fieldTok.value == "self") {
+                throw std::runtime_error("Invalid field name 'self' at line " + std::to_string(fieldTok.line));
             }
             advance();
             node.paramNames.push_back(fieldTok.value);
@@ -543,6 +615,30 @@ private:
 
     // ident.method(...) or ident.field.method(...) as a statement (result discarded).
     // Distinguished from member assignment (ident.field = ...).
+    bool looksLikeIndexedDotCallStmt() const {
+        if (pos_ + 3 >= tokens_.size()) return false;
+        if (tokens_[pos_].type != TokenType::Identifier) return false;
+        if (tokens_[pos_ + 1].type != TokenType::LBracket) return false;
+        int depth = 0;
+        for (size_t i = pos_ + 1; i < tokens_.size(); i++) {
+            if (tokens_[i].type == TokenType::LBracket) depth++;
+            else if (tokens_[i].type == TokenType::RBracket) {
+                depth--;
+                if (depth == 0) {
+                    size_t j = i + 1;
+                    if (j + 2 < tokens_.size() &&
+                        (tokens_[j].type == TokenType::Dot || tokens_[j].type == TokenType::Arrow) &&
+                        tokens_[j + 1].type == TokenType::Identifier &&
+                        tokens_[j + 2].type == TokenType::LParen) {
+                        return true;
+                    }
+                    return false;
+                }
+            }
+        }
+        return false;
+    }
+
     bool looksLikeDotMethodCallStmt() const {
         if (pos_ + 1 >= tokens_.size()) return false;
         if (tokens_[pos_].type != TokenType::Identifier) return false;
@@ -1029,7 +1125,11 @@ private:
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size()) {
                 TokenType next = tokens_[pos_ + 1].type;
                 if (next == TokenType::LBracket) {
-                    stmts.push_back(parseIndexedAssignment());
+                    if (looksLikeIndexedDotCallStmt()) {
+                        stmts.push_back(parseExprStatement());
+                    } else {
+                        stmts.push_back(parseIndexedAssignment());
+                    }
                 } else if (next == TokenType::Assign || next == TokenType::PlusAssign || next == TokenType::MinusAssign ||
                     next == TokenType::StarAssign || next == TokenType::SlashAssign || next == TokenType::PercentAssign ||
                     next == TokenType::BitAndAssign || next == TokenType::BitOrAssign || next == TokenType::BitXorAssign ||
@@ -1728,7 +1828,11 @@ private:
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size()) {
                 TokenType next = tokens_[pos_ + 1].type;
                 if (next == TokenType::LBracket) {
-                    stmts.push_back(parseIndexedAssignment());
+                    if (looksLikeIndexedDotCallStmt()) {
+                        stmts.push_back(parseExprStatement());
+                    } else {
+                        stmts.push_back(parseIndexedAssignment());
+                    }
                 } else if (next == TokenType::Assign || next == TokenType::PlusAssign || next == TokenType::MinusAssign ||
                     next == TokenType::StarAssign || next == TokenType::SlashAssign || next == TokenType::PercentAssign ||
                     next == TokenType::BitAndAssign || next == TokenType::BitOrAssign || next == TokenType::BitXorAssign ||
@@ -1844,15 +1948,14 @@ private:
                     cur = std::move(call);
                     continue;
                 }
-                if (!modules_.hasCppHeader()) {
-                    throw std::runtime_error("Unknown method '." + m + "()' at line " + std::to_string(ftok.line) +
-                        " (string methods: upper, lower, trim, len, contains, starts_with, ends_with, index_of, repeat, split, replace, substring)");
-                }
             }
-            if (peek().type == TokenType::LParen && modules_.hasCppHeader()) {
+            if (peek().type == TokenType::LParen) {
+                if (arrow) {
+                    throw std::runtime_error("Methods use '.' not '->' at line " + std::to_string(ftok.line));
+                }
                 advance();
                 AstNode call{AstNode::Type::FnCall, ftok.value, {}};
-                call.initValue = arrow ? "->" : ".";
+                call.initValue = ".";
                 call.children.push_back(std::move(cur));
                 if (peek().type != TokenType::RParen) {
                     for (;;) {
@@ -1865,9 +1968,6 @@ private:
                 }
                 cur = std::move(call);
                 continue;
-            }
-            if (arrow && peek().type == TokenType::LParen) {
-                throw std::runtime_error("Methods use '.' not '->' at line " + std::to_string(ftok.line));
             }
             AstNode mem{AstNode::Type::ExprMember, ftok.value, {std::move(cur)}};
             mem.isArrowMember = arrow;

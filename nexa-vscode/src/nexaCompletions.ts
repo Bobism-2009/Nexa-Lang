@@ -27,6 +27,7 @@ export const NEXA_KEYWORDS = [
   "true",
   "false",
   "null",
+  "self",
 ];
 
 export const NEXA_TYPES = [
@@ -47,6 +48,9 @@ export const NEXA_TYPES = [
   "*char",
   "*void",
   "*size_t",
+  "[]int",
+  "[]string",
+  "map",
 ];
 
 export const STD_INCLUDES = [
@@ -234,6 +238,11 @@ export const STRING_METHODS = [
   "substring",
   "repeat",
   "split",
+  "push",
+  "pop",
+  "clear",
+  "has",
+  "remove",
 ];
 
 export const HOVER_DOCS: Record<string, string> = {

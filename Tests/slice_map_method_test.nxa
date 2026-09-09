@@ -1,0 +1,64 @@
+#include <std/io>
+
+struct Point {
+    x: int;
+    y: int;
+
+    fn add(q: Point): Point {
+        let r: Point;
+        r.x = self.x + q.x;
+        r.y = self.y + q.y;
+        return r;
+    }
+
+    fn bump() {
+        self.x = self.x + 1;
+    }
+}
+
+fn main() {
+    let xs: []int = [10, 20];
+    xs.push(30);
+    io.println(len(xs));
+    io.println(xs[2]);
+    let last: int = xs.pop();
+    io.println(last);
+    io.println(len(xs));
+
+    let names: []string;
+    names.push("ada");
+    names.push("bob");
+    for (n in names) {
+        io.println(n);
+    }
+
+    let pts: []Point;
+    let a: Point;
+    a.x = 1;
+    a.y = 2;
+    let b: Point;
+    b.x = 3;
+    b.y = 4;
+    pts.push(a);
+    pts.push(b);
+    let s: Point = pts[0].add(pts[1]);
+    io.println(s.x);
+    io.println(s.y);
+    pts[0].bump();
+    io.println(pts[0].x);
+
+    let scores: map[string]int;
+    scores["ada"] = 9;
+    scores["bob"] = 4;
+    io.println(scores["ada"]);
+    if (scores.has("bob")) {
+        io.println(scores["bob"]);
+    }
+    scores.remove("bob");
+    if (!scores.has("bob")) {
+        io.println("gone");
+    }
+    for (k in scores) {
+        io.println(k);
+    }
+}

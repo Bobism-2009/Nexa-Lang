@@ -67,6 +67,7 @@ exports.NEXA_KEYWORDS = [
     "true",
     "false",
     "null",
+    "self",
 ];
 exports.NEXA_TYPES = [
     "int",
@@ -86,6 +87,9 @@ exports.NEXA_TYPES = [
     "*char",
     "*void",
     "*size_t",
+    "[]int",
+    "[]string",
+    "map",
 ];
 exports.STD_INCLUDES = [
     "std/io",
@@ -270,6 +274,11 @@ exports.STRING_METHODS = [
     "substring",
     "repeat",
     "split",
+    "push",
+    "pop",
+    "clear",
+    "has",
+    "remove",
 ];
 exports.HOVER_DOCS = {
     "io.println": "Print to stdout with a trailing newline.",
