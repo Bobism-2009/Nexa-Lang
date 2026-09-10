@@ -34,7 +34,7 @@ static std::string __nexa_http_narrow(const std::wstring& w) {
   WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), &s[0], n, nullptr, nullptr);
   return s;
 }
-static std::string __nexa_http_request(const std::string& method, const std::string& url, const std::string& body) {
+static __nexa_result<std::string> __nexa_http_request(const std::string& method, const std::string& url, const std::string& body) {
   std::wstring wurl = __nexa_http_widen(url);
   URL_COMPONENTS uc;
   memset(&uc, 0, sizeof(uc));
@@ -43,26 +43,28 @@ static std::string __nexa_http_request(const std::string& method, const std::str
   uc.lpszHostName = host; uc.dwHostNameLength = 256;
   uc.lpszUrlPath = path; uc.dwUrlPathLength = 2048;
   uc.lpszExtraInfo = extra; uc.dwExtraInfoLength = 2048;
-  if (!WinHttpCrackUrl(wurl.c_str(), (DWORD)wurl.size(), 0, &uc)) return std::string();
+  if (!WinHttpCrackUrl(wurl.c_str(), (DWORD)wurl.size(), 0, &uc)) {
+    return __nexa_result<std::string>::make_err("invalid URL");
+  }
   std::wstring wpath = std::wstring(path, uc.dwUrlPathLength) + std::wstring(extra, uc.dwExtraInfoLength);
   if (wpath.empty()) wpath = L"/";
   HINTERNET hSession = WinHttpOpen(L"NexaHTTP/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-  if (!hSession) return std::string();
+  if (!hSession) return __nexa_result<std::string>::make_err("could not open HTTP session");
   INTERNET_PORT port = uc.nPort ? uc.nPort : (uc.nScheme == INTERNET_SCHEME_HTTPS ? INTERNET_DEFAULT_HTTPS_PORT : INTERNET_DEFAULT_HTTP_PORT);
   HINTERNET hConnect = WinHttpConnect(hSession, std::wstring(host, uc.dwHostNameLength).c_str(), port, 0);
-  if (!hConnect) { WinHttpCloseHandle(hSession); return std::string(); }
+  if (!hConnect) { WinHttpCloseHandle(hSession); return __nexa_result<std::string>::make_err("could not connect"); }
   DWORD flags = (uc.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
   std::wstring wmethod = __nexa_http_widen(method);
   HINTERNET hRequest = WinHttpOpenRequest(hConnect, wmethod.c_str(), wpath.c_str(), nullptr,
     WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
-  if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return std::string(); }
+  if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return __nexa_result<std::string>::make_err("could not open request"); }
   BOOL ok = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
     body.empty() ? WINHTTP_NO_REQUEST_DATA : (LPVOID)body.data(),
     (DWORD)body.size(), (DWORD)body.size(), 0);
   if (!ok || !WinHttpReceiveResponse(hRequest, nullptr)) {
     WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
-    return std::string();
+    return __nexa_result<std::string>::make_err("request failed");
   }
   std::string out;
   for (;;) {
@@ -76,15 +78,19 @@ static std::string __nexa_http_request(const std::string& method, const std::str
     out += chunk;
   }
   WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
-  return out;
+  return __nexa_result<std::string>::make_ok(out);
 }
 #elif defined(__APPLE__)
 #include <CoreFoundation/CoreFoundation.h>
 #include <CFNetwork/CFNetwork.h>
-static std::string __nexa_http_request(const std::string& method, const std::string& url, const std::string& body) {
+static __nexa_result<std::string> __nexa_http_request(const std::string& method, const std::string& url, const std::string& body) {
   CFStringRef cfUrl = CFStringCreateWithCString(kCFAllocatorDefault, url.c_str(), kCFStringEncodingUTF8);
   CFStringRef cfMethod = CFStringCreateWithCString(kCFAllocatorDefault, method.c_str(), kCFStringEncodingUTF8);
   CFURLRef urlRef = CFURLCreateWithString(kCFAllocatorDefault, cfUrl, nullptr);
+  if (!urlRef) {
+    CFRelease(cfMethod); CFRelease(cfUrl);
+    return __nexa_result<std::string>::make_err("invalid URL");
+  }
   CFHTTPMessageRef req = CFHTTPMessageCreateRequest(kCFAllocatorDefault, cfMethod, urlRef, kCFHTTPVersion1_1);
   if (!body.empty()) {
     CFDataRef data = CFDataCreate(kCFAllocatorDefault, (const UInt8*)body.data(), (CFIndex)body.size());
@@ -95,7 +101,7 @@ static std::string __nexa_http_request(const std::string& method, const std::str
   CFReadStreamSetProperty(stream, kCFStreamPropertyHTTPShouldAutoredirect, kCFBooleanTrue);
   if (!CFReadStreamOpen(stream)) {
     CFRelease(stream); CFRelease(req); CFRelease(urlRef); CFRelease(cfMethod); CFRelease(cfUrl);
-    return std::string();
+    return __nexa_result<std::string>::make_err("could not open request");
   }
   std::string out;
   UInt8 buf[4096];
@@ -106,12 +112,12 @@ static std::string __nexa_http_request(const std::string& method, const std::str
   }
   CFReadStreamClose(stream);
   CFRelease(stream); CFRelease(req); CFRelease(urlRef); CFRelease(cfMethod); CFRelease(cfUrl);
-  return out;
+  return __nexa_result<std::string>::make_ok(out);
 }
 #elif defined(__EMSCRIPTEN__)
 #include <emscripten/fetch.h>
 #include <cstring>
-static std::string __nexa_http_request(const std::string& method, const std::string& url, const std::string& body) {
+static __nexa_result<std::string> __nexa_http_request(const std::string& method, const std::string& url, const std::string& body) {
   emscripten_fetch_attr_t attr;
   emscripten_fetch_attr_init(&attr);
   std::memset(attr.requestMethod, 0, sizeof(attr.requestMethod));
@@ -122,12 +128,16 @@ static std::string __nexa_http_request(const std::string& method, const std::str
     attr.requestDataSize = body.size();
   }
   emscripten_fetch_t* fetch = emscripten_fetch(&attr, url.c_str());
-  if (!fetch) return std::string();
+  if (!fetch) return __nexa_result<std::string>::make_err("request failed");
+  if (fetch->status < 200 || fetch->status >= 300) {
+    std::string err = "HTTP " + std::to_string((int)fetch->status);
+    emscripten_fetch_close(fetch);
+    return __nexa_result<std::string>::make_err(err);
+  }
   std::string out;
-  if (fetch->status >= 200 && fetch->status < 300 && fetch->data && fetch->numBytes)
-    out.assign(fetch->data, fetch->numBytes);
+  if (fetch->data && fetch->numBytes) out.assign(fetch->data, fetch->numBytes);
   emscripten_fetch_close(fetch);
-  return out;
+  return __nexa_result<std::string>::make_ok(out);
 }
 #else
 #include <sys/types.h>
@@ -239,22 +249,26 @@ static int __nexa_http_io_write(int fd, void* ssl, const __nexa_SslApi* api, con
   }
   return 1;
 }
-static std::string __nexa_http_request(const std::string& method, const std::string& url, const std::string& body) {
+static __nexa_result<std::string> __nexa_http_request(const std::string& method, const std::string& url, const std::string& body) {
   std::string scheme, host, path; int port = 80;
-  if (!__nexa_http_parse_url(url, scheme, host, port, path)) return std::string();
+  if (!__nexa_http_parse_url(url, scheme, host, port, path)) {
+    return __nexa_result<std::string>::make_err("invalid URL");
+  }
   int tls = 0;
   if (scheme == "https") tls = 1;
-  else if (scheme != "http") return std::string();
+  else if (scheme != "http") return __nexa_result<std::string>::make_err("unsupported URL scheme");
   const __nexa_SslApi* api = nullptr;
   if (tls) {
     api = __nexa_ssl_api();
-    if (!api) return std::string();
+    if (!api) return __nexa_result<std::string>::make_err("HTTPS requires libssl");
   }
   addrinfo hints; memset(&hints, 0, sizeof(hints));
   hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_STREAM;
   addrinfo* res = nullptr;
   std::string portStr = std::to_string(port);
-  if (getaddrinfo(host.c_str(), portStr.c_str(), &hints, &res) != 0 || !res) return std::string();
+  if (getaddrinfo(host.c_str(), portStr.c_str(), &hints, &res) != 0 || !res) {
+    return __nexa_result<std::string>::make_err("could not resolve host");
+  }
   int fd = -1;
   for (addrinfo* p = res; p; p = p->ai_next) {
     fd = (int)socket(p->ai_family, p->ai_socktype, p->ai_protocol);
@@ -263,16 +277,16 @@ static std::string __nexa_http_request(const std::string& method, const std::str
     close(fd); fd = -1;
   }
   freeaddrinfo(res);
-  if (fd < 0) return std::string();
+  if (fd < 0) return __nexa_result<std::string>::make_err("could not connect");
   void* ctx = nullptr;
   void* ssl = nullptr;
   if (tls) {
     const void* meth = api->TLS_client_method();
     ctx = meth ? api->SSL_CTX_new(meth) : nullptr;
-    if (!ctx) { close(fd); return std::string(); }
+    if (!ctx) { close(fd); return __nexa_result<std::string>::make_err("TLS setup failed"); }
     if (api->SSL_CTX_set_default_verify_paths) api->SSL_CTX_set_default_verify_paths(ctx);
     ssl = api->SSL_new(ctx);
-    if (!ssl) { api->SSL_CTX_free(ctx); close(fd); return std::string(); }
+    if (!ssl) { api->SSL_CTX_free(ctx); close(fd); return __nexa_result<std::string>::make_err("TLS setup failed"); }
     if (api->SSL_set_verify) api->SSL_set_verify(ssl, 1, nullptr);
     if (api->SSL_set1_host) api->SSL_set1_host(ssl, host.c_str());
     if (api->SSL_ctrl) api->SSL_ctrl(ssl, 55, 0, (void*)host.c_str());
@@ -280,14 +294,14 @@ static std::string __nexa_http_request(const std::string& method, const std::str
       api->SSL_free(ssl);
       api->SSL_CTX_free(ctx);
       close(fd);
-      return std::string();
+      return __nexa_result<std::string>::make_err("TLS handshake failed");
     }
     if (api->SSL_get_verify_result && api->SSL_get_verify_result(ssl) != 0) {
       if (api->SSL_shutdown) api->SSL_shutdown(ssl);
       api->SSL_free(ssl);
       api->SSL_CTX_free(ctx);
       close(fd);
-      return std::string();
+      return __nexa_result<std::string>::make_err("TLS certificate verify failed");
     }
   }
   std::string hostHdr = host;
@@ -309,7 +323,7 @@ static std::string __nexa_http_request(const std::string& method, const std::str
       api->SSL_CTX_free(ctx);
     }
     close(fd);
-    return std::string();
+    return __nexa_result<std::string>::make_err("request failed");
   }
   std::string raw;
   char buf[4096];
@@ -325,14 +339,14 @@ static std::string __nexa_http_request(const std::string& method, const std::str
   }
   close(fd);
   size_t hdr = raw.find("\r\n\r\n");
-  if (hdr == std::string::npos) return raw;
-  return raw.substr(hdr + 4);
+  if (hdr == std::string::npos) return __nexa_result<std::string>::make_ok(raw);
+  return __nexa_result<std::string>::make_ok(raw.substr(hdr + 4));
 }
 #endif
-static std::string __nexa_http_get(const std::string& url) {
+static __nexa_result<std::string> __nexa_http_get(const std::string& url) {
   return __nexa_http_request("GET", url, "");
 }
-static std::string __nexa_http_post(const std::string& url, const std::string& body) {
+static __nexa_result<std::string> __nexa_http_post(const std::string& url, const std::string& body) {
   return __nexa_http_request("POST", url, body);
 }
 )NEXA_HTTP";

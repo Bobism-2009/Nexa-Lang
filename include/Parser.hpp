@@ -32,6 +32,7 @@ struct AstNode {
                       FileRead, FileWrite, FileAppend, FileExists, FileMkdir, FileCall,
                       RandomInt, RandomSeed,
                       MathCall, CryptoCall, HttpCall, GfxCall, JsonCall,
+                      ResultMake,
                       StrMethod,
                       TimeSleep, TimeSeconds, TimeMilliseconds, TimeNowMs,
                       ThreadSpawn, ThreadJoin, ThreadWorker, ThreadRun, ThreadWorkerJoin,
@@ -63,7 +64,7 @@ struct AstNode {
                       Block,
                       ExprIntLiteral, ExprFloatLiteral, ExprCharLiteral, ExprBoolLiteral, ExprVarRef, ExprAdd, ExprSub, ExprMul, ExprDiv, ExprMod,
                       ExprBitAnd, ExprBitOr, ExprBitXor, ExprShl, ExprShr, ExprBitNot,
-                      ExprArrayLiteral, ExprArrayIndex,
+                      ExprArrayLiteral, ExprArrayIndex, ExprSlice,
                       ExprCast,
                       ExprAddrOf,
                       ExprDeref,
@@ -138,6 +139,18 @@ inline std::string nexaSliceElem(const std::string& t) {
 
 inline bool nexaIsMapType(const std::string& t) {
     return t.size() >= 4 && t.compare(0, 4, "map[") == 0;
+}
+
+inline bool nexaIsResultType(const std::string& t) {
+    return t.size() >= 8 && t.compare(0, 7, "Result[") == 0 && t.back() == ']';
+}
+
+inline std::string nexaResultInner(const std::string& t) {
+    return nexaIsResultType(t) ? t.substr(7, t.size() - 8) : std::string();
+}
+
+inline std::string nexaMakeResultType(const std::string& inner) {
+    return "Result[" + inner + "]";
 }
 
 inline bool nexaSplitMapType(const std::string& t, std::string& key, std::string& val) {
@@ -279,7 +292,7 @@ private:
             return m == "shell" || m == "newline" || m == "path_sep" || m == "lang"
                 || m == "config_dir" || m == "cache_dir" || m == "desktop" || m == "endian";
         }
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsExecutable || e.type == AstNode::Type::OsTempDir || e.type == AstNode::Type::OsArch || e.type == AstNode::Type::OsWhich || e.type == AstNode::Type::OsCwd || e.type == AstNode::Type::OsHostname || e.type == AstNode::Type::OsUsername || e.type == AstNode::Type::OsHome || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::OsLoad || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall || e.type == AstNode::Type::HttpCall) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsExecutable || e.type == AstNode::Type::OsTempDir || e.type == AstNode::Type::OsArch || e.type == AstNode::Type::OsWhich || e.type == AstNode::Type::OsCwd || e.type == AstNode::Type::OsHostname || e.type == AstNode::Type::OsUsername || e.type == AstNode::Type::OsHome || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::OsLoad || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall) return true;
         if (e.type == AstNode::Type::JsonCall && e.value == "stringify") return true;
         if (e.type == AstNode::Type::ExprCast && e.value == "string") return true;
         if (e.type == AstNode::Type::FileCall) {
@@ -460,6 +473,16 @@ private:
             std::string val = parseTypeName();
             return "map[" + key + "]" + val;
         }
+        if (v == "Result" || v == "result") {
+            if (!match(TokenType::LBracket)) {
+                throw std::runtime_error("Expected '[' after Result at line " + std::to_string(peek().line));
+            }
+            std::string inner = parseTypeName();
+            if (!match(TokenType::RBracket)) {
+                throw std::runtime_error("Expected ']' after Result inner type at line " + std::to_string(peek().line));
+            }
+            return nexaMakeResultType(inner);
+        }
         if (v == "int") return "int";
         if (v == "short") return "short";
         if (v == "long") return "long";
@@ -510,7 +533,8 @@ private:
         const std::string& v = t.value;
         if (v == "int" || v == "short" || v == "long" || v == "size_t" ||
             v == "float" || v == "char" || v == "bool" || v == "string" ||
-            v == "void" || v == "unsigned" || v == "map" || v == "Json" || v == "json") {
+            v == "void" || v == "unsigned" || v == "map" || v == "Json" || v == "json" ||
+            v == "Result" || v == "result") {
             return true;
         }
         return structNames_.count(v) != 0 || enumNames_.count(v) != 0;
@@ -709,6 +733,21 @@ private:
                 depth--;
                 if (depth == 0) {
                     size_t j = i + 1;
+                    while (j < tokens_.size() && tokens_[j].type == TokenType::LBracket) {
+                        int d2 = 0;
+                        size_t k = j;
+                        for (; k < tokens_.size(); k++) {
+                            if (tokens_[k].type == TokenType::LBracket) d2++;
+                            else if (tokens_[k].type == TokenType::RBracket) {
+                                d2--;
+                                if (d2 == 0) {
+                                    j = k + 1;
+                                    break;
+                                }
+                            }
+                        }
+                        if (k >= tokens_.size()) return false;
+                    }
                     if (j + 2 < tokens_.size() &&
                         (tokens_[j].type == TokenType::Dot || tokens_[j].type == TokenType::Arrow) &&
                         tokens_[j + 1].type == TokenType::Identifier &&
@@ -1446,8 +1485,7 @@ private:
             }
             e = std::move(call);
         }
-        if (peek().type == TokenType::Dot || peek().type == TokenType::Arrow) return parseDotChain(std::move(e));
-        return e;
+        return applyIndexAndDotPostfix(std::move(e));
     }
 
     AstNode parseFnCallExpr() {
@@ -1620,15 +1658,31 @@ private:
         }
         advance();
         std::string name = nameTok.value;
-        if (!match(TokenType::LBracket)) {
-            throw std::runtime_error("Expected '[' at line " + std::to_string(peek().line));
-        }
-        AstNode idx = parseExpression();
-        if (!match(TokenType::RBracket)) {
-            throw std::runtime_error("Expected ']' at line " + std::to_string(peek().line));
-        }
+        std::vector<AstNode> indices;
+        do {
+            if (!match(TokenType::LBracket)) {
+                throw std::runtime_error("Expected '[' at line " + std::to_string(peek().line));
+            }
+            if (peek().type == TokenType::Colon) {
+                throw std::runtime_error("Cannot assign to a slice xs[a:b] at line " + std::to_string(peek().line));
+            }
+            AstNode idx = parseExpression();
+            if (peek().type == TokenType::Colon) {
+                throw std::runtime_error("Cannot assign to a slice xs[a:b] at line " + std::to_string(peek().line));
+            }
+            if (!match(TokenType::RBracket)) {
+                throw std::runtime_error("Expected ']' at line " + std::to_string(peek().line));
+            }
+            indices.push_back(std::move(idx));
+        } while (peek().type == TokenType::LBracket);
         if (peek().type == TokenType::Dot || peek().type == TokenType::Arrow) {
-            AstNode cur{AstNode::Type::ExprArrayIndex, name, {std::move(idx)}};
+            AstNode cur{AstNode::Type::ExprVarRef, name, {}};
+            for (AstNode& idx : indices) {
+                AstNode indexed{AstNode::Type::ExprArrayIndex, "", {}};
+                indexed.children.push_back(std::move(cur));
+                indexed.children.push_back(std::move(idx));
+                cur = std::move(indexed);
+            }
             while (peek().type == TokenType::Dot || peek().type == TokenType::Arrow) {
                 bool arrow = peek().type == TokenType::Arrow;
                 advance();
@@ -1670,7 +1724,9 @@ private:
         if (!match(TokenType::Semicolon)) {
             throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
         }
-        AstNode node{AstNode::Type::AssnIndex, name, {idx, expr}};
+        AstNode node{AstNode::Type::AssnIndex, name, {}};
+        node.children = std::move(indices);
+        node.children.push_back(std::move(expr));
         return node;
     }
 
@@ -2109,9 +2165,23 @@ private:
             AstNode block = parseBody();
             return {AstNode::Type::ForIn, varName, {collExpr, block}};
         }
-        // for (i, n) { ... }
+        // for (i, n) { ... }  or  for (k, v in m) { ... }
         if (!match(TokenType::Comma)) {
             throw std::runtime_error("Expected ',' or 'in' in for loop at line " + std::to_string(peek().line));
+        }
+        if (peek().type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
+            tokens_[pos_ + 1].type == TokenType::Identifier && tokens_[pos_ + 1].value == "in") {
+            std::string valueName = peek().value;
+            advance();
+            advance(); // 'in'
+            AstNode collExpr = parseExpression();
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' after for (... in ...) at line " + std::to_string(peek().line));
+            }
+            AstNode block = parseBody();
+            AstNode node{AstNode::Type::ForIn, varName, {collExpr, block}};
+            node.initValue = valueName;
+            return node;
         }
         AstNode countExpr = parseExpression();
         if (!match(TokenType::RParen)) {
@@ -2120,6 +2190,63 @@ private:
         AstNode block = parseBody();
         AstNode forNode{AstNode::Type::For, varName, {countExpr, block}};
         return forNode;
+    }
+
+    AstNode parseIndexOrSliceOn(AstNode base) {
+        size_t line = peek().line;
+        if (peek().type == TokenType::Colon) {
+            advance();
+            AstNode node{AstNode::Type::ExprSlice, "", {}};
+            node.children.push_back(std::move(base));
+            if (peek().type == TokenType::RBracket) {
+                node.initValue = "all";
+            } else {
+                node.initValue = "end";
+                node.children.push_back(parseExpression());
+            }
+            if (!match(TokenType::RBracket)) {
+                throw std::runtime_error("Expected ']' after slice at line " + std::to_string(peek().line));
+            }
+            return node;
+        }
+        AstNode start = parseExpression();
+        if (match(TokenType::Colon)) {
+            AstNode node{AstNode::Type::ExprSlice, "", {}};
+            node.children.push_back(std::move(base));
+            node.children.push_back(std::move(start));
+            if (peek().type == TokenType::RBracket) {
+                node.initValue = "start";
+            } else {
+                node.initValue = "both";
+                node.children.push_back(parseExpression());
+            }
+            if (!match(TokenType::RBracket)) {
+                throw std::runtime_error("Expected ']' after slice at line " + std::to_string(peek().line));
+            }
+            return node;
+        }
+        if (!match(TokenType::RBracket)) {
+            throw std::runtime_error("Expected ']' at line " + std::to_string(line));
+        }
+        AstNode indexed{AstNode::Type::ExprArrayIndex, "", {}};
+        indexed.children.push_back(std::move(base));
+        indexed.children.push_back(std::move(start));
+        return indexed;
+    }
+
+    AstNode applyIndexAndDotPostfix(AstNode cur) {
+        for (;;) {
+            if (match(TokenType::LBracket)) {
+                cur = parseIndexOrSliceOn(std::move(cur));
+                continue;
+            }
+            if (peek().type == TokenType::Dot || peek().type == TokenType::Arrow) {
+                cur = parseDotChain(std::move(cur));
+                continue;
+            }
+            break;
+        }
+        return cur;
     }
 
     // Parses a chain of `.field` / `->field` accesses and `.method(args)` calls on a base expression.
@@ -2355,7 +2482,7 @@ private:
             return parsePostfixCalls(parseStructLiteral());
         }
         if (peek().type == TokenType::LBracket) {
-            return parseArrayLiteral();
+            return applyIndexAndDotPostfix(parseArrayLiteral());
         }
         if (match(TokenType::Number)) {
             return {AstNode::Type::ExprIntLiteral, tokens_[pos_ - 1].value, {}};
@@ -2377,9 +2504,7 @@ private:
             return {AstNode::Type::ExprNull, "null", {}};
         }
         if (match(TokenType::String)) {
-            AstNode lit{AstNode::Type::ExprStringLiteral, tokens_[pos_ - 1].value, {}};
-            if (peek().type == TokenType::Dot || peek().type == TokenType::Arrow) return parseDotChain(std::move(lit));
-            return lit;
+            return applyIndexAndDotPostfix({AstNode::Type::ExprStringLiteral, tokens_[pos_ - 1].value, {}});
         }
         if (peek().type == TokenType::Identifier && peek().value == "io" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
@@ -2443,11 +2568,11 @@ private:
         }
         if (peek().type == TokenType::Identifier && peek().value == "http" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
-            return parseHttpCall();
+            return applyIndexAndDotPostfix(parseHttpCall());
         }
         if (peek().type == TokenType::Identifier && peek().value == "json" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
-            return parseDotChain(parseJsonCall());
+            return applyIndexAndDotPostfix(parseJsonCall());
         }
         if (peek().type == TokenType::Identifier && peek().value == "time" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
@@ -2465,6 +2590,11 @@ private:
         if (peek().type == TokenType::Identifier && peek().value == "ui") {
             throw std::runtime_error("std/ui has been removed at line " + std::to_string(peek().line));
         }
+        if (peek().type == TokenType::Identifier &&
+            (peek().value == "ok" || peek().value == "err") &&
+            pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::LParen) {
+            return applyIndexAndDotPostfix(parseResultMake());
+        }
         if (peek().type == TokenType::Identifier && peek().value == "len" && pos_ + 1 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::LParen) {
             return parseLenExpr();
@@ -2476,25 +2606,11 @@ private:
         if (looksLikeQualifiedFnCall() ||
             (peek().type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
              tokens_[pos_ + 1].type == TokenType::LParen)) {
-            return parseFnCallExpr();
+            return applyIndexAndDotPostfix(parseFnCallExpr());
         }
         if (match(TokenType::Identifier)) {
             std::string name = tokens_[pos_ - 1].value;
-            AstNode cur = parseDotChain({AstNode::Type::ExprVarRef, name, {}});
-            if (match(TokenType::LBracket)) {
-                if (cur.type != AstNode::Type::ExprVarRef) {
-                    throw std::runtime_error("Only simple variable [] indexing is supported at line " + std::to_string(peek().line));
-                }
-                AstNode idx = parseExpression();
-                if (!match(TokenType::RBracket)) {
-                    throw std::runtime_error("Expected ']' at line " + std::to_string(peek().line));
-                }
-                AstNode indexed{AstNode::Type::ExprArrayIndex, cur.value, {idx}};
-                // Allow methods/fields on an indexed element, e.g. parts[i].split("=") or arr[i]->x.
-                if (peek().type == TokenType::Dot || peek().type == TokenType::Arrow) return parseDotChain(std::move(indexed));
-                return indexed;
-            }
-            return cur;
+            return applyIndexAndDotPostfix({AstNode::Type::ExprVarRef, name, {}});
         }
         if (match(TokenType::LParen)) {
             // Use the full top-level (parseTernary) so parenthesized boolean expressions
@@ -3591,6 +3707,40 @@ private:
         return node;
     }
 
+    AstNode parseResultMake() {
+        const Token& nameTok = peek();
+        size_t line = nameTok.line;
+        if (nameTok.type != TokenType::Identifier || (nameTok.value != "ok" && nameTok.value != "err")) {
+            throw std::runtime_error("Expected ok(...) or err(...) at line " + std::to_string(line));
+        }
+        std::string kind = nameTok.value;
+        advance();
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after " + kind + " at line " + std::to_string(peek().line));
+        }
+        AstNode node{AstNode::Type::ResultMake, kind, {}};
+        if (kind == "ok") {
+            if (peek().type != TokenType::RParen) {
+                node.children.push_back(parseExpression());
+                if (peek().type == TokenType::Comma) {
+                    throw std::runtime_error("ok(...) takes at most one value at line " + std::to_string(peek().line));
+                }
+            }
+        } else {
+            if (peek().type == TokenType::RParen) {
+                throw std::runtime_error("err(...) requires an error message at line " + std::to_string(line));
+            }
+            node.children.push_back(parseExpression());
+            if (peek().type == TokenType::Comma) {
+                throw std::runtime_error("err(...) takes one argument at line " + std::to_string(peek().line));
+            }
+        }
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' after " + kind + "(...) at line " + std::to_string(peek().line));
+        }
+        return node;
+    }
+
     AstNode parseHttpCall() {
         size_t line = peek().line;
         if (!modules_.hasHttp()) {
@@ -4186,7 +4336,7 @@ private:
                 node.initIsFloat = false;
                 node.initIsChar = false;
             }
-            if (nexaIsFnType(declType) || declType == "json") {
+            if (nexaIsFnType(declType) || nexaIsResultType(declType) || declType == "json") {
                 node.initIsInt = false;
                 node.initIsBool = false;
                 node.initIsFloat = false;
@@ -4272,6 +4422,10 @@ private:
                 node.initIsInt = false;
             } else if (b.type == AstNode::Type::JsonCall) {
                 node.initIsInt = false;
+            } else if (b.type == AstNode::Type::ResultMake || b.type == AstNode::Type::HttpCall) {
+                node.initIsInt = false;
+            } else if (b.type == AstNode::Type::ExprSlice) {
+                node.initIsInt = false;
             } else {
                 node.initIsInt = !exprProducesString(b);
             }
@@ -4299,7 +4453,8 @@ private:
                 node.initIsFloat = false;
                 node.initIsChar = false;
             }
-            if (nexaIsFnType(declType) || nexaIsSliceType(declType) || nexaIsMapType(declType) || declType == "json") {
+            if (nexaIsFnType(declType) || nexaIsSliceType(declType) || nexaIsMapType(declType) ||
+                nexaIsResultType(declType) || declType == "json") {
                 node.initIsInt = false;
                 node.initIsBool = false;
                 node.initIsFloat = false;

@@ -3,6 +3,7 @@
 #include "include/Transpiler.hpp"
 #include "include/Modules.hpp"
 #include "include/nexapkg.hpp"
+#include "include/NexaUpgrade.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -1585,6 +1586,7 @@ static int printHelp(int page = 1) {
     std::cout << "Usage:\n";
     std::cout << "  NexaC init [dir]       Scaffold new project (current dir or dir/)\n";
     std::cout << "  NexaC build [dir]      Build .nxa with fn main() or fn __init__()\n";
+    std::cout << "  NexaC upgrade          Install the latest NexaC if a newer release exists\n";
     std::cout << "  NexaC <file.nxa> [-o <executable>]\n";
     std::cout << "  NexaC <file.nxa> --source <output.cpp>\n";
     std::cout << "  NexaC --help [page|module]\n\n";
@@ -1644,6 +1646,9 @@ int main(int argc, char* argv[]) {
     if (argc >= 2 && std::string(argv[1]) == "build") {
         std::string dir = (argc >= 3) ? argv[2] : "";
         return doBuild(dir);
+    }
+    if (argc >= 2 && std::string(argv[1]) == "upgrade") {
+        return nexa::doUpgrade(argc, argv, getExePath(), NEXAC_VERSION);
     }
 
     std::string inputPath;
@@ -1744,10 +1749,10 @@ int main(int argc, char* argv[]) {
             if (!entry.empty()) inputPath = entry;
         }
         if (inputPath.empty()) {
-            std::cerr << "Usage: NexaC init [dir]  |  NexaC build [dir]  |  NexaC <file.nxa> [-o <exe>]\n";
-            std::cerr << "       NexaC <file.nxa> --source <output.cpp>\n";
+            std::cerr << "Usage: NexaC init [dir]  |  NexaC build [dir]  |  NexaC upgrade\n";
+            std::cerr << "       NexaC <file.nxa> [-o <exe>]  |  NexaC <file.nxa> --source <output.cpp>\n";
             std::cerr << "       NexaC <file.nxa> --run  |  NexaC --run (in project dir)\n";
-            std::cerr << "Example: NexaC init  |  NexaC build  |  NexaC --run\n";
+            std::cerr << "Example: NexaC init  |  NexaC build  |  NexaC upgrade  |  NexaC --run\n";
             return 1;
         }
     }
@@ -1944,7 +1949,7 @@ int main(int argc, char* argv[]) {
         std::string cpp = transpiler.transpile();
 
         // Decide which C++ machinery the generated code can safely omit. Exceptions/unwind tables
-        // are only needed for try/catch, throw, std::stoi (io.to_int), or inline_cpp (arbitrary C++).
+        // are only needed for try/catch, throw, Result.value(), std::stoi (io.to_int), or inline_cpp.
         // RTTI is never emitted by the transpiler, so it is dropped unless inline_cpp is present.
         const nexa::Modules::CppUsage& usage = transpiler.cppUsage();
         const bool noExceptions = !usage.exceptions && !usage.ioToInt && !modules.hasInlineCpp();

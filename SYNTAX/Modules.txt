@@ -161,10 +161,12 @@ Nexa Standard Modules
   macOS:   CFNetwork (HTTP + HTTPS)
   Linux:   POSIX sockets + HTTPS via system libssl.so (dlopen; needs
            libssl1.1/libssl3 at runtime, usual on desktop/server Linux)
-  http.get(url)           - GET request; returns response body string ("" on failure)
-  http.post(url, body)    - POST request; returns response body string ("" on failure)
-  Use: let html = http.get("https://example.com/");
-  Use: let r = http.post("https://httpbin.org/post", "{\"a\":1}");
+  http.get(url)           - GET; returns Result[string] (body on success, .error() on failure)
+  http.post(url, body)    - POST; returns Result[string]
+  Use: let page = http.get("https://example.com/");
+       if (page.ok()) { io.println(page.value()); }
+       else { io.println(page.error()); }
+  Empty successful body is still ok (unlike the old ""-means-fail rule).
 
 #include <std/json>
   Nested JSON objects and arrays (not a flat string map).
@@ -231,7 +233,7 @@ Nexa Standard Modules
   gfx.text_height(s[, scale])        - pixel height including \\n (does not draw)
   gfx.present()                  - blit framebuffer to the window
   gfx.image(path)                - load PNG/JPEG/BMP/GIF (and OS formats); handle, or 0
-  gfx.decode(bytes)              - same decode from a string (os.load / http.get)
+  gfx.decode(bytes)              - same decode from a string (os.load / http.get(...).value())
   gfx.image_w(id) / image_h(id)  - pixel size of a loaded image (0 if invalid)
   gfx.blit(x, y, src[, w, h])    - draw image at x,y; src is handle or path
                                    omit w,h for native size; nearest-neighbor scale;

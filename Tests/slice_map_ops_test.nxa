@@ -1,0 +1,92 @@
+#include <std/io>
+
+struct Point {
+    x: int;
+    y: int;
+}
+
+fn main() {
+    let xs: []int = [10, 20, 30, 40];
+    xs.insert(1, 15);
+    io.println(len(xs));
+    io.println(xs[1]);
+    xs.insert(0, 5);
+    io.println(xs[0]);
+    xs.insert(100, 99);
+    io.println(xs[len(xs) - 1]);
+
+    io.println(xs.contains(20));
+    io.println(xs.has(21));
+    io.println(xs.index_of(30));
+    io.println(xs.index_of(8));
+
+    let mid = xs[2:4];
+    io.println(len(mid));
+    io.println(mid[0]);
+    io.println(mid[1]);
+
+    let tail = xs[3:];
+    io.println(len(tail));
+    io.println(tail[0]);
+
+    let head = xs[:2];
+    io.println(len(head));
+    io.println(head[0]);
+    io.println(head[1]);
+
+    let copy = xs[:];
+    io.println(len(copy));
+
+    let last2 = xs[-2:];
+    io.println(len(last2));
+    io.println(last2[0]);
+    io.println(last2[1]);
+
+    let names: []string = ["ada", "bob", "cam"];
+    io.println(names.contains("bob"));
+    io.println(names.index_of("cam"));
+    let some = names[1:];
+    io.println(some[0]);
+
+    let s = "hello";
+    io.println(s[1:4]);
+    io.println(s[:2]);
+    io.println(s[3:]);
+    io.println(s[:]);
+
+    let scores: map[string]int;
+    scores["ada"] = 9;
+    scores["bob"] = 4;
+    let ks = scores.keys();
+    io.println(len(ks));
+    io.println(ks[0]);
+    io.println(ks[1]);
+    let vs = scores.values();
+    io.println(len(vs));
+    io.println(vs[0]);
+    io.println(vs[1]);
+
+    for (k, v in scores) {
+        io.println(k);
+        io.println(v);
+    }
+
+    for (n in xs[2:4]) {
+        io.println(n);
+    }
+
+    let pts: []Point;
+    let a: Point;
+    a.x = 1;
+    a.y = 2;
+    let b: Point;
+    b.x = 3;
+    b.y = 4;
+    pts.push(a);
+    pts.push(b);
+    io.println(pts.contains(a));
+    let miss: Point;
+    miss.x = 9;
+    miss.y = 9;
+    io.println(pts.contains(miss));
+}

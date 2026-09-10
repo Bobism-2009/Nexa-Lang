@@ -16,7 +16,7 @@ fn main() {
     io.println(v.get("c").is_null());
     io.println(v.get("d").get("k").as_string());
     io.println(v["a"].as_int());
-    io.println(v["b"].get(1).as_string());
+    io.println(v["b"][1].as_string());
 
     let compact = json.stringify(v);
     let again = json.parse(compact);

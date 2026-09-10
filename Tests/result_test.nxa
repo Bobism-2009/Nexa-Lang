@@ -1,0 +1,65 @@
+#include <std/io>
+#include <std/http>
+
+fn divide(a: int, b: int): Result[int] {
+    if (b == 0) {
+        return err("divide by zero");
+    }
+    return ok(a / b);
+}
+
+fn done(): Result[void] {
+    return ok();
+}
+
+fn fail_void(): Result[void] {
+    return err("nope");
+}
+
+fn load(path: string): Result[string] {
+    if (path.len() == 0) {
+        return err("empty path");
+    }
+    return ok(path);
+}
+
+fn main() {
+    let a = divide(10, 2);
+    io.println(a.ok());
+    io.println(a.value());
+    io.println(a.error().len());
+
+    let b = divide(1, 0);
+    io.println(b.ok());
+    io.println(b.error());
+
+    io.println(divide(8, 2).ok());
+    io.println(divide(8, 2).value());
+    io.println(divide(8, 0).ok());
+    io.println(divide(8, 0).error());
+
+    let t = done();
+    io.println(t.ok());
+    io.println(fail_void().ok());
+    io.println(fail_void().error());
+
+    let s = load("hi");
+    io.println(s.ok());
+    io.println(s.value());
+    io.println(load("").ok());
+    io.println(load("").error());
+
+    let typed: Result[int] = err("typed");
+    io.println(typed.ok());
+    io.println(typed.error());
+
+    let blank: Result[int];
+    io.println(blank.ok());
+
+    let bad = http.get("notaurl");
+    io.println(bad.ok());
+    io.println((bad.error().len() > 0));
+    io.println(http.get("notaurl").ok());
+
+    return 0;
+}

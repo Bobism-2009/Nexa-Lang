@@ -1,0 +1,43 @@
+#include <std/io>
+#include <std/json>
+
+struct Point {
+    x: int;
+    y: int;
+}
+
+fn main() {
+    let grid: [][]int;
+    let row0: []int = [1, 2];
+    let row1: []int = [3, 4];
+    grid.push(row0);
+    grid.push(row1);
+    io.println(grid[0][1]);
+    io.println(grid[1][0]);
+    grid[1][1] = 9;
+    io.println(grid[1][1]);
+
+    let xs: []int = [10, 20, 30, 40];
+    io.println(xs[1:3][0]);
+    io.println(xs[1:3][1]);
+
+    let parts = "a,b,c".split(",");
+    io.println(parts[0]);
+    io.println("x,y,z".split(",")[1]);
+
+    let pts: []Point;
+    let p: Point;
+    p.x = 5;
+    p.y = 6;
+    pts.push(p);
+    io.println(pts[0].x);
+    pts[0].y = 8;
+    io.println(pts[0].y);
+
+    let v: Json = json.parse("{\"b\":[true,\"x\"],\"c\":{\"k\":2}}");
+    io.println(v["b"][1].as_string());
+    io.println(v["c"]["k"].as_int());
+    io.println(json.parse("{\"a\":[3,4]}")["a"][0].as_int());
+    v["b"][0] = false;
+    io.println(v["b"][0].as_bool());
+}

@@ -24,7 +24,7 @@ STRUCTS
     other: string;
     nested: InnerStruct;   // InnerStruct must be declared earlier in the file
   }
-  - Field types: int, unsigned int, short, unsigned short, long, unsigned long, size_t, string, bool, float, char, unsigned char, *T pointers, []T, map[K]V, or another struct name
+  - Field types: int, unsigned int, short, unsigned short, long, unsigned long, size_t, string, bool, float, char, unsigned char, *T pointers, []T, map[K]V, Result[T], or another struct name
   - Methods: `fn name(args): Ret { ... }` inside the struct. Use `self.field` (self is the receiver).
     Call as `p.name(args)`. Return type is required when it is not int/void.
   - Optional semicolon after the closing }
@@ -317,11 +317,11 @@ STRING METHODS (core; no #include required)
   STRING INDEXING
     s[i]           - character at index i (type char); i is 0-based
     s[i] = 'x';    - replace character at i (also accepts int code point)
+    s[a:b]         - substring copy (half-open); also s[:n], s[n:], s[:]
     Bounds are not checked (same as C++ std::string).
     Note: []string indexing still returns string (parts[i]), not char.
 
-  Note: index directly into a split result via a variable
-  (let parts = s.split(","); parts[0]), not s.split(",")[0].
+  Indexing chains: grid[i][j], v["b"][1], xs[1:3][0], s.split(",")[0].
 
 SLICES ([]T)
   Growable arrays. Emitted as std::vector. Distinct from fixed `let buf: int[4]` (C array).
@@ -329,9 +329,14 @@ SLICES ([]T)
     let xs: []int = [1, 2];
     xs.push(3);            // append
     let n: int = xs.pop(); // remove and return last
+    xs.insert(1, 9);       // insert at index (clamped to [0, len])
     xs.clear();
     io.println(len(xs));
     xs[0] = 9;
+    grid[i][j] = 1;        // chained index (also maps / Json)
+    let mid = xs[1:3];     // half-open copy; also xs[:n], xs[n:], xs[:]
+    if (xs.contains(9)) { ... }   // or xs.has(9)
+    io.println(xs.index_of(9));   // index, or -1
     for (x in xs) { ... }
 
   Element type can be anything parseTypeName accepts: []string, []Point, [][]int, []*int.
@@ -345,7 +350,42 @@ MAPS (map[K]V)
     if (scores.has("ada")) { ... }
     scores.remove("ada");
     scores.clear();
+    let ks = scores.keys();      // []K
+    let vs = scores.values();    // []V
     for (k in scores) { ... }    // iterates keys
+    for (k, v in scores) { ... } // key and value
 
   Keys and values can be any Nexa type (string, int, structs, ...).
   Emitted as std::map. Missing-key read default-constructs the value (same as C++ []).
+
+RESULT (Result[T])
+  A value that is either success or an error. Core type; no #include.
+  Also accepted as result[T]. Result[void] is success-or-error with no value.
+
+    fn load(path: string): Result[string] {
+        if (path.len() == 0) {
+            return err("empty path");
+        }
+        return ok(path);
+    }
+
+    let r = load("a.txt");
+    if (r.ok()) {
+        io.println(r.value());
+    } else {
+        io.println(r.error());
+    }
+
+    if (load("").ok()) { ... }          // .ok() on a function call
+    if (http.get(url).ok()) { ... }     // same; http.get returns Result[string]
+
+  ok(value)              - success Result[typeof value]
+  ok()                   - success Result[void]
+  err(message)           - failure (converts to any Result[T])
+  r.ok()                 - true if this succeeded
+  r.value()              - the value; throws if not ok
+  r.error()              - error text ("" if ok)
+
+  Write `: Result[T]` on functions that return one (return type is not inferred
+  as Result). Uninitialized `let r: Result[int];` starts as not-ok.
+  `ok` and `err` are builtins.

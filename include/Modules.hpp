@@ -8,6 +8,7 @@
 #include "HttpRuntime.hpp"
 #include "GfxRuntime.hpp"
 #include "JsonRuntime.hpp"
+#include "ResultRuntime.hpp"
 
 namespace nexa {
 
@@ -81,6 +82,7 @@ public:
         bool exceptions = false;
         bool gfx = false;
         bool json = false;
+        bool result = false;
     };
 
     void enable(const std::string& path) {
@@ -1385,6 +1387,9 @@ public:
             }
             if (need.sha256 || need.sha1) need.hex = true;
             out += cryptoRuntimeCpp(need);
+        }
+        if (usage.result || (hasHttp() && usage.http)) {
+            out += resultRuntimeCpp();
         }
         if (hasHttp() && usage.http) {
             out += httpRuntimeCpp();

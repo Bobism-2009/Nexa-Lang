@@ -69,6 +69,7 @@ Check the toolchain:
 
 ```bash
 NexaC --version
+NexaC upgrade          # install a newer GitHub release if one exists
 ```
 
 ---

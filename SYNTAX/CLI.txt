@@ -4,11 +4,22 @@ NexaC Command Line
 USAGE
   NexaC init [dir]           Scaffold new project (current dir or dir/)
   NexaC build [dir]          Build .nxa with fn main() or fn __init__()
+  NexaC upgrade              Check GitHub for a newer NexaC and offer to install it
   NexaC <file.nxa> [-o <executable>]
   NexaC <file.nxa> --run
   NexaC <file.nxa> --source <output.cpp>
   NexaC --help [page|module]
   NexaC --version
+
+  NexaC upgrade [--check] [--yes] [--user | --all-users]
+    Looks up the latest GitHub release. If it is newer than this NexaC, asks
+    whether to install that version number. Yes: download, extract, replace
+    this NexaC, delete the temp files.
+    Also asks whether to update for all users (Windows UAC / sudo).
+    --check       Print versions only; do not install
+    --yes, -y     Install without the first yes/no prompt
+    --user        This NexaC only (no all-users prompt)
+    --all-users   System install (Program Files /usr/local/bin); may UAC/sudo
 
 OPTIONS
   -o <name>       Output executable or library name

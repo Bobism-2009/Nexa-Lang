@@ -57,7 +57,8 @@ SWITCH
 
 LOOPS
   for (i, n) { ... }       - loop i from 0 to n-1
-  for (x in arr) { ... }   - iterate each element of an array ([]int or []string)
+  for (x in arr) { ... }   - iterate each element of a slice
+  for (k, v in m) { ... }  - iterate map keys and values (std::map order)
   while (cond) { ... }
   while (true) { ... }   - infinite loop
   while (false) { ... }  - never runs

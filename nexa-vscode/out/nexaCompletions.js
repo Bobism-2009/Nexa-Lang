@@ -92,6 +92,7 @@ exports.NEXA_TYPES = [
     "map",
     "fn",
     "Json",
+    "Result",
 ];
 exports.STD_INCLUDES = [
     "std/io",
@@ -209,8 +210,8 @@ exports.MODULE_MEMBERS = {
         { name: "base64_encode", detail: "crypto.base64_encode(data)" },
     ],
     http: [
-        { name: "get", detail: "http.get(url)" },
-        { name: "post", detail: "http.post(url, body)" },
+        { name: "get", detail: "http.get(url) — Result[string]; .ok() / .value() / .error()" },
+        { name: "post", detail: "http.post(url, body) — Result[string]; .ok() / .value() / .error()" },
     ],
     json: [
         { name: "parse", detail: "json.parse(s) — nested JSON; .ok() is false on error" },
@@ -294,8 +295,16 @@ exports.STRING_METHODS = [
     "clear",
     "has",
     "remove",
+    "insert",
+    "keys",
+    "values",
+    "ok",
+    "value",
+    "error",
 ];
 exports.HOVER_DOCS = {
+    "http.get": "GET a URL. Returns Result[string]: .ok() / .value() for the body, .error() on failure.",
+    "http.post": "POST a URL. Returns Result[string]: .ok() / .value() for the body, .error() on failure.",
     "json.parse": "Parse JSON text into a Json value. On failure .ok() is false and .as_string() is the error.",
     "json.stringify": "Serialize Json (or a native value via json.of) to text. Optional indent pretty-prints.",
     "json.of": "Convert int, float, bool, string, Json, []T, or map[string]T to Json.",
