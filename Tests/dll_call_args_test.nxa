@@ -5,7 +5,15 @@
 fn main() {
     let h = dll.load("dll_call_args_lib.dll");
     dll.call(h, "WriteArg", "human");
-    io.println(file.read("dll_call_args_out.txt"));
+    if (file.read("dll_call_args_out.txt") != "human") {
+        io.println("fail WriteArg");
+        return 1;
+    }
     dll.call(h, "WriteLines", "human\nAda");
-    io.println(file.read("dll_call_args_lines.txt"));
+    if (file.read("dll_call_args_lines.txt") != "human\nAda") {
+        io.println("fail WriteLines");
+        return 2;
+    }
+    io.println("ok");
+    return 0;
 }

@@ -1515,27 +1515,40 @@ static void __nexa_gfx_put_a(int i, unsigned char R, unsigned char G, unsigned c
 #endif
 }
 
-static int __nexa_gfx_blit(int x, int y, int id, int dw, int dh) {
+static int __nexa_gfx_blit(int x, int y, int id, int dw, int dh, int sx, int sy, int sw, int sh) {
     if (!__nexa_g.fb || !__nexa_g.ready) return 0;
     if (id < 1 || id >= (int)__nexa_imgs.size()) return 0;
     const __nexa_GfxImg& im = __nexa_imgs[(size_t)id];
     if (!im.px || im.w < 1 || im.h < 1) return 0;
-    if (dw < 1) dw = im.w;
-    if (dh < 1) dh = im.h;
+    if (sw > 0 && sh > 0) {
+        if (sx < 0) { sw += sx; sx = 0; }
+        if (sy < 0) { sh += sy; sy = 0; }
+        if (sx >= im.w || sy >= im.h || sw < 1 || sh < 1) return 0;
+        if (sx + sw > im.w) sw = im.w - sx;
+        if (sy + sh > im.h) sh = im.h - sy;
+        if (sw < 1 || sh < 1) return 0;
+    } else {
+        sx = 0;
+        sy = 0;
+        sw = im.w;
+        sh = im.h;
+    }
+    if (dw < 1) dw = sw;
+    if (dh < 1) dh = sh;
     int drew = 0;
     for (int yy = 0; yy < dh; yy++) {
         int py = y + yy;
         if (py < 0 || py >= __nexa_g.h) continue;
-        int sy = yy * im.h / dh;
-        if (sy < 0) sy = 0;
-        if (sy >= im.h) sy = im.h - 1;
+        int srcy = sy + yy * sh / dh;
+        if (srcy < sy) srcy = sy;
+        if (srcy >= sy + sh) srcy = sy + sh - 1;
         for (int xx = 0; xx < dw; xx++) {
             int px = x + xx;
             if (px < 0 || px >= __nexa_g.w) continue;
-            int sx = xx * im.w / dw;
-            if (sx < 0) sx = 0;
-            if (sx >= im.w) sx = im.w - 1;
-            const unsigned char* s = im.px + ((size_t)sy * (size_t)im.w + (size_t)sx) * 4;
+            int srcx = sx + xx * sw / dw;
+            if (srcx < sx) srcx = sx;
+            if (srcx >= sx + sw) srcx = sx + sw - 1;
+            const unsigned char* s = im.px + ((size_t)srcy * (size_t)im.w + (size_t)srcx) * 4;
             __nexa_gfx_put_a((py * __nexa_g.w + px) * 4, s[0], s[1], s[2], s[3]);
             drew = 1;
         }
@@ -1543,8 +1556,8 @@ static int __nexa_gfx_blit(int x, int y, int id, int dw, int dh) {
     return drew;
 }
 
-static int __nexa_gfx_blit_path(int x, int y, const std::string& path, int dw, int dh) {
-    return __nexa_gfx_blit(x, y, __nexa_gfx_image(path), dw, dh);
+static int __nexa_gfx_blit_path(int x, int y, const std::string& path, int dw, int dh, int sx, int sy, int sw, int sh) {
+    return __nexa_gfx_blit(x, y, __nexa_gfx_image(path), dw, dh, sx, sy, sw, sh);
 }
 
 static std::string __nexa_gfx_filter_safe(const std::string& spec) {

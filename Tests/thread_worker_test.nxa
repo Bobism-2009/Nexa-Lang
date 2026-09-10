@@ -1,16 +1,52 @@
+#include <std/file>
+#include <std/io>
 #include <std/os>
 #include <std/thread>
-#include <std/time>
 
-fn ping() {
-    os.notify("worker", "ping");
+fn write_one() {
+    file.write(file.join(os.tempdir(), "_nexa_thread_one.txt"), "one");
+}
+
+fn write_two() {
+    file.write(file.join(os.tempdir(), "_nexa_thread_two.txt"), "two");
+}
+
+fn write_spawn() {
+    file.write(file.join(os.tempdir(), "_nexa_thread_spawn.txt"), "spawn");
 }
 
 fn main() {
+    let dir: string = os.tempdir();
+    let p1: string = file.join(dir, "_nexa_thread_one.txt");
+    let p2: string = file.join(dir, "_nexa_thread_two.txt");
+    let ps: string = file.join(dir, "_nexa_thread_spawn.txt");
+    file.remove(p1);
+    file.remove(p2);
+    file.remove(ps);
+
     let w: int = thread.worker();
-    thread.run(w, os.notify("worker", "one"));
-    thread.run(w, ping());
-    thread.run(w, os.notify("worker", "two"));
-    time.sleep(time.seconds(2));
+    thread.run(w, write_one());
+    thread.run(w, write_two());
     thread.worker_join(w);
+    if (file.read(p1) != "one") {
+        io.println("fail worker one");
+        return 1;
+    }
+    if (file.read(p2) != "two") {
+        io.println("fail worker two");
+        return 2;
+    }
+
+    let t: int = thread.spawn(write_spawn());
+    thread.join(t);
+    if (file.read(ps) != "spawn") {
+        io.println("fail spawn");
+        return 3;
+    }
+
+    file.remove(p1);
+    file.remove(p2);
+    file.remove(ps);
+    io.println("ok");
+    return 0;
 }

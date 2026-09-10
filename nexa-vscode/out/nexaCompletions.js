@@ -266,7 +266,7 @@ exports.MODULE_MEMBERS = {
         { name: "decode", detail: "gfx.decode(bytes) — decode image bytes, returns handle or 0" },
         { name: "image_w", detail: "gfx.image_w(id) — image width" },
         { name: "image_h", detail: "gfx.image_h(id) — image height" },
-        { name: "blit", detail: "gfx.blit(x, y, src[, w, h]) — draw image (handle or path)" },
+        { name: "blit", detail: "gfx.blit(x, y, src[, w, h] | src, sx, sy, sw, sh[, dw, dh]) — image or sprite" },
         { name: "key", detail: "gfx.key(name) — 1 if that key is down" },
         { name: "pressed", detail: "gfx.pressed(name) — 1 if that key went down this poll" },
         { name: "mouse_x", detail: "gfx.mouse_x() — cursor X in framebuffer pixels" },

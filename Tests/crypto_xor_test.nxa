@@ -54,6 +54,10 @@ fn main() {
         io.println("hex decode failed");
         return 9;
     }
+    if (crypto.hex_encode(true) != "74727565") {
+        io.println("hex bool failed");
+        return 11;
+    }
 
     let rb: string = crypto.random_bytes(16);
     if (rb.len() != 16) {

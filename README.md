@@ -217,7 +217,7 @@ re-copied on every install so edits propagate during development.
 | [`NexaC.cpp`](NexaC.cpp) | Driver: parse, transpile, compile, temp file handling |
 | [`include/`](include/) | Lexer, parser, transpiler, modules, package tool headers |
 | [`SYNTAX/`](SYNTAX/) | Language & compiler reference (`Core`, `Modules`, `CLI`, …) |
-| `Tests/` | Small programs and harnesses (e.g. optimizations, arg slicing) |
+| `Tests/` | Self-checking `.nxa` programs for language, stdlib, and compiler features |
 | [`Examples/`](Examples/) | Larger samples |
 | [`nexa-vscode/`](nexa-vscode/) | VS Code extension (syntax / tooling) |
 | [`Installer/`](Installer/) | Installer-related Nexa sources |

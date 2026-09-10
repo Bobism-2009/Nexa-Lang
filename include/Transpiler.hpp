@@ -4134,12 +4134,27 @@ private:
                 if (fn == "image_w") return "__nexa_gfx_image_w(" + a(0) + ")";
                 if (fn == "image_h") return "__nexa_gfx_image_h(" + a(0) + ")";
                 if (fn == "blit") {
-                    std::string dw = e.children.size() >= 5 ? a(3) : "0";
-                    std::string dh = e.children.size() >= 5 ? a(4) : "0";
-                    if (inferExprNexaType(e.children[2]) == "string") {
-                        return "__nexa_gfx_blit_path(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + dw + ", " + dh + ")";
+                    std::string dw = "0", dh = "0", sx = "0", sy = "0", sw = "0", sh = "0";
+                    if (e.children.size() == 5) {
+                        dw = a(3);
+                        dh = a(4);
+                    } else if (e.children.size() == 7) {
+                        sx = a(3);
+                        sy = a(4);
+                        sw = a(5);
+                        sh = a(6);
+                    } else if (e.children.size() >= 9) {
+                        sx = a(3);
+                        sy = a(4);
+                        sw = a(5);
+                        sh = a(6);
+                        dw = a(7);
+                        dh = a(8);
                     }
-                    return "__nexa_gfx_blit(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + dw + ", " + dh + ")";
+                    if (inferExprNexaType(e.children[2]) == "string") {
+                        return "__nexa_gfx_blit_path(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + dw + ", " + dh + ", " + sx + ", " + sy + ", " + sw + ", " + sh + ")";
+                    }
+                    return "__nexa_gfx_blit(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + dw + ", " + dh + ", " + sx + ", " + sy + ", " + sw + ", " + sh + ")";
                 }
                 throw std::runtime_error("Internal: unknown gfx method '" + fn + "'");
             }

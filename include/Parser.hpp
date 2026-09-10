@@ -3943,7 +3943,7 @@ private:
         else if (method == "title") { argc = 0; argcMax = 1; }
         else if (method == "opendialog" || method == "openfile") { argc = 0; argcMax = 1; if (method == "openfile") method = "opendialog"; }
         else if (method == "image" || method == "decode" || method == "image_w" || method == "image_h") argc = 1;
-        else if (method == "blit") { argc = 3; argcMax = 5; }
+        else if (method == "blit") { argc = 3; argcMax = 9; }
         else {
             throw std::runtime_error("Unknown gfx method 'gfx." + method +
                 "' at line " + std::to_string(methodTok.line) +
@@ -3964,8 +3964,8 @@ private:
         }
         int got = (int)node.children.size();
         if (argcMax >= 0) {
-            if (method == "blit" && got != 3 && got != 5) {
-                throw std::runtime_error("gfx.blit(x, y, src[, w, h]) at line " + std::to_string(line));
+            if (method == "blit" && got != 3 && got != 5 && got != 7 && got != 9) {
+                throw std::runtime_error("gfx.blit(x, y, src[, w, h]) or gfx.blit(x, y, src, sx, sy, sw, sh[, dw, dh]) at line " + std::to_string(line));
             }
             if (got < argc || got > argcMax) {
                 if (method == "resize") {

@@ -226,6 +226,60 @@ fn main() {
         gfx.close();
         return 42;
     }
+    gfx.clear(0, 0, 0);
+    if (gfx.blit(5, 6, img, 1, 0, 1, 1) != 1) {
+        io.println("fail blit sprite");
+        gfx.close();
+        return 46;
+    }
+    if (gfx.get(5, 6) != 65280) {
+        io.println("fail blit sprite pixel");
+        gfx.close();
+        return 47;
+    }
+    if (gfx.get(6, 6) != 0) {
+        io.println("fail blit sprite neighbor");
+        gfx.close();
+        return 48;
+    }
+    gfx.clear(0, 0, 0);
+    if (gfx.blit(0, 0, img, 0, 0, 2, 1, 4, 2) != 1) {
+        io.println("fail blit sprite scale");
+        gfx.close();
+        return 49;
+    }
+    if (gfx.get(0, 0) != 16711680 || gfx.get(1, 0) != 16711680 || gfx.get(2, 0) != 65280 || gfx.get(3, 1) != 65280) {
+        io.println("fail blit sprite scale pixels");
+        gfx.close();
+        return 50;
+    }
+    gfx.clear(0, 0, 0);
+    if (gfx.blit(2, 2, pngPath, 0, 1, 1, 1) != 1) {
+        io.println("fail blit sprite path");
+        gfx.close();
+        return 51;
+    }
+    if (gfx.get(2, 2) != 255) {
+        io.println("fail blit sprite path pixel");
+        gfx.close();
+        return 52;
+    }
+    gfx.clear(0, 0, 0);
+    if (gfx.blit(0, 0, img, 1, 0, 4, 1) != 1) {
+        io.println("fail blit sprite clip");
+        gfx.close();
+        return 53;
+    }
+    if (gfx.get(0, 0) != 65280 || gfx.get(1, 0) != 0) {
+        io.println("fail blit sprite clip pixels");
+        gfx.close();
+        return 54;
+    }
+    if (gfx.blit(0, 0, img, 8, 8, 1, 1) != 0) {
+        io.println("fail blit sprite oob");
+        gfx.close();
+        return 55;
+    }
     if (gfx.image_w(0) != 0 || gfx.image_h(-1) != 0) {
         io.println("fail image size invalid");
         gfx.close();

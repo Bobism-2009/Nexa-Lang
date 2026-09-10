@@ -235,8 +235,12 @@ Nexa Standard Modules
   gfx.image(path)                - load PNG/JPEG/BMP/GIF (and OS formats); handle, or 0
   gfx.decode(bytes)              - same decode from a string (os.load / http.get(...).value())
   gfx.image_w(id) / image_h(id)  - pixel size of a loaded image (0 if invalid)
-  gfx.blit(x, y, src[, w, h])    - draw image at x,y; src is handle or path
-                                   omit w,h for native size; nearest-neighbor scale;
+  gfx.blit(x, y, src[, w, h])    - draw whole image at x,y; src is handle or path
+                                   omit w,h for native size; nearest-neighbor scale
+  gfx.blit(x, y, src, sx, sy, sw, sh[, dw, dh])
+                                 - sprite: copy source rect (sx,sy,sw,sh) from the image
+                                   omit dw,dh to draw 1:1; else nearest-neighbor scale
+                                   source rect is clipped to the image
                                    PNG alpha blends onto the buffer
   gfx.key(name)                  - 1 if that key is down ("w", "1", "escape", "space", "up",
                                    "shift", "ctrl", "alt", "tab", "backspace", "delete", ...)

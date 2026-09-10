@@ -1,0 +1,355 @@
+#include <std/io>
+
+struct Point {
+    x: int;
+    y: int;
+    label: string;
+}
+
+let gpts: Point[2];
+
+fn greet(name: string, greeting: string = "Hello"): string {
+    return greeting + ", " + name;
+}
+
+fn add(a: int, b: int = 1, c: int = 0): int {
+    return a + b + c;
+}
+
+fn bump_int(p: *int) {
+    *p = *p + 1;
+}
+
+fn bump_point(p: *Point) {
+    p->x = p->x + 1;
+}
+
+fn main() {
+    io.println("n=", 7, " ok");
+
+    let x: float = 3.7;
+    if ((int)x != 3) {
+        io.println("fail cast int");
+        return 1;
+    }
+    if ((string)3 != "3") {
+        io.println("fail cast string");
+        return 2;
+    }
+    if ((char)65 != 'A') {
+        io.println("fail cast char");
+        return 3;
+    }
+    if ((int)"42" != 42) {
+        io.println("fail cast int str");
+        return 4;
+    }
+    if ((float)"42" != 42.0) {
+        io.println("fail cast float str");
+        return 5;
+    }
+    let flag = (bool)1;
+    if (!flag) {
+        io.println("fail cast bool");
+        return 6;
+    }
+    if ((string)(float)(int)"9" != "9") {
+        io.println("fail cast chain");
+        return 7;
+    }
+
+    let u: unsigned int = 42;
+    let w: unsigned int;
+    w = 100;
+    if (u != 42 || w != 100) {
+        io.println("fail uint");
+        return 8;
+    }
+    if ((unsigned int)(-1) == 0) {
+        io.println("fail uint wrap");
+        return 9;
+    }
+    if ((unsigned int)"99" != 99) {
+        io.println("fail uint str");
+        return 10;
+    }
+    let uarr: unsigned int[4];
+    uarr[0] = 1;
+    uarr[1] = 2;
+    if (uarr[0] != 1 || uarr[1] != 2) {
+        io.println("fail uint arr");
+        return 11;
+    }
+    let up: *unsigned int = &u;
+    if (*up != 42) {
+        io.println("fail uint ptr");
+        return 12;
+    }
+
+    let n = 10;
+    let p: *int = &n;
+    if (*p != 10) {
+        io.println("fail ptr read");
+        return 13;
+    }
+    *p = 20;
+    if (n != 20) {
+        io.println("fail ptr write");
+        return 14;
+    }
+    bump_int(&n);
+    if (n != 21) {
+        io.println("fail ptr bump");
+        return 15;
+    }
+    let q: *int = null;
+    if (q != null) {
+        io.println("fail null");
+        return 16;
+    }
+    let y = 5;
+    let r = &y;
+    *r += 2;
+    if (*r != 7) {
+        io.println("fail ptr add");
+        return 17;
+    }
+
+    let pt: Point;
+    pt.x = 10;
+    pt.y = 20;
+    pt.label = "hi";
+    let pp: *Point = &pt;
+    if (pp->x != 10) {
+        io.println("fail arrow read");
+        return 18;
+    }
+    pp->x = 30;
+    if (pt.x != 30) {
+        io.println("fail arrow write");
+        return 19;
+    }
+    pp->y += 5;
+    if (pp->y != 25) {
+        io.println("fail arrow add");
+        return 20;
+    }
+    pp->label += "!";
+    if (pp->label != "hi!") {
+        io.println("fail arrow str");
+        return 21;
+    }
+    bump_point(&pt);
+    if (pt.x != 31) {
+        io.println("fail arrow bump");
+        return 22;
+    }
+
+    let sw = 99;
+    let swGot = "";
+    switch (sw) {
+        case 1:
+            swGot = "one";
+            break;
+        case default:
+            swGot = "other";
+    }
+    if (swGot != "other") {
+        io.println("fail switch int");
+        return 23;
+    }
+    let sws = "z";
+    let swsGot = "";
+    switch (sws) {
+        case "a":
+            swsGot = "a";
+            break;
+        case default:
+            swsGot = "fallback";
+    }
+    if (swsGot != "fallback") {
+        io.println("fail switch str");
+        return 24;
+    }
+
+    if (greet("World") != "Hello, World") {
+        io.println("fail default greet");
+        return 25;
+    }
+    if (greet("World", "Hi") != "Hi, World") {
+        io.println("fail greet override");
+        return 26;
+    }
+    if (add(10) != 11 || add(10, 2) != 12 || add(10, 2, 3) != 15) {
+        io.println("fail default add");
+        return 27;
+    }
+
+    let nums = [10, 20, 30];
+    let sum = 0;
+    for (v in nums) {
+        sum = sum + v;
+    }
+    if (sum != 60) {
+        io.println("fail for-in arr");
+        return 28;
+    }
+    let parts = "a,b,c".split(",");
+    let joined = "";
+    for (part in parts) {
+        joined = joined + part;
+    }
+    if (joined != "abc") {
+        io.println("fail for-in split");
+        return 29;
+    }
+    let litSum = 0;
+    for (v in [1, 2]) {
+        litSum = litSum + v;
+    }
+    if (litSum != 3) {
+        io.println("fail for-in lit");
+        return 30;
+    }
+
+    let s = "Hello";
+    if (s[0] != 'H' || s[1] != 'e' || s[4] != 'o') {
+        io.println("fail str index");
+        return 31;
+    }
+    s[0] = 'J';
+    if (s != "Jello") {
+        io.println("fail str mutate");
+        return 32;
+    }
+    let i = 0;
+    while (i < len(s)) {
+        let b = s[i];
+        s[i] = b ^ 1;
+        i = i + 1;
+    }
+    if (s != "Kdmmn") {
+        io.println("fail str xor");
+        return 33;
+    }
+    if (parts[0] != "a" || parts[2] != "c") {
+        io.println("fail split index");
+        return 34;
+    }
+
+    let hp: *int = new int;
+    *hp = 42;
+    bump_int(hp);
+    if (*hp != 43) {
+        io.println("fail new int");
+        delete hp;
+        return 35;
+    }
+    delete hp;
+
+    let hn = 3;
+    let ha: *int = new int[hn];
+    ha[0] = 1;
+    ha[1] = 2;
+    ha[2] = 3;
+    if (ha[0] != 1 || ha[1] != 2 || ha[2] != 3) {
+        io.println("fail new arr");
+        delete[] ha;
+        return 36;
+    }
+    delete[] ha;
+
+    let hq = new int;
+    *hq = 7;
+    if (*hq != 7) {
+        io.println("fail new infer");
+        delete hq;
+        return 37;
+    }
+    delete hq;
+
+    let hpt: *Point = new Point;
+    hpt->x = 10;
+    hpt->y = 20;
+    if (hpt->x != 10 || hpt->y != 20) {
+        io.println("fail new struct");
+        delete hpt;
+        return 38;
+    }
+    delete hpt;
+
+    let hpts: *Point = new Point[2];
+    hpts[0].x = 1;
+    hpts[0].y = 2;
+    hpts[1].x = 3;
+    hpts[1].y = 4;
+    if (hpts[0].x != 1 || hpts[1].y != 4) {
+        io.println("fail new struct arr");
+        delete[] hpts;
+        return 39;
+    }
+    delete[] hpts;
+
+    let hu: *unsigned int = new unsigned int;
+    *hu = 99;
+    if (*hu != 99) {
+        io.println("fail new uint");
+        delete hu;
+        return 40;
+    }
+    delete hu;
+
+    let hz: *int = null;
+    delete hz;
+
+    let buf: *char = new char[5];
+    buf[0] = 'h';
+    buf[1] = 'i';
+    buf[2] = 0;
+    if (buf[0] != 'h' || buf[1] != 'i') {
+        io.println("fail new char");
+        delete[] buf;
+        return 41;
+    }
+    delete[] buf;
+
+    let pts: Point[3];
+    pts[0].x = 1;
+    pts[0].y = 2;
+    pts[0].label = "a";
+    pts[1].x = 3;
+    pts[1].label = "b";
+    if (pts[0].x != 1 || pts[1].x != 3 || pts[0].label != "a") {
+        io.println("fail struct arr");
+        return 42;
+    }
+    pts[2] = pts[0];
+    if (pts[2].x != 1 || pts[2].label != "a") {
+        io.println("fail struct copy");
+        return 43;
+    }
+    let spa: *Point = &pts[0];
+    spa->x = 9;
+    if (pts[0].x != 9) {
+        io.println("fail struct arr ptr");
+        return 44;
+    }
+    bump_point(&pts[1]);
+    if (pts[1].x != 4) {
+        io.println("fail struct arr bump");
+        return 45;
+    }
+    gpts[0].x = 5;
+    gpts[0].label = "g";
+    if (gpts[0].x != 5 || gpts[0].label != "g") {
+        io.println("fail global struct arr");
+        return 46;
+    }
+    if (sizeof(pts) != sizeof(Point) * 3) {
+        io.println("fail struct arr sizeof");
+        return 47;
+    }
+
+    io.println("ok");
+    return 0;
+}
