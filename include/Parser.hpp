@@ -24,7 +24,7 @@ struct AstNode {
                       OsSetBrightness, OsGetBrightness,
                       OsClipSet, OsClipGet,
                       OsType,
-                      OsNotify, OsOpen, OsLoad, OsPlay, OsSpawn, OsWait, OsKill,
+                      OsNotify, OsOpen, OsLoad, OsSave, OsPlay, OsSpawn, OsWait, OsKill,
                       OsTempDir, OsArch, OsCpuCount, OsWhich, OsUnsetenv, OsExecutable, OsCwd, OsChdir,
                       OsInfo,
                       OsExit, OsHostname, OsUsername, OsHome, OsSetenv,
@@ -2816,6 +2816,21 @@ private:
             finishOsCall(requireSemicolon, peek().line);
             return {AstNode::Type::OsOpen, "", {arg}};
         }
+        if (method == "save") {
+            if (!match(TokenType::LParen)) {
+                throw std::runtime_error("Expected '(' after os.save at line " + std::to_string(peek().line));
+            }
+            AstNode pathArg = parseExpression();
+            if (!match(TokenType::Comma)) {
+                throw std::runtime_error("Expected ',' after os.save path at line " + std::to_string(peek().line));
+            }
+            AstNode dataArg = parseExpression();
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' after os.save(...) at line " + std::to_string(peek().line));
+            }
+            finishOsCall(requireSemicolon, peek().line);
+            return {AstNode::Type::OsSave, "", {pathArg, dataArg}};
+        }
         if (method == "load" || method == "play") {
             if (!match(TokenType::LParen)) {
                 throw std::runtime_error("Expected '(' after os." + method + " at line " + std::to_string(peek().line));
@@ -3930,7 +3945,9 @@ private:
         else if (method == "resize") { argc = 2; argcMax = 3; }
         else if (method == "close" || method == "poll" || method == "present" || method == "closed"
                  || method == "mouse_x" || method == "mouse_y" || method == "drop"
-                 || method == "width" || method == "height" || method == "scale") argc = 0;
+                 || method == "width" || method == "height" || method == "scale"
+                 || method == "audio_queued" || method == "audio_flush") argc = 0;
+        else if (method == "fullscreen") { argc = 0; argcMax = 1; }
         else if (method == "key" || method == "pressed" || method == "mouse") argc = 1;
         else if (method == "get") argc = 2;
         else if (method == "clear") argc = 3;
@@ -3942,12 +3959,14 @@ private:
         else if (method == "text_width" || method == "text_height") { argc = 1; argcMax = 2; }
         else if (method == "title") { argc = 0; argcMax = 1; }
         else if (method == "opendialog" || method == "openfile") { argc = 0; argcMax = 1; if (method == "openfile") method = "opendialog"; }
-        else if (method == "image" || method == "decode" || method == "image_w" || method == "image_h") argc = 1;
+        else if (method == "image" || method == "decode" || method == "image_w" || method == "image_h"
+                 || method == "sample") argc = 1;
+        else if (method == "audio") { argc = 0; argcMax = 1; }
         else if (method == "blit") { argc = 3; argcMax = 9; }
         else {
             throw std::runtime_error("Unknown gfx method 'gfx." + method +
                 "' at line " + std::to_string(methodTok.line) +
-                " (use open, close, resize, width, height, scale, title, poll, closed, clear, plot, fill, line, text, text_size, text_width, text_height, get, present, image, decode, image_w, image_h, blit, key, pressed, mouse_x, mouse_y, mouse)");
+                " (use open, close, resize, width, height, scale, title, poll, closed, clear, plot, fill, line, text, text_size, text_width, text_height, get, present, image, decode, image_w, image_h, blit, key, pressed, mouse_x, mouse_y, mouse, audio, sample, audio_queued, audio_flush, fullscreen)");
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after gfx." + method + " at line " + std::to_string(peek().line));
@@ -3988,6 +4007,12 @@ private:
                 }
                 if (method == "opendialog") {
                     throw std::runtime_error("gfx.opendialog([filter]) at line " + std::to_string(line));
+                }
+                if (method == "audio") {
+                    throw std::runtime_error("gfx.audio([rate]) at line " + std::to_string(line));
+                }
+                if (method == "fullscreen") {
+                    throw std::runtime_error("gfx.fullscreen() or gfx.fullscreen(on) at line " + std::to_string(line));
                 }
                 throw std::runtime_error("gfx.open(title, w, h[, scale]) at line " + std::to_string(line));
             }

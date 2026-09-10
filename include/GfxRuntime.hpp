@@ -24,6 +24,7 @@ inline std::string gfxRuntimeCpp() {
 #include <commdlg.h>
 #include <objbase.h>
 #include <wincodec.h>
+#include <mmsystem.h>
 #elif defined(__APPLE__)
 #import <Cocoa/Cocoa.h>
 #include <CoreGraphics/CoreGraphics.h>
@@ -47,6 +48,7 @@ struct __nexa_Gfx {
     int mmb;
     int mrb;
     int text_scale;
+    int fullscreen;
     unsigned char* fb;
     std::string title;
     std::string drop_path;
@@ -55,6 +57,8 @@ struct __nexa_Gfx {
 #ifdef _WIN32
     HWND hwnd;
     BITMAPINFO bmi;
+    WINDOWPLACEMENT wnd_place;
+    LONG wnd_style;
 #endif
 #if defined(__linux__) && !defined(__EMSCRIPTEN__)
     Display* dpy;
@@ -74,6 +78,9 @@ struct __nexa_Gfx {
 
 static __nexa_Gfx __nexa_g = {};
 
+static void __nexa_gfx_clear(int r, int g, int b);
+static void __nexa_gfx_present();
+
 static int __nexa_gfx_map_mouse(int px, int py, int cw, int ch, int* ox, int* oy) {
     if (cw < 1 || ch < 1 || __nexa_g.w < 1 || __nexa_g.h < 1) return 0;
     if (px < 0 || py < 0 || px >= cw || py >= ch) return 0;
@@ -90,6 +97,7 @@ static int __nexa_gfx_map_mouse(int px, int py, int cw, int ch, int* ox, int* oy
 
 static void __nexa_gfx_mouse_refresh();
 static void __nexa_gfx_key_snapshot();
+static int __nexa_gfx_has_focus();
 
 static void __nexa_gfx_mouse_apply(int x, int y, int inside, int left, int middle, int right) {
     if (inside) {
@@ -173,6 +181,10 @@ static __NexaGfxView* __nexa_gfx_nsview = nil;
 static __NexaGfxDelegate* __nexa_gfx_delegate = nil;
 #endif
 
+#ifdef _WIN32
+static void __nexa_gfx_bb_free();
+#endif
+
 static void __nexa_gfx_free() {
     delete[] __nexa_g.fb;
     __nexa_g.fb = nullptr;
@@ -197,6 +209,7 @@ static void __nexa_gfx_free() {
     __nexa_g.vis = nullptr;
 #endif
 #ifdef _WIN32
+    __nexa_gfx_bb_free();
     if (__nexa_g.hwnd) {
         DestroyWindow(__nexa_g.hwnd);
         __nexa_g.hwnd = nullptr;
@@ -219,6 +232,91 @@ static void __nexa_gfx_free() {
 }
 
 #ifdef _WIN32
+static int __nexa_gfx_fullscreen(int on);
+static HDC __nexa_bb_dc = NULL;
+static HBITMAP __nexa_bb_bmp = NULL;
+static int __nexa_bb_w = 0;
+static int __nexa_bb_h = 0;
+
+static void __nexa_gfx_bb_free() {
+    if (__nexa_bb_dc) {
+        DeleteDC(__nexa_bb_dc);
+        __nexa_bb_dc = NULL;
+    }
+    if (__nexa_bb_bmp) {
+        DeleteObject(__nexa_bb_bmp);
+        __nexa_bb_bmp = NULL;
+    }
+    __nexa_bb_w = 0;
+    __nexa_bb_h = 0;
+}
+
+static int __nexa_gfx_bb_lock(int w, int h) {
+    if (w < 1 || h < 1) return 0;
+    if (__nexa_bb_dc && __nexa_bb_w == w && __nexa_bb_h == h) return 1;
+    __nexa_gfx_bb_free();
+    if (!__nexa_g.hwnd) return 0;
+    HDC wnd = GetDC(__nexa_g.hwnd);
+    if (!wnd) return 0;
+    HDC dc = CreateCompatibleDC(wnd);
+    HBITMAP bmp = CreateCompatibleBitmap(wnd, w, h);
+    ReleaseDC(__nexa_g.hwnd, wnd);
+    if (!dc || !bmp) {
+        if (dc) DeleteDC(dc);
+        if (bmp) DeleteObject(bmp);
+        return 0;
+    }
+    SelectObject(dc, bmp);
+    __nexa_bb_dc = dc;
+    __nexa_bb_bmp = bmp;
+    __nexa_bb_w = w;
+    __nexa_bb_h = h;
+    return 1;
+}
+
+static void __nexa_gfx_blit_letterbox(HDC hdc, int cw, int ch) {
+    if (!__nexa_g.fb || __nexa_g.w < 1 || __nexa_g.h < 1 || cw < 1 || ch < 1) return;
+    int sx = cw / __nexa_g.w;
+    int sy = ch / __nexa_g.h;
+    int sc = sx < sy ? sx : sy;
+    if (sc < 1) sc = 1;
+    int dw = __nexa_g.w * sc;
+    int dh = __nexa_g.h * sc;
+    if (dw > cw) dw = cw;
+    if (dh > ch) dh = ch;
+    int ox = (cw - dw) / 2;
+    int oy = (ch - dh) / 2;
+    SetStretchBltMode(hdc, COLORONCOLOR);
+    HBRUSH black = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    if (oy > 0) {
+        RECT r = {0, 0, cw, oy};
+        FillRect(hdc, &r, black);
+    }
+    if (oy + dh < ch) {
+        RECT r = {0, oy + dh, cw, ch};
+        FillRect(hdc, &r, black);
+    }
+    if (ox > 0) {
+        RECT r = {0, oy, ox, oy + dh};
+        FillRect(hdc, &r, black);
+    }
+    if (ox + dw < cw) {
+        RECT r = {ox + dw, oy, cw, oy + dh};
+        FillRect(hdc, &r, black);
+    }
+    StretchDIBits(hdc, ox, oy, dw, dh, 0, 0, __nexa_g.w, __nexa_g.h,
+        __nexa_g.fb, &__nexa_g.bmi, DIB_RGB_COLORS, SRCCOPY);
+}
+
+static void __nexa_gfx_flip(HDC dst, int cw, int ch) {
+    if (__nexa_gfx_bb_lock(cw, ch)) {
+        __nexa_gfx_blit_letterbox(__nexa_bb_dc, cw, ch);
+        BitBlt(dst, 0, 0, cw, ch, __nexa_bb_dc, 0, 0, SRCCOPY);
+    } else {
+        __nexa_gfx_blit_letterbox(dst, cw, ch);
+    }
+}
+
 static LRESULT CALLBACK __nexa_gfx_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (msg == WM_CLOSE) {
         __nexa_g.closed = 1;
@@ -228,6 +326,17 @@ static LRESULT CALLBACK __nexa_gfx_wndproc(HWND hwnd, UINT msg, WPARAM wParam, L
     if (msg == WM_DESTROY) {
         if (__nexa_g.hwnd == hwnd) __nexa_g.hwnd = nullptr;
         return 0;
+    }
+    if (msg == WM_SYSCOMMAND) {
+        UINT cmd = (UINT)(wParam & 0xFFF0);
+        if (cmd == SC_MAXIMIZE) {
+            __nexa_gfx_fullscreen(1);
+            return 0;
+        }
+        if (cmd == SC_RESTORE) {
+            __nexa_gfx_fullscreen(0);
+            return 0;
+        }
     }
     if (msg == WM_DROPFILES) {
         HDROP drop = (HDROP)wParam;
@@ -240,12 +349,9 @@ static LRESULT CALLBACK __nexa_gfx_wndproc(HWND hwnd, UINT msg, WPARAM wParam, L
     if (msg == WM_PAINT) {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
-        if (__nexa_g.fb && __nexa_g.w > 0 && __nexa_g.h > 0) {
-            RECT rc;
-            GetClientRect(hwnd, &rc);
-            StretchDIBits(hdc, 0, 0, rc.right, rc.bottom, 0, 0, __nexa_g.w, __nexa_g.h,
-                __nexa_g.fb, &__nexa_g.bmi, DIB_RGB_COLORS, SRCCOPY);
-        }
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        __nexa_gfx_flip(hdc, rc.right, rc.bottom);
         EndPaint(hwnd, &ps);
         return 0;
     }
@@ -307,6 +413,7 @@ static void __nexa_gfx_drop_x11_image() {
 }
 
 static void __nexa_gfx_apply_window_size(int w, int h, int scale) {
+    if (__nexa_g.fullscreen) return;
 #ifdef __EMSCRIPTEN__
     EM_ASM(({
         var c = Module['canvas'] || document.getElementById('canvas');
@@ -350,6 +457,7 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
     __nexa_g.h = h;
     __nexa_g.scale = scale;
     __nexa_g.closed = 0;
+    __nexa_g.fullscreen = 0;
     __nexa_g.mx = 0;
     __nexa_g.my = 0;
     __nexa_g.min = 0;
@@ -363,6 +471,7 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
     std::memset(__nexa_g.k_prev, 0, sizeof(__nexa_g.k_prev));
     __nexa_g.fb = new unsigned char[(size_t)w * (size_t)h * 4];
     std::memset(__nexa_g.fb, 0, (size_t)w * (size_t)h * 4);
+    __nexa_gfx_clear(0, 0, 0);
 #ifdef __EMSCRIPTEN__
     std::memset(__nexa_g.keys, 0, sizeof(__nexa_g.keys));
     emscripten_set_keydown_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, 0, 1, __nexa_gfx_ekey);
@@ -382,14 +491,14 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
         c.style.imageRendering = 'pixelated';
         c.style.background = '#000';
         document.title = UTF8ToString($3);
-        Module['nexaDropPath'] = '';
-        var cnv = Module['canvas'] || document.getElementById('canvas');
-        var inp = document.getElementById('nexa-file');
+        Module["nexaDropPath"] = "";
+        var cnv = Module["canvas"] || document.getElementById("canvas");
+        var inp = document.getElementById("nexa-file");
         if (!inp) {
-            inp = document.createElement('input');
-            inp.type = 'file';
-            inp.id = 'nexa-file';
-            inp.style.display = 'none';
+            inp = document.createElement("input");
+            inp.type = "file";
+            inp.id = "nexa-file";
+            inp.style.display = "none";
             document.body.appendChild(inp);
         }
         function nexaTakeFile(f) {
@@ -397,15 +506,15 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
             var r = new FileReader();
             r.onload = function() {
                 var u8 = new Uint8Array(r.result);
-                var name = '/tmp/' + f.name;
-                if (typeof FS !== 'undefined' && FS.writeFile) FS.writeFile(name, u8);
-                Module['nexaDropPath'] = name;
+                var name = "/tmp/" + f.name;
+                if (typeof FS !== "undefined" && FS.writeFile) FS.writeFile(name, u8);
+                Module["nexaDropPath"] = name;
             };
             r.readAsArrayBuffer(f);
         }
         inp.onchange = function() {
             nexaTakeFile(inp.files && inp.files[0]);
-            inp.value = '';
+            inp.value = "";
         };
         function nexaBindDrop(el) {
             if (!el || el.getAttribute('data-nexa-drop')) return;
@@ -424,6 +533,7 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
     emscripten_set_mouseup_callback("#canvas", 0, 1, __nexa_gfx_emouse);
     emscripten_set_mouseleave_callback("#canvas", 0, 1, __nexa_gfx_emouse);
     __nexa_g.ready = 1;
+    __nexa_gfx_present();
     return 1;
 #elif defined(_WIN32)
     WNDCLASSA wc = {};
@@ -434,9 +544,9 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
     wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
     RegisterClassA(&wc);
     RECT wr = {0, 0, w * scale, h * scale};
-    AdjustWindowRect(&wr, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_THICKFRAME, FALSE);
+    AdjustWindowRect(&wr, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_THICKFRAME, FALSE);
     __nexa_g.hwnd = CreateWindowExA(0, "NexaGfx", title.c_str(),
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_THICKFRAME | WS_VISIBLE,
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_THICKFRAME | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT, wr.right - wr.left, wr.bottom - wr.top,
         nullptr, nullptr, wc.hInstance, nullptr);
     std::memset(&__nexa_g.bmi, 0, sizeof(__nexa_g.bmi));
@@ -544,6 +654,85 @@ static int __nexa_gfx_scale() {
     return __nexa_g.ready ? __nexa_g.scale : 0;
 }
 
+static int __nexa_gfx_fullscreen(int on) {
+    if (!__nexa_g.ready) return 0;
+    if (on < 0) return __nexa_g.fullscreen;
+#ifdef __EMSCRIPTEN__
+    int want = on ? 1 : 0;
+    EM_ASM(({
+        var el = Module["canvas"] || document.documentElement;
+        if ($0) {
+            if (el.requestFullscreen) el.requestFullscreen();
+        } else if (document.exitFullscreen) {
+            document.exitFullscreen();
+        }
+    }), want);
+    __nexa_g.fullscreen = want;
+    return __nexa_g.fullscreen;
+#elif defined(_WIN32)
+    if (!__nexa_g.hwnd) return 0;
+    int want = on ? 1 : 0;
+    if (want == __nexa_g.fullscreen) return __nexa_g.fullscreen;
+    if (want) {
+        __nexa_g.wnd_place.length = sizeof(WINDOWPLACEMENT);
+        GetWindowPlacement(__nexa_g.hwnd, &__nexa_g.wnd_place);
+        __nexa_g.wnd_style = GetWindowLongA(__nexa_g.hwnd, GWL_STYLE);
+        HMONITOR mon = MonitorFromWindow(__nexa_g.hwnd, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi;
+        std::memset(&mi, 0, sizeof(mi));
+        mi.cbSize = sizeof(mi);
+        if (!GetMonitorInfoA(mon, &mi)) return __nexa_g.fullscreen;
+        SetWindowLongA(__nexa_g.hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+        SetWindowPos(__nexa_g.hwnd, HWND_TOP,
+            mi.rcMonitor.left, mi.rcMonitor.top,
+            mi.rcMonitor.right - mi.rcMonitor.left,
+            mi.rcMonitor.bottom - mi.rcMonitor.top,
+            SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+        __nexa_g.fullscreen = 1;
+    } else {
+        SetWindowLongA(__nexa_g.hwnd, GWL_STYLE, __nexa_g.wnd_style | WS_VISIBLE);
+        SetWindowPlacement(__nexa_g.hwnd, &__nexa_g.wnd_place);
+        SetWindowPos(__nexa_g.hwnd, nullptr, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+        __nexa_g.fullscreen = 0;
+    }
+    InvalidateRect(__nexa_g.hwnd, nullptr, FALSE);
+    return __nexa_g.fullscreen;
+#elif defined(__APPLE__)
+    if (!__nexa_gfx_nswin) return 0;
+    int want = on ? 1 : 0;
+    if (want != __nexa_g.fullscreen) {
+        [__nexa_gfx_nswin toggleFullScreen:nil];
+        __nexa_g.fullscreen = want;
+    }
+    return __nexa_g.fullscreen;
+#elif defined(__linux__)
+    if (!__nexa_g.dpy || !__nexa_g.win) return 0;
+    int want = on ? 1 : 0;
+    if (want == __nexa_g.fullscreen) return __nexa_g.fullscreen;
+    Atom wm = XInternAtom(__nexa_g.dpy, "_NET_WM_STATE", False);
+    Atom fs = XInternAtom(__nexa_g.dpy, "_NET_WM_STATE_FULLSCREEN", False);
+    XEvent ev;
+    std::memset(&ev, 0, sizeof(ev));
+    ev.xclient.type = ClientMessage;
+    ev.xclient.window = __nexa_g.win;
+    ev.xclient.message_type = wm;
+    ev.xclient.format = 32;
+    ev.xclient.data.l[0] = want ? 1 : 0;
+    ev.xclient.data.l[1] = (long)fs;
+    ev.xclient.data.l[2] = 0;
+    ev.xclient.data.l[3] = 1;
+    XSendEvent(__nexa_g.dpy, DefaultRootWindow(__nexa_g.dpy), False,
+        SubstructureRedirectMask | SubstructureNotifyMask, &ev);
+    XFlush(__nexa_g.dpy);
+    __nexa_g.fullscreen = want;
+    return __nexa_g.fullscreen;
+#else
+    (void)on;
+    return 0;
+#endif
+}
+
 static std::string __nexa_gfx_title_get() {
     return __nexa_g.title;
 }
@@ -571,7 +760,10 @@ static int __nexa_gfx_title_set(const std::string& s) {
 #endif
 }
 
+static void __nexa_gfx_audio_close();
+
 static void __nexa_gfx_close() {
+    __nexa_gfx_audio_close();
     __nexa_g.closed = 1;
     __nexa_gfx_free();
 }
@@ -608,10 +800,10 @@ static void __nexa_gfx_poll() {
     {
         char buf[1024];
         int got = EM_ASM_INT(({
-            var p = Module['nexaDropPath'] || '';
+            var p = Module["nexaDropPath"] || "";
             if (!p.length) return 0;
             stringToUTF8(p, $0, $1);
-            Module['nexaDropPath'] = '';
+            Module["nexaDropPath"] = "";
             return 1;
         }), buf, 1024);
         if (got) __nexa_g.drop_path = buf;
@@ -629,6 +821,10 @@ static void __nexa_gfx_mouse_refresh() {
     if (!__nexa_g.ready) return;
 #ifdef _WIN32
     if (!__nexa_g.hwnd) return;
+    if (!__nexa_gfx_has_focus()) {
+        __nexa_gfx_mouse_apply(0, 0, 0, 0, 0, 0);
+        return;
+    }
     POINT p;
     if (!GetCursorPos(&p)) return;
     if (!ScreenToClient(__nexa_g.hwnd, &p)) return;
@@ -1070,20 +1266,29 @@ static void __nexa_gfx_present() {
     if (!__nexa_g.ready || !__nexa_g.fb) return;
 #ifdef __EMSCRIPTEN__
     EM_ASM(({
-        var c = Module['canvas'] || document.getElementById('canvas');
+        var c = Module["canvas"] || document.getElementById("canvas");
         if (!c) return;
         var ww = $0;
         var hh = $1;
         if (c.width !== ww) c.width = ww;
         if (c.height !== hh) c.height = hh;
-        var ctx = c.getContext('2d');
+        var ctx = c.getContext("2d");
         var img = ctx.createImageData(ww, hh);
         var src = HEAPU8.subarray($2, $2 + ww * hh * 4);
         img.data.set(src);
         ctx.putImageData(img, 0, 0);
     }), __nexa_g.w, __nexa_g.h, (int)(uintptr_t)__nexa_g.fb);
+    emscripten_sleep(0);
 #elif defined(_WIN32)
-    if (__nexa_g.hwnd) InvalidateRect(__nexa_g.hwnd, nullptr, FALSE);
+    if (__nexa_g.hwnd) {
+        RECT rc;
+        GetClientRect(__nexa_g.hwnd, &rc);
+        HDC hdc = GetDC(__nexa_g.hwnd);
+        if (hdc) {
+            __nexa_gfx_flip(hdc, rc.right, rc.bottom);
+            ReleaseDC(__nexa_g.hwnd, hdc);
+        }
+    }
     __nexa_gfx_poll();
 #elif defined(__APPLE__)
     if (__nexa_gfx_nsview) [__nexa_gfx_nsview setNeedsDisplay:YES];
@@ -1101,8 +1306,27 @@ static int __nexa_gfx_mac_held(unsigned short kc) {
 }
 #endif
 
+static int __nexa_gfx_has_focus() {
+#ifdef _WIN32
+    return (__nexa_g.hwnd && GetForegroundWindow() == __nexa_g.hwnd) ? 1 : 0;
+#elif defined(__APPLE__)
+    return (__nexa_gfx_nswin && [__nexa_gfx_nswin isKeyWindow]) ? 1 : 0;
+#elif defined(__linux__) && !defined(__EMSCRIPTEN__)
+    if (!__nexa_g.dpy || !__nexa_g.win) return 0;
+    Window focused = 0;
+    int revert = 0;
+    XGetInputFocus(__nexa_g.dpy, &focused, &revert);
+    return (focused == __nexa_g.win) ? 1 : 0;
+#elif defined(__EMSCRIPTEN__)
+    return EM_ASM_INT(({ return document.hasFocus() ? 1 : 0; }));
+#else
+    return 1;
+#endif
+}
+
 static int __nexa_gfx_vk(const std::string& name) {
     if (name.empty()) return 0;
+    if (!__nexa_gfx_has_focus()) return 0;
     std::string s = name;
     for (char& c : s) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
 #ifdef _WIN32
@@ -1124,6 +1348,7 @@ static int __nexa_gfx_vk(const std::string& name) {
     if (s == "tab") return GetAsyncKeyState(VK_TAB) & 0x8000 ? 1 : 0;
     if (s == "backspace" || s == "bksp") return GetAsyncKeyState(VK_BACK) & 0x8000 ? 1 : 0;
     if (s == "delete" || s == "del") return GetAsyncKeyState(VK_DELETE) & 0x8000 ? 1 : 0;
+    if (s == "f11") return GetAsyncKeyState(VK_F11) & 0x8000 ? 1 : 0;
 #elif defined(__EMSCRIPTEN__)
     auto down = [&](int code) -> int {
         return (code >= 0 && code < 512) ? __nexa_g.keys[code] : 0;
@@ -1146,6 +1371,7 @@ static int __nexa_gfx_vk(const std::string& name) {
     if (s == "tab") return down(9);
     if (s == "backspace" || s == "bksp") return down(8);
     if (s == "delete" || s == "del") return down(46);
+    if (s == "f11") return down(122);
 #elif defined(__APPLE__)
     static const unsigned char letters[26] = {
         0x00, 0x0B, 0x08, 0x02, 0x0E, 0x03, 0x05, 0x04, 0x22, 0x26,
@@ -1173,6 +1399,7 @@ static int __nexa_gfx_vk(const std::string& name) {
     if (s == "tab") return __nexa_gfx_mac_held(0x30);
     if (s == "backspace" || s == "bksp") return __nexa_gfx_mac_held(0x33);
     if (s == "delete" || s == "del") return __nexa_gfx_mac_held(0x75);
+    if (s == "f11") return __nexa_gfx_mac_held(0x67);
 #elif defined(__linux__)
     if (!__nexa_g.dpy) return 0;
     char keys[32];
@@ -1200,6 +1427,7 @@ static int __nexa_gfx_vk(const std::string& name) {
     if (s == "tab") return held(XK_Tab);
     if (s == "backspace" || s == "bksp") return held(XK_BackSpace);
     if (s == "delete" || s == "del") return held(XK_Delete);
+    if (s == "f11") return held(XK_F11);
 #endif
     return 0;
 }
@@ -1209,7 +1437,7 @@ static const char* const __nexa_gfx_key_names[] = {
     "a","b","c","d","e","f","g","h","i","j","k","l","m",
     "n","o","p","q","r","s","t","u","v","w","x","y","z",
     "escape","space","enter","up","down","left","right",
-    "shift","ctrl","alt","tab","backspace","delete"
+    "shift","ctrl","alt","tab","backspace","delete","f11"
 };
 
 static int __nexa_gfx_key_slot(const std::string& name) {
@@ -1651,6 +1879,202 @@ static std::string __nexa_gfx_opendialog(const std::string& spec) {
     return std::string();
 #endif
 }
+
+#ifdef _WIN32
+#define NEXA_PCM_BUFS 4
+#define NEXA_PCM_LEN 2048
+static HWAVEOUT __nexa_wo = NULL;
+static WAVEHDR __nexa_wh[NEXA_PCM_BUFS];
+static short __nexa_wb[NEXA_PCM_BUFS][NEXA_PCM_LEN];
+static int __nexa_wf = 0;
+static int __nexa_wn = 0;
+static int __nexa_audio_rate = 0;
+
+static void __nexa_gfx_audio_close() {
+    if (!__nexa_wo) return;
+    waveOutReset(__nexa_wo);
+    for (int i = 0; i < NEXA_PCM_BUFS; i++) {
+        if (__nexa_wh[i].dwFlags & WHDR_PREPARED) waveOutUnprepareHeader(__nexa_wo, &__nexa_wh[i], sizeof(WAVEHDR));
+        std::memset(&__nexa_wh[i], 0, sizeof(WAVEHDR));
+    }
+    waveOutClose(__nexa_wo);
+    __nexa_wo = NULL;
+    __nexa_wf = 0;
+    __nexa_wn = 0;
+    __nexa_audio_rate = 0;
+}
+
+static int __nexa_audio_free_buf() {
+    for (int n = 0; n < 80; n++) {
+        int i = 0;
+        while (i < NEXA_PCM_BUFS) {
+            DWORD f = __nexa_wh[i].dwFlags;
+            if (!(f & WHDR_INQUEUE)) return i;
+            i++;
+        }
+        Sleep(1);
+    }
+    return -1;
+}
+
+static void __nexa_audio_submit() {
+    if (!__nexa_wo || __nexa_wn < 1) return;
+    int i = __nexa_audio_free_buf();
+    if (i < 0) {
+        __nexa_wn = 0;
+        return;
+    }
+    if (i != __nexa_wf) {
+        int n = 0;
+        while (n < __nexa_wn) {
+            __nexa_wb[i][n] = __nexa_wb[__nexa_wf][n];
+            n++;
+        }
+        __nexa_wf = i;
+    }
+    __nexa_wh[i].lpData = (LPSTR)__nexa_wb[i];
+    __nexa_wh[i].dwBufferLength = (DWORD)(__nexa_wn * (int)sizeof(short));
+    __nexa_wh[i].dwFlags = WHDR_PREPARED;
+    __nexa_wh[i].dwLoops = 0;
+    waveOutWrite(__nexa_wo, &__nexa_wh[i], sizeof(WAVEHDR));
+    __nexa_wn = 0;
+    __nexa_wf = (__nexa_wf + 1) % NEXA_PCM_BUFS;
+}
+
+static int __nexa_gfx_audio(int rate) {
+    if (rate < 8000 || rate > 96000) rate = 44100;
+    if (__nexa_wo && __nexa_audio_rate == rate) return 1;
+    __nexa_gfx_audio_close();
+    WAVEFORMATEX fmt;
+    std::memset(&fmt, 0, sizeof(fmt));
+    fmt.wFormatTag = WAVE_FORMAT_PCM;
+    fmt.nChannels = 1;
+    fmt.nSamplesPerSec = (DWORD)rate;
+    fmt.wBitsPerSample = 16;
+    fmt.nBlockAlign = 2;
+    fmt.nAvgBytesPerSec = (DWORD)(rate * 2);
+    if (waveOutOpen(&__nexa_wo, WAVE_MAPPER, &fmt, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) {
+        __nexa_wo = NULL;
+        return 0;
+    }
+    int i = 0;
+    while (i < NEXA_PCM_BUFS) {
+        std::memset(&__nexa_wh[i], 0, sizeof(WAVEHDR));
+        __nexa_wh[i].lpData = (LPSTR)__nexa_wb[i];
+        __nexa_wh[i].dwBufferLength = (DWORD)(NEXA_PCM_LEN * (int)sizeof(short));
+        waveOutPrepareHeader(__nexa_wo, &__nexa_wh[i], sizeof(WAVEHDR));
+        i++;
+    }
+    __nexa_wf = 0;
+    __nexa_wn = 0;
+    __nexa_audio_rate = rate;
+    return 1;
+}
+
+static int __nexa_gfx_sample(int s) {
+    if (!__nexa_wo) return 0;
+    if (s < -32768) s = -32768;
+    if (s > 32767) s = 32767;
+    if (__nexa_wn >= NEXA_PCM_LEN) __nexa_audio_submit();
+    if (__nexa_wn >= NEXA_PCM_LEN) return 0;
+    __nexa_wb[__nexa_wf][__nexa_wn] = (short)s;
+    __nexa_wn++;
+    if (__nexa_wn >= NEXA_PCM_LEN) __nexa_audio_submit();
+    return 1;
+}
+
+static int __nexa_gfx_audio_queued() {
+    if (!__nexa_wo) return 0;
+    int n = __nexa_wn;
+    int i = 0;
+    while (i < NEXA_PCM_BUFS) {
+        if (__nexa_wh[i].dwFlags & WHDR_INQUEUE) n += NEXA_PCM_LEN;
+        i++;
+    }
+    return n;
+}
+
+static void __nexa_gfx_audio_flush() {
+    if (__nexa_wn > 0) __nexa_audio_submit();
+}
+#elif defined(__EMSCRIPTEN__)
+static int __nexa_audio_rate = 0;
+
+static void __nexa_gfx_audio_close() {
+    EM_ASM(({
+        var ac = Module["nexaAC"];
+        if (ac && ac.close) ac.close();
+        Module["nexaAC"] = null;
+        Module["nexaAQ"] = null;
+        Module["nexaSP"] = null;
+    }));
+    __nexa_audio_rate = 0;
+}
+
+static int __nexa_gfx_audio(int rate) {
+    if (rate < 8000 || rate > 96000) rate = 44100;
+    if (__nexa_audio_rate == rate) {
+        EM_ASM(({
+            var ac = Module["nexaAC"];
+            if (ac && ac.state === "suspended") ac.resume();
+        }));
+        return 1;
+    }
+    __nexa_gfx_audio_close();
+    EM_ASM(({
+        var r = $0;
+        var AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        var ac = new AC({sampleRate: r});
+        Module["nexaAC"] = ac;
+        Module["nexaAQ"] = [];
+        var sp = ac.createScriptProcessor(2048, 0, 1);
+        sp.onaudioprocess = function(ev) {
+            var o = ev.outputBuffer.getChannelData(0);
+            var q = Module["nexaAQ"];
+            var i = 0;
+            while (i < o.length) {
+                if (q && q.length) o[i] = q.shift() / 32768.0;
+                else o[i] = 0.0;
+                i = i + 1;
+            }
+        };
+        sp.connect(ac.destination);
+        Module["nexaSP"] = sp;
+        if (ac.state === "suspended") ac.resume();
+    }), rate);
+    __nexa_audio_rate = rate;
+    return 1;
+}
+
+static int __nexa_gfx_sample(int s) {
+    if (__nexa_audio_rate < 1) return 0;
+    if (s < -32768) s = -32768;
+    if (s > 32767) s = 32767;
+    return EM_ASM_INT(({
+        var q = Module["nexaAQ"];
+        if (!q) return 0;
+        if (q.length > 44100) return 0;
+        q.push($0);
+        return 1;
+    }), s);
+}
+
+static int __nexa_gfx_audio_queued() {
+    return EM_ASM_INT(({
+        var q = Module["nexaAQ"];
+        return q ? q.length : 0;
+    }));
+}
+
+static void __nexa_gfx_audio_flush() {}
+#else
+static void __nexa_gfx_audio_close() {}
+static int __nexa_gfx_audio(int rate) { (void)rate; return 0; }
+static int __nexa_gfx_sample(int s) { (void)s; return 0; }
+static int __nexa_gfx_audio_queued() { return 0; }
+static void __nexa_gfx_audio_flush() {}
+#endif
 )NEXA_GFX";
 }
 

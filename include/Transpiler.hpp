@@ -109,6 +109,7 @@ public:
                 case AstNode::Type::OsNotify:
                 case AstNode::Type::OsOpen: cppUsage.osDesktop = true; break;
                 case AstNode::Type::OsLoad: cppUsage.osLoad = true; break;
+                case AstNode::Type::OsSave: cppUsage.osSave = true; break;
                 case AstNode::Type::OsPlay: cppUsage.osPlay = true; break;
                 case AstNode::Type::OsSpawn:
                 case AstNode::Type::OsWait:
@@ -1531,6 +1532,7 @@ private:
             case AstNode::Type::OsChdir: return "int";
             case AstNode::Type::OsGetVolume: return "int";
             case AstNode::Type::OsPlay: return "int";
+            case AstNode::Type::OsSave: return "int";
             case AstNode::Type::OsGetBrightness: return "int";
             case AstNode::Type::OsHostname:
             case AstNode::Type::OsUsername:
@@ -2957,6 +2959,10 @@ private:
             } else if (child.type == AstNode::Type::OsLoad) {
                 std::string p = emitOsStringArg(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 out << indent << "(void)__nexa_os_load(" << p << ");\n";
+            } else if (child.type == AstNode::Type::OsSave) {
+                std::string p = emitOsStringArg(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                std::string d = emitOsStringArg(child.children[1], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                out << indent << "(void)__nexa_os_save(" << p << ", " << d << ");\n";
             } else if (child.type == AstNode::Type::OsPlay) {
                 std::string p = emitOsStringArg(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 out << indent << "(void)__nexa_os_play(" << p << ");\n";
@@ -3850,6 +3856,9 @@ private:
                 return "__nexa_os_clip_get()";
             case AstNode::Type::OsLoad:
                 return "__nexa_os_load(" + emitOsStringArg(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
+            case AstNode::Type::OsSave:
+                return "__nexa_os_save(" + emitOsStringArg(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ", " +
+                    emitOsStringArg(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::OsPlay:
                 return "__nexa_os_play(" + emitOsStringArg(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::IoReadln: {
@@ -4125,6 +4134,17 @@ private:
                     return "__nexa_gfx_title_set(" + a(0) + ")";
                 }
                 if (fn == "drop") return "__nexa_gfx_drop()";
+                if (fn == "fullscreen") {
+                    std::string v = e.children.empty() ? "-1" : a(0);
+                    return "__nexa_gfx_fullscreen(" + v + ")";
+                }
+                if (fn == "audio") {
+                    std::string r = e.children.empty() ? "44100" : a(0);
+                    return "__nexa_gfx_audio(" + r + ")";
+                }
+                if (fn == "sample") return "__nexa_gfx_sample(" + a(0) + ")";
+                if (fn == "audio_queued") return "__nexa_gfx_audio_queued()";
+                if (fn == "audio_flush") return "(__nexa_gfx_audio_flush(), 0)";
                 if (fn == "opendialog" || fn == "openfile") {
                     std::string f = e.children.empty() ? "std::string()" : a(0);
                     return "__nexa_gfx_opendialog(" + f + ")";

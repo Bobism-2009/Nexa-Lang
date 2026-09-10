@@ -2,7 +2,7 @@
 
 **Nexa** is a small systems-friendly language with C++-like surface syntax. **NexaC** is its compiler: it parses `.nxa` files, transpiles to a single C++ translation unit, and invokes **clang++** (or **g++** on Windows as a fallback) to produce a native executable or shared library.
 
-Current compiler version string: **0.1.11** (`NexaC --version`).
+Current compiler version string: **0.1.12** (`NexaC --version`).
 
 | | |
 |---|---|
@@ -136,7 +136,7 @@ Full detail: [`SYNTAX/CLI.txt`](SYNTAX/CLI.txt) or `NexaC --help`.
 | `NexaC --static-lib` | Build a static archive (`.a` Linux / `.lib` Windows) from a `.nxa` |
 | `NexaC file.nxa --link lib.a` | Statically link an archive/object into the executable (repeatable) |
 | `NexaC --no-console` | Windows subsystem without console (executables only) |
-| `NexaC file.nxa --wasm` | WebAssembly via **em++** (`.js` + `.wasm`) or WASI-SDK (`.wasm`) |
+| `NexaC file.nxa --wasm` | WebAssembly via **em++** (`.js` + `.wasm`) or WASI-SDK (`.wasm`). With `std/gfx`, also writes a `.html` (`.js` embeds the `.wasm`) |
 | `nexapkg <cmd>` / `NexaC nexapkg <cmd>` | Package manager (see [Packages](#packages-nexapkg)) |
 
 ---
@@ -229,5 +229,5 @@ re-copied on every install so edits propagate during development.
 
 1. **Entry & types:** [`SYNTAX/Core.txt`](SYNTAX/Core.txt) — functions, `let`, structs, enums, `fn main()`, `fn main(args: []string)`, core string methods (`s.upper()`, `s.split(",")`, `s.contains(...)`, …).
 2. **Control flow:** [`SYNTAX/ControlFlow.txt`](SYNTAX/ControlFlow.txt).
-3. **Standard modules:** [`SYNTAX/Modules.txt`](SYNTAX/Modules.txt) — `#include <std/io>`, `std/os`, `std/file`, `std/math`, `std/random`, `std/time`, `std/thread`, etc.
+3. **Standard modules:** [`SYNTAX/Modules.txt`](SYNTAX/Modules.txt) — `#include <std/io>`, `std/os`, `std/file`, `std/math`, `std/random`, `std/time`, `std/thread`, `std/gfx` (window, fullscreen, PCM audio), etc.
 4. **Includes & packages:** [`SYNTAX/Includes.txt`](SYNTAX/Includes.txt), **nexapkg** for third-party deps.

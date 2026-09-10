@@ -47,5 +47,8 @@ supports HTTP and HTTPS through the operating system networking stack.
 `#include <std/gfx>` opens a Cocoa window. NexaC compiles the generated code as
 Objective-C++ (`-x objective-c++ -fobjc-arc`) and links `-framework Cocoa`
 and `-framework ApplicationServices`. `gfx.key` uses the HID key state
-(`CGEventSourceKeyState`). `gfx.mouse_x` / `gfx.mouse_y` / `gfx.mouse` use
-the cursor location in the content view and `pressedMouseButtons`.
+(`CGEventSourceKeyState`) only while the gfx window is the key window.
+`gfx.mouse_x` / `gfx.mouse_y` / `gfx.mouse` use the cursor location in the
+content view and `pressedMouseButtons`. `gfx.fullscreen(1)` / `gfx.fullscreen(0)`
+call `toggleFullScreen`. `gfx.audio` / `gfx.sample` compile but return 0 on
+macOS (PCM output is implemented on Windows and wasm).

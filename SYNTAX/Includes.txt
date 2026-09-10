@@ -11,6 +11,7 @@ MODULE INCLUDES (angle brackets)
   #include <std/thread>
   #include <std/json>     - Nested JSON parse/stringify (type Json)
   #include <std/gfx>      - Pixel window: gfx.open/plot/text/mouse/drop/opendialog/present
+                            plus gfx.fullscreen, gfx.audio/sample/audio_queued/audio_flush
   #include <std/inline>   - Enables inline_cpp! { ... } (raw C++ pasted into generated code; use sparingly)
   - Standard library modules
 

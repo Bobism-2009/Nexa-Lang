@@ -42,6 +42,7 @@ public:
         bool osClipboard = false;
         bool osDesktop = false;
         bool osLoad = false;
+        bool osSave = false;
         bool osPlay = false;
         bool osSpawn = false;
         bool osTempDir = false;
@@ -1155,17 +1156,29 @@ public:
             out += "  return out;\n";
             out += "}\n";
         }
-        if (hasOs() && usage.osLoad) {
+        if (hasOs() && (usage.osLoad || usage.osSave)) {
             out += "#include <cstdio>\n";
             out += "#include <string>\n";
-            out += "static std::string __nexa_os_load(const std::string& path) {\n";
-            out += "  FILE* f = std::fopen(path.c_str(), \"rb\");\n";
-            out += "  if (!f) return std::string();\n";
-            out += "  std::string out; char buf[4096]; size_t n;\n";
-            out += "  while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) out.append(buf, n);\n";
-            out += "  std::fclose(f);\n";
-            out += "  return out;\n";
-            out += "}\n";
+            if (usage.osLoad) {
+                out += "static std::string __nexa_os_load(const std::string& path) {\n";
+                out += "  FILE* f = std::fopen(path.c_str(), \"rb\");\n";
+                out += "  if (!f) return std::string();\n";
+                out += "  std::string out; char buf[4096]; size_t n;\n";
+                out += "  while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) out.append(buf, n);\n";
+                out += "  std::fclose(f);\n";
+                out += "  return out;\n";
+                out += "}\n";
+            }
+            if (usage.osSave) {
+                out += "static int __nexa_os_save(const std::string& path, const std::string& data) {\n";
+                out += "  FILE* f = std::fopen(path.c_str(), \"wb\");\n";
+                out += "  if (!f) return 0;\n";
+                out += "  const size_t n = data.size();\n";
+                out += "  if (n > 0 && std::fwrite(data.data(), 1, n, f) != n) { std::fclose(f); return 0; }\n";
+                out += "  std::fclose(f);\n";
+                out += "  return 1;\n";
+                out += "}\n";
+            }
         }
         if (hasOs() && (usage.osDesktop || usage.osType || usage.osPlay)) {
             out += "#include <string>\n";
@@ -1406,10 +1419,13 @@ public:
             out += "#include <cctype>\n";
         }
         if (hasTime() && usage.timeSleep) {
-            out += "#ifdef _WIN32\n#include <windows.h>\n#else\n#include <time.h>\n#endif\n";
+            out += "#ifdef __EMSCRIPTEN__\n#include <emscripten.h>\n";
+            out += "#elif defined(_WIN32)\n#include <windows.h>\n#else\n#include <time.h>\n#endif\n";
             out += "static void __nexa_time_sleep_ms(int __ms) {\n";
             out += "  if (__ms < 0) __ms = 0;\n";
-            out += "#ifdef _WIN32\n";
+            out += "#ifdef __EMSCRIPTEN__\n";
+            out += "  emscripten_sleep(static_cast<unsigned>(__ms));\n";
+            out += "#elif defined(_WIN32)\n";
             out += "  Sleep(static_cast<DWORD>(__ms));\n";
             out += "#else\n";
             out += "  struct timespec __ts;\n";
@@ -1550,6 +1566,7 @@ public:
         all.osClipboard = true;
         all.osDesktop = true;
         all.osLoad = true;
+        all.osSave = true;
         all.osPlay = true;
         all.osSpawn = true;
         all.osTempDir = all.osArch = all.osCpuCount = all.osWhich = all.osCwd = all.osInfo = true;

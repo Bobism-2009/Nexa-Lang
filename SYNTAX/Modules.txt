@@ -94,6 +94,10 @@ Nexa Standard Modules
   os.notify(title, message) - Show a desktop notification
   os.open(target)        - Open a file, folder, or URL with the default app
   os.load(path)          - Read an entire file as binary, returns string ("" if missing)
+  os.save(path, data)    - Write a string as binary (int, 1 on success, 0 on failure)
+                      Counterpart to os.load. Null bytes in data are written as-is.
+                      Does not create missing parent directories. Empty data creates
+                      an empty file. Returns 0 if the file cannot be opened or written.
   os.play(path)          - Play an audio file and wait until it finishes (int, 1/0)
                       Windows: MCI (wav/mp3/wma/...), then PlaySound for WAV.
                       macOS: afplay. Linux: paplay, pw-play, aplay, ffplay, mpv, mpg123.
@@ -189,7 +193,10 @@ Nexa Standard Modules
   Use: let t = json.stringify(v, 2);
 
 #include <std/time>
-  time.sleep(duration)      - Sleep (ms, or seconds()/milliseconds() helpers). Uses Sleep/nanosleep — no <thread>.
+  time.sleep(duration)      - Sleep (ms, or seconds()/milliseconds() helpers).
+                      Native: Sleep / nanosleep — no <thread>.
+                      wasm (Emscripten): emscripten_sleep, so the browser can paint
+                      and handle input. gfx builds pass -sASYNCIFY for this.
   time.seconds(n)           - n*1000 milliseconds
   time.milliseconds(n)      - n milliseconds
   time.now_ms()             - Monotonic time in milliseconds (float); QPC on Windows, CLOCK_MONOTONIC on Linux/macOS
@@ -231,7 +238,21 @@ Nexa Standard Modules
   gfx.text_size() / text_size(n)     - get or set default text scale (1..64), lasts until changed
   gfx.text_width(s[, scale])         - pixel width of longest line (does not draw)
   gfx.text_height(s[, scale])        - pixel height including \\n (does not draw)
-  gfx.present()                  - blit framebuffer to the window
+  gfx.present()                  - blit framebuffer to the window (Windows: offscreen
+                                   back buffer, then one BitBlt; letterboxed integer scale.
+                                   wasm: putImageData, then yield so the tab can composite)
+  gfx.fullscreen()               - 1 if the window is fullscreen, else 0
+  gfx.fullscreen(on)             - set fullscreen (1) or windowed (0); returns new state
+                                   Windows: borderless monitor, also the maximize button
+                                   macOS: toggleFullScreen. Linux: _NET_WM_STATE_FULLSCREEN
+                                   wasm: Element.requestFullscreen / exitFullscreen
+  gfx.audio([rate])              - open 16-bit mono PCM output (default 44100 Hz); 1/0
+                                   Windows: winmm waveOut (-lwinmm). wasm: Web Audio
+                                   macOS/Linux: compiles, returns 0 (no device yet)
+                                   gfx.close() also closes the stream
+  gfx.sample(s)                  - queue one signed 16-bit sample (-32768..32767); 1/0
+  gfx.audio_queued()             - samples still waiting to play
+  gfx.audio_flush()              - submit a partial buffer so playback starts sooner
   gfx.image(path)                - load PNG/JPEG/BMP/GIF (and OS formats); handle, or 0
   gfx.decode(bytes)              - same decode from a string (os.load / http.get(...).value())
   gfx.image_w(id) / image_h(id)  - pixel size of a loaded image (0 if invalid)
@@ -243,10 +264,14 @@ Nexa Standard Modules
                                    source rect is clipped to the image
                                    PNG alpha blends onto the buffer
   gfx.key(name)                  - 1 if that key is down ("w", "1", "escape", "space", "up",
-                                   "shift", "ctrl", "alt", "tab", "backspace", "delete", ...)
+                                   "shift", "ctrl", "alt", "tab", "backspace", "delete",
+                                   "f11", ...)
   gfx.pressed(name)              - 1 if that key went down since the last gfx.poll()
   gfx.mouse_x() / gfx.mouse_y()  - cursor in framebuffer pixels (last in-window position)
   gfx.mouse(button)              - 1 if that button is down in the window ("left", "right", "middle")
+                                   Keys and mouse are read only while the gfx window is focused
+                                   (Windows: foreground HWND. macOS: key window.
+                                   Linux: X input focus. wasm: document.hasFocus()).
   gfx.drop()                     - path of a file dropped on the window (consumes; empty if none)
   gfx.opendialog([filter])       - native file picker; filter like "*.ch8;*.hex" (empty if cancelled)
                                    alias: gfx.openfile([filter])
@@ -255,7 +280,9 @@ Nexa Standard Modules
   Images are 1..4096 on each side. Windows uses WIC (PNG/JPEG/BMP/GIF/TIFF/ICO, plus
   WebP/HEIF when the OS has the codec). macOS uses ImageIO. Linux/wasm decode
   PNG, JPEG (including progressive), BMP, and GIF.
-  --wasm + gfx writes a sibling .html to open in a browser.
+  --wasm + gfx writes a sibling .html (the .js embeds the .wasm, so file:// works).
+  The page stays blank/gray until the runtime yields: call gfx.present() and
+  time.sleep(...) in your loop. NexaC links those builds with -sASYNCIFY.
 
 #include <std/inline>
   Enables inline_cpp! { ... } — paste C++ into the generated file. Lines starting with #include are hoisted to the top of the generated .cpp (no automatic iostream).
@@ -286,7 +313,7 @@ Nexa Standard Modules
   path, content: string or variable
   Only I/O helpers (read/write/append) are emitted unless you call a path/list API.
   write/read/append use C stdio in binary mode (no CR/LF translation).
-  Bytes from \\xHH and os.load survive a write/read roundtrip.
+  Bytes from \\xHH, os.load, and os.save survive a write/read roundtrip.
   A write-only program stays hello-world sized.
   exists/mkdir/list/cwd and the other path helpers use Win32 / POSIX (no <filesystem>).
 

@@ -26,7 +26,7 @@
 #include <sys/wait.h>
 #endif
 
-#define NEXAC_VERSION "0.1.11"
+#define NEXAC_VERSION "0.1.12"
 
 static std::string getExePath() {
 #ifdef __linux__
@@ -1020,9 +1020,10 @@ static std::string nexaWasmCompileCmd(
     cmd += " \"" + cppPath + "\"";
     if (tool.kind == WasmKind::Emscripten) {
         cmd += " -sALLOW_MEMORY_GROWTH=1 -sEXIT_RUNTIME=1";
-        if (linkHttp) cmd += " -sFETCH=1 -sASYNCIFY";
+        if (linkHttp) cmd += " -sFETCH=1";
+        if (linkHttp || linkGfx) cmd += " -sASYNCIFY";
         if (linkThread) cmd += " -pthread -sPTHREAD_POOL_SIZE=4";
-        if (linkGfx) cmd += " -sFORCE_FILESYSTEM=1";
+        if (linkGfx) cmd += " -sFORCE_FILESYSTEM=1 -sSINGLE_FILE=1";
     } else {
         cmd += " --target=wasm32-wasi";
         if (!tool.sysroot.empty()) {
@@ -1209,6 +1210,7 @@ static std::string nexaBuildCompileCmd(
         cmd += " -lgdi32";
         cmd += " -lwindowscodecs";
         cmd += " -lcomdlg32";
+        cmd += " -lwinmm";
     }
     if (linkHttp) {
         // std/http uses WinHTTP (OS API; HTTPS via Schannel).
@@ -2074,9 +2076,7 @@ int main(int argc, char* argv[]) {
             }
             std::cout << "[Nexa] Build successful!\n";
             if (wasmTool.kind == WasmKind::Emscripten) {
-                std::string side = std::filesystem::path(wasmOut).replace_extension(".wasm").string();
                 std::cout << "[Nexa] Loader: " << wasmOut << "\n";
-                std::cout << "[Nexa] Module: " << side << "\n";
                 if (modules.hasGfx() && usage.gfx) {
                     std::filesystem::path jsPath(wasmOut);
                     std::filesystem::path htmlPath = jsPath;
@@ -2084,14 +2084,27 @@ int main(int argc, char* argv[]) {
                     std::string jsName = jsPath.filename().string();
                     std::ofstream html(htmlPath);
                     html << "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>Nexa</title>\n";
-                    html << "<style>html,body{margin:0;height:100%;background:#111;display:flex;align-items:center;justify-content:center}</style>\n";
+                    html << "<style>html,body{margin:0;height:100%;background:#111;color:#ccc;";
+                    html << "display:flex;flex-direction:column;align-items:center;justify-content:center;";
+                    html << "font:14px sans-serif}</style>\n";
                     html << "</head><body>\n<canvas id=\"canvas\" oncontextmenu=\"event.preventDefault()\"></canvas>\n";
-                    html << "<script>var Module={canvas:document.getElementById('canvas')};</script>\n";
+                    html << "<div id=\"nexa-status\">Loading…</div>\n";
+                    html << "<script>\n";
+                    html << "var nexaStatus=document.getElementById('nexa-status');\n";
+                    html << "var Module={\n";
+                    html << "  canvas:document.getElementById('canvas'),\n";
+                    html << "  printErr:function(t){if(nexaStatus)nexaStatus.textContent=t;},\n";
+                    html << "  onAbort:function(r){if(nexaStatus)nexaStatus.textContent=String(r);},\n";
+                    html << "  onRuntimeInitialized:function(){if(nexaStatus)nexaStatus.remove();}\n";
+                    html << "};\n";
+                    html << "</script>\n";
                     html << "<script src=\"" << jsName << "\"></script>\n</body></html>\n";
                     html.close();
                     std::cout << "[Nexa] Page: " << htmlPath.string() << "\n";
-                    std::cout << "[Nexa] Open the .html in a browser for the graphics window.\n";
+                    std::cout << "[Nexa] Open the .html in a browser (the .js embeds the .wasm).\n";
                 } else {
+                    std::string side = std::filesystem::path(wasmOut).replace_extension(".wasm").string();
+                    std::cout << "[Nexa] Module: " << side << "\n";
                     std::cout << "[Nexa] Run: node \"" << wasmOut << "\"  (or include the .js from a page)\n";
                 }
             } else {

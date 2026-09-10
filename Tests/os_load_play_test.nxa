@@ -27,6 +27,21 @@ fn main() {
         io.println("fail play missing");
         return 5;
     }
+    let raw: string = "\x00\x0a\x0d\xffSAVE";
+    let savePath: string = file.join(dir, "_nexa_os_save.bin");
+    if (os.save(savePath, raw) != 1) {
+        io.println("fail save write");
+        return 6;
+    }
+    if (os.load(savePath) != raw) {
+        io.println("fail save load");
+        return 7;
+    }
+    if (os.save(file.join(dir, "missing_os_save_dir/nope.bin"), raw) != 0) {
+        io.println("fail save missing dir");
+        return 8;
+    }
+    file.remove(savePath);
     io.println("ok");
     return 0;
 }

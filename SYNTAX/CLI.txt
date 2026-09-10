@@ -31,6 +31,8 @@ OPTIONS
   --win     Build Windows .exe (mingw-w64 from Linux)
   --wasm    Build WebAssembly (em++ → .js+.wasm, or WASI-SDK → .wasm).
             If the WASM toolchain is missing, a popup asks to install Emscripten.
+            With std/gfx, em++ also writes a sibling .html; the .js embeds the
+            .wasm so you can open the page without a local server.
   --no-console    Build Windows GUI .exe with no console window
   fn __init__() in a DLL/SO/dylib is auto-executed when the library is loaded
   --run, -r       Compile to temp file and run
