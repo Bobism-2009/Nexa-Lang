@@ -243,9 +243,12 @@ Nexa Standard Modules
                                    wasm: putImageData, then yield so the tab can composite)
   gfx.fullscreen()               - 1 if the window is fullscreen, else 0
   gfx.fullscreen(on)             - set fullscreen (1) or windowed (0); returns new state
-                                   Windows: borderless monitor, also the maximize button
-                                   macOS: toggleFullScreen. Linux: _NET_WM_STATE_FULLSCREEN
-                                   wasm: Element.requestFullscreen / exitFullscreen
+                                   Windows: borderless monitor; maximize enters it; Esc / F11 /
+                                   restore leaves it. Minimize keeps a taskbar button and can
+                                   be restored. macOS: toggleFullScreen.
+                                   Linux: _NET_WM_STATE_FULLSCREEN
+                                   wasm: Element.requestFullscreen / exitFullscreen; Esc leaves
+                                   fullscreen and does not close the page
   gfx.audio([rate])              - open 16-bit mono PCM output (default 44100 Hz); 1/0
                                    Windows: winmm waveOut (-lwinmm). wasm: Web Audio
                                    macOS/Linux: compiles, returns 0 (no device yet)

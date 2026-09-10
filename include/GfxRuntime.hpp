@@ -231,8 +231,11 @@ static void __nexa_gfx_free() {
     __nexa_g.mrb = 0;
 }
 
-#ifdef _WIN32
 static int __nexa_gfx_fullscreen(int on);
+
+#ifdef _WIN32
+static const DWORD __nexa_gfx_overlapped =
+    WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_THICKFRAME;
 static HDC __nexa_bb_dc = NULL;
 static HBITMAP __nexa_bb_bmp = NULL;
 static int __nexa_bb_w = 0;
@@ -327,15 +330,27 @@ static LRESULT CALLBACK __nexa_gfx_wndproc(HWND hwnd, UINT msg, WPARAM wParam, L
         if (__nexa_g.hwnd == hwnd) __nexa_g.hwnd = nullptr;
         return 0;
     }
+    if (msg == WM_KEYDOWN && wParam == VK_ESCAPE && __nexa_g.fullscreen) {
+        __nexa_gfx_fullscreen(0);
+        return 0;
+    }
     if (msg == WM_SYSCOMMAND) {
         UINT cmd = (UINT)(wParam & 0xFFF0);
-        if (cmd == SC_MAXIMIZE) {
-            __nexa_gfx_fullscreen(1);
-            return 0;
-        }
-        if (cmd == SC_RESTORE) {
-            __nexa_gfx_fullscreen(0);
-            return 0;
+        if (cmd == SC_MINIMIZE) {
+            if (__nexa_g.fullscreen) __nexa_gfx_fullscreen(0);
+        } else if (cmd == SC_MAXIMIZE) {
+            if (!IsIconic(hwnd)) {
+                __nexa_gfx_fullscreen(1);
+                return 0;
+            }
+        } else if (cmd == SC_RESTORE) {
+            if (IsIconic(hwnd)) {
+                return DefWindowProcA(hwnd, msg, wParam, lParam);
+            }
+            if (__nexa_g.fullscreen) {
+                __nexa_gfx_fullscreen(0);
+                return 0;
+            }
         }
     }
     if (msg == WM_DROPFILES) {
@@ -349,9 +364,11 @@ static LRESULT CALLBACK __nexa_gfx_wndproc(HWND hwnd, UINT msg, WPARAM wParam, L
     if (msg == WM_PAINT) {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
-        RECT rc;
-        GetClientRect(hwnd, &rc);
-        __nexa_gfx_flip(hdc, rc.right, rc.bottom);
+        if (!IsIconic(hwnd)) {
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            __nexa_gfx_flip(hdc, rc.right, rc.bottom);
+        }
         EndPaint(hwnd, &ps);
         return 0;
     }
@@ -364,7 +381,10 @@ static EM_BOOL __nexa_gfx_ekey(int type, const EmscriptenKeyboardEvent* e, void*
     int down = (type == EMSCRIPTEN_EVENT_KEYDOWN) ? 1 : 0;
     int code = (int)e->keyCode;
     if (code >= 0 && code < 512) __nexa_g.keys[code] = down;
-    if (code == 27 && !down) __nexa_g.closed = 1;
+    if (code == 27 && down && __nexa_g.fullscreen) {
+        __nexa_gfx_fullscreen(0);
+        return EM_TRUE;
+    }
     return EM_TRUE;
 }
 
@@ -544,9 +564,9 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
     wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
     RegisterClassA(&wc);
     RECT wr = {0, 0, w * scale, h * scale};
-    AdjustWindowRect(&wr, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_THICKFRAME, FALSE);
-    __nexa_g.hwnd = CreateWindowExA(0, "NexaGfx", title.c_str(),
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_THICKFRAME | WS_VISIBLE,
+    AdjustWindowRect(&wr, __nexa_gfx_overlapped, FALSE);
+    __nexa_g.hwnd = CreateWindowExA(WS_EX_APPWINDOW, "NexaGfx", title.c_str(),
+        __nexa_gfx_overlapped | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT, wr.right - wr.left, wr.bottom - wr.top,
         nullptr, nullptr, wc.hInstance, nullptr);
     std::memset(&__nexa_g.bmi, 0, sizeof(__nexa_g.bmi));
@@ -676,12 +696,16 @@ static int __nexa_gfx_fullscreen(int on) {
     if (want) {
         __nexa_g.wnd_place.length = sizeof(WINDOWPLACEMENT);
         GetWindowPlacement(__nexa_g.hwnd, &__nexa_g.wnd_place);
-        __nexa_g.wnd_style = GetWindowLongA(__nexa_g.hwnd, GWL_STYLE);
+        __nexa_g.wnd_place.showCmd = SW_SHOWNORMAL;
+        LONG style = GetWindowLongA(__nexa_g.hwnd, GWL_STYLE);
+        if (style & WS_POPUP) style = __nexa_gfx_overlapped;
+        __nexa_g.wnd_style = (style & ~(WS_MAXIMIZE | WS_MINIMIZE)) | WS_VISIBLE;
         HMONITOR mon = MonitorFromWindow(__nexa_g.hwnd, MONITOR_DEFAULTTONEAREST);
         MONITORINFO mi;
         std::memset(&mi, 0, sizeof(mi));
         mi.cbSize = sizeof(mi);
         if (!GetMonitorInfoA(mon, &mi)) return __nexa_g.fullscreen;
+        SetWindowLongA(__nexa_g.hwnd, GWL_EXSTYLE, GetWindowLongA(__nexa_g.hwnd, GWL_EXSTYLE) | WS_EX_APPWINDOW);
         SetWindowLongA(__nexa_g.hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
         SetWindowPos(__nexa_g.hwnd, HWND_TOP,
             mi.rcMonitor.left, mi.rcMonitor.top,
@@ -690,10 +714,14 @@ static int __nexa_gfx_fullscreen(int on) {
             SWP_FRAMECHANGED | SWP_SHOWWINDOW);
         __nexa_g.fullscreen = 1;
     } else {
-        SetWindowLongA(__nexa_g.hwnd, GWL_STYLE, __nexa_g.wnd_style | WS_VISIBLE);
+        LONG style = __nexa_g.wnd_style ? __nexa_g.wnd_style : __nexa_gfx_overlapped;
+        SetWindowLongA(__nexa_g.hwnd, GWL_STYLE, style | WS_VISIBLE);
+        __nexa_g.wnd_place.length = sizeof(WINDOWPLACEMENT);
+        __nexa_g.wnd_place.showCmd = SW_SHOWNORMAL;
         SetWindowPlacement(__nexa_g.hwnd, &__nexa_g.wnd_place);
-        SetWindowPos(__nexa_g.hwnd, nullptr, 0, 0, 0, 0,
+        SetWindowPos(__nexa_g.hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+        ShowWindow(__nexa_g.hwnd, SW_SHOWNORMAL);
         __nexa_g.fullscreen = 0;
     }
     InvalidateRect(__nexa_g.hwnd, nullptr, FALSE);
@@ -1280,7 +1308,7 @@ static void __nexa_gfx_present() {
     }), __nexa_g.w, __nexa_g.h, (int)(uintptr_t)__nexa_g.fb);
     emscripten_sleep(0);
 #elif defined(_WIN32)
-    if (__nexa_g.hwnd) {
+    if (__nexa_g.hwnd && !IsIconic(__nexa_g.hwnd)) {
         RECT rc;
         GetClientRect(__nexa_g.hwnd, &rc);
         HDC hdc = GetDC(__nexa_g.hwnd);
