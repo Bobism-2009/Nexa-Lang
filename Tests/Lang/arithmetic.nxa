@@ -61,13 +61,16 @@ fn main() {
     io.println("cast_bool_false=", (bool)0);
     io.println("cast_uchar_wrap=", (int)(unsigned char)300);
 
-    // Mixed-width arithmetic keeps the wider type. Note the "+" (string) form:
-    // io.println(big + 1) on its own still narrows to %d — see
-    // Tests/Lang/known_bugs/wide_int_println.nxa.
+    // Mixed-width arithmetic keeps the wider type; Tests/Lang/wide_int_arith.nxa
+    // covers that on its own. Both spellings are pinned here because they take
+    // different paths through the transpiler: "+" concatenates into a string,
+    // the comma form prints the value through printf.
     let big: long = 3000000000;
     io.println("long_value=", big);
     io.println("long_add=" + (big + 1));
+    io.println("long_add=", big + 1);
     io.println("long_mul=" + (big * 3));
+    io.println("long_mul=", big * 3);
     let u: unsigned int = 4294967295;
     io.println("uint_max=", u);
 }

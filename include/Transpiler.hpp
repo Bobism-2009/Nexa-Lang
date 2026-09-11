@@ -1640,17 +1640,21 @@ private:
                 size_t slot = resolveOverload(e.value, argT);
                 return inferReturnNexaType(ast_[fnOverloadSlots_[slot].astIndex]);
             }
+            // Integer operands keep their width through an operation: `long + 1` is a long,
+            // not an int. Collapsing it to "int" made every consumer of the inferred type
+            // wrong at once - printf picked "%d" for a 64-bit argument, and `let y = big + 1`
+            // declared an int and truncated the sum.
             case AstNode::Type::ExprAdd:
                 if (e.children.size() >= 2) {
                     std::string t0 = inferExprNexaType(e.children[0]);
                     std::string t1 = inferExprNexaType(e.children[1]);
                     if (t0 == "string" || t1 == "string") return "string";
                     if (t0 == "float" || t1 == "float") return "float";
-                    return "int";
+                    return nexaArithIntResultType(t0, t1);
                 }
                 if (e.children.size() >= 1) {
                     std::string t0 = inferExprNexaType(e.children[0]);
-                    return t0 == "float" ? "float" : "int";
+                    return t0 == "float" ? "float" : nexaArithIntResultType(t0, t0);
                 }
                 return "int";
             case AstNode::Type::ExprSub:
@@ -1660,16 +1664,24 @@ private:
             case AstNode::Type::ExprBitAnd:
             case AstNode::Type::ExprBitOr:
             case AstNode::Type::ExprBitXor:
-            case AstNode::Type::ExprShl:
-            case AstNode::Type::ExprShr:
             case AstNode::Type::ExprBitNot:
                 if (e.children.size() >= 1) {
                     std::string t0 = inferExprNexaType(e.children[0]);
                     if (e.children.size() >= 2) {
                         std::string t1 = inferExprNexaType(e.children[1]);
                         if (t0 == "float" || t1 == "float") return "float";
+                        return nexaArithIntResultType(t0, t1);
                     }
-                    return t0 == "float" ? "float" : "int";
+                    return t0 == "float" ? "float" : nexaArithIntResultType(t0, t0);
+                }
+                return "int";
+            case AstNode::Type::ExprShl:
+            case AstNode::Type::ExprShr:
+                // A shift is not subject to the usual arithmetic conversions: its type is the
+                // promoted left operand alone, so `1 << wide` is still an int.
+                if (e.children.size() >= 1) {
+                    std::string t0 = inferExprNexaType(e.children[0]);
+                    return t0 == "float" ? "float" : nexaArithIntResultType(t0, t0);
                 }
                 return "int";
             case AstNode::Type::ExprLen: return "int";
@@ -2740,21 +2752,31 @@ private:
         out << indent << "printf(\"" << fmt << (newline ? "\\n" : "") << "\", " << arg << ");\n";
     }
 
+    // printf for an integer argument whose Nexa type is known. Anything wider than an int is
+    // cast to a fixed width that the conversion specifier names exactly, rather than printed
+    // through "%ld"/"%zu": printf reads the argument back off the varargs list, where a
+    // width mismatch is undefined behaviour and not a conversion, and the width of `long`
+    // and `size_t` depends on the target. `long long` covers every one of them on every
+    // target, and widening to it preserves the value. Same choice as emitIntLiteralPrintf.
+    //
+    // int-width types stay uncast so the common case emits what it always did, and so that
+    // a future inference bug there still shows up as a -Wformat warning rather than silently
+    // truncating behind a cast.
     void emitIntegerPrintf(std::ostringstream& out, const std::string& indent,
                            const std::string& ntype, const std::string& expr, bool newline) const {
         std::string fmt = "%d";
         std::string arg = expr;
         if (ntype == "unsigned int") {
             fmt = "%u";
-        } else if (ntype == "unsigned short") {
+        } else if (ntype == "unsigned short" || ntype == "unsigned char") {
             fmt = "%u";
             arg = "static_cast<unsigned int>(" + expr + ")";
-        } else if (ntype == "unsigned long") {
-            fmt = "%lu";
+        } else if (ntype == "unsigned long" || ntype == "size_t") {
+            fmt = "%llu";
+            arg = "static_cast<unsigned long long>(" + expr + ")";
         } else if (ntype == "long") {
-            fmt = "%ld";
-        } else if (ntype == "size_t") {
-            fmt = "%zu";
+            fmt = "%lld";
+            arg = "static_cast<long long>(" + expr + ")";
         } else if (ntype == "short") {
             arg = "static_cast<int>(" + expr + ")";
         }
