@@ -1,0 +1,14 @@
+// A case body is its own scope, so a name declared in one case is not visible
+// in the next. NexaC must say so itself, naming the line of the use (12) rather
+// than letting the generated C++ complain about an undeclared identifier.
+#include <std/io>
+
+fn main() {
+    switch (1) {
+        case 1:
+            let a = 11;
+            break;
+        case 2:
+            io.println(a);
+    }
+}

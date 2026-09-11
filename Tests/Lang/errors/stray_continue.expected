@@ -1,5 +1,1 @@
-'continue' outside of a loop
-# The line number is deliberately not asserted here: NexaC reports the
-# switch's line (4) rather than the continue's (6). `continue` inside a plain
-# if block does get the right line, so this is specific to switch. Filed as a
-# NexaC diagnostic bug; tighten this to "at line 6" once it is fixed.
+'continue' outside of a loop at line 6
