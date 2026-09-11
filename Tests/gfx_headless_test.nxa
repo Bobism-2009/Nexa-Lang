@@ -14,6 +14,7 @@
 #include <std/gfx>
 #include <std/io>
 #include <std/os>
+#include <std/file>
 
 fn main() {
     // --- the closed-window contract ------------------------------------
@@ -109,6 +110,62 @@ fn main() {
     // A decoded image is still not something to draw without a window.
     io.println("blit_no_window=", gfx.blit(0, 0, img));
     io.println("blit_path_no_window=", gfx.blit(0, 0, pngPath));
+
+    // --- shapes with no framebuffer -------------------------------------
+    // Every shape rasterizer is a no-op without a window, and the two that
+    // report anything say 0. Statements first: none of these may crash.
+    gfx.rect(0, 0, 4, 4, 1, 2, 3);
+    gfx.circle(2, 2, 2, 1, 2, 3);
+    gfx.fill_circle(2, 2, 2, 1, 2, 3);
+    gfx.ellipse(2, 2, 3, 2, 1, 2, 3);
+    gfx.fill_ellipse(2, 2, 3, 2, 1, 2, 3);
+    gfx.tri(0, 0, 4, 0, 2, 4, 1, 2, 3);
+    gfx.fill_tri(0, 0, 4, 0, 2, 4, 1, 2, 3);
+    gfx.line(0, 0, 4, 4, 1, 2, 3, 5);
+    io.println("shapes_no_window=ok");
+
+    // poly and fill_poly return 1 when they drew and 0 otherwise, so with no
+    // window they are 0 even though the point lists are perfectly good.
+    let xs: []int = [0, 4, 2];
+    let ys: []int = [0, 0, 4];
+    io.println("poly_no_window=", gfx.poly(xs, ys, 1, 2, 3));
+    io.println("fill_poly_no_window=", gfx.fill_poly(xs, ys, 1, 2, 3));
+
+    // The other two ways to be refused, which do not need a window to happen:
+    // lists of different lengths, and fewer than three points.
+    let short_x: []int = [0, 4];
+    let short_y: []int = [0, 0];
+    io.println("poly_too_few=", gfx.poly(short_x, short_y, 1, 2, 3));
+    let long_y: []int = [0, 0, 4, 8];
+    io.println("poly_uneven=", gfx.poly(xs, long_y, 1, 2, 3));
+
+    // --- the draw alpha is not part of the window -------------------------
+    // gfx.alpha is global draw state rather than something the window owns, so
+    // unlike every call above it answers properly with nothing open.
+    io.println("alpha_default=", gfx.alpha());
+    io.println("alpha_set=", gfx.alpha(128));
+    io.println("alpha_get=", gfx.alpha());
+    io.println("alpha_clamp_high=", gfx.alpha(300));
+    io.println("alpha_clamp_low=", gfx.alpha(-5));
+    io.println("alpha_reset=", gfx.alpha(255));
+
+    // --- gfx.save needs a framebuffer to write ----------------------------
+    // Refused for an empty path and for a closed window alike, and in neither
+    // case may a file appear.
+    io.println("save_empty_path=", gfx.save(""));
+    io.println("save_no_window=", gfx.save("nexa_headless_should_not_exist.bmp"));
+    io.println("save_wrote_nothing=", file.exists("nexa_headless_should_not_exist.bmp"));
+
+    // --- the input added in BOB-21 ----------------------------------------
+    // Scrolling and typing are read only while a window is focused, so with no
+    // window there is nothing to report: 0 notches and no text.
+    io.println("wheel=", gfx.wheel());
+    io.println("wheel_x=", gfx.wheel_x());
+    io.println("released_escape=", gfx.released("escape"));
+    io.println("released_unknown=", gfx.released("nope"));
+    io.println("typed=", gfx.typed());
+    let typed_again: string = gfx.typed();
+    io.println("typed_empty=", typed_again.len());
 
     return 0;
 }

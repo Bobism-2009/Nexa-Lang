@@ -17,8 +17,11 @@
 #
 #   headless  Build and run Tests/gfx_headless_test.nxa, which never opens a
 #             window: the closed-window return values, text metrics and image
-#             decoding. Needs a C++ toolchain that can link a gfx binary, but
-#             no display. Skipped when the link fails.
+#             decoding. Needs no display. A real gfx link is preferred; when
+#             that is impossible -- no X11 development libraries, say -- the
+#             transpiled C++ is built against the fake X11 in
+#             Tests/gfx_x11_stub instead, which is sound because this program
+#             never opens a window. Skipped only when neither route builds.
 #
 #   window    Build and run Tests/gfx_open_close_test.nxa, which opens a real
 #             window and reads pixels back. Needs a display; skipped without
@@ -52,6 +55,7 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 
 fails=0
 skips=0
+build_mode=none
 
 # --- codegen layer ----------------------------------------------------------
 
@@ -202,25 +206,89 @@ expect_emit "audio_flush is usable as an expression" \
 
 # --- behavioural layers -----------------------------------------------------
 
+pick_cxx() {
+    if [ -n "${NEXA_CXX:-}" ]; then
+        echo "$NEXA_CXX"
+        return
+    fi
+    for c in clang++ g++ c++; do
+        if command -v "$c" > /dev/null 2>&1; then
+            echo "$c"
+            return
+        fi
+    done
+    echo ""
+}
+
+CXX=$(pick_cxx)
+
+# build_program <source.nxa>
+# Builds a gfx test program into $WORK/prog, leaving the build log in
+# $WORK/build.log and the route taken in build_mode: native, stub, broken (the
+# program does not transpile) or none (this machine cannot build gfx at all).
+# Both are set in the caller's shell, so this must not be run in a subshell.
+#
+# A real build is tried first. When that fails -- on a box with no X11
+# development libraries it always does, because the window backend is linked in
+# statically -- the transpiled C++ is compiled against the fake X11 in
+# Tests/gfx_x11_stub instead. That is enough for a program that never opens a
+# window, which is exactly what the headless layer is, and it turns a layer that
+# used to be skipped on every machine without X11 into one that actually runs.
+build_program() {
+    src=$1
+    rm -f "$WORK/prog"
+
+    if "$NEXAC" "$src" -o "$WORK/prog" > "$WORK/build.log" 2>&1 && [ -x "$WORK/prog" ]; then
+        build_mode=native
+        return 0
+    fi
+
+    # Tell "this machine cannot link a gfx binary" apart from "the test program
+    # is broken". Only the first is a property of the machine, and only the
+    # first deserves a skip; transpiling needs no X11 at all, so if that is what
+    # failed the test itself is at fault and must be reported as a failure.
+    if ! "$NEXAC" "$src" --source "$WORK/gen.cpp" > "$WORK/build.log" 2>&1; then
+        build_mode=broken
+        return 1
+    fi
+
+    if [ -n "$CXX" ] && "$CXX" -std=c++17 -O0 -I "$SUITE/gfx_x11_stub" \
+            "$WORK/gen.cpp" "$SUITE/gfx_x11_stub/x11_stub.cpp" \
+            -o "$WORK/prog" > "$WORK/build.log" 2>&1 && [ -x "$WORK/prog" ]; then
+        build_mode=stub
+        return 0
+    fi
+
+    build_mode=none
+    return 1
+}
+
 # expect_program <label> <source.nxa> <expected-stdout-file>
 # Builds and runs a test program and diffs its stdout. A build failure is
-# reported as a skip, not a failure: on a machine without the X11 development
-# libraries no gfx program links at all, and that is a property of the machine
+# reported as a skip, not a failure: on a machine that can build a gfx program
+# neither for real nor against the stub, that is a property of the machine
 # rather than of NexaC.
 expect_program() {
     label=$1
     src=$2
     want=$3
 
-    log=$("$NEXAC" "$src" -o "$WORK/prog" 2>&1)
-    if [ $? -ne 0 ] || [ ! -x "$WORK/prog" ]; then
+    if ! build_program "$src"; then
+        if [ "$build_mode" = broken ]; then
+            echo "FAIL $label: NexaC could not transpile the test program"
+            grep -E 'error|Error' "$WORK/build.log" | head -n 3 | sed 's/^/  /'
+            fails=$((fails + 1))
+            return 0
+        fi
         echo "SKIP $label: this machine cannot build a gfx program"
-        printf '%s\n' "$log" | grep -E 'error|Error' | head -n 3 | sed 's/^/       /'
+        grep -E 'error|Error' "$WORK/build.log" | head -n 3 | sed 's/^/       /'
         skips=$((skips + 1))
         return 1
     fi
+    via=""
+    [ "$build_mode" = stub ] && via=" (via the X11 stub)"
     # Generated code must be clean; a warning here is a codegen bug.
-    diags=$(printf '%s\n' "$log" | grep -E '\.cpp:[0-9]+:[0-9]+: (warning|error):')
+    diags=$(grep -E '\.cpp:[0-9]+:[0-9]+: (warning|error):' "$WORK/build.log")
     if [ -n "$diags" ]; then
         echo "FAIL $label: the C++ compiler had something to say about generated code"
         printf '%s\n' "$diags" | sed 's/^/  /'
@@ -243,17 +311,18 @@ expect_program() {
         fails=$((fails + 1))
         return 0
     fi
-    echo "ok $label"
+    echo "ok $label$via"
     return 0
 }
 
 echo "-- headless: std/gfx with no window"
 # Run from the repo root so the test finds Tests/gfx_2x2.png.
+expect_program "gfx_headless_test" \
+    "$SUITE/gfx_headless_test.nxa" "$SUITE/gfx_headless_test.expected"
+# The window layer needs a real window, so the stub cannot stand in for it: it
+# runs only when the headless layer built for real.
 gfx_builds=1
-if ! expect_program "gfx_headless_test" \
-        "$SUITE/gfx_headless_test.nxa" "$SUITE/gfx_headless_test.expected"; then
-    gfx_builds=0
-fi
+[ "$build_mode" = native ] || gfx_builds=0
 
 echo "-- window: std/gfx against a real window"
 if [ "$gfx_builds" -eq 0 ]; then

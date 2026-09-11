@@ -422,13 +422,18 @@ Nexa Standard Modules
   WebP/HEIF when the OS has the codec). macOS uses ImageIO. Linux/wasm decode
   PNG, JPEG (including progressive), BMP, and GIF.
   With no window open -- before the first gfx.open(), after gfx.close(), or when
-  gfx.open() failed -- no gfx call is an error. Drawing (clear, plot, fill, line,
-  text, blit, present, poll) does nothing; width, height, scale, resize, blit,
-  text, fullscreen, mouse_x, mouse_y, mouse, key and pressed return 0; get
-  returns -1; title and drop return what they last held. The calls with no window
-  in them still work: text_width, text_height, text_size, image, decode, image_w
-  and image_h. A program can therefore load and measure its assets before it
-  opens a window, and keep running after the user closes one.
+  gfx.open() failed -- no gfx call is an error. Drawing (clear, plot, fill, rect,
+  line, circle, fill_circle, ellipse, fill_ellipse, tri, fill_tri, poly,
+  fill_poly, text, blit, present, poll) does nothing; width, height, scale,
+  resize, fullscreen, blit, text, poly, fill_poly, save, wheel, wheel_x,
+  mouse_x, mouse_y, mouse, key, pressed and released return 0; get returns -1;
+  typed returns ""; title and drop return what they last held. The calls with no
+  window in them still work: text_width, text_height, text_size, alpha, image,
+  decode, image_w and image_h. A program can therefore load and measure its
+  assets before it opens a window, and keep running after the user closes one.
+  Note that the two pieces of draw state differ on purpose: gfx.open() puts the
+  alpha back to 255, so setting it before opening a window buys nothing, while
+  the text size is carried across and lasts until changed.
   --wasm + gfx writes a sibling .html (the .js embeds the .wasm, so file:// works).
   The page stays blank/gray until the runtime yields: call gfx.present() and
   time.sleep(...) in your loop. NexaC links those builds with -sASYNCIFY.
