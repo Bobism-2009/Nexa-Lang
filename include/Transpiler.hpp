@@ -12,6 +12,7 @@
 #include <functional>
 #include <vector>
 #include <cctype>
+#include <limits>
 #include <optional>
 
 namespace nexa {
@@ -48,6 +49,76 @@ inline std::string stripInlineCppIncludeLines(const std::string& body) {
 inline void walkAstForInlineCppIncludes(const AstNode& n, std::vector<std::string>& order, std::set<std::string>& seen) {
     if (n.type == AstNode::Type::InlineCpp) collectInlineCppIncludeLines(n.value, order, seen);
     for (const AstNode& c : n.children) walkAstForInlineCppIncludes(c, order, seen);
+}
+
+// Decomposition of an integer literal's token text, as the lexer produced it.
+// `base` is 16 for 0x/0X, 8 for a leading zero, 10 otherwise; `magnitude` is the
+// digits' value with the sign stripped. `valid` is false for text that is not a
+// plain integer literal, in which case nothing else has been filled in.
+struct IntLiteralText {
+    bool valid = false;
+    bool negative = false;
+    int base = 10;
+    unsigned long long magnitude = 0;
+};
+
+inline IntLiteralText parseIntLiteralText(const std::string& text) {
+    IntLiteralText lit;
+    size_t i = 0;
+    if (i < text.size() && (text[i] == '-' || text[i] == '+')) {
+        lit.negative = (text[i] == '-');
+        i++;
+    }
+    if (i >= text.size()) return lit;
+    if (text[i] == '0' && i + 1 < text.size() && (text[i + 1] == 'x' || text[i + 1] == 'X')) {
+        lit.base = 16;
+        i += 2;
+        if (i >= text.size()) return lit;
+    } else if (text[i] == '0' && i + 1 < text.size()) {
+        lit.base = 8;
+        i++;
+    }
+    const unsigned long long uMax = std::numeric_limits<unsigned long long>::max();
+    for (size_t j = i; j < text.size(); ++j) {
+        unsigned char c = static_cast<unsigned char>(text[j]);
+        unsigned long long d;
+        if (c >= '0' && c <= '9') d = static_cast<unsigned long long>(c - '0');
+        else if (c >= 'a' && c <= 'f') d = static_cast<unsigned long long>(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F') d = static_cast<unsigned long long>(c - 'A' + 10);
+        else return lit;  // not an integer literal (a float, a suffix, something else)
+        if (d >= static_cast<unsigned long long>(lit.base)) return lit;
+        const unsigned long long b = static_cast<unsigned long long>(lit.base);
+        if (lit.magnitude > (uMax - d) / b) return lit;  // the lexer rejects these; leave the text alone
+        lit.magnitude = lit.magnitude * b + d;
+    }
+    lit.valid = true;
+    return lit;
+}
+
+// The C++ spelling of an integer literal the Nexa lexer accepted.
+//
+// C++ gives an unsuffixed *decimal* literal the first type that fits from
+// int -> long -> long long, and that list has no unsigned fallback. A decimal
+// above i64 max therefore has no type the standard offers: clang takes
+// `unsigned long long` under protest and warns -Wimplicitly-unsigned-literal,
+// pointing at machine-written C++ the user never typed. A ULL suffix names the
+// type the compiler was already choosing, so the value and the type are
+// unchanged and the warning goes away. Hex and octal need nothing — their
+// candidate type lists already include the unsigned types.
+//
+// `-9223372036854775808` is the one negative that needs care. It is a negation
+// applied to 9223372036854775808, which is itself past i64 max, so the literal
+// went unsigned and the negation wrapped back to the same magnitude: emitted
+// verbatim, `-9223372036854775808 < 0` was *false*. Building i64 min by
+// subtraction keeps the expression `long long` and the comparison honest.
+inline std::string emitIntLiteral(const std::string& text) {
+    const IntLiteralText lit = parseIntLiteralText(text);
+    if (!lit.valid || lit.base != 10) return text;
+    const unsigned long long i64Max = 9223372036854775807ULL;
+    if (lit.magnitude <= i64Max) return text;
+    if (!lit.negative) return text + "ULL";
+    if (lit.magnitude == i64Max + 1) return "(-9223372036854775807LL - 1)";
+    return text;  // out of range for i64 either way; the lexer already refused it
 }
 
 // Converts Nexa AST to C++ source code
@@ -922,7 +993,7 @@ public:
             } else if (node.initIsInt || (!node.declType.empty() && nexaIsNumericIntType(node.declType))) {
                 std::string c = node.isConst ? "const " : "";
                 std::string cppT = (!node.declType.empty() && nexaIsNumericIntType(node.declType)) ? nexaTypeToCpp(node.declType) : "int";
-                out << c << cppT << " " << vname << " = " << node.initValue << ";\n";
+                out << c << cppT << " " << vname << " = " << emitIntLiteral(node.initValue) << ";\n";
             } else {
                 std::string c = node.isConst ? "const " : "";
                 out << c << "std::string " << vname << " = " << emitCppStringValue(node.initValue) << ";\n";
@@ -2460,7 +2531,10 @@ private:
             return;
         }
         if (arg.type == AstNode::Type::ExprIntLiteral) {
-            out << indent << "printf(\"%d" << (newline ? "\\n" : "") << "\", " << arg.value << ");\n";
+            // The format has to follow the literal's own width, not `int`: printing a
+            // literal that does not fit an int through "%d" reads the wrong number of
+            // bytes off the varargs list, and io.println(9999999999) printed 1410065407.
+            emitIntLiteralPrintf(out, indent, arg.value, newline);
             return;
         }
         if (arg.type == AstNode::Type::ExprBoolLiteral) {
@@ -2507,6 +2581,31 @@ private:
             std::string carg = isNexaEnum ? ("static_cast<int>(" + expr + ")") : expr;
             out << indent << "printf(\"%d" << (newline ? "\\n" : "") << "\", " << carg << ");\n";
         }
+    }
+
+    // printf for a literal argument, where the C++ type comes from the literal's own
+    // magnitude rather than from a declared Nexa type. Anything that fits an int keeps
+    // "%d" so the common case emits exactly what it did before; wider literals are cast
+    // to a fixed width so the conversion matches on every target, not just LP64.
+    void emitIntLiteralPrintf(std::ostringstream& out, const std::string& indent,
+                              const std::string& text, bool newline) const {
+        const IntLiteralText lit = parseIntLiteralText(text);
+        const unsigned long long intMax = 2147483647ULL;
+        // C++ types the digits before it applies the sign, so `-2147483648` is a
+        // negated `long`, not an int. The magnitude alone decides the width.
+        const bool fitsInt = lit.valid && lit.magnitude <= intMax;
+        std::string fmt = "%d";
+        std::string arg = emitIntLiteral(text);
+        if (!fitsInt) {
+            if (lit.valid && !lit.negative && lit.magnitude > 9223372036854775807ULL) {
+                fmt = "%llu";
+                arg = "static_cast<unsigned long long>(" + arg + ")";
+            } else {
+                fmt = "%lld";
+                arg = "static_cast<long long>(" + arg + ")";
+            }
+        }
+        out << indent << "printf(\"" << fmt << (newline ? "\\n" : "") << "\", " << arg << ");\n";
     }
 
     void emitIntegerPrintf(std::ostringstream& out, const std::string& indent,
@@ -3184,7 +3283,7 @@ private:
                 } else if (child.initIsInt || (!child.declType.empty() && nexaIsNumericIntType(child.declType))) {
                     std::string c = child.isConst ? "const " : "";
                     std::string cppT = (!child.declType.empty() && nexaIsNumericIntType(child.declType)) ? nexaTypeToCpp(child.declType) : "int";
-                    out << indent << c << cppT << " " << vname << " = " << child.initValue << ";\n";
+                    out << indent << c << cppT << " " << vname << " = " << emitIntLiteral(child.initValue) << ";\n";
                 } else {
                     std::string c = child.isConst ? "const " : "";
                     out << indent << c << "std::string " << vname << " = " << emitCppStringValue(child.initValue) << ";\n";
@@ -4245,7 +4344,7 @@ private:
         const std::map<std::string, bool>& vIsStr = varIsString ? *varIsString : kEmptyTypeMap;
         switch (e.type) {
             case AstNode::Type::ExprIntLiteral:
-                return e.value;
+                return emitIntLiteral(e.value);
             case AstNode::Type::ExprFloatLiteral:
                 return e.value;
             case AstNode::Type::ExprCharLiteral: {

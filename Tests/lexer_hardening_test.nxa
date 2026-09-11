@@ -80,6 +80,17 @@ fn main() {
     expectInt("i64 max", iMax, 9223372036854775807);
     if (hMax != uMax) { io.println("FAIL hex u64 max"); } else { io.println("ok hex u64 max"); }
 
+    // A literal past i64 max has no signed type in C++, so one emitted verbatim
+    // went unsigned under protest. i64 min is the case that bit: it is a negation
+    // applied to a magnitude one step past i64 max, so the whole expression turned
+    // unsigned and wrapped -- `-9223372036854775808 < 0` was false. (BOB-10.)
+    if (-9223372036854775808 < 0) { io.println("ok i64 min is negative"); } else { io.println("FAIL i64 min is negative"); }
+    if (iMin < iMax) { io.println("ok i64 min orders below max"); } else { io.println("FAIL i64 min orders below max"); }
+    expectInt("i64 min value", iMin, -9223372036854775808);
+    expectInt("i64 min arithmetic", -9223372036854775808 + 1, -9223372036854775807);
+    // u64 max keeps its own sense: above every signed value, never below zero.
+    if (uMax > 9223372036854775807) { io.println("ok u64 max stays unsigned"); } else { io.println("FAIL u64 max stays unsigned"); }
+
     // A leading 0 means octal, as in C, and the range check reads it that way
     // rather than as decimal. `09` is rejected by the lexer, not by clang.
     expectInt("octal", 042, 34);
