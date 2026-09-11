@@ -18,3 +18,5 @@ Tests/PkgTest/nexapkg.lock
 
 # Zipping
 dist/
+# Test scratch output
+Tests/_io_roundtrip.txt
