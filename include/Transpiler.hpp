@@ -1856,6 +1856,15 @@ private:
     void buildFnOverloadTableAndInitGlobalNexaDecl() {
         fnOverloadSlots_.clear();
         globalNexaDecl_.clear();
+        // "Every executable must have exactly one fn main()" (SYNTAX/Core.txt). Without
+        // this the only complaint came from clang++, as a C++ redefinition error.
+        size_t mainCount = 0;
+        for (const AstNode& n : ast_) {
+            if (n.type == AstNode::Type::MainFunction) mainCount++;
+        }
+        if (mainCount > 1) {
+            throw std::runtime_error("Duplicate fn main(): a program must define exactly one");
+        }
         for (size_t ai = 0; ai < ast_.size(); ++ai) {
             const AstNode& n = ast_[ai];
             if (n.type != AstNode::Type::Function) continue;

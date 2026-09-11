@@ -189,10 +189,18 @@ struct __nexa_json {
             case Number: {
                 if (!std::isfinite(n)) { out += "null"; break; }
                 char buf[64];
-                if (n == (double)(long long)n && n >= -9007199254740992.0 && n <= 9007199254740992.0) {
+                // Range-check before the cast: converting a double outside long long's
+                // range (1e300) is undefined, and && does not save us here because the
+                // cast sits in the left operand.
+                if (n >= -9007199254740992.0 && n <= 9007199254740992.0 && n == (double)(long long)n) {
                     std::snprintf(buf, sizeof(buf), "%.0f", n);
                 } else {
-                    std::snprintf(buf, sizeof(buf), "%.17g", n);
+                    // %.17g always round-trips but is noisy (0.1 -> 0.10000000000000001).
+                    // Take the shortest precision that still reads back bit-identical.
+                    for (int prec = 15; prec <= 17; prec++) {
+                        std::snprintf(buf, sizeof(buf), "%.*g", prec, n);
+                        if (std::strtod(buf, nullptr) == n) break;
+                    }
                 }
                 out += buf;
                 break;

@@ -1,0 +1,41 @@
+// Regression cover for std/json number handling:
+//  - stringify used %.17g unconditionally, so 0.1 came back as
+//    0.10000000000000001 and would not round-trip cleanly
+//  - the integral check cast to long long before range-checking, which is
+//    undefined for values like 1e300 (UBSan traps on it)
+#include <std/io>
+#include <std/json>
+
+fn expect(label: string, got: string, want: string) {
+    if (got == want) {
+        io.println("ok " + label);
+    } else {
+        io.println("FAIL " + label + " got=" + got + " want=" + want);
+    }
+}
+
+fn roundtrip(src: string): string {
+    return json.stringify(json.parse(src));
+}
+
+fn main() {
+    expect("tenth", roundtrip("0.1"), "0.1");
+    expect("fifth", roundtrip("0.2"), "0.2");
+    expect("pi", roundtrip("3.14159"), "3.14159");
+    expect("half", roundtrip("1.5"), "1.5");
+    expect("negative", roundtrip("-1.5"), "-1.5");
+    expect("array", roundtrip("[0.1,0.2,1.5]"), "[0.1,0.2,1.5]");
+
+    // Out of long long range: must not be cast before the range check.
+    expect("huge", roundtrip("1e300"), "1e+300");
+    expect("huge negative", roundtrip("-1e300"), "-1e+300");
+    expect("overflow", roundtrip("1e999"), "null");
+
+    // Integral values still print without a fraction or exponent.
+    expect("int", roundtrip("42"), "42");
+    expect("big int", roundtrip("123456789012345"), "123456789012345");
+    expect("zero", roundtrip("0"), "0");
+    expect("int float", roundtrip("2.0"), "2");
+
+    io.println("json_number ok");
+}

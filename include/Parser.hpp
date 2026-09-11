@@ -842,6 +842,32 @@ private:
         return node;
     }
 
+    // The std modules Modules.hpp knows how to emit (SYNTAX/Modules.txt).
+    static const std::vector<std::string>& knownStdModules() {
+        static const std::vector<std::string> mods = {
+            "std/io", "std/os", "std/file", "std/dll", "std/random", "std/math",
+            "std/crypto", "std/http", "std/json", "std/time", "std/thread",
+            "std/gfx", "std/inline",
+        };
+        return mods;
+    }
+
+    static bool isKnownStdModule(const std::string& path) {
+        for (const std::string& m : knownStdModules()) {
+            if (m == path) return true;
+        }
+        return false;
+    }
+
+    static std::string knownStdModuleList() {
+        std::string out;
+        for (const std::string& m : knownStdModules()) {
+            if (!out.empty()) out += ", ";
+            out += m;
+        }
+        return out;
+    }
+
     std::vector<AstNode> parseInclude() {
         const Token& t = advance();
         std::string raw = t.value;
@@ -858,6 +884,13 @@ private:
                 }
                 if (path == "std/wait") {
                     throw std::runtime_error("std/wait has been removed; use #include <std/time>");
+                }
+                // A misspelled std module used to be accepted silently; the program then
+                // failed later with "json.* requires #include <std/json>" pointing at code
+                // that looked correct. Reject the include itself instead.
+                if (!isKnownStdModule(path)) {
+                    throw std::runtime_error("Unknown module '" + path + "' at line " + std::to_string(t.line) +
+                                             ". Valid modules: " + knownStdModuleList());
                 }
                 // #include <std/io> - built-in module
                 modules_.enable(path);
