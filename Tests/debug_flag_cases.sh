@@ -66,6 +66,16 @@ elf_has_symbol() {
     fi
 }
 
+elf_has_section() {
+    if command -v readelf >/dev/null 2>&1; then
+        readelf -SW "$1" 2>/dev/null | grep -q " $2 "
+    elif command -v objdump >/dev/null 2>&1; then
+        objdump -h "$1" 2>/dev/null | grep -q " $2 "
+    else
+        return 2
+    fi
+}
+
 # --- 1. --debug produces debug info; the default build does not --------------
 out=$("$NEXAC" "$WORK/prog.nxa" --debug -o "$WORK/dbg" 2>&1)
 if [ $? -ne 0 ]; then
@@ -89,6 +99,16 @@ else
         0) pass "debug binary keeps the Nexa function name" ;;
         2) echo "skip symbol check (no readelf/objdump)" ;;
         *) fail "debug binary" "compute_total is absent: --debug did not imply --preserve-names, or the symbol table was stripped" ;;
+    esac
+
+    # A build-id is how a debugger or symbol server pairs the binary with separated
+    # debug info. Not passing --build-id=none is not enough to get one: lld emits
+    # none unless asked, so --debug must request it explicitly.
+    elf_has_section "$WORK/dbg" ".note.gnu.build-id"
+    case $? in
+        0) pass "debug binary carries a build-id" ;;
+        2) echo "skip build-id check (no readelf/objdump)" ;;
+        *) fail "debug binary" "no .note.gnu.build-id: --debug must ask for one, not merely stop removing it" ;;
     esac
 
     # The binary's line info names this file; deleting it would leave a debugger
@@ -116,6 +136,13 @@ else
         0) fail "release build" "default build carries .debug_info; it must stay stripped" ;;
         2) echo "skip release .debug_info check (no readelf/objdump)" ;;
         *) pass "default build stays stripped" ;;
+    esac
+
+    elf_has_section "$WORK/rel" ".note.gnu.build-id"
+    case $? in
+        0) fail "release build" "default build carries a build-id; release still drops it" ;;
+        2) : ;;
+        *) pass "default build still drops the build-id" ;;
     esac
 fi
 

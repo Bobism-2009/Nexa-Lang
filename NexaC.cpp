@@ -1295,9 +1295,11 @@ static std::string nexaBuildCompileCmd(
         // trivial binary to ~64KB+ of segment alignment. 4KB pages (the kernel default on Pi OS
         // and most aarch64 Linux) shrink output ~10x. On x86-64 this is already the default (no-op).
         cmd += " -Wl,-z,max-page-size=4096";
-        // Keep the build-id in debug builds: it is how debuggers and symbol servers pair a
-        // binary with its debug info.
-        if (!debugBuild) cmd += " -Wl,--build-id=none";
+        // Release drops the build-id; debug asks for one outright. Merely not passing
+        // --build-id=none is not enough: lld (and a plainly-configured GNU ld) emits no
+        // build-id unless asked, and the build-id is how a debugger or symbol server pairs
+        // a binary with separated debug info.
+        cmd += debugBuild ? " -Wl,--build-id=sha1" : " -Wl,--build-id=none";
     }
     if (elfTarget && !buildShared) {
         // Self-contained w.r.t. the C++ toolchain runtime: embed libstdc++ and libgcc so the
