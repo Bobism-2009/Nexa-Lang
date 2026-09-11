@@ -1,0 +1,3 @@
+gfx.poly(xs, ys, r, g, b) expects []int point lists
+xs is '[]string'
+at line 10

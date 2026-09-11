@@ -1,0 +1,59 @@
+// Every std/gfx shape primitive, on one screen.
+//
+//   build: NexaC Examples/shapes_demo.nxa -o shapes_demo && ./shapes_demo
+//   quit:  escape, or close the window
+//
+// The scene is drawn into a 160x100 framebuffer scaled up 6x, so each pixel of
+// each shape is easy to see.
+#include <std/gfx>
+#include <std/time>
+
+fn main() {
+    gfx.open("Nexa shapes", 160, 100, 6);
+
+    // Point lists for gfx.poly / gfx.fill_poly: a five-pointed star drawn as one
+    // self-crossing loop. The even-odd fill rule is what leaves the pentagon in
+    // the middle of it hollow.
+    let starX: []int = [26, 38, 7, 45, 14];
+    let starY: []int = [50, 86, 64, 64, 86];
+
+    while (gfx.closed() != 1) {
+        gfx.poll();
+        gfx.clear(16, 16, 24);
+
+        // --- rectangles: outline and fill, side by side --------------------
+        gfx.rect(6, 6, 40, 24, 240, 240, 240);
+        gfx.fill(12, 12, 28, 12, 60, 90, 200);
+        gfx.rect(12, 12, 28, 12, 240, 240, 240);
+
+        // --- circles and ellipses ------------------------------------------
+        gfx.fill_circle(70, 18, 12, 200, 70, 70);
+        gfx.circle(70, 18, 12, 255, 220, 220);
+        gfx.circle(70, 18, 6, 255, 220, 220);
+        gfx.fill_ellipse(122, 18, 26, 12, 70, 160, 90);
+        gfx.ellipse(122, 18, 26, 12, 220, 255, 230);
+        gfx.ellipse(122, 18, 12, 12, 220, 255, 230);
+
+        // --- triangles: filled, and the same shape as an outline -----------
+        gfx.fill_tri(60, 70, 100, 70, 80, 38, 210, 170, 60);
+        gfx.tri(60, 70, 100, 70, 80, 38, 255, 240, 200);
+        gfx.tri(106, 70, 146, 70, 126, 38, 255, 240, 200);
+
+        // --- polygons -------------------------------------------------------
+        gfx.fill_poly(starX, starY, 120, 90, 200);
+        gfx.poly(starX, starY, 235, 225, 255);
+
+        // --- lines: thin, and two thicknesses -------------------------------
+        gfx.line(84, 82, 152, 82, 255, 255, 255);
+        gfx.line(84, 88, 152, 88, 255, 120, 60, 3);
+        gfx.line(84, 96, 152, 82, 120, 255, 180, 7);
+
+        gfx.text(6, 92, "escape quits", 200, 200, 210);
+
+        if (gfx.key("escape") == 1) {
+            gfx.close();
+        }
+        gfx.present();
+        time.sleep(16);
+    }
+}

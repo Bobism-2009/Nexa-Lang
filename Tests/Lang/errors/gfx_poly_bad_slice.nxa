@@ -1,0 +1,11 @@
+// gfx.poly and gfx.fill_poly are the only gfx calls that take a slice, so they
+// are the only ones whose arguments can be the wrong *type* rather than the
+// wrong count. The point lists are handed to a C++ template: without a check in
+// Nexa the user's reward for passing []string is a page of template errors
+// about code they never wrote.
+#include <std/gfx>
+fn main() {
+    let xs: []string = ["1", "2", "3"];
+    let ys: []int = [1, 2, 3];
+    gfx.poly(xs, ys, 255, 255, 255);
+}

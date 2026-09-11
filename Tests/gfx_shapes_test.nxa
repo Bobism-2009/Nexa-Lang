@@ -1,0 +1,223 @@
+// std/gfx shape primitives, read back through gfx.get (BOB-19).
+//
+// This one needs a display: gfx.get only answers while a window is open, so the
+// program opens a small framebuffer and checks the pixels the shapes landed on.
+// On a headless box it cannot even be linked -- the window backend is compiled
+// in statically -- so the pixel-level cover that runs everywhere lives in
+// Tests/gfx_shapes_cases.sh, which lifts the rasterizers out of
+// include/GfxRuntime.hpp and drives them with no window at all.
+//
+// Reference: SYNTAX/Modules.txt (#include <std/gfx>). Every expectation below
+// comes from there, not from what NexaC currently draws.
+//
+// Prints "ok" and exits 0 when the shapes are right; otherwise it names the
+// shape that moved and exits with that check's number.
+#include <std/gfx>
+#include <std/io>
+
+fn main() {
+    if (gfx.open("nexa-gfx-shapes", 24, 16, 4) != 1) {
+        io.println("fail open");
+        return 1;
+    }
+    let white: int = 16777215;
+
+    // --- gfx.rect: the border of the box gfx.fill would have filled ---------
+    gfx.clear(0, 0, 0);
+    gfx.rect(2, 2, 6, 4, 255, 255, 255);
+    if (gfx.get(2, 2) != white || gfx.get(7, 2) != white ||
+        gfx.get(2, 5) != white || gfx.get(7, 5) != white) {
+        io.println("fail rect corners");
+        gfx.close();
+        return 2;
+    }
+    if (gfx.get(4, 3) != 0) {
+        io.println("fail rect is an outline");
+        gfx.close();
+        return 3;
+    }
+    if (gfx.get(8, 2) != 0 || gfx.get(2, 6) != 0) {
+        io.println("fail rect right/bottom edge is exclusive");
+        gfx.close();
+        return 4;
+    }
+    // Negative w/h flip about the corner they are measured from, as in gfx.fill.
+    gfx.clear(0, 0, 0);
+    gfx.rect(8, 6, -6, -4, 255, 255, 255);
+    if (gfx.get(2, 2) != white || gfx.get(7, 5) != white || gfx.get(8, 6) != 0) {
+        io.println("fail rect negative size");
+        gfx.close();
+        return 5;
+    }
+
+    // --- circles ------------------------------------------------------------
+    gfx.clear(0, 0, 0);
+    gfx.circle(8, 8, 3, 255, 0, 0);
+    if (gfx.get(5, 8) != 16711680 || gfx.get(11, 8) != 16711680 ||
+        gfx.get(8, 5) != 16711680 || gfx.get(8, 11) != 16711680) {
+        io.println("fail circle extremes");
+        gfx.close();
+        return 6;
+    }
+    if (gfx.get(8, 8) != 0) {
+        io.println("fail circle is an outline");
+        gfx.close();
+        return 7;
+    }
+    gfx.clear(0, 0, 0);
+    gfx.fill_circle(8, 8, 3, 0, 255, 0);
+    if (gfx.get(8, 8) != 65280 || gfx.get(5, 8) != 65280 || gfx.get(8, 5) != 65280) {
+        io.println("fail fill_circle inside");
+        gfx.close();
+        return 8;
+    }
+    if (gfx.get(4, 8) != 0 || gfx.get(12, 8) != 0) {
+        io.println("fail fill_circle stays inside its radius");
+        gfx.close();
+        return 9;
+    }
+
+    // --- ellipses -----------------------------------------------------------
+    gfx.clear(0, 0, 0);
+    gfx.fill_ellipse(10, 7, 6, 3, 0, 0, 255);
+    if (gfx.get(4, 7) != 255 || gfx.get(16, 7) != 255 || gfx.get(10, 4) != 255) {
+        io.println("fail fill_ellipse extremes");
+        gfx.close();
+        return 10;
+    }
+    if (gfx.get(4, 4) != 0) {
+        io.println("fail fill_ellipse corner is outside");
+        gfx.close();
+        return 11;
+    }
+    gfx.clear(0, 0, 0);
+    gfx.ellipse(10, 7, 6, 3, 0, 0, 255);
+    if (gfx.get(4, 7) != 255 || gfx.get(16, 7) != 255) {
+        io.println("fail ellipse extremes");
+        gfx.close();
+        return 12;
+    }
+    if (gfx.get(10, 7) != 0) {
+        io.println("fail ellipse is an outline");
+        gfx.close();
+        return 13;
+    }
+
+    // --- triangles ----------------------------------------------------------
+    gfx.clear(0, 0, 0);
+    gfx.fill_tri(2, 2, 14, 2, 8, 10, 255, 255, 0);
+    if (gfx.get(8, 3) != 16776960 || gfx.get(3, 2) != 16776960) {
+        io.println("fail fill_tri inside");
+        gfx.close();
+        return 14;
+    }
+    if (gfx.get(2, 9) != 0) {
+        io.println("fail fill_tri outside");
+        gfx.close();
+        return 15;
+    }
+    gfx.clear(0, 0, 0);
+    gfx.tri(2, 2, 14, 2, 8, 10, 255, 255, 0);
+    if (gfx.get(2, 2) != 16776960 || gfx.get(14, 2) != 16776960 || gfx.get(8, 10) != 16776960) {
+        io.println("fail tri vertices");
+        gfx.close();
+        return 16;
+    }
+    if (gfx.get(8, 4) != 0) {
+        io.println("fail tri is an outline");
+        gfx.close();
+        return 17;
+    }
+
+    // --- polygons -----------------------------------------------------------
+    let xs: []int = [2, 14, 14, 2];
+    let ys: []int = [2, 2, 8, 8];
+    gfx.clear(0, 0, 0);
+    if (gfx.fill_poly(xs, ys, 255, 0, 255) != 1) {
+        io.println("fail fill_poly drew");
+        gfx.close();
+        return 18;
+    }
+    // The filled polygon of a rectangle is the rectangle gfx.fill draws: the
+    // right and bottom edges belong to the next shape along, not to this one.
+    if (gfx.get(2, 2) != 16711935 || gfx.get(13, 7) != 16711935) {
+        io.println("fail fill_poly inside");
+        gfx.close();
+        return 19;
+    }
+    if (gfx.get(14, 2) != 0 || gfx.get(2, 8) != 0) {
+        io.println("fail fill_poly half-open edges");
+        gfx.close();
+        return 20;
+    }
+    gfx.clear(0, 0, 0);
+    if (gfx.poly(xs, ys, 255, 0, 255) != 1) {
+        io.println("fail poly drew");
+        gfx.close();
+        return 21;
+    }
+    // The outline closes itself, so the last point joins back to the first.
+    if (gfx.get(2, 8) != 16711935 || gfx.get(14, 8) != 16711935) {
+        io.println("fail poly closes");
+        gfx.close();
+        return 22;
+    }
+    if (gfx.get(8, 5) != 0) {
+        io.println("fail poly is an outline");
+        gfx.close();
+        return 23;
+    }
+    let short_xs: []int = [1, 2];
+    let short_ys: []int = [1, 2];
+    if (gfx.poly(short_xs, short_ys, 1, 2, 3) != 0 ||
+        gfx.fill_poly(short_xs, short_ys, 1, 2, 3) != 0) {
+        io.println("fail poly needs three points");
+        gfx.close();
+        return 24;
+    }
+    let uneven_ys: []int = [1, 2, 3];
+    if (gfx.fill_poly(xs, uneven_ys, 1, 2, 3) != 0) {
+        io.println("fail fill_poly needs matching lists");
+        gfx.close();
+        return 25;
+    }
+
+    // --- thick lines --------------------------------------------------------
+    gfx.clear(0, 0, 0);
+    gfx.line(2, 8, 20, 8, 255, 255, 255, 3);
+    if (gfx.get(10, 7) != white || gfx.get(10, 8) != white || gfx.get(10, 9) != white) {
+        io.println("fail thick line width");
+        gfx.close();
+        return 26;
+    }
+    if (gfx.get(10, 6) != 0 || gfx.get(10, 10) != 0) {
+        io.println("fail thick line is only t wide");
+        gfx.close();
+        return 27;
+    }
+    // t of 1 is the plain one-pixel line.
+    gfx.clear(0, 0, 0);
+    gfx.line(2, 8, 20, 8, 255, 255, 255, 1);
+    if (gfx.get(10, 8) != white || gfx.get(10, 7) != 0) {
+        io.println("fail thin line through the t argument");
+        gfx.close();
+        return 28;
+    }
+
+    // --- nothing draws once the window is gone ------------------------------
+    gfx.close();
+    gfx.rect(0, 0, 4, 4, 255, 255, 255);
+    gfx.circle(2, 2, 1, 255, 255, 255);
+    gfx.fill_tri(0, 0, 3, 0, 0, 3, 255, 255, 255);
+    gfx.line(0, 0, 4, 4, 255, 255, 255, 5);
+    if (gfx.poly(xs, ys, 1, 2, 3) != 0 || gfx.fill_poly(xs, ys, 1, 2, 3) != 0) {
+        io.println("fail poly after close");
+        return 29;
+    }
+    if (gfx.get(0, 0) != -1) {
+        io.println("fail draw after close");
+        return 30;
+    }
+    io.println("ok");
+    return 0;
+}

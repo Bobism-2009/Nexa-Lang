@@ -1890,7 +1890,8 @@ private:
                     || e.value == "text_size" || e.value == "text" || e.value == "text_width"
                     || e.value == "text_height" || e.value == "get"
                     || e.value == "image" || e.value == "decode" || e.value == "image_w"
-                    || e.value == "image_h" || e.value == "blit") return "int";
+                    || e.value == "image_h" || e.value == "blit"
+                    || e.value == "poly" || e.value == "fill_poly") return "int";
                 return "void";
             case AstNode::Type::StrMethod:
                 if (strMethodReturnsString(e.value)) return "string";
@@ -2529,6 +2530,10 @@ private:
                 for (const AstNode& c : e.children) semExpr(c);
                 semCheckSliceLiteralWidth(e);
                 break;
+            case AstNode::Type::GfxCall:
+                for (const AstNode& c : e.children) semExpr(c);
+                semCheckGfxPoly(e);
+                break;
             default:
                 for (const AstNode& c : e.children) semExpr(c);
                 break;
@@ -2542,6 +2547,21 @@ private:
         std::string why;
         arrayLiteralElemNexaType(e, &bad, &why);
         if (bad) semError(*bad, why);
+    }
+
+    // gfx.poly / gfx.fill_poly are the only gfx calls that take a slice, and the
+    // runtime takes the points through a template so any vector of integers
+    // works. That makes []string the user's problem to hear about here, by line,
+    // rather than as a page of C++ template errors about generated code.
+    void semCheckGfxPoly(const AstNode& e) const {
+        if (e.value != "poly" && e.value != "fill_poly") return;
+        if (e.children.size() < 2) return;
+        for (int i = 0; i < 2; i++) {
+            std::string t = inferExprNexaType(e.children[(size_t)i]);
+            if (nexaIsSliceType(t) && nexaIsNumericIntType(nexaSliceElem(t))) continue;
+            semError(e, "gfx." + e.value + "(xs, ys, r, g, b) expects []int point lists, but " +
+                std::string(i == 0 ? "xs" : "ys") + " is '" + (t.empty() ? std::string("unknown") : t) + "'");
+        }
     }
 
     void semCheckNameUse(const AstNode& at, const std::string& name) {
@@ -5078,7 +5098,27 @@ private:
                 if (fn == "plot") return "__nexa_gfx_plot(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + a(4) + ")";
                 if (fn == "get") return "__nexa_gfx_get(" + a(0) + ", " + a(1) + ")";
                 if (fn == "fill") return "__nexa_gfx_fill(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + a(4) + ", " + a(5) + ", " + a(6) + ")";
-                if (fn == "line") return "__nexa_gfx_line(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + a(4) + ", " + a(5) + ", " + a(6) + ")";
+                if (fn == "rect") return "__nexa_gfx_rect(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + a(4) + ", " + a(5) + ", " + a(6) + ")";
+                if (fn == "line") {
+                    std::string base = "(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + a(4) + ", " + a(5) + ", " + a(6);
+                    if (e.children.size() >= 8) return "__nexa_gfx_line_thick" + base + ", " + a(7) + ")";
+                    return "__nexa_gfx_line" + base + ")";
+                }
+                if (fn == "circle" || fn == "fill_circle") {
+                    return "__nexa_gfx_" + fn + "(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + a(4) + ", " + a(5) + ")";
+                }
+                if (fn == "ellipse" || fn == "fill_ellipse") {
+                    return "__nexa_gfx_" + fn + "(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + a(4) + ", " + a(5) + ", " + a(6) + ")";
+                }
+                if (fn == "tri" || fn == "fill_tri") {
+                    return "__nexa_gfx_" + fn + "(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + a(4) + ", " +
+                        a(5) + ", " + a(6) + ", " + a(7) + ", " + a(8) + ")";
+                }
+                // The point lists are checked in semCheckGfxPoly, which has the
+                // source line to complain on.
+                if (fn == "poly" || fn == "fill_poly") {
+                    return "__nexa_gfx_" + fn + "(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + a(4) + ")";
+                }
                 if (fn == "text") {
                     std::string sc = e.children.size() >= 7 ? a(6) : "__nexa_gfx_text_scale()";
                     return "__nexa_gfx_text(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + a(4) + ", " + a(5) + ", " + sc + ")";

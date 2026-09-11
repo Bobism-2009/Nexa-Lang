@@ -8,6 +8,8 @@ inline std::string gfxRuntimeCpp() {
     return R"NEXA_GFX(
 #include <string>
 #include <vector>
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -918,6 +920,18 @@ static int __nexa_gfx_mouse(const std::string& name) {
     return 0;
 }
 
+// --- framebuffer rasterizers ------------------------------------------------
+//
+// Everything between the two markers below reaches the screen only through
+// __nexa_g.fb / __nexa_gfx_put: no window handle, no display connection, no
+// platform call. That is what lets Tests/gfx_shapes_cases.sh slice this block
+// out of the header and unit-test the shapes against a stub framebuffer on a
+// machine with no display and no X11 development headers.
+//
+// Keep window, audio and image code out of the block, and keep the markers
+// spelled exactly as they are: the test fails loudly if it cannot find them.
+//
+// [nexa:rasterizers-begin]
 static void __nexa_gfx_put(int i, unsigned char R, unsigned char G, unsigned char B) {
 #ifdef _WIN32
     __nexa_g.fb[i + 0] = B;
@@ -1072,6 +1086,288 @@ static void __nexa_gfx_line(int x0, int y0, int x1, int y1, int r, int g, int b)
         if (e2 < dx) { err += dx; y += sy; }
     }
 }
+
+// One horizontal run, both ends inclusive, clipped to the framebuffer. Every
+// shape below is drawn as a stack of these, so clipping lives in one place and
+// a shape whose coordinates are millions of pixels off screen costs nothing
+// beyond the rows the framebuffer actually has.
+static void __nexa_gfx_span(long long y, long long xa, long long xb,
+                            unsigned char R, unsigned char G, unsigned char B) {
+    if (!__nexa_g.fb) return;
+    if (y < 0 || y >= (long long)__nexa_g.h) return;
+    if (xa < 0) xa = 0;
+    if (xb > (long long)__nexa_g.w - 1) xb = (long long)__nexa_g.w - 1;
+    if (xa > xb) return;
+    long long row = y * (long long)__nexa_g.w;
+    for (long long x = xa; x <= xb; x++) __nexa_gfx_put((int)((row + x) * 4), R, G, B);
+}
+
+// Rows of the framebuffer a shape spanning [ya, yb] can actually touch.
+static void __nexa_gfx_row_range(long long ya, long long yb, long long* first, long long* last) {
+    if (ya < 0) ya = 0;
+    if (yb > (long long)__nexa_g.h - 1) yb = (long long)__nexa_g.h - 1;
+    *first = ya;
+    *last = yb;
+}
+
+// Rectangle outline: the border of the pixels gfx.fill would have filled, so
+// gfx.rect and gfx.fill agree on which pixels a rectangle covers. Negative
+// w/h flip the same way, and the arithmetic is done in 64 bits because
+// x + w is allowed to run past INT_MAX (it is clipped, not drawn).
+static void __nexa_gfx_rect(int x, int y, int w, int h, int r, int g, int b) {
+    if (!__nexa_g.fb) return;
+    long long x0 = x, y0 = y, ww = w, hh = h;
+    if (ww < 0) { x0 += ww; ww = -ww; }
+    if (hh < 0) { y0 += hh; hh = -hh; }
+    if (ww < 1 || hh < 1) return;
+    long long x1 = x0 + ww - 1;
+    long long y1 = y0 + hh - 1;
+    unsigned char R = __nexa_gfx_u8(r);
+    unsigned char G = __nexa_gfx_u8(g);
+    unsigned char B = __nexa_gfx_u8(b);
+    __nexa_gfx_span(y0, x0, x1, R, G, B);
+    if (y1 != y0) __nexa_gfx_span(y1, x0, x1, R, G, B);
+    long long first, last;
+    __nexa_gfx_row_range(y0 + 1, y1 - 1, &first, &last);
+    for (long long yy = first; yy <= last; yy++) {
+        __nexa_gfx_span(yy, x0, x0, R, G, B);
+        if (x1 != x0) __nexa_gfx_span(yy, x1, x1, R, G, B);
+    }
+}
+
+// Half width of the ellipse (rx, ry) on the row dy away from its centre, or -1
+// when that row misses the ellipse entirely. Rows are sampled at their centre,
+// so a radius of 0 is one pixel and rx == ry gives a circle.
+static long long __nexa_gfx_ellipse_halfwidth(long long dy, long long rx, long long ry) {
+    if (rx < 0 || ry < 0) return -1;
+    if (dy < 0) dy = -dy;
+    if (dy > ry) return -1;
+    if (ry == 0) return rx;
+    double t = 1.0 - ((double)dy * (double)dy) / ((double)ry * (double)ry);
+    if (t < 0.0) t = 0.0;
+    return (long long)((double)rx * std::sqrt(t));
+}
+
+// Radii are clamped well above any drawable size (the framebuffer itself tops
+// out at 4096) purely so the double arithmetic above stays exact.
+static long long __nexa_gfx_radius(int v) {
+    if (v < 0) return -1;
+    return v > 1048576 ? 1048576 : (long long)v;
+}
+
+static void __nexa_gfx_fill_ellipse(int cx, int cy, int rx, int ry, int r, int g, int b) {
+    if (!__nexa_g.fb) return;
+    long long RX = __nexa_gfx_radius(rx);
+    long long RY = __nexa_gfx_radius(ry);
+    if (RX < 0 || RY < 0) return;
+    unsigned char R = __nexa_gfx_u8(r);
+    unsigned char G = __nexa_gfx_u8(g);
+    unsigned char B = __nexa_gfx_u8(b);
+    long long first, last;
+    __nexa_gfx_row_range((long long)cy - RY, (long long)cy + RY, &first, &last);
+    for (long long y = first; y <= last; y++) {
+        long long hw = __nexa_gfx_ellipse_halfwidth(y - (long long)cy, RX, RY);
+        if (hw < 0) continue;
+        __nexa_gfx_span(y, (long long)cx - hw, (long long)cx + hw, R, G, B);
+    }
+}
+
+// Outline: the pixels of the filled ellipse that the two neighbouring rows do
+// not both cover. Where the curve is flat (top and bottom) that is a long run,
+// where it is steep it is the two end pixels, which is what keeps the ring
+// connected without a second rasterization pass.
+static void __nexa_gfx_ellipse(int cx, int cy, int rx, int ry, int r, int g, int b) {
+    if (!__nexa_g.fb) return;
+    long long RX = __nexa_gfx_radius(rx);
+    long long RY = __nexa_gfx_radius(ry);
+    if (RX < 0 || RY < 0) return;
+    unsigned char R = __nexa_gfx_u8(r);
+    unsigned char G = __nexa_gfx_u8(g);
+    unsigned char B = __nexa_gfx_u8(b);
+    long long first, last;
+    __nexa_gfx_row_range((long long)cy - RY, (long long)cy + RY, &first, &last);
+    for (long long y = first; y <= last; y++) {
+        long long dy = y - (long long)cy;
+        long long hw = __nexa_gfx_ellipse_halfwidth(dy, RX, RY);
+        if (hw < 0) continue;
+        long long up = __nexa_gfx_ellipse_halfwidth(dy - 1, RX, RY);
+        long long down = __nexa_gfx_ellipse_halfwidth(dy + 1, RX, RY);
+        long long inner = up < down ? up : down;
+        if (inner > hw - 1) inner = hw - 1;
+        if (inner < 0) {
+            __nexa_gfx_span(y, (long long)cx - hw, (long long)cx + hw, R, G, B);
+        } else {
+            __nexa_gfx_span(y, (long long)cx - hw, (long long)cx - inner - 1, R, G, B);
+            __nexa_gfx_span(y, (long long)cx + inner + 1, (long long)cx + hw, R, G, B);
+        }
+    }
+}
+
+static void __nexa_gfx_circle(int cx, int cy, int rad, int r, int g, int b) {
+    __nexa_gfx_ellipse(cx, cy, rad, rad, r, g, b);
+}
+
+static void __nexa_gfx_fill_circle(int cx, int cy, int rad, int r, int g, int b) {
+    __nexa_gfx_fill_ellipse(cx, cy, rad, rad, r, g, b);
+}
+
+// Even-odd scanline fill. A pixel belongs to the polygon when its centre does,
+// with the same half-open rule gfx.fill uses: an edge exactly on the left or
+// top boundary is inside, one exactly on the right or bottom boundary is not.
+// Two polygons sharing an edge therefore tile it without a seam or an overlap.
+static void __nexa_gfx_fill_poly_pts(const int* xs, const int* ys, int n,
+                                     unsigned char R, unsigned char G, unsigned char B) {
+    if (!__nexa_g.fb || n < 3) return;
+    long long ymin = ys[0];
+    long long ymax = ys[0];
+    for (int i = 1; i < n; i++) {
+        if ((long long)ys[i] < ymin) ymin = ys[i];
+        if ((long long)ys[i] > ymax) ymax = ys[i];
+    }
+    long long first, last;
+    __nexa_gfx_row_range(ymin, ymax, &first, &last);
+    std::vector<double> hits;
+    for (long long y = first; y <= last; y++) {
+        hits.clear();
+        for (int i = 0; i < n; i++) {
+            int j = i + 1 == n ? 0 : i + 1;
+            long long ya = ys[i];
+            long long yb = ys[j];
+            if ((ya <= y) == (yb <= y)) continue;
+            double t = (double)(y - ya) / (double)(yb - ya);
+            hits.push_back((double)xs[i] + t * ((double)xs[j] - (double)xs[i]));
+        }
+        std::sort(hits.begin(), hits.end());
+        for (size_t k = 0; k + 1 < hits.size(); k += 2) {
+            long long xa = (long long)std::ceil(hits[k]);
+            long long xb = (long long)std::ceil(hits[k + 1]) - 1;
+            __nexa_gfx_span(y, xa, xb, R, G, B);
+        }
+    }
+}
+
+static void __nexa_gfx_poly_pts(const int* xs, const int* ys, int n, int r, int g, int b) {
+    if (!__nexa_g.fb || n < 3) return;
+    for (int i = 0; i < n; i++) {
+        int j = i + 1 == n ? 0 : i + 1;
+        __nexa_gfx_line(xs[i], ys[i], xs[j], ys[j], r, g, b);
+    }
+}
+
+static void __nexa_gfx_tri(int x1, int y1, int x2, int y2, int x3, int y3, int r, int g, int b) {
+    int xs[3] = {x1, x2, x3};
+    int ys[3] = {y1, y2, y3};
+    __nexa_gfx_poly_pts(xs, ys, 3, r, g, b);
+}
+
+static void __nexa_gfx_fill_tri(int x1, int y1, int x2, int y2, int x3, int y3, int r, int g, int b) {
+    if (!__nexa_g.fb) return;
+    int xs[3] = {x1, x2, x3};
+    int ys[3] = {y1, y2, y3};
+    __nexa_gfx_fill_poly_pts(xs, ys, 3, __nexa_gfx_u8(r), __nexa_gfx_u8(g), __nexa_gfx_u8(b));
+}
+
+// A Nexa []int is a std::vector of whatever integer type held the literals, so
+// the points arrive through a template and are narrowed here, once.
+template <class TX, class TY>
+static int __nexa_gfx_poly_take(const TX& xs, const TY& ys, std::vector<int>& px, std::vector<int>& py) {
+    if (!__nexa_g.fb) return 0;
+    if (xs.size() != ys.size() || xs.size() < 3) return 0;
+    px.reserve(xs.size());
+    py.reserve(ys.size());
+    for (size_t i = 0; i < xs.size(); i++) {
+        long long vx = (long long)xs[i];
+        long long vy = (long long)ys[i];
+        if (vx < -2147483647ll) vx = -2147483647ll;
+        if (vx > 2147483647ll) vx = 2147483647ll;
+        if (vy < -2147483647ll) vy = -2147483647ll;
+        if (vy > 2147483647ll) vy = 2147483647ll;
+        px.push_back((int)vx);
+        py.push_back((int)vy);
+    }
+    return 1;
+}
+
+template <class TX, class TY>
+static int __nexa_gfx_poly(const TX& xs, const TY& ys, int r, int g, int b) {
+    std::vector<int> px, py;
+    if (!__nexa_gfx_poly_take(xs, ys, px, py)) return 0;
+    __nexa_gfx_poly_pts(px.data(), py.data(), (int)px.size(), r, g, b);
+    return 1;
+}
+
+template <class TX, class TY>
+static int __nexa_gfx_fill_poly(const TX& xs, const TY& ys, int r, int g, int b) {
+    std::vector<int> px, py;
+    if (!__nexa_gfx_poly_take(xs, ys, px, py)) return 0;
+    __nexa_gfx_fill_poly_pts(px.data(), py.data(), (int)px.size(),
+                             __nexa_gfx_u8(r), __nexa_gfx_u8(g), __nexa_gfx_u8(b));
+    return 1;
+}
+
+// Thick line: the pixels whose centre lies within t/2 of the segment, i.e. a
+// capsule with round caps. A capsule is convex, so each row meets it in one
+// run, and that run is the widest of the two end discs and the body quad.
+// Thickness is measured across the line at every angle, which a stack of
+// offset Bresenham lines does not give you on a diagonal.
+static void __nexa_gfx_line_thick(int x0, int y0, int x1, int y1, int r, int g, int b, int t) {
+    if (!__nexa_g.fb) return;
+    if (t <= 1) {
+        __nexa_gfx_line(x0, y0, x1, y1, r, g, b);
+        return;
+    }
+    if (t > 4096) t = 4096;
+    unsigned char R = __nexa_gfx_u8(r);
+    unsigned char G = __nexa_gfx_u8(g);
+    unsigned char B = __nexa_gfx_u8(b);
+    double rad = (double)t * 0.5;
+    double ax = (double)x0, ay = (double)y0;
+    double bx = (double)x1, by = (double)y1;
+    double dx = bx - ax, dy = by - ay;
+    double len = std::sqrt(dx * dx + dy * dy);
+    double qx[4] = {0, 0, 0, 0};
+    double qy[4] = {0, 0, 0, 0};
+    if (len > 0.0) {
+        double nx = -dy / len * rad;
+        double ny = dx / len * rad;
+        qx[0] = ax + nx; qy[0] = ay + ny;
+        qx[1] = bx + nx; qy[1] = by + ny;
+        qx[2] = bx - nx; qy[2] = by - ny;
+        qx[3] = ax - nx; qy[3] = ay - ny;
+    }
+    long long ylo = (long long)std::floor((ay < by ? ay : by) - rad);
+    long long yhi = (long long)std::ceil((ay > by ? ay : by) + rad);
+    long long first, last;
+    __nexa_gfx_row_range(ylo, yhi, &first, &last);
+    for (long long y = first; y <= last; y++) {
+        double lo = 0.0, hi = 0.0;
+        int have = 0;
+        double ex[2] = {ax, bx};
+        double ey[2] = {ay, by};
+        for (int i = 0; i < 2; i++) {
+            double d = rad * rad - ((double)y - ey[i]) * ((double)y - ey[i]);
+            if (d < 0.0) continue;
+            double s = std::sqrt(d);
+            if (!have || ex[i] - s < lo) lo = ex[i] - s;
+            if (!have || ex[i] + s > hi) hi = ex[i] + s;
+            have = 1;
+        }
+        if (len > 0.0) {
+            for (int i = 0; i < 4; i++) {
+                int j = (i + 1) & 3;
+                if ((qy[i] <= (double)y) == (qy[j] <= (double)y)) continue;
+                double f = ((double)y - qy[i]) / (qy[j] - qy[i]);
+                double x = qx[i] + f * (qx[j] - qx[i]);
+                if (!have || x < lo) lo = x;
+                if (!have || x > hi) hi = x;
+                have = 1;
+            }
+        }
+        if (!have) continue;
+        __nexa_gfx_span(y, (long long)std::ceil(lo), (long long)std::floor(hi), R, G, B);
+    }
+}
+// [nexa:rasterizers-end]
 
 // 5x7, columns left-to-right, bit 0 = top. Printable ASCII 32..126.
 static const unsigned char __nexa_gfx_font5x7[95][5] = {

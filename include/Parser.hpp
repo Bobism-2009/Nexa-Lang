@@ -4106,7 +4106,12 @@ private:
         else if (method == "clear") argc = 3;
         else if (method == "plot") argc = 5;
         else if (method == "fill") argc = 7;
-        else if (method == "line") argc = 7;
+        else if (method == "rect") argc = 7;
+        else if (method == "line") { argc = 7; argcMax = 8; }
+        else if (method == "circle" || method == "fill_circle") argc = 6;
+        else if (method == "ellipse" || method == "fill_ellipse") argc = 7;
+        else if (method == "tri" || method == "fill_tri") argc = 9;
+        else if (method == "poly" || method == "fill_poly") argc = 5;
         else if (method == "text") { argc = 6; argcMax = 7; }
         else if (method == "text_size") { argc = 0; argcMax = 1; }
         else if (method == "text_width" || method == "text_height") { argc = 1; argcMax = 2; }
@@ -4119,7 +4124,7 @@ private:
         else {
             throw std::runtime_error("Unknown gfx method 'gfx." + method +
                 "' at line " + std::to_string(methodTok.line) +
-                " (use open, close, resize, width, height, scale, title, poll, closed, clear, plot, fill, line, text, text_size, text_width, text_height, get, present, image, decode, image_w, image_h, blit, key, pressed, mouse_x, mouse_y, mouse, audio, sample, audio_queued, audio_flush, fullscreen)");
+                " (use open, close, resize, width, height, scale, title, poll, closed, clear, plot, fill, rect, line, circle, fill_circle, ellipse, fill_ellipse, tri, fill_tri, poly, fill_poly, text, text_size, text_width, text_height, get, present, image, decode, image_w, image_h, blit, key, pressed, mouse_x, mouse_y, mouse, audio, sample, audio_queued, audio_flush, fullscreen)");
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after gfx." + method + " at line " + std::to_string(peek().line));
@@ -4135,7 +4140,26 @@ private:
             throw std::runtime_error("Expected ')' after gfx." + method + "(...) at line " + std::to_string(peek().line));
         }
         int got = (int)node.children.size();
+        // Spelling out the shape signatures beats "argument count": a wrong
+        // count is nearly always a forgotten colour or a swapped radius.
+        auto shapeSignature = [](const std::string& m) {
+            if (m == "rect") return std::string("gfx.rect(x, y, w, h, r, g, b)");
+            if (m == "circle") return std::string("gfx.circle(cx, cy, rad, r, g, b)");
+            if (m == "fill_circle") return std::string("gfx.fill_circle(cx, cy, rad, r, g, b)");
+            if (m == "ellipse") return std::string("gfx.ellipse(cx, cy, rx, ry, r, g, b)");
+            if (m == "fill_ellipse") return std::string("gfx.fill_ellipse(cx, cy, rx, ry, r, g, b)");
+            if (m == "tri") return std::string("gfx.tri(x1, y1, x2, y2, x3, y3, r, g, b)");
+            if (m == "fill_tri") return std::string("gfx.fill_tri(x1, y1, x2, y2, x3, y3, r, g, b)");
+            if (m == "poly") return std::string("gfx.poly(xs, ys, r, g, b)");
+            if (m == "fill_poly") return std::string("gfx.fill_poly(xs, ys, r, g, b)");
+            return std::string();
+        };
         if (argcMax >= 0) {
+            if (method == "line") {
+                if (got < argc || got > argcMax) {
+                    throw std::runtime_error("gfx.line(x1, y1, x2, y2, r, g, b[, t]) at line " + std::to_string(line));
+                }
+            }
             if (method == "blit" && got != 3 && got != 5 && got != 7 && got != 9) {
                 throw std::runtime_error("gfx.blit(x, y, src[, w, h]) or gfx.blit(x, y, src, sx, sy, sw, sh[, dw, dh]) at line " + std::to_string(line));
             }
@@ -4170,6 +4194,10 @@ private:
                 throw std::runtime_error("gfx.open(title, w, h[, scale]) at line " + std::to_string(line));
             }
         } else if (got != argc) {
+            std::string sig = shapeSignature(method);
+            if (!sig.empty()) {
+                throw std::runtime_error(sig + " at line " + std::to_string(line));
+            }
             throw std::runtime_error("gfx." + method + " argument count at line " + std::to_string(line));
         }
         if (requireSemicolon && !match(TokenType::Semicolon)) {

@@ -232,7 +232,51 @@ Nexa Standard Modules
   gfx.plot(x, y, r, g, b)        - set one pixel (0..255)
   gfx.get(x, y)                  - pixel as 0xRRGGBB, or -1 if out of bounds / closed
   gfx.fill(x, y, w, h, r, g, b)  - filled rectangle, clipped (negative w/h flip)
-  gfx.line(x1, y1, x2, y2, r, g, b) - clipped line (0..255)
+  gfx.rect(x, y, w, h, r, g, b)  - rectangle OUTLINE: the 1px border of the pixels
+                                   gfx.fill would have filled, so the right and
+                                   bottom edges are x+w-1 and y+h-1. Same clipping
+                                   and the same negative w/h flip (the corner they
+                                   are measured from is the one past the box:
+                                   rect(8, 5, -6, -4) is rect(2, 1, 6, 4)).
+  gfx.line(x1, y1, x2, y2, r, g, b[, t])
+                                 - clipped line (0..255). Optional thickness t in
+                                   pixels: t <= 1 is the plain one-pixel line, and
+                                   t > 1 draws every pixel whose centre lies within
+                                   t/2 of the segment -- thickness measured across
+                                   the line at every angle, with round caps that
+                                   extend t/2 past each end. t is capped at 4096.
+  gfx.circle(cx, cy, rad, r, g, b)      - circle outline, centred on the pixel cx,cy
+  gfx.fill_circle(cx, cy, rad, r, g, b) - filled circle
+                                   rad 0 is one pixel; a negative rad draws nothing.
+  gfx.ellipse(cx, cy, rx, ry, r, g, b)      - ellipse outline (rx across, ry down)
+  gfx.fill_ellipse(cx, cy, rx, ry, r, g, b) - filled ellipse
+                                   Rasterized by scanline: a row belongs to the
+                                   ellipse when its centre does, and the outline is
+                                   the part of a row its two neighbouring rows do
+                                   not both cover -- a flat run at the top and
+                                   bottom, the end pixels down the steep sides.
+                                   Radii are clamped to 1048576 (the framebuffer
+                                   itself tops out at 4096).
+  gfx.tri(x1, y1, x2, y2, x3, y3, r, g, b)      - triangle outline (three lines)
+  gfx.fill_tri(x1, y1, x2, y2, x3, y3, r, g, b) - filled triangle
+  gfx.poly(xs, ys, r, g, b)      - closed polygon outline; xs and ys are []int of
+                                   equal length, 3 points or more. Returns 1 if it
+                                   drew, 0 if the window is closed, the lists are
+                                   different lengths, or there are fewer than 3
+                                   points. The last point joins back to the first.
+  gfx.fill_poly(xs, ys, r, g, b) - the same polygon, filled by the EVEN-ODD rule:
+                                   a pixel is inside when a ray from it crosses the
+                                   edges an odd number of times, so a self-crossing
+                                   outline (a five-pointed star) comes out hollow in
+                                   the middle. Same 1/0 return as gfx.poly.
+                                   Edges are half-open exactly as gfx.fill's are --
+                                   the left and top boundary belong to the polygon,
+                                   the right and bottom to whatever is next to it --
+                                   so fill_poly of a rectangle is fill of it, and
+                                   two polygons sharing an edge leave no seam.
+                                   All of these are clipped to the framebuffer and
+                                   do nothing (0 for poly / fill_poly) when the
+                                   window is closed or was never opened.
   gfx.text(x, y, s, r, g, b[, scale]) - 5x7 ASCII (32..126); optional scale 1..64
                                    omits scale: uses gfx.text_size(); 6x8 cell * scale; \\n / \\t
                                    returns pixel width of the longest line (int)
