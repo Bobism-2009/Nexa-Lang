@@ -135,6 +135,46 @@ inline bool nexaIsNumericIntType(const std::string& t) {
     return nexaIsIntegerType(t) && t != "char";
 }
 
+// Conversion rank of an integer type, ordered so that the higher-ranked operand of a binary
+// integer operation is never a narrower type than the one the operation really has in C++.
+// Deliberately coarser than C++'s own rank: `long` and `size_t` are different widths on LP64
+// and LLP64, so this is the order that holds on every target Nexa emits for rather than the
+// one a single ABI would give. A non-integer type ranks 0, so callers can pass anything.
+//   0  char/short and their unsigned forms - integer-promoted to int before the operation
+//   1  int
+//   2  unsigned int
+//   3  long
+//   4  unsigned long
+//   5  size_t - unsigned, and at least as wide as unsigned long on every supported target
+inline int nexaIntConversionRank(const std::string& t) {
+    if (t == "int") return 1;
+    if (t == "unsigned int") return 2;
+    if (t == "long") return 3;
+    if (t == "unsigned long") return 4;
+    if (t == "size_t") return 5;
+    return 0;
+}
+
+// Type of `a <op> b` for the arithmetic and bitwise operators: Nexa's stand-in for C++'s
+// usual arithmetic conversions. Pass the same type twice for a unary operator, whose result
+// is just its promoted operand.
+//
+// One case is approximate. `long <op> unsigned int` is `long` here, which is exact on LP64
+// (long is 64-bit, so it absorbs every unsigned int) but is really `unsigned long` on LLP64,
+// where the two are both 32 bits. The two answers have the same width on that target, so
+// nothing truncates; only the modelled signedness differs.
+inline std::string nexaArithIntResultType(const std::string& a, const std::string& b) {
+    const int ra = nexaIntConversionRank(a);
+    const int rb = nexaIntConversionRank(b);
+    switch (ra > rb ? ra : rb) {
+        case 5: return "size_t";
+        case 4: return "unsigned long";
+        case 3: return "long";
+        case 2: return "unsigned int";
+        default: return "int";
+    }
+}
+
 inline bool nexaIsSliceType(const std::string& t) {
     return t.size() >= 2 && t[0] == '[' && t[1] == ']';
 }

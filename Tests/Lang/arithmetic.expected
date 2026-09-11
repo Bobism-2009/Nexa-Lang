@@ -39,5 +39,7 @@ cast_bool_false=0
 cast_uchar_wrap=44
 long_value=3000000000
 long_add=3000000001
+long_add=3000000001
+long_mul=9000000000
 long_mul=9000000000
 uint_max=4294967295

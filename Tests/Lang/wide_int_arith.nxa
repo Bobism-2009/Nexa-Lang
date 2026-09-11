@@ -1,0 +1,57 @@
+// Pins the width of an integer *expression*: an operation on a type wider than
+// int keeps that width, both where the result is printed and where it is stored
+// in an inferred `let`. Narrowing it to int (BOB-15) printed io.println(big + 1)
+// as -1294967295 and declared `let y = big + 1` as an int.
+//
+// Reference: SYNTAX/Core.txt (ARITHMETIC), Tests/wide_int_codegen_cases.sh for
+// the matching claim about the generated C++.
+#include <std/io>
+
+fn main() {
+    // long: signed, wider than int on LP64.
+    let big: long = 3000000000;
+    io.println("long_value=", big);
+    io.println("long_add=", big + 1);
+    io.println("long_mul=", big * 3);
+    io.println("long_sub=", big - 4000000000);
+    io.println("long_neg=", -big);
+    io.println("long_div=", big / 7);
+    io.println("long_mod=", big % 7);
+    io.println("long_shl=", big << 1);
+    io.println("long_shr=", big >> 4);
+    io.println("long_and=", big & 65535);
+    io.println("long_nested=", (big + 1) * 2);
+
+    // size_t: unsigned, and the operand order must not matter.
+    let sz: size_t = 5000000000;
+    io.println("size_t_add=", sz + 1);
+    io.println("size_t_add_rev=", 1 + sz);
+    io.println("size_t_mul=", sz * 2);
+    io.println("size_t_div=", sz / 3);
+    io.println("size_t_mod=", sz % 7);
+
+    // unsigned long: an under-zero result wraps, it does not go negative.
+    let ul: unsigned long = 5000000000;
+    io.println("ulong_add=", ul + 1);
+    io.println("ulong_wrap=", ul - 6000000000);
+
+    // unsigned int is int-width but must not print through a signed conversion.
+    let un: unsigned int = 4294967295;
+    io.println("uint_value=", un);
+    io.println("uint_wrap=", un + 1);
+    io.println("uint_div=", un / 2);
+
+    // An inferred `let` takes the width of the expression, not int.
+    let y = big + 1;
+    io.println("inferred_long=", y);
+    io.println("inferred_long_add=", y + 1);
+    let z = sz * 2;
+    io.println("inferred_size_t=", z);
+
+    // Narrower operands still promote to int and stay there.
+    let sh: short = 300;
+    io.println("short_mul=", sh * 2);
+    let n: int = 2;
+    io.println("int_add=", n + 1);
+    io.println("int_shl=", 1 << 3);
+}
