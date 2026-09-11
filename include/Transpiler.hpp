@@ -543,6 +543,15 @@ public:
                 (n.type == AstNode::Type::ExprAdd && exprProducesString(n))) {
                 needsString = true;
             }
+            // So does a comparison whose two operands both emit as bare C++ string literals:
+            // emitComparison promotes the left one rather than compare two const char*
+            // addresses. This runs before function signatures are registered, so it stays
+            // purely syntactic -- inferring a type here would throw on a forward call.
+            if (isComparisonNodeType(n.type) && n.children.size() >= 2 &&
+                mayEmitBareCppStringLiteral(n.children[0]) && mayEmitBareCppStringLiteral(n.children[1]) &&
+                !(isPlainStringLiteralChain(n.children[0]) && isPlainStringLiteralChain(n.children[1]))) {
+                needsString = true;
+            }
             if (n.type == AstNode::Type::FnCall && (n.value == "has" || n.value == "remove" ||
                     n.value == "keys" || n.value == "values")) {
                 needsMap = true;
@@ -4296,6 +4305,88 @@ private:
         }
     }
 
+    // The six nodes emitComparison handles: == != < <= > >=.
+    static bool isComparisonNodeType(AstNode::Type t) {
+        return t == AstNode::Type::CondEq || t == AstNode::Type::CondNe ||
+               t == AstNode::Type::CondLt || t == AstNode::Type::CondLe ||
+               t == AstNode::Type::CondGt || t == AstNode::Type::CondGe;
+    }
+
+    // Nothing but a literal, or a + of literals. Such an operand always constant-folds,
+    // so a comparison between two of them emits `true`/`false` and no std::string at all.
+    static bool isPlainStringLiteralChain(const AstNode& n) {
+        if (n.type == AstNode::Type::ExprStringLiteral) return true;
+        if (n.type == AstNode::Type::ExprAdd && n.children.size() >= 2) {
+            return isPlainStringLiteralChain(n.children[0]) && isPlainStringLiteralChain(n.children[1]);
+        }
+        return false;
+    }
+
+    // Over-approximates "emitExpr may render this as a bare "..." rather than a std::string
+    // value": the node kinds that fold a compile-time-known string through emitCppStringValue.
+    // Deliberately syntactic -- callers may run before name resolution.
+    static bool mayEmitBareCppStringLiteral(const AstNode& n) {
+        switch (n.type) {
+            case AstNode::Type::ExprStringLiteral:
+            case AstNode::Type::ExprAdd:
+            case AstNode::Type::StrMethod:
+            case AstNode::Type::ExprSlice:
+            case AstNode::Type::CryptoCall:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    // Apply a Nexa comparison operator to the result of std::string::compare (or of any
+    // other three-way "negative / zero / positive" result).
+    static bool comparisonHolds(const std::string& op, int cmp) {
+        if (op == "==") return cmp == 0;
+        if (op == "!=") return cmp != 0;
+        if (op == "<") return cmp < 0;
+        if (op == "<=") return cmp <= 0;
+        if (op == ">") return cmp > 0;
+        return cmp >= 0;  // ">="
+    }
+
+    // One emitter for all six comparison operators, because they share a trap: a comparison
+    // with a string on BOTH sides must compare characters, not addresses.
+    //
+    // A bare C++ string literal is a `const char[N]` that decays to `const char*`, so
+    // `"abc" < "abd"` in the generated code compares two addresses. That is unspecified, it
+    // is not what the Nexa program asked for, and clang says so twice (-Warray-compare,
+    // -Wstring-compare) right in the user's face. Only `==`/`!=` between *identical* spellings
+    // appear to work, and only because the C++ compiler happens to pool equal literals.
+    //
+    // Two defences, in order:
+    //   1. Constant-fold when both sides are known at compile time. This is the common case --
+    //      NexaC already folds literal receivers for string methods -- and it emits no
+    //      comparison at all, so there is nothing left to get wrong.
+    //   2. Otherwise, if both sides still emit as bare literals, promote the left one to
+    //      std::string so the operator resolves to a by-value comparison.
+    // A string *variable* on either side needs neither: that side is already a std::string and
+    // drags the other into a value comparison.
+    std::string emitComparison(const AstNode& c, const std::string& op,
+                               const std::map<std::string, std::string>& varMap,
+                               const std::map<std::string, bool>* varIsString,
+                               const std::map<std::string, bool>* varIsFloat,
+                               const std::map<std::string, bool>* varIsChar,
+                               const std::map<std::string, bool>* varIsBool) {
+        if (c.children.size() >= 2) {
+            if (auto L = tryFoldComparableString(c.children[0], varIsString)) {
+                if (auto R = tryFoldComparableString(c.children[1], varIsString)) {
+                    // std::string::compare orders by char_traits<char>, which is the same
+                    // ordering the generated code would use at runtime.
+                    return comparisonHolds(op, L->compare(*R)) ? "true" : "false";
+                }
+            }
+        }
+        std::string lhs = emitCmpOperand(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+        std::string rhs = emitCmpOperand(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+        if (isBareCppStringLiteral(lhs) && isBareCppStringLiteral(rhs)) lhs = asCppStdString(lhs);
+        return lhs + " " + op + " " + rhs;
+    }
+
     std::string emitCond(const AstNode& c, const std::map<std::string, std::string>& varMap,
                          const std::map<std::string, bool>* varIsString = nullptr,
                          const std::map<std::string, bool>* varIsFloat = nullptr,
@@ -4303,33 +4394,17 @@ private:
                          const std::map<std::string, bool>* varIsBool = nullptr) {
         switch (c.type) {
             case AstNode::Type::CondEq:
-                if (c.children.size() >= 2) {
-                    if (auto L = tryFoldComparableString(c.children[0], varIsString)) {
-                        if (auto R = tryFoldComparableString(c.children[1], varIsString)) {
-                            return (*L == *R) ? "true" : "false";
-                        }
-                    }
-                }
-                return emitCmpOperand(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " == " +
-                       emitCmpOperand(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                return emitComparison(c, "==", varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::CondNe:
-                if (c.children.size() >= 2) {
-                    if (auto L = tryFoldComparableString(c.children[0], varIsString)) {
-                        if (auto R = tryFoldComparableString(c.children[1], varIsString)) {
-                            return (*L != *R) ? "true" : "false";
-                        }
-                    }
-                }
-                return emitCmpOperand(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " != " +
-                       emitCmpOperand(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                return emitComparison(c, "!=", varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::CondLt:
-                return emitCmpOperand(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " < " + emitCmpOperand(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                return emitComparison(c, "<", varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::CondLe:
-                return emitCmpOperand(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " <= " + emitCmpOperand(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                return emitComparison(c, "<=", varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::CondGt:
-                return emitCmpOperand(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " > " + emitCmpOperand(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                return emitComparison(c, ">", varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::CondGe:
-                return emitCmpOperand(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " >= " + emitCmpOperand(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                return emitComparison(c, ">=", varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::CondAnd: {
                 std::string L = emitCond(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 if (c.children[0].type == AstNode::Type::CondOr) L = "(" + L + ")";
