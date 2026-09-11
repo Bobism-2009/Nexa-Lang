@@ -1,0 +1,22 @@
+// KNOWN NEXAC BUG: a slice literal is always typed std::vector<int>, so an
+// element that does not fit an int is a hard C++ error that reaches the user:
+//
+//   error: constant expression evaluates to 2147483648 which cannot be
+//          narrowed to type 'int' [-Wc++11-narrowing]
+//
+// Two things are wrong. The literal should get an element type that can hold
+// it (NexaC already does this for a bare literal and for `let x: long`), and
+// if it genuinely cannot, the refusal should be a "[Nexa] Error:" naming the
+// .nxa line rather than a clang diagnostic about generated code.
+//
+// SYNTAX/Core.txt says a literal is legal up to 18446744073709551615, and
+// does not carve slice literals out of that.
+#include <std/io>
+
+fn main() {
+    let arr = [2147483648, 1];
+    io.println("slice_wide=" + arr[0]);
+
+    let wide = [9223372036854775807];
+    io.println("slice_i64_max=" + wide[0]);
+}

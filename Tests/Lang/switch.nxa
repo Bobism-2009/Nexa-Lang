@@ -1,0 +1,135 @@
+// switch: case bodies are scopes that may declare variables, and fall-through
+// still works when a case body omits `break`.
+//
+// Promoted out of known_bugs/ when BOB-18 fixed the unbraced case body that made
+// `let a = 11;` in a case emit C++ a later case label jumped over.
+#include <std/io>
+
+enum Color {
+    Red;
+    Green;
+    Blue;
+}
+
+// Cases that return: the braces around a case body must not swallow the return.
+fn classify(n: int) {
+    switch (n) {
+        case 0:
+            return 100;
+        case 1:
+        case 2:
+            return 200;
+        default:
+            return 300;
+    }
+    return 0;
+}
+
+fn main() {
+    // A declaration in a case body, with a default that has one too. Each name
+    // is local to its own case.
+    switch (1) {
+        case 1:
+            let a = 11;
+            io.println("case1=", a);
+            break;
+        default:
+            let a = 99;
+            io.println("default=", a);
+    }
+
+    // The same name again at switch scope: the case bodies above did not leak it.
+    let a = "outer";
+    io.println("outer=", a);
+
+    // Fall-through: case 2 has no body and no break, so it runs case 3's body,
+    // which then falls into default.
+    switch (2) {
+        case 2:
+        case 3:
+            io.println("fell into 3");
+        default:
+            io.println("fell into default");
+    }
+
+    // A case body that declares and then breaks does not fall through.
+    switch (7) {
+        case 7:
+            let seven = 7;
+            io.println("seven=", seven);
+            break;
+        default:
+            io.println("not reached");
+    }
+
+    // String switch, same shape.
+    let word = "two";
+    switch (word) {
+        case "one":
+            let s = "matched one";
+            io.println(s);
+            break;
+        case "two":
+            let s = "matched two";
+            io.println(s);
+            break;
+        default:
+            io.println("matched nothing");
+    }
+
+    // Enum switch, same shape.
+    let c: enum Color = Color.Green;
+    switch (c) {
+        case Color.Red:
+            let name = "red";
+            io.println("color=", name);
+            break;
+        case Color.Green:
+            let name = "green";
+            io.println("color=", name);
+            break;
+        default:
+            io.println("color=other");
+    }
+
+    // A switch nested inside a case body, each level declaring its own name.
+    switch (1) {
+        case 1:
+            let level = 1;
+            switch (2) {
+                case 2:
+                    let level = 2;
+                    io.println("inner level=", level);
+                    break;
+                default:
+                    io.println("inner default");
+            }
+            io.println("outer level=", level);
+            break;
+        default:
+            io.println("outer default");
+    }
+
+    io.println("classify(0)=", classify(0));
+    io.println("classify(2)=", classify(2));
+    io.println("classify(9)=", classify(9));
+
+    // A switch inside a loop: break leaves the switch, continue leaves the
+    // iteration, and a case-body declaration is fresh each time round.
+    let total = 0;
+    for (i, 5) {
+        switch (i) {
+            case 0:
+                continue;
+            case 1:
+            case 2:
+                let add = i * 10;
+                total = total + add;
+                break;
+            default:
+                total = total + 1;
+        }
+        total = total + 100;
+    }
+    io.println("total=", total);
+}

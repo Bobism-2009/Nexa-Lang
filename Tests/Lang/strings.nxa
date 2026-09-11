@@ -1,0 +1,106 @@
+// Pins string behaviour: the core methods, indexing, slicing, concatenation
+// with non-string operands, and the compile-time folding of literal receivers.
+// Reference: SYNTAX/Core.txt (STRING METHODS, STRING INDEXING)
+#include <std/io>
+
+fn main() {
+    let s = "Hello, World";
+
+    // Case, trim, length.
+    io.println("upper=", s.upper());
+    io.println("lower=", s.lower());
+    io.println("len_method=", s.len());
+    io.println("len_builtin=", len(s));
+    io.println("trim=[", "  padded  ".trim(), "]");
+    io.println("trim_tabs=[", "\t\n x \t\n".trim(), "]");
+    io.println("trim_empty=[", "   ".trim(), "]");
+
+    // Search predicates.
+    io.println("contains=", s.contains("World"));
+    io.println("contains_miss=", s.contains("world"));
+    io.println("contains_empty=", s.contains(""));
+    io.println("starts_with=", s.starts_with("Hello"));
+    io.println("starts_with_miss=", s.starts_with("hello"));
+    io.println("ends_with=", s.ends_with("World"));
+    io.println("index_of=", s.index_of("World"));
+    io.println("index_of_missing=", s.index_of("zzz"));
+    io.println("index_of_first=", "abcabc".index_of("b"));
+
+    // Transforms return a new string; the receiver is untouched.
+    io.println("replace=", s.replace("l", "L"));
+    io.println("replace_missing=", s.replace("zz", "!"));
+    io.println("replace_longer=", "aaa".replace("a", "bb"));
+    io.println("receiver_intact=", s);
+
+    io.println("substring=", s.substring(7, 5));
+    io.println("substring_to_end=", s.substring(7, -1));
+    io.println("substring_zero=[", s.substring(3, 0), "]");
+    io.println("repeat=", "ab".repeat(3));
+    io.println("repeat_zero=[", "ab".repeat(0), "]");
+
+    // split returns []string.
+    let parts = "a,b,c".split(",");
+    io.println("split_len=", len(parts));
+    for (p in parts) {
+        io.println("split_item=", p);
+    }
+    let one = "abc".split("");
+    io.println("split_empty_sep_len=", len(one));
+    io.println("split_empty_sep_0=", one[0]);
+    let trailing = "a,,b".split(",");
+    io.println("split_keeps_empty_len=", len(trailing));
+    io.println("split_keeps_empty_1=[", trailing[1], "]");
+
+    // Chaining.
+    io.println("chain=", "  MiXeD  ".trim().lower());
+    io.println("chain_index=", "a,b,c".split(",")[1]);
+
+    // Indexing yields char; assignment replaces one character.
+    io.println("index_char=", s[0]);
+    io.println("index_code=", (int)s[1]);
+    let word = "cat";
+    word[0] = 'b';
+    io.println("index_assign=", word);
+    word[2] = 116;              // an int code point is accepted too
+    io.println("index_assign_int=", word);
+
+    // Slicing is a half-open copy.
+    io.println("slice=", s[0:5]);
+    io.println("slice_prefix=", s[:5]);
+    io.println("slice_suffix=", s[7:]);
+    io.println("slice_all=", s[:]);
+    io.println("slice_empty=[", s[2:2], "]");
+    io.println("slice_chain=", "abcdef"[1:4][0]);
+
+    // Concatenation converts int / float / bool / char operands.
+    let n = 7;
+    let f = 1.5;
+    let ok = true;
+    let c: char = 'Z';
+    io.println("concat_int=" + n);
+    io.println("concat_float=" + f);
+    // Note the asymmetry: under "+" a bool renders as true/false, while as a
+    // comma argument it renders as 1/0 (see Tests/Lang/comparisons.nxa).
+    // SYNTAX/ does not say which is intended; this pins what NexaC does today.
+    io.println("concat_bool=" + ok);
+    io.println("arg_bool=", ok);
+    io.println("concat_char=" + c);
+    io.println("concat_chain=" + n + "/" + f);
+    io.println("concat_expr=" + (n * 2));
+
+    // []string indexing stays string (it is not char indexing).
+    let names = ["bob", "jessica"];
+    io.println("strarray_0=", names[0]);
+    io.println("strarray_1_len=", len(names[1]));
+    io.println("strarray_char=", names[0][1]);
+
+    // An empty string is well defined.
+    let e = "";
+    io.println("empty_len=", len(e));
+    io.println("empty_upper=[", e.upper(), "]");
+    io.println("empty_contains=", e.contains(""));
+
+    // Declared-but-uninitialized strings start empty.
+    let u: string;
+    io.println("uninit_len=", len(u));
+}

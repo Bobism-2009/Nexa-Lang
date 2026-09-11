@@ -1,0 +1,6 @@
+// A literal wider than 64 bits is a Nexa error, not a C++ compiler error.
+// Reference: SYNTAX/Core.txt ("Integer literals")
+#include <std/io>
+fn main() {
+    io.println(18446744073709551616);
+}

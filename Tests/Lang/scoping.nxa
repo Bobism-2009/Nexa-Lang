@@ -1,0 +1,132 @@
+// Pins Nexa block scoping. A `let` inside a nested block is a new variable;
+// it must not hijack the outer variable's emitted name once the block ends,
+// and it must not leak out of the block.
+// Reference: SYNTAX/Core.txt (COMPILE-TIME CHECKS -> "What stays legal")
+#include <std/io>
+
+let g = 100;
+
+fn shadowsParam(x: int): int {
+    let x = 9;          // a parameter is an enclosing scope, so this is legal
+    return x;
+}
+
+fn readsGlobal(): int {
+    return g;
+}
+
+fn shadowsGlobal(): int {
+    let g = 7;          // a function body is a new scope
+    return g;
+}
+
+fn main() {
+    // Plain nested-block shadow: inner wins inside, outer survives after.
+    let x = 1;
+    if (true) {
+        let x = 2;
+        io.println("if_inner=", x);
+    }
+    io.println("if_outer=", x);
+
+    // The shadow may even have a different type.
+    let s = "outer";
+    if (true) {
+        let s = 42;
+        io.println("retype_inner=", s);
+    }
+    s += "!";
+    io.println("retype_outer=", s);
+
+    // Two sibling blocks each get their own binding.
+    if (true) { let y = 1; io.println("sibling_a=", y); }
+    if (true) { let y = 2; io.println("sibling_b=", y); }
+
+    // Three levels deep, unwinding one at a time. Nexa has no bare `{ }`
+    // block statement, so the nesting is spelled with if (true).
+    let d = 0;
+    if (true) {
+        let d = 1;
+        if (true) {
+            let d = 2;
+            if (true) {
+                let d = 3;
+                io.println("depth3=", d);
+            }
+            io.println("depth2=", d);
+        }
+        io.println("depth1=", d);
+    }
+    io.println("depth0=", d);
+
+    // A loop body is a new scope on every kind of loop.
+    let n = 5;
+    for (i, 2) {
+        let n = i;
+        io.println("for_inner=", n);
+    }
+    io.println("for_outer=", n);
+
+    let w = 0;
+    while (w < 2) {
+        let inner = w * 10;
+        io.println("while_inner=", inner);
+        w += 1;
+    }
+    io.println("while_outer=", w);
+
+    let items = [7, 8];
+    let e = -1;
+    for (e in items) {
+        io.println("rangefor_inner=", e);
+    }
+    io.println("rangefor_outer=", e);
+
+    // A lambda body is a new scope; it also captures by reference.
+    let cap = 10;
+    let f = fn (): int {
+        let cap = 3;        // shadows the captured one
+        return cap;
+    };
+    io.println("lambda_shadow=", f());
+    io.println("lambda_outer=", cap);
+
+    let mutate = fn (): void { cap = 99; };
+    mutate();
+    io.println("lambda_captures_by_ref=", cap);
+
+    // Parameters and globals.
+    io.println("param_shadow=", shadowsParam(1));
+    io.println("global_read=", readsGlobal());
+    io.println("global_shadow=", shadowsGlobal());
+    io.println("global_intact=", g);
+
+    // Assigning (not re-declaring) inside a block hits the outer variable.
+    let counter = 0;
+    if (true) {
+        counter = 5;
+    }
+    io.println("assign_through_block=", counter);
+
+    // The else branch is its own scope too.
+    if (false) {
+        let z = 1;
+        io.println("unreachable=", z);
+    } else {
+        let z = 2;
+        io.println("else_scope=", z);
+    }
+
+    // A switch case body is not braced in Nexa, so its statements live in the
+    // switch's scope and can read the enclosing function's variables.
+    // Declaring a `let` in a case does not work at all -- see
+    // Tests/Lang/known_bugs/let_in_switch_case.nxa.
+    let sc = 11;
+    switch (1) {
+        case 1:
+            io.println("switch_scope=", sc);
+            break;
+        default:
+            io.println("switch_default=0");
+    }
+}

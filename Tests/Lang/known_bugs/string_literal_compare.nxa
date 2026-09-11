@@ -1,0 +1,22 @@
+// KNOWN NEXAC BUG: a relational comparison with a string LITERAL on both
+// sides is emitted as a raw `const char*` comparison, so it compares two
+// addresses instead of two strings. clang warns twice:
+//
+//   warning: comparison between two arrays compare their addresses ...
+//   warning: result of comparison against a string literal is unspecified ...
+//
+// The result is unspecified, and in practice "abc" < "abd" comes back false.
+// A string VARIABLE on either side is fine, because that side is a
+// std::string and drags the other into a value comparison -- which is why
+// Tests/Lang/comparisons.nxa spells it `a < "abd"`.
+//
+// == and != happen to look right today only because clang pools identical
+// literals to one address; they are just as unspecified.
+#include <std/io>
+
+fn main() {
+    io.println("lit_lt=", "abc" < "abd");
+    io.println("lit_gt=", "abd" > "abc");
+    io.println("lit_le=", "abc" <= "abc");
+    io.println("lit_ne_different=", "abc" != "abd");
+}

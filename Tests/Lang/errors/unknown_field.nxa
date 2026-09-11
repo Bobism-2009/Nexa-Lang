@@ -1,0 +1,10 @@
+// Assigning a field the struct does not have.
+#include <std/io>
+struct P {
+    x: int;
+}
+fn main() {
+    let p = P { x: 1 };
+    p.zz = 5;
+    io.println(p.x);
+}

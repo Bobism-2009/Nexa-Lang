@@ -1,0 +1,7 @@
+// Two `let`s for the same name in one scope.
+#include <std/io>
+fn main() {
+    let x = 1;
+    let x = 2;
+    io.println(x);
+}

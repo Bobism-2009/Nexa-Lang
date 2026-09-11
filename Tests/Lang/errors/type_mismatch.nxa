@@ -1,0 +1,6 @@
+// A typed `let` and a string initializer do not agree.
+#include <std/io>
+fn main() {
+    let x: int = "hello";
+    io.println(x);
+}

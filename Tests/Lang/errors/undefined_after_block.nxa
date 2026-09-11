@@ -1,0 +1,9 @@
+// A block-scoped `let` does not survive its block.
+#include <std/io>
+fn main() {
+    if (true) {
+        let inner = 1;
+        io.println(inner);
+    }
+    io.println(inner);
+}

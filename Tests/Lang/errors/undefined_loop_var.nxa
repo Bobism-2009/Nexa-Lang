@@ -1,0 +1,8 @@
+// The counter of `for (i, n)` belongs to the loop.
+#include <std/io>
+fn main() {
+    for (i, 3) {
+        io.println(i);
+    }
+    io.println(i);
+}

@@ -1,0 +1,7 @@
+// Globals are one scope too.
+#include <std/io>
+let g = 1;
+let g = 2;
+fn main() {
+    io.println(g);
+}

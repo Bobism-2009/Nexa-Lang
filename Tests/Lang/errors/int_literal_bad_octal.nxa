@@ -1,0 +1,5 @@
+// A leading 0 means octal, so 9 is not a digit.
+#include <std/io>
+fn main() {
+    io.println(09);
+}

@@ -1,0 +1,69 @@
+// Pins integer-literal parsing and the width NexaC gives each literal.
+// The range boundaries matter twice over: one past the edge is a Nexa error
+// (Tests/Lang/errors/int_literal_*.nxa), and at the edge the literal has to
+// keep its value all the way through codegen instead of being printed with a
+// narrower format.
+// Reference: SYNTAX/Core.txt ("Integer literals")
+#include <std/io>
+
+fn main() {
+    // Bases. A leading 0 means octal, as in C.
+    io.println("decimal=", 42);
+    io.println("hex_lower=", 0x2a);
+    io.println("hex_upper=", 0x2A);
+    io.println("octal=", 052);
+    io.println("zero=", 0);
+    io.println("octal_zero=", 00);
+    io.println("hex_zero=", 0x0);
+    io.println("bases_agree=", 42 == 0x2A);
+    io.println("octal_not_decimal=", 010);
+
+    // Negative literals.
+    io.println("neg=", -42);
+    io.println("neg_hex=", -0x2A);
+
+    // 32-bit boundaries: these must not be truncated to int.
+    io.println("i32_max=" + 2147483647);
+    io.println("past_i32_max=" + 2147483648);
+    io.println("i32_min=" + -2147483648);
+    io.println("u32_max=" + 4294967295);
+
+    // 64-bit boundaries, the documented limits of a Nexa integer literal.
+    io.println("i64_max=" + 9223372036854775807);
+    io.println("i64_min=" + -9223372036854775808);
+    io.println("u64_max=" + 18446744073709551615);
+    io.println("hex_u64_max=" + 0xFFFFFFFFFFFFFFFF);
+    io.println("hex_i64_max=" + 0x7FFFFFFFFFFFFFFF);
+
+    // The edge values keep their sign and ordering, not just their digits.
+    let iMax: long = 9223372036854775807;
+    let iMin: long = -9223372036854775808;
+    io.println("i64_max_positive=", iMax > 0);
+    io.println("i64_min_negative=", iMin < 0);
+    io.println("i64_min_plus_one=" + (iMin + 1));
+    io.println("i64_max_minus_one=" + (iMax - 1));
+
+    let uMax: unsigned long = 18446744073709551615;
+    io.println("u64_above_i64_max=", uMax > 9223372036854775807);
+    io.println("u64_not_negative=", uMax > 0);
+
+    // Arithmetic on wide literals stays wide.
+    io.println("wide_product=" + (4000000000 * 3));
+    io.println("wide_sum=" + (9223372036854775806 + 1));
+
+    // Literals in the places that are easy to get wrong.
+    // A wide literal inside a slice literal does not build at all -- see
+    // Tests/Lang/known_bugs/wide_literal_in_slice.nxa.
+    let m: map[string]int;
+    m["big"] = 2000000000;
+    io.println("literal_in_map=", m["big"]);
+    io.println("literal_arg=" + double(3000000000));
+
+    // Casting a wide literal down is the usual C truncation, not an error.
+    io.println("truncate_to_int=", (int)4294967296 + 0);
+    io.println("truncate_to_uchar=", (int)(unsigned char)511);
+}
+
+fn double(n: long): long {
+    return n * 2;
+}
