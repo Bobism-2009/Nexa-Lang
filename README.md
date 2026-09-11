@@ -132,6 +132,7 @@ Full detail: [`SYNTAX/CLI.txt`](SYNTAX/CLI.txt) or `NexaC --help`.
 | `NexaC build [dir]` | Build entry `.nxa` in directory |
 | `NexaC --run` / `-r` | Build to temp binary and run |
 | `NexaC -p` / `--preserve-names` | Keep readable C++ symbol names |
+| `NexaC file.nxa --debug` / `-g` | Debuggable binary: `-g -O0`, nothing stripped, implies `--preserve-names`, plus sanitizer checks when the C++ compiler can link them. With `--run` the binary is kept. Not valid with `--small` or `--wasm` |
 | `NexaC --dll` / `--shared` | Build DLL / `.so` (Linux) / `.dylib` (macOS) |
 | `NexaC --static-lib` | Build a static archive (`.a` Linux / `.lib` Windows) from a `.nxa` |
 | `NexaC file.nxa --link lib.a` | Statically link an archive/object into the executable (repeatable) |

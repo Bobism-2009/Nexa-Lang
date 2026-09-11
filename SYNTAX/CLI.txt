@@ -26,6 +26,23 @@ OPTIONS
   --source <f>    Emit C++ only, do not compile
   --preserve-names, -p  Keep function names (readability)
   --small         Optimize for smaller output (-Os)
+  --debug, -g     Build a debuggable binary instead of the stripped release build:
+                    * -g -O0 and frame pointers (line info, readable backtraces)
+                    * nothing stripped: symbol table, sections and build-id all kept
+                    * implies --preserve-names, so `break my_fn` in gdb/lldb works on
+                      the name you wrote in the .nxa
+                    * adds -fsanitize=address,undefined when the C++ compiler can link
+                      it; otherwise falls back to UBSan, then UBSan trap mode, then
+                      plain -g, printing which one it used
+                    * with --run the binary is kept (not deleted) so you can re-run it
+                      under a debugger; it is written to the normal output path
+                    * the generated C++ is kept as <output>.debug.cpp, because that is
+                      the file the binary's line info points at (delete it when done)
+                    * library builds (--dll/--shared/--static-lib) get -g -O0 but no
+                      sanitizer: instrumenting a library would require the host process
+                      to be instrumented too
+                  Rejected with --small (contradictory) and with --wasm: NexaC debug
+                  builds target native gdb/lldb, not the browser DWARF workflow.
   --dll     Build Windows .dll (default: -Os; link with strip for size)
   --shared  Build .dylib (macOS) or .so (Linux)
   --win     Build Windows .exe (mingw-w64 from Linux)

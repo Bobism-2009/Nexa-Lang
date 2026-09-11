@@ -1099,6 +1099,91 @@ static bool nexaHasExt(const std::string& path, const char* ext) {
     return e == ext;
 }
 
+// --debug runtime checks: what the backend compiler is asked to bake into the executable.
+// Ordered strongest-first; nexaProbeSanitizer() walks down the list until one links, so a
+// toolchain that ships no sanitizer runtime still produces a debuggable (-g) binary.
+enum class NexaSanitizer {
+    AddressUndefined,  // ASan + UBSan: needs libclang_rt.asan and libclang_rt.ubsan
+    Undefined,         // UBSan through the toolchain's runtime: needs libclang_rt.ubsan
+    UndefinedTrap,     // UBSan in trap mode: no runtime library; UB aborts on a trap instruction
+    None,              // -g only: symbols for a debugger, no added checks
+};
+
+// Compiler flags for one level. Never includes -g: every --debug build gets that anyway.
+static std::string nexaSanitizerFlags(NexaSanitizer s) {
+    switch (s) {
+        case NexaSanitizer::AddressUndefined: return "-fsanitize=address,undefined";
+        case NexaSanitizer::Undefined:        return "-fsanitize=undefined";
+        // -fsanitize-trap turns each check into a trap instruction instead of a call into the
+        // UBSan runtime, so this level links on toolchains that ship no sanitizer libraries.
+        case NexaSanitizer::UndefinedTrap:    return "-fsanitize=undefined -fsanitize-trap=undefined";
+        case NexaSanitizer::None:             break;
+    }
+    return "";
+}
+
+// Named by flag rather than by promise: how a caught error is reported (a printed diagnostic or
+// a bare trap) depends on which sanitizer runtime the toolchain ships. Some, like the one bundled
+// with zig's clang, abort on SIGILL without printing anything.
+static const char* nexaSanitizerLabel(NexaSanitizer s) {
+    switch (s) {
+        case NexaSanitizer::AddressUndefined: return "address + undefined (-fsanitize=address,undefined)";
+        case NexaSanitizer::Undefined:        return "undefined behavior (-fsanitize=undefined)";
+        case NexaSanitizer::UndefinedTrap:    return "undefined behavior, trap mode (-fsanitize-trap=undefined)";
+        case NexaSanitizer::None:             break;
+    }
+    return "none (this C++ toolchain ships no linkable sanitizer runtime)";
+}
+
+// Pick the strongest sanitizer level this toolchain can actually link, by compiling a 3-line
+// throwaway program once per level. Probing beats retrying the real build: a program that fails
+// to compile for the user's own reasons then reports that error once instead of four times.
+static NexaSanitizer nexaProbeSanitizer(const std::string& cxx, const std::string& targetFlags) {
+    namespace fs = std::filesystem;
+    std::string pidStr;
+#ifdef _WIN32
+    pidStr = std::to_string(GetCurrentProcessId());
+    const std::string exeSuffix = ".exe";
+    const std::string quiet = " >nul 2>&1";
+#else
+    pidStr = std::to_string(getpid());
+    const std::string exeSuffix = "";
+    const std::string quiet = " >/dev/null 2>&1";
+#endif
+    std::error_code ec;
+    fs::path src = fs::temp_directory_path(ec) / ("neaxc_sanprobe_" + pidStr + ".cpp");
+    fs::path bin = fs::temp_directory_path(ec) / ("neaxc_sanprobe_" + pidStr + exeSuffix);
+    if (ec) return NexaSanitizer::None;
+    {
+        std::ofstream probe(src);
+        if (!probe) return NexaSanitizer::None;
+        probe << "int main() { return 0; }\n";
+    }
+    const NexaSanitizer levels[] = {
+        NexaSanitizer::AddressUndefined,
+        NexaSanitizer::Undefined,
+        NexaSanitizer::UndefinedTrap,
+    };
+    NexaSanitizer chosen = NexaSanitizer::None;
+    for (NexaSanitizer level : levels) {
+#ifdef _WIN32
+        std::string cmd = cxx + targetFlags;
+#else
+        std::string cmd = "\"" + cxx + "\"" + targetFlags;
+#endif
+        cmd += " -std=c++17 -g " + nexaSanitizerFlags(level);
+        cmd += " \"" + src.string() + "\" -o \"" + bin.string() + "\"" + quiet;
+        int ret = std::system(cmd.c_str());
+        std::remove(bin.string().c_str());
+        if (ret == 0) {
+            chosen = level;
+            break;
+        }
+    }
+    std::remove(src.string().c_str());
+    return chosen;
+}
+
 // Build the shell command for clang/g++/gcc. Linker flags are selected per object format:
 // PE/COFF on Windows, Mach-O on macOS, and ELF on Linux.
 static std::string nexaBuildCompileCmd(
@@ -1117,6 +1202,7 @@ static std::string nexaBuildCompileCmd(
     bool linkGfx,
     bool noExceptions,
     bool noRtti,
+    bool debugBuild,
     const std::vector<std::string>& linkInputs
 ) {
     // Windows cmd.exe: do not wrap the compiler name in quotes unless it contains spaces;
@@ -1146,21 +1232,32 @@ static std::string nexaBuildCompileCmd(
         cmd += " -fno-rtti";
     }
     if (noExceptions) {
-        cmd += " -fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables";
+        cmd += " -fno-exceptions";
+        // Unwind tables are what a debugger walks to produce a backtrace, so --debug keeps
+        // them even when the program itself can never throw.
+        if (!debugBuild) cmd += " -fno-unwind-tables -fno-asynchronous-unwind-tables";
     }
-    // Trim non-essential metadata from the object/binary (no runtime effect).
-    cmd += " -fno-ident -fmerge-all-constants";
+    if (debugBuild) {
+        // Frame pointers make backtraces reliable even in frames the DWARF CFI does not cover.
+        cmd += " -fno-omit-frame-pointer";
+    } else {
+        // Trim non-essential metadata from the object/binary (no runtime effect).
+        // Skipped for --debug: constant merging folds distinct source-level objects together.
+        cmd += " -fno-ident -fmerge-all-constants";
+    }
     if (const char* nexaCxx = std::getenv("NEXA_CXXFLAGS")) {
         cmd += " ";
         cmd += nexaCxx;
     }
 #ifdef _WIN32
-    cmd += " -ffunction-sections -fdata-sections";
+    // Section splitting exists only to let the linker garbage-collect; --debug keeps every
+    // section (and every symbol) so the debugger can map addresses back to source.
+    if (!debugBuild) cmd += " -ffunction-sections -fdata-sections";
     if (buildDll || buildShared) {
         cmd += " -shared";
         // Match Linux: garbage-collect unused sections + strip symbols. MSVC-target clang
         // builds are uncommon here; if linking fails, use a MinGW/LLVM-MinGW toolchain.
-        cmd += " -Wl,--gc-sections -s";
+        if (!debugBuild) cmd += " -Wl,--gc-sections -s";
         if (buildDll) {
             std::filesystem::path dllOut(exePath);
             std::filesystem::path libOut = dllOut;
@@ -1177,17 +1274,20 @@ static std::string nexaBuildCompileCmd(
         cmd += " -static -static-libgcc -static-libstdc++";
         // Same as Linux: drop unreferenced object code from static libc++ and strip symbols
         // (ffunction/fdata sections were enabled above; without --gc-sections, .exe stays large).
-        cmd += " -Wl,--gc-sections -s";
+        if (!debugBuild) cmd += " -Wl,--gc-sections -s";
     }
 #elif defined(__APPLE__)
     // ld64 uses dead_strip instead of GNU ld's --gc-sections. Apple platforms
     // provide libc++ as a system library, so static libgcc/libstdc++ flags are invalid.
-    cmd += " -Wl,-dead_strip";
+    if (!debugBuild) cmd += " -Wl,-dead_strip";
     if (buildDll || buildShared) {
         cmd += " -dynamiclib -fPIC";
     }
 #else
-    cmd += " -s -ffunction-sections -fdata-sections -Wl,--gc-sections";
+    // Release: strip the symbol table and garbage-collect unreferenced sections.
+    // --debug keeps both: `-s` would delete the very symbols gdb needs, and section GC
+    // can drop code the debugger still has line entries for.
+    if (!debugBuild) cmd += " -s -ffunction-sections -fdata-sections -Wl,--gc-sections";
     // Native ELF output (Linux exe or .so), not mingw-cross (PE) builds.
     const bool elfTarget = !buildWin && !buildDll;
     if (elfTarget) {
@@ -1195,7 +1295,9 @@ static std::string nexaBuildCompileCmd(
         // trivial binary to ~64KB+ of segment alignment. 4KB pages (the kernel default on Pi OS
         // and most aarch64 Linux) shrink output ~10x. On x86-64 this is already the default (no-op).
         cmd += " -Wl,-z,max-page-size=4096";
-        cmd += " -Wl,--build-id=none";
+        // Keep the build-id in debug builds: it is how debuggers and symbol servers pair a
+        // binary with its debug info.
+        if (!debugBuild) cmd += " -Wl,--build-id=none";
     }
     if (elfTarget && !buildShared) {
         // Self-contained w.r.t. the C++ toolchain runtime: embed libstdc++ and libgcc so the
@@ -1292,7 +1394,8 @@ static std::string nexaStaticLibCmd(
     const std::string& archivePath,
     const std::string& opt,
     bool noExceptions,
-    bool noRtti
+    bool noRtti,
+    bool debugBuild
 ) {
 #ifdef _WIN32
     std::string cmd = cxx;
@@ -1304,8 +1407,13 @@ static std::string nexaStaticLibCmd(
         cmd += " -Wno-parentheses-equality";
     }
     if (noRtti) cmd += " -fno-rtti";
-    if (noExceptions) cmd += " -fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables";
-    cmd += " -fno-ident -fmerge-all-constants -ffunction-sections -fdata-sections -fPIC -c";
+    if (noExceptions) {
+        cmd += " -fno-exceptions";
+        if (!debugBuild) cmd += " -fno-unwind-tables -fno-asynchronous-unwind-tables";
+    }
+    if (debugBuild) cmd += " -fno-omit-frame-pointer";
+    else cmd += " -fno-ident -fmerge-all-constants";
+    cmd += " -ffunction-sections -fdata-sections -fPIC -c";
     if (const char* nexaCxx = std::getenv("NEXA_CXXFLAGS")) {
         cmd += " ";
         cmd += nexaCxx;
@@ -1621,6 +1729,12 @@ static int printHelp(int page = 1) {
     std::cout << "  --source [opts...] <f>  Emit C++ only (e.g. --source --p Out.cpp)\n";
     std::cout << "  --preserve-names, --p  Keep function names in generated C++ (default: mangle)\n";
     std::cout << "  --small       Optimize for smaller executable (-Os)\n";
+    std::cout << "  --debug, -g   Debuggable binary: -g -O0, nothing stripped, keeps your\n";
+    std::cout << "                function names, adds sanitizer checks when the C++ compiler\n";
+    std::cout << "                supports them. With --run the binary is kept, not deleted.\n";
+    std::cout << "                Also keeps the generated <output>.debug.cpp (the binary's\n";
+    std::cout << "                line info points at it).\n";
+    std::cout << "                Not valid with --small or --wasm (debug targets gdb/lldb).\n";
     std::cout << "  --dll     Build Windows .dll (default: -Os + strip for smaller .dll)\n";
     std::cout << "  --shared  Build .dylib (macOS) or .so (Linux; default: -Os + strip)\n";
     std::cout << "  --static-lib  Build a static archive (.a Linux / .lib Windows) from a .nxa\n";
@@ -1683,6 +1797,7 @@ int main(int argc, char* argv[]) {
     bool sourceOnly = false;
     bool preserveNames = false;
     bool optimizeSize = false;
+    bool debugBuild = false;  // -g -O0, no stripping, implies --preserve-names
     bool buildDll = false;   // mingw -> .dll
     bool buildShared = false;  // clang++ -> .so
     bool buildStaticLib = false;  // -> .a (Linux) / .lib (Windows) static archive
@@ -1733,6 +1848,8 @@ int main(int argc, char* argv[]) {
             preserveNames = true;
         } else if (arg == "--small") {
             optimizeSize = true;
+        } else if (arg == "--debug" || arg == "--g" || arg == "-g") {
+            debugBuild = true;
         } else if (arg == "--dll") {
             buildDll = true;
         } else if (arg == "--shared") {
@@ -1769,6 +1886,16 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // --debug wants the user's own function names in the symbol table; mangled names would make
+    // `break my_fn` fail in the debugger. Checked before the flag-conflict errors below so those
+    // messages describe what the user typed, not what --debug implied.
+    if (debugBuild && optimizeSize) {
+        std::cerr << "[Nexa] Error: --debug and --small are contradictory (--debug builds -g -O0 and keeps every symbol; --small optimizes for size and strips)\n";
+        std::cerr << "[Nexa] Tip: pick one, or build twice: once with --debug to debug, once with --small to ship\n";
+        return 1;
+    }
+    if (debugBuild) preserveNames = true;
+
     if (inputPath.empty()) {
         if (runAfterBuild) {
             std::string entry = findEntryFile(std::filesystem::current_path());
@@ -1800,6 +1927,15 @@ int main(int argc, char* argv[]) {
     }
     if (buildWasm && (buildDll || buildShared || buildWin || buildStaticLib)) {
         std::cerr << "[Nexa] Error: --wasm cannot be combined with --dll, --shared, --win, or --static-lib\n";
+        return 1;
+    }
+    if (buildWasm && debugBuild) {
+        // Deliberate: WASM debugging is a browser/DWARF-extension workflow (source maps, the
+        // Chrome C/C++ DevTools extension), not the native gdb/lldb workflow --debug promises.
+        // Rejecting is clearer than handing back a -g .wasm that no local debugger can attach to.
+        std::cerr << "[Nexa] Error: --debug is not supported with --wasm (NexaC debug builds target native gdb/lldb)\n";
+        std::cerr << "[Nexa] Tip: debug the same program natively (NexaC file.nxa --debug --run), then build --wasm to ship.\n";
+        std::cerr << "[Nexa] Tip: for browser-side DWARF (em++ builds only), pass it through: NEXA_CXXFLAGS=\"-g\" NexaC file.nxa --wasm --p\n";
         return 1;
     }
     if (buildWasm && noConsole) {
@@ -1848,7 +1984,9 @@ int main(int argc, char* argv[]) {
 
     std::string cppPath;
     std::string exePath;
-    bool useTempExe = runAfterBuild;
+    // --run normally builds to a temp file and deletes it afterwards. A debug build exists to be
+    // inspected, so --debug --run keeps the binary at its normal output path instead.
+    bool useTempExe = runAfterBuild && !debugBuild;
 
     if (sourceOnly) {
         cppPath = sourceCpp;
@@ -1930,6 +2068,12 @@ int main(int argc, char* argv[]) {
                     exePath += (wasmTool.kind == WasmKind::Emscripten) ? ".js" : ".wasm";
                 }
             }
+        }
+        if (debugBuild) {
+            // DWARF line entries name the file that was compiled, so a debugger can only show
+            // source if that file still exists. Release builds transpile into a temp .cpp and
+            // delete it; debug builds put it next to the binary and keep it.
+            cppPath = exePath + ".debug.cpp";
         }
     }
 
@@ -2109,9 +2253,30 @@ int main(int argc, char* argv[]) {
         }
 
         std::cout.flush();  // ensure [Nexa] lines appear before child compiler output (e.g. when stdout is redirected)
+        // Sanitizers instrument the whole program and need their runtime in the final link, so
+        // they are for executables only: an instrumented .so/.dll/.a would force every host
+        // process that loads it to be instrumented too.
+        const bool sanitizeThisBuild = debugBuild && !buildDll && !buildShared && !buildStaticLib;
+        NexaSanitizer sanitizer = NexaSanitizer::None;
+        if (sanitizeThisBuild) {
+            sanitizer = nexaProbeSanitizer(cxx, targetFlags);
+            if (sanitizer != NexaSanitizer::AddressUndefined) {
+                std::cout << "[Nexa] Note: " << cxx << " cannot link AddressSanitizer here; falling back to "
+                          << nexaSanitizerLabel(sanitizer) << ".\n";
+            }
+        }
         // Shared libraries (.dll / .so): default to -Os; use --small for exes, or NEXA_CXXFLAGS=-O2
         // if you need speed on a specific library.
         std::string opt = (optimizeSize || buildDll || buildShared) ? "-Os" : "-O2";
+        if (debugBuild) {
+            opt = "-g -O0";
+            std::string san = nexaSanitizerFlags(sanitizer);
+            if (!san.empty()) opt += " " + san;
+            std::cout << "[Nexa] Debug build: -g -O0, symbols kept, checks: "
+                      << (sanitizeThisBuild ? nexaSanitizerLabel(sanitizer)
+                                            : "none (library builds are not instrumented)") << "\n";
+            std::cout.flush();
+        }
         const bool linkUser32 = modules.hasOs() || modules.hasInlineCpp();
         const bool linkHttp = modules.hasHttp();
         const bool linkGfx = modules.hasGfx() && usage.gfx;
@@ -2181,9 +2346,9 @@ int main(int argc, char* argv[]) {
 
         if (buildStaticLib) {
             std::string objPath = cppPath.substr(0, cppPath.size() - 4) + ".o";
-            std::string cmd = nexaStaticLibCmd(cxx, cppPath, objPath, exePath, opt, noExceptions, noRtti);
+            std::string cmd = nexaStaticLibCmd(cxx, cppPath, objPath, exePath, opt, noExceptions, noRtti, debugBuild);
             int ret = std::system(cmd.c_str());
-            std::remove(cppPath.c_str());
+            if (!debugBuild) std::remove(cppPath.c_str());  // debug: the archive's DWARF points at it
             std::remove(objPath.c_str());
             if (ret != 0) {
                 std::cerr << "[Nexa] Static library build failed.\n";
@@ -2195,8 +2360,21 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 
-        std::string cmd = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkGfx, noExceptions, noRtti, linkInputs);
+        std::string cmd = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkGfx, noExceptions, noRtti, debugBuild, linkInputs);
         int ret = std::system(cmd.c_str());
+
+        if (ret != 0 && sanitizeThisBuild && sanitizer != NexaSanitizer::None) {
+            // The probe links a 3-line program; the real link adds -static-libstdc++, gfx/http
+            // system libraries and --link inputs, any of which can be incompatible with the
+            // sanitizer runtime. A debuggable binary is worth more than the instrumentation.
+            std::cout << "[Nexa] Sanitizer flags (" << nexaSanitizerLabel(sanitizer)
+                      << ") failed to link this program; retrying with plain -g.\n";
+            std::cout.flush();
+            sanitizer = NexaSanitizer::None;
+            opt = "-g -O0";
+            std::string cmdNoSan = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkGfx, noExceptions, noRtti, debugBuild, linkInputs);
+            ret = std::system(cmdNoSan.c_str());
+        }
 
         if (ret != 0) {
             std::string fallback;
@@ -2224,23 +2402,45 @@ int main(int argc, char* argv[]) {
                 cxx = fallback;
                 targetFlags = "";
                 std::cout.flush();
-                std::string cmd2 = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkGfx, noExceptions, noRtti, linkInputs);
+                std::string cmd2 = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkGfx, noExceptions, noRtti, debugBuild, linkInputs);
                 ret = std::system(cmd2.c_str());
             }
         }
 
-        std::remove(cppPath.c_str());
+        // Debug builds keep the generated C++: the binary's DWARF refers to it by path, so
+        // deleting it would leave the debugger with line numbers and no source to show.
+        if (!debugBuild) std::remove(cppPath.c_str());
 
         if (ret != 0) {
             std::cerr << "[Nexa] Compilation failed.\n";
+            if (debugBuild) std::cerr << "[Nexa] Generated C++ kept for inspection: " << cppPath << "\n";
             return 1;
         }
 
         std::cout << "[Nexa] Build successful!\n";
+        if (debugBuild) {
+            std::cout << "[Nexa] Debug binary: " << exePath << "\n";
+            std::cout << "[Nexa] Debug source: " << cppPath << " (kept; the binary's line info points here)\n";
+            if (!buildDll && !buildShared) {
+                std::cout << "[Nexa] Debug it with: gdb \"" << exePath << "\"  (break <nexa fn name>, run)\n";
+            }
+            std::cout.flush();
+        }
 
         if (runAfterBuild) {
-            int runRet = std::system(("\"" + exePath + "\"").c_str());
-            std::remove(exePath.c_str());
+            // A temp-file build is an absolute path, but a debug build runs the real output
+            // ("myprog"), and no shell searches the current directory for a bare name.
+            std::string runTarget = exePath;
+            if (runTarget.find('/') == std::string::npos && runTarget.find('\\') == std::string::npos) {
+#ifdef _WIN32
+                runTarget = ".\\" + runTarget;
+#else
+                runTarget = "./" + runTarget;
+#endif
+            }
+            int runRet = std::system(("\"" + runTarget + "\"").c_str());
+            // --debug --run keeps the binary so it can be re-run under a debugger.
+            if (!debugBuild) std::remove(exePath.c_str());
 #ifdef _WIN32
             return runRet;
 #else
@@ -2251,7 +2451,7 @@ int main(int argc, char* argv[]) {
     } catch (const std::exception& e) {
         if (!cppPath.empty() && !sourceOnly) {
             std::remove(cppPath.c_str());
-            if (runAfterBuild && !exePath.empty()) std::remove(exePath.c_str());
+            if (runAfterBuild && !debugBuild && !exePath.empty()) std::remove(exePath.c_str());
         }
         std::cerr << "[Nexa] Error: " << e.what() << "\n";
         return 1;
