@@ -423,7 +423,10 @@ inline __nexa_json __nexa_json_from(short v) { return __nexa_json::number((doubl
 inline __nexa_json __nexa_json_from(unsigned short v) { return __nexa_json::number((double)v); }
 inline __nexa_json __nexa_json_from(long v) { return __nexa_json::number((double)v); }
 inline __nexa_json __nexa_json_from(unsigned long v) { return __nexa_json::number((double)v); }
-inline __nexa_json __nexa_json_from(std::size_t v) { return __nexa_json::number((double)v); }
+// No std::size_t overload: size_t aliases one of the unsigned types above/below on every
+// platform, and a duplicate overload is a redefinition error (e.g. unsigned long on LP64 Linux).
+inline __nexa_json __nexa_json_from(long long v) { return __nexa_json::number((double)v); }
+inline __nexa_json __nexa_json_from(unsigned long long v) { return __nexa_json::number((double)v); }
 inline __nexa_json __nexa_json_from(double v) { return __nexa_json::number(v); }
 inline __nexa_json __nexa_json_from(float v) { return __nexa_json::number((double)v); }
 inline __nexa_json __nexa_json_from(char v) { return __nexa_json::number((double)(unsigned char)v); }

@@ -239,6 +239,28 @@ static std::string findWindowsCxxNative() {
 #endif
 }
 
+// On Linux/macOS: pick the native C++ compiler. NEXA_CXX overrides (a name on PATH or a
+// full path); otherwise prefer clang++, then g++ (same order as the Makefile). Returns
+// compiler name or empty.
+static std::string findUnixCxxNative() {
+#ifdef _WIN32
+    return "";
+#else
+    if (const char* env = std::getenv("NEXA_CXX")) {
+        if (*env) return env;
+    }
+    const char* candidates[] = {"clang++", "g++"};
+    for (const char* cxx : candidates) {
+        std::string cmd = "command -v ";
+        cmd += cxx;
+        cmd += " >/dev/null 2>&1";
+        if (std::system(cmd.c_str()) == 0)
+            return cxx;
+    }
+    return "";
+#endif
+}
+
 // Return mingw-g++ path for Windows cross-compile (skip clang). Used as fallback when clang fails.
 static std::string findMingwCxx() {
 #ifdef _WIN32
@@ -2012,8 +2034,16 @@ int main(int argc, char* argv[]) {
 #endif
             std::cout << "[Nexa] Compiling with " << cxx << " (Windows DLL)...\n";
         } else if (buildShared) {
+#ifdef _WIN32
             cxx = "clang++";
-            std::cout << "[Nexa] Compiling with clang++ (shared library)...\n";
+#else
+            cxx = findUnixCxxNative();
+            if (cxx.empty()) {
+                std::cerr << "[Nexa] Error: No C++ compiler found (clang++ or g++). Install one (e.g. `make install-deps`) or set NEXA_CXX.\n";
+                return 1;
+            }
+#endif
+            std::cout << "[Nexa] Compiling with " << cxx << " (shared library)...\n";
         } else if (buildStaticLib) {
 #ifdef _WIN32
             cxx = findWindowsCxxNative();
@@ -2022,7 +2052,11 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
 #else
-            cxx = "clang++";
+            cxx = findUnixCxxNative();
+            if (cxx.empty()) {
+                std::cerr << "[Nexa] Error: No C++ compiler found (clang++ or g++). Install one (e.g. `make install-deps`) or set NEXA_CXX.\n";
+                return 1;
+            }
 #endif
             std::cout << "[Nexa] Compiling with " << cxx << " (static library)...\n";
         } else if (buildWin) {
@@ -2051,8 +2085,12 @@ int main(int argc, char* argv[]) {
             }
             std::cout << "[Nexa] Compiling with " << cxx << "...\n";
 #else
-            cxx = "clang++";
-            std::cout << "[Nexa] Compiling with clang++...\n";
+            cxx = findUnixCxxNative();
+            if (cxx.empty()) {
+                std::cerr << "[Nexa] Error: No C++ compiler found (clang++ or g++). Install one (e.g. `make install-deps`) or set NEXA_CXX.\n";
+                return 1;
+            }
+            std::cout << "[Nexa] Compiling with " << cxx << "...\n";
 #endif
         }
 

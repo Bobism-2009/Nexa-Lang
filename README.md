@@ -1,6 +1,6 @@
 # Nexa & NexaC
 
-**Nexa** is a small systems-friendly language with C++-like surface syntax. **NexaC** is its compiler: it parses `.nxa` files, transpiles to a single C++ translation unit, and invokes **clang++** (or **g++** on Windows as a fallback) to produce a native executable or shared library.
+**Nexa** is a small systems-friendly language with C++-like surface syntax. **NexaC** is its compiler: it parses `.nxa` files, transpiles to a single C++ translation unit, and invokes **clang++** (falling back to **g++** when clang is not installed) to produce a native executable or shared library. Set `NEXA_CXX` to force a specific compiler.
 
 Current compiler version string: **0.1.12** (`NexaC --version`).
 
@@ -16,7 +16,7 @@ Current compiler version string: **0.1.12** (`NexaC --version`).
 ## Requirements
 
 - **Windows:** [LLVM/Clang](https://releases.llvm.org/) or **MinGW-w64** (`clang++` / `g++`) on your `PATH`. The installer finds winget-installed compilers (WinGet Links / Packages / LLVM) and only installs a package if it is missing — it will not upgrade tools you already have.
-- **Linux:** `clang++` and normal build tools. The installer / `make install-deps`
+- **Linux:** `clang++` (or `g++`) and normal build tools. The installer / `make install-deps`
   installs compile-time packages only (compiler, git, X11 *headers/static libs*
   for `std/gfx`). It does **not** install the wasm toolchain. Executables embed
   libstdc++, libgcc, and static X11; the resulting binary does not need
