@@ -121,12 +121,41 @@ inline std::string emitIntLiteral(const std::string& text) {
     return text;  // out of range for i64 either way; the lexer already refused it
 }
 
+// Sentinel comment a debug build emits around every statement; a final pass rewrites each one
+// into a real `#line` directive so the debugger maps generated C++ back to the .nxa source.
+//
+// Why a marker instead of writing `#line` directly: the snap-back directive has to name the line
+// number it sits on, and two later passes (duplicate-#include removal, inactive platform guards)
+// delete whole lines. Any number computed during emission would be stale by the time the text is
+// final. Emitting a placeholder and numbering it last is the only order that can be correct.
+//
+// A marker is only honoured when it is the whole line (indentation aside), because `#line` is only
+// legal as the first token on a line. That also makes the failure mode safe: a marker that somehow
+// ends up spliced mid-line stays an ordinary comment instead of becoming a syntax error.
+inline const std::string& nexaLineMark() {
+    static const std::string mark = "//__nexa_line_mark__";
+    return mark;
+}
+
+// Quote a path for a `#line` directive. Only backslash and double quote need escaping, which is
+// what makes Windows paths safe here.
+inline std::string nexaLineFileLiteral(const std::string& path) {
+    std::string q = "\"";
+    for (char c : path) {
+        if (c == '\\' || c == '"') q += '\\';
+        q += c;
+    }
+    q += '"';
+    return q;
+}
+
 // Converts Nexa AST to C++ source code
 class Transpiler {
 public:
     Transpiler(const std::vector<AstNode>& ast, const Modules& modules, bool preserveNames = false, bool buildDll = false,
-              CppTarget target = hostCppTarget())
-        : ast_(ast), modules_(modules), preserveNames_(preserveNames), buildDll_(buildDll), target_(target) {}
+              CppTarget target = hostCppTarget(), bool lineDirectives = false, const std::string& generatedCppPath = "")
+        : ast_(ast), modules_(modules), preserveNames_(preserveNames), buildDll_(buildDll), target_(target),
+          lineDirectives_(lineDirectives), generatedCppPath_(generatedCppPath) {}
 
     // Valid after transpile(): which C++ features the generated code actually uses.
     // Lets the build step drop exception/RTTI machinery when nothing needs it.
@@ -512,6 +541,15 @@ public:
             // len()/slicing over a folded string literal promotes it with std::string(...).
             if (n.type == AstNode::Type::ExprLen || n.type == AstNode::Type::ExprSlice ||
                 (n.type == AstNode::Type::ExprAdd && exprProducesString(n))) {
+                needsString = true;
+            }
+            // So does a comparison whose two operands both emit as bare C++ string literals:
+            // emitComparison promotes the left one rather than compare two const char*
+            // addresses. This runs before function signatures are registered, so it stays
+            // purely syntactic -- inferring a type here would throw on a forward call.
+            if (isComparisonNodeType(n.type) && n.children.size() >= 2 &&
+                mayEmitBareCppStringLiteral(n.children[0]) && mayEmitBareCppStringLiteral(n.children[1]) &&
+                !(isPlainStringLiteralChain(n.children[0]) && isPlainStringLiteralChain(n.children[1]))) {
                 needsString = true;
             }
             if (n.type == AstNode::Type::FnCall && (n.value == "has" || n.value == "remove" ||
@@ -1071,15 +1109,106 @@ public:
         if (cppUsage_.gfx && (target_ == CppTarget::Linux || target_ == CppTarget::Wasm)) {
             src += gfxStbImageRuntimeCpp();
         }
+        // Last, once nothing else will add or drop a line: turn the statement markers into
+        // `#line` directives. The appended gfx runtime carries no markers, and the final
+        // snap-back before it already points line info back at the generated file.
+        if (lineDirectives_) src = rewriteLineMarks(src);
         return src;
     }
 
 private:
+    // Brackets one statement with a begin/end marker pair. RAII because the statement loop uses
+    // `continue` in several places, and a begin marker without its end would leave every following
+    // line of generated glue claiming to be .nxa source.
+    struct LineMarkScope {
+        std::ostringstream* out = nullptr;
+        LineMarkScope(bool enabled, std::ostringstream& o, const AstNode& n, const std::string& indent) {
+            if (!enabled || n.line == 0 || n.srcFile.empty()) return;
+            // A path containing a newline would split the marker across lines and break parsing.
+            if (n.srcFile.find('\n') != std::string::npos || n.srcFile.find('\r') != std::string::npos) return;
+            out = &o;
+            o << indent << nexaLineMark() << " B " << n.line << " " << n.srcFile << "\n";
+        }
+        ~LineMarkScope() { if (out) *out << nexaLineMark() << " E\n"; }
+        LineMarkScope(const LineMarkScope&) = delete;
+        LineMarkScope& operator=(const LineMarkScope&) = delete;
+    };
+
+    // Recognise a marker line. `payload` receives what follows the sentinel: "E" for a snap-back,
+    // or "B <line> <path>" for a statement start. Anything else is left alone as a plain comment.
+    static bool parseLineMark(const std::string& line, std::string& payload) {
+        const std::string& mark = nexaLineMark();
+        size_t i = line.find_first_not_of(" \t");
+        if (i == std::string::npos) return false;
+        if (line.compare(i, mark.size(), mark) != 0) return false;
+        size_t p = i + mark.size();
+        if (p >= line.size() || line[p] != ' ') return false;
+        payload = line.substr(p + 1);
+        while (!payload.empty() && payload.back() == '\r') payload.pop_back();
+        if (payload == "E") return true;
+        if (payload.rfind("B ", 0) != 0) return false;
+        size_t sp = payload.find(' ', 2);
+        if (sp == std::string::npos || sp == 2 || sp + 1 >= payload.size()) return false;
+        for (size_t k = 2; k < sp; ++k) {
+            if (!std::isdigit(static_cast<unsigned char>(payload[k]))) return false;
+        }
+        return true;
+    }
+
+    // Rewrite markers into `#line` directives. Must run last, on the final text: each marker line
+    // becomes exactly one line, so numbering stays 1:1 with the input and a snap-back is simply
+    // "the line after this one" — which is only true once no later pass can move lines.
+    std::string rewriteLineMarks(const std::string& src) const {
+        const std::string genFile = nexaLineFileLiteral(generatedCppPath_);
+
+        std::vector<std::string> lines;
+        std::vector<std::string> marks;  // parsed payload per line, empty when not a marker
+        for (size_t pos = 0;;) {
+            size_t nl = src.find('\n', pos);
+            lines.push_back(src.substr(pos, nl == std::string::npos ? std::string::npos : nl - pos));
+            marks.emplace_back();
+            if (!parseLineMark(lines.back(), marks.back())) marks.back().clear();
+            if (nl == std::string::npos) break;
+            pos = nl + 1;
+        }
+
+        std::ostringstream res;
+        for (size_t i = 0; i < lines.size(); ++i) {
+            const bool isLast = (i + 1 == lines.size());
+            if (marks[i].empty()) {
+                res << lines[i];
+                if (!isLast) res << "\n";
+                continue;
+            }
+            // Only the last marker of a consecutive run governs a real line of code; the ones
+            // before it would be superseded on the very next line. Drop them to a blank line,
+            // which keeps the 1:1 numbering the snap-backs depend on. Without this, straight-line
+            // code carries a dead snap-back between every pair of statements.
+            if (!isLast && !marks[i + 1].empty()) {
+                res << "\n";
+                continue;
+            }
+            if (marks[i] == "E") {
+                // i is 0-based, so the next line is number i + 2.
+                res << "#line " << (i + 2) << " " << genFile << "\n";
+            } else {
+                size_t sp = marks[i].find(' ', 2);
+                res << "#line " << marks[i].substr(2, sp - 2) << " "
+                    << nexaLineFileLiteral(marks[i].substr(sp + 1)) << "\n";
+            }
+        }
+        return res.str();
+    }
+
     const std::vector<AstNode>& ast_;
     const Modules& modules_;
     bool preserveNames_;
     bool buildDll_;
     CppTarget target_;
+    // Debug builds map generated C++ back to the .nxa source with `#line` directives.
+    // generatedCppPath_ is the name the snap-back directives use to leave that mapping again.
+    bool lineDirectives_;
+    std::string generatedCppPath_;
     Modules::CppUsage cppUsage_;
     // While emitting a function or main body: how bare `return;` / value returns are interpreted
     enum class EmitFnRet { Main, IntFn, VoidFn };
@@ -1349,7 +1478,10 @@ private:
         std::map<std::string, bool> spawnEnum;
         emitBlockStatements(body, e.children, spawnVarMap, spawnVarIdx, spawnStr, spawnConst,
             spawnFloat, spawnChar, spawnBool, spawnEnum, "", false);
-        return "[=]() { " + body.str() + "}";
+        // This lambda is spliced into the middle of an expression, so the body's first statement
+        // would otherwise start on the same line as the `{`. A `#line` marker there could not be
+        // rewritten (directives must start a line), so debug builds break the line first.
+        return std::string("[=]() {") + (lineDirectives_ ? "\n" : " ") + body.str() + "}";
     }
 
     std::string cppFnNameForAstIndex(size_t astIndex) const {
@@ -3065,6 +3197,7 @@ private:
                    std::map<std::string, bool>& varIsBool, std::map<std::string, bool>& varIsEnum,
                    const std::string& indent = "    ", bool inStringSwitchCase = false) {
         for (const AstNode& child : children) {
+            LineMarkScope lineMark(lineDirectives_, out, child, indent);
             if (child.type == AstNode::Type::Variable) {
                 std::string vname = preserveNames_ ? child.value : ("__nexa_var_" + std::to_string(varIdx++));
                 if (!preserveNames_) varMap[child.value] = vname;
@@ -4103,7 +4236,7 @@ private:
                 const AstNode& c = node.children[i];
                 if (c.type != AstNode::Type::SwitchCase) continue;
                 if (c.value == "default") {
-                    out << indent << "default:\n";
+                    out << indent << "default:";
                 } else if (c.caseIsEnum) {
                     auto enIt = enumCppNames_.find(c.value);
                     if (enIt == enumCppNames_.end()) {
@@ -4113,11 +4246,18 @@ private:
                     if (vsIt == enumVariants_.end() || !vsIt->second.count(c.initValue)) {
                         throw std::runtime_error("Unknown enum variant '" + c.initValue + "' for '" + c.value + "'");
                     }
-                    out << indent << "case " << enIt->second << "::" << c.initValue << ":\n";
+                    out << indent << "case " << enIt->second << "::" << c.initValue << ":";
                 } else {
-                    out << indent << "case " << c.value << ":\n";
+                    out << indent << "case " << c.value << ":";
                 }
+                // Each case body gets its own braces. A case body is already a scope on the Nexa
+                // side (the semantic checker and emitBlock both pop its declarations), and without
+                // the braces a `let` here is a declaration a later case label jumps over, which
+                // C++ rejects outright. Braces keep fall-through working: control still leaves the
+                // block at the closing brace and lands on the next case label.
+                out << " {\n";
                 emitBlock(out, c.children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "    ");
+                out << indent << "}\n";
             }
             out << indent << "}\n";
         }
@@ -4165,6 +4305,88 @@ private:
         }
     }
 
+    // The six nodes emitComparison handles: == != < <= > >=.
+    static bool isComparisonNodeType(AstNode::Type t) {
+        return t == AstNode::Type::CondEq || t == AstNode::Type::CondNe ||
+               t == AstNode::Type::CondLt || t == AstNode::Type::CondLe ||
+               t == AstNode::Type::CondGt || t == AstNode::Type::CondGe;
+    }
+
+    // Nothing but a literal, or a + of literals. Such an operand always constant-folds,
+    // so a comparison between two of them emits `true`/`false` and no std::string at all.
+    static bool isPlainStringLiteralChain(const AstNode& n) {
+        if (n.type == AstNode::Type::ExprStringLiteral) return true;
+        if (n.type == AstNode::Type::ExprAdd && n.children.size() >= 2) {
+            return isPlainStringLiteralChain(n.children[0]) && isPlainStringLiteralChain(n.children[1]);
+        }
+        return false;
+    }
+
+    // Over-approximates "emitExpr may render this as a bare "..." rather than a std::string
+    // value": the node kinds that fold a compile-time-known string through emitCppStringValue.
+    // Deliberately syntactic -- callers may run before name resolution.
+    static bool mayEmitBareCppStringLiteral(const AstNode& n) {
+        switch (n.type) {
+            case AstNode::Type::ExprStringLiteral:
+            case AstNode::Type::ExprAdd:
+            case AstNode::Type::StrMethod:
+            case AstNode::Type::ExprSlice:
+            case AstNode::Type::CryptoCall:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    // Apply a Nexa comparison operator to the result of std::string::compare (or of any
+    // other three-way "negative / zero / positive" result).
+    static bool comparisonHolds(const std::string& op, int cmp) {
+        if (op == "==") return cmp == 0;
+        if (op == "!=") return cmp != 0;
+        if (op == "<") return cmp < 0;
+        if (op == "<=") return cmp <= 0;
+        if (op == ">") return cmp > 0;
+        return cmp >= 0;  // ">="
+    }
+
+    // One emitter for all six comparison operators, because they share a trap: a comparison
+    // with a string on BOTH sides must compare characters, not addresses.
+    //
+    // A bare C++ string literal is a `const char[N]` that decays to `const char*`, so
+    // `"abc" < "abd"` in the generated code compares two addresses. That is unspecified, it
+    // is not what the Nexa program asked for, and clang says so twice (-Warray-compare,
+    // -Wstring-compare) right in the user's face. Only `==`/`!=` between *identical* spellings
+    // appear to work, and only because the C++ compiler happens to pool equal literals.
+    //
+    // Two defences, in order:
+    //   1. Constant-fold when both sides are known at compile time. This is the common case --
+    //      NexaC already folds literal receivers for string methods -- and it emits no
+    //      comparison at all, so there is nothing left to get wrong.
+    //   2. Otherwise, if both sides still emit as bare literals, promote the left one to
+    //      std::string so the operator resolves to a by-value comparison.
+    // A string *variable* on either side needs neither: that side is already a std::string and
+    // drags the other into a value comparison.
+    std::string emitComparison(const AstNode& c, const std::string& op,
+                               const std::map<std::string, std::string>& varMap,
+                               const std::map<std::string, bool>* varIsString,
+                               const std::map<std::string, bool>* varIsFloat,
+                               const std::map<std::string, bool>* varIsChar,
+                               const std::map<std::string, bool>* varIsBool) {
+        if (c.children.size() >= 2) {
+            if (auto L = tryFoldComparableString(c.children[0], varIsString)) {
+                if (auto R = tryFoldComparableString(c.children[1], varIsString)) {
+                    // std::string::compare orders by char_traits<char>, which is the same
+                    // ordering the generated code would use at runtime.
+                    return comparisonHolds(op, L->compare(*R)) ? "true" : "false";
+                }
+            }
+        }
+        std::string lhs = emitCmpOperand(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+        std::string rhs = emitCmpOperand(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+        if (isBareCppStringLiteral(lhs) && isBareCppStringLiteral(rhs)) lhs = asCppStdString(lhs);
+        return lhs + " " + op + " " + rhs;
+    }
+
     std::string emitCond(const AstNode& c, const std::map<std::string, std::string>& varMap,
                          const std::map<std::string, bool>* varIsString = nullptr,
                          const std::map<std::string, bool>* varIsFloat = nullptr,
@@ -4172,33 +4394,17 @@ private:
                          const std::map<std::string, bool>* varIsBool = nullptr) {
         switch (c.type) {
             case AstNode::Type::CondEq:
-                if (c.children.size() >= 2) {
-                    if (auto L = tryFoldComparableString(c.children[0], varIsString)) {
-                        if (auto R = tryFoldComparableString(c.children[1], varIsString)) {
-                            return (*L == *R) ? "true" : "false";
-                        }
-                    }
-                }
-                return emitCmpOperand(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " == " +
-                       emitCmpOperand(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                return emitComparison(c, "==", varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::CondNe:
-                if (c.children.size() >= 2) {
-                    if (auto L = tryFoldComparableString(c.children[0], varIsString)) {
-                        if (auto R = tryFoldComparableString(c.children[1], varIsString)) {
-                            return (*L != *R) ? "true" : "false";
-                        }
-                    }
-                }
-                return emitCmpOperand(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " != " +
-                       emitCmpOperand(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                return emitComparison(c, "!=", varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::CondLt:
-                return emitCmpOperand(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " < " + emitCmpOperand(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                return emitComparison(c, "<", varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::CondLe:
-                return emitCmpOperand(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " <= " + emitCmpOperand(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                return emitComparison(c, "<=", varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::CondGt:
-                return emitCmpOperand(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " > " + emitCmpOperand(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                return emitComparison(c, ">", varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::CondGe:
-                return emitCmpOperand(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " >= " + emitCmpOperand(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                return emitComparison(c, ">=", varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::CondAnd: {
                 std::string L = emitCond(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 if (c.children[0].type == AstNode::Type::CondOr) L = "(" + L + ")";

@@ -1734,8 +1734,11 @@ static int printHelp(int page = 1) {
     std::cout << "  --debug, -g   Debuggable binary: -g -O0, nothing stripped, keeps your\n";
     std::cout << "                function names, adds sanitizer checks when the C++ compiler\n";
     std::cout << "                supports them. With --run the binary is kept, not deleted.\n";
-    std::cout << "                Also keeps the generated <output>.debug.cpp (the binary's\n";
-    std::cout << "                line info points at it).\n";
+    std::cout << "                The debugger steps through your .nxa source: statements carry\n";
+    std::cout << "                #line info back to the file and line you wrote.\n";
+    std::cout << "                Also keeps the generated <output>.debug.cpp, which the line\n";
+    std::cout << "                info still names for code with no .nxa equivalent (runtime\n";
+    std::cout << "                helpers, function prologues).\n";
     std::cout << "                Not valid with --small or --wasm (debug targets gdb/lldb).\n";
     std::cout << "  --dll     Build Windows .dll (default: -Os + strip for smaller .dll)\n";
     std::cout << "  --shared  Build .dylib (macOS) or .so (Linux; default: -Os + strip)\n";
@@ -2127,7 +2130,15 @@ int main(int argc, char* argv[]) {
         nexa::CppTarget cppTarget = nexa::hostCppTarget();
         if (buildWasm) cppTarget = nexa::CppTarget::Wasm;
         else if (buildWin) cppTarget = nexa::CppTarget::Windows;
-        nexa::Transpiler transpiler(ast, modules, preserveNames || isLib, isLib, cppTarget);  // library: preserve + export C names
+        // Debug builds map the generated C++ back to the .nxa source with `#line` directives, so a
+        // debugger steps through what the user wrote. The generated file is named absolutely in the
+        // snap-back directives for the same reason absInputPath is: a debugger launched from another
+        // directory still resolves both.
+        std::string absCppPath = cppPath.empty()
+            ? cppPath
+            : std::filesystem::absolute(std::filesystem::path(cppPath)).string();
+        nexa::Transpiler transpiler(ast, modules, preserveNames || isLib, isLib, cppTarget,
+                                    debugBuild, absCppPath);  // library: preserve + export C names
         std::string cpp = transpiler.transpile();
 
         // Decide which C++ machinery the generated code can safely omit. Exceptions/unwind tables
@@ -2422,7 +2433,8 @@ int main(int argc, char* argv[]) {
         std::cout << "[Nexa] Build successful!\n";
         if (debugBuild) {
             std::cout << "[Nexa] Debug binary: " << exePath << "\n";
-            std::cout << "[Nexa] Debug source: " << cppPath << " (kept; the binary's line info points here)\n";
+            std::cout << "[Nexa] Debug source: your .nxa (the debugger steps through it directly)\n";
+            std::cout << "[Nexa] Generated C++: " << cppPath << " (kept; line info names it for runtime helpers)\n";
             if (!buildDll && !buildShared) {
                 std::cout << "[Nexa] Debug it with: gdb \"" << exePath << "\"  (break <nexa fn name>, run)\n";
             }

@@ -36,8 +36,12 @@ OPTIONS
                       plain -g, printing which one it used
                     * with --run the binary is kept (not deleted) so you can re-run it
                       under a debugger; it is written to the normal output path
-                    * the generated C++ is kept as <output>.debug.cpp, because that is
-                      the file the binary's line info points at (delete it when done)
+                    * the debugger steps through your .nxa source: every statement gets
+                      a #line directive naming the file and line you wrote, including
+                      statements that came from an #include'd .nxa
+                    * the generated C++ is kept as <output>.debug.cpp, because line info
+                      still names it for code with no .nxa equivalent (runtime helpers,
+                      function prologues) -- delete it when done
                     * library builds (--dll/--shared/--static-lib) get -g -O0 but no
                       sanitizer: instrumenting a library would require the host process
                       to be instrumented too
