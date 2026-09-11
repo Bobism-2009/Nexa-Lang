@@ -14,6 +14,7 @@ MODULE INCLUDES (angle brackets)
                             shapes: gfx.fill/rect/line (optional thickness), circle,
                             ellipse, tri, poly and their fill_ forms
                             plus gfx.fullscreen, gfx.audio/sample/audio_queued/audio_flush
+                            and input: gfx.key/pressed/released, gfx.wheel/wheel_x, gfx.typed
   #include <std/inline>   - Enables inline_cpp! { ... } (raw C++ pasted into generated code; use sparingly)
   - Standard library modules
 

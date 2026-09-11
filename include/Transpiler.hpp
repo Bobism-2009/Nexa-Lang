@@ -1883,8 +1883,11 @@ private:
                 return "json";
             case AstNode::Type::GfxCall:
                 if (e.value == "title") return e.children.empty() ? "string" : "int";
-                if (e.value == "drop" || e.value == "opendialog" || e.value == "openfile") return "string";
-                if (e.value == "closed" || e.value == "key" || e.value == "pressed" || e.value == "open" || e.value == "resize"
+                if (e.value == "drop" || e.value == "opendialog" || e.value == "openfile"
+                    || e.value == "typed") return "string";
+                if (e.value == "closed" || e.value == "key" || e.value == "pressed"
+                    || e.value == "released" || e.value == "wheel" || e.value == "wheel_x"
+                    || e.value == "open" || e.value == "resize"
                     || e.value == "mouse_x" || e.value == "mouse_y" || e.value == "mouse"
                     || e.value == "width" || e.value == "height" || e.value == "scale"
                     || e.value == "text_size" || e.value == "text" || e.value == "text_width"
@@ -5103,6 +5106,10 @@ private:
                 if (fn == "closed") return "__nexa_gfx_closed()";
                 if (fn == "key") return "__nexa_gfx_key(" + a(0) + ")";
                 if (fn == "pressed") return "__nexa_gfx_pressed(" + a(0) + ")";
+                if (fn == "released") return "__nexa_gfx_released(" + a(0) + ")";
+                if (fn == "wheel") return "__nexa_gfx_wheel()";
+                if (fn == "wheel_x") return "__nexa_gfx_wheel_x()";
+                if (fn == "typed") return "__nexa_gfx_typed()";
                 if (fn == "mouse_x") return "__nexa_gfx_mouse_x()";
                 if (fn == "mouse_y") return "__nexa_gfx_mouse_y()";
                 if (fn == "mouse") return "__nexa_gfx_mouse(" + a(0) + ")";

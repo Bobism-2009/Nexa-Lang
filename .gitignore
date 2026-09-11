@@ -6,6 +6,11 @@
 *.dll
 *.dylib
 
+# *.cpp above is for the C++ NexaC generates. These are hand-written test
+# sources that happen to be C++, so they are not build output.
+!Tests/gfx_input_semantics.cpp
+!Tests/gfx_x11_stub/x11_stub.cpp
+
 # Packages
 .nexa/
 

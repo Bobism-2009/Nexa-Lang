@@ -353,11 +353,36 @@ Nexa Standard Modules
                                    "shift", "ctrl", "alt", "tab", "backspace", "delete",
                                    "f11", ...)
   gfx.pressed(name)              - 1 if that key went down since the last gfx.poll()
+  gfx.released(name)             - 1 if that key went up since the last gfx.poll();
+                                   same key names as gfx.key / gfx.pressed
+  gfx.wheel()                    - notches of vertical scrolling since the last gfx.poll():
+                                   positive is up / away from you, negative is toward you,
+                                   0 if the wheel did not move. Not sticky — it reports one
+                                   frame, and the next gfx.poll() replaces it.
+                                   A trackpad scrolls a fraction of a notch at a time; the
+                                   remainder carries over instead of rounding away to nothing.
+  gfx.wheel_x()                  - the same for horizontal scrolling; positive is to the right
+                                   Windows: WM_MOUSEHWHEEL. Linux: X buttons 6/7.
+                                   macOS: scrollingDeltaX. wasm: WheelEvent.deltaX.
+  gfx.typed()                    - the text typed since the last gfx.poll(), as UTF-8.
+                                   Characters, not key names: shift and the keyboard layout
+                                   are already applied, which is what gfx.key cannot give you.
+                                   Printable input only — Enter, Tab, Esc and Backspace are
+                                   keys, so read those with gfx.pressed.
+                                   Consumes the queue, like gfx.drop(): empty when nothing was
+                                   typed, and empty on a second call in the same frame.
+                                   At most 1024 bytes per frame.
+                                   Linux reads it through XLookupString, so a layout outside
+                                   Latin-1 needs an input method NexaC does not open.
+                                   Windows reads WM_CHAR in the process code page.
   gfx.mouse_x() / gfx.mouse_y()  - cursor in framebuffer pixels (last in-window position)
   gfx.mouse(button)              - 1 if that button is down in the window ("left", "right", "middle")
-                                   Keys and mouse are read only while the gfx window is focused
-                                   (Windows: foreground HWND. macOS: key window.
-                                   Linux: X input focus. wasm: document.hasFocus()).
+                                   Keys, mouse, scrolling and typed text are read only while
+                                   the gfx window is focused (Windows: foreground HWND.
+                                   macOS: key window. Linux: X input focus.
+                                   wasm: document.hasFocus()). Input that arrives while the
+                                   window is not focused is dropped, not saved up to arrive
+                                   the moment it is.
   gfx.drop()                     - path of a file dropped on the window (consumes; empty if none)
   gfx.opendialog([filter])       - native file picker; filter like "*.ch8;*.hex" (empty if cancelled)
                                    alias: gfx.openfile([filter])

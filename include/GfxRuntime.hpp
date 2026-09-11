@@ -56,6 +56,18 @@ struct __nexa_Gfx {
     std::string drop_path;
     int k_now[64];
     int k_prev[64];
+    // Wheel and typed text are edge events, so they are collected as they arrive
+    // and published as a whole-frame value by gfx.poll(). The *_acc fields are
+    // what the backend event handlers write to; the published fields are what
+    // gfx.wheel()/gfx.wheel_x()/gfx.typed() read.
+    double wheel_acc_y;
+    double wheel_acc_x;
+    int wheel_y;
+    int wheel_x;
+    std::string type_acc;
+    std::string type_buf;
+    // A DBCS lead byte held over from one WM_CHAR to the next (Win32 only).
+    int type_lead;
 #ifdef _WIN32
     HWND hwnd;
     BITMAPINFO bmi;
@@ -83,6 +95,103 @@ static __nexa_Gfx __nexa_g = {};
 static void __nexa_gfx_clear(int r, int g, int b);
 static void __nexa_gfx_present();
 static int __nexa_gfx_alpha_set(int a);
+
+// --- typed-text queue -------------------------------------------------------
+// gfx.typed() reports characters, not keys, so every backend hands its own
+// notion of "the user typed something" to these two helpers and they do the
+// filtering in one place. A frame's text is capped so that a program which
+// stops calling gfx.poll() cannot grow the queue without bound.
+static const size_t __nexa_gfx_type_cap = 1024;
+
+// Appends one code point as UTF-8, dropping anything that is not printable
+// text: C0 controls, DEL, the C1 range (which is what a Latin-1 control byte
+// decodes to), surrogates, and out-of-range values.
+static void __nexa_gfx_type_push_cp(unsigned cp) {
+    if (cp < 0x20u || cp == 0x7Fu) return;
+    if (cp >= 0x80u && cp <= 0x9Fu) return;
+    if (cp >= 0xD800u && cp <= 0xDFFFu) return;
+    if (cp > 0x10FFFFu) return;
+    char out[4];
+    int n = 0;
+    if (cp < 0x80u) {
+        out[n++] = (char)cp;
+    } else if (cp < 0x800u) {
+        out[n++] = (char)(0xC0u | (cp >> 6));
+        out[n++] = (char)(0x80u | (cp & 0x3Fu));
+    } else if (cp < 0x10000u) {
+        out[n++] = (char)(0xE0u | (cp >> 12));
+        out[n++] = (char)(0x80u | ((cp >> 6) & 0x3Fu));
+        out[n++] = (char)(0x80u | (cp & 0x3Fu));
+    } else {
+        out[n++] = (char)(0xF0u | (cp >> 18));
+        out[n++] = (char)(0x80u | ((cp >> 12) & 0x3Fu));
+        out[n++] = (char)(0x80u | ((cp >> 6) & 0x3Fu));
+        out[n++] = (char)(0x80u | (cp & 0x3Fu));
+    }
+    if (__nexa_g.type_acc.size() + (size_t)n > __nexa_gfx_type_cap) return;
+    __nexa_g.type_acc.append(out, (size_t)n);
+}
+
+#if defined(_WIN32) || defined(__APPLE__) || defined(__EMSCRIPTEN__)
+// Appends UTF-8 bytes, decoding as it goes so that a malformed sequence from a
+// backend is dropped rather than corrupting the queue. n < 0 means NUL-terminated.
+static void __nexa_gfx_type_push_utf8(const char* s, int n) {
+    if (!s) return;
+    size_t len = (n < 0) ? std::strlen(s) : (size_t)n;
+    size_t i = 0;
+    while (i < len) {
+        unsigned char b = (unsigned char)s[i];
+        unsigned cp = 0;
+        size_t extra = 0;
+        if (b < 0x80u) { cp = b; extra = 0; }
+        else if ((b & 0xE0u) == 0xC0u) { cp = b & 0x1Fu; extra = 1; }
+        else if ((b & 0xF0u) == 0xE0u) { cp = b & 0x0Fu; extra = 2; }
+        else if ((b & 0xF8u) == 0xF0u) { cp = b & 0x07u; extra = 3; }
+        else { i++; continue; }              // stray continuation or invalid lead
+        if (i + extra >= len) break;         // sequence runs past the end
+        size_t j = 1;
+        for (; j <= extra; j++) {
+            unsigned char c = (unsigned char)s[i + j];
+            if ((c & 0xC0u) != 0x80u) break;
+            cp = (cp << 6) | (unsigned)(c & 0x3Fu);
+        }
+        if (j <= extra) { i++; continue; }   // bad continuation; resync one byte on
+        __nexa_gfx_type_push_cp(cp);
+        i += extra + 1;
+    }
+}
+#endif
+
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+// Latin-1 bytes, as XLookupString hands them back.
+static void __nexa_gfx_type_push_latin1(const char* s, int n) {
+    for (int i = 0; i < n; i++) __nexa_gfx_type_push_cp((unsigned char)s[i]);
+}
+#endif
+
+// --- wheel accumulator ------------------------------------------------------
+// Backends report scrolling in wildly different units (whole notches on X11,
+// 1/120ths on Win32, pixels from a trackpad). Each converts to fractional
+// notches and adds them here; gfx.poll() publishes the whole part and keeps the
+// remainder, so a slow trackpad scroll still eventually reports a notch instead
+// of rounding to nothing every frame.
+//
+// Sign, on every backend: +y is up / away from the user, +x is to the right.
+static void __nexa_gfx_wheel_add(double dx, double dy) {
+    double ax = __nexa_g.wheel_acc_x + dx;
+    double ay = __nexa_g.wheel_acc_y + dy;
+    // Keep a runaway, absurd or non-finite delta away from the int conversion
+    // in __nexa_gfx_input_publish, where it would be undefined behaviour.
+    // x != x is true only for NaN, and needs no <cmath>.
+    if (ax != ax) ax = 0.0;
+    if (ay != ay) ay = 0.0;
+    if (ax > 1e6) ax = 1e6;
+    if (ax < -1e6) ax = -1e6;
+    if (ay > 1e6) ay = 1e6;
+    if (ay < -1e6) ay = -1e6;
+    __nexa_g.wheel_acc_x = ax;
+    __nexa_g.wheel_acc_y = ay;
+}
 
 static int __nexa_gfx_map_mouse(int px, int py, int cw, int ch, int* ox, int* oy) {
     if (cw < 1 || ch < 1 || __nexa_g.w < 1 || __nexa_g.h < 1) return 0;
@@ -232,6 +341,15 @@ static void __nexa_gfx_free() {
     __nexa_g.mlb = 0;
     __nexa_g.mmb = 0;
     __nexa_g.mrb = 0;
+    // A closed window reports no scrolling and no typed text, the same way it
+    // reports no keys and no mouse buttons.
+    __nexa_g.wheel_acc_x = 0.0;
+    __nexa_g.wheel_acc_y = 0.0;
+    __nexa_g.wheel_x = 0;
+    __nexa_g.wheel_y = 0;
+    __nexa_g.type_acc.clear();
+    __nexa_g.type_buf.clear();
+    __nexa_g.type_lead = 0;
 }
 
 static int __nexa_gfx_fullscreen(int on);
@@ -356,6 +474,43 @@ static LRESULT CALLBACK __nexa_gfx_wndproc(HWND hwnd, UINT msg, WPARAM wParam, L
             }
         }
     }
+    // The window class is ANSI (RegisterClassA / DispatchMessageA), so WM_CHAR
+    // arrives as one byte in the process code page — possibly the lead byte of
+    // a DBCS pair. Pair it up, then convert through UTF-16 to UTF-8.
+    if (msg == WM_CHAR) {
+        char mb[2];
+        int mbn = 0;
+        if (__nexa_g.type_lead) {
+            mb[0] = (char)(unsigned char)__nexa_g.type_lead;
+            mb[1] = (char)(unsigned char)wParam;
+            mbn = 2;
+            __nexa_g.type_lead = 0;
+        } else if (IsDBCSLeadByteEx(CP_ACP, (BYTE)wParam)) {
+            __nexa_g.type_lead = (int)(unsigned char)wParam;
+            return 0;
+        } else {
+            mb[0] = (char)(unsigned char)wParam;
+            mbn = 1;
+        }
+        wchar_t wide[4];
+        int wn = MultiByteToWideChar(CP_ACP, 0, mb, mbn, wide, 4);
+        if (wn > 0) {
+            char utf8[16];
+            int un = WideCharToMultiByte(CP_UTF8, 0, wide, wn, utf8, (int)sizeof(utf8), nullptr, nullptr);
+            if (un > 0) __nexa_gfx_type_push_utf8(utf8, un);
+        }
+        return 0;
+    }
+    if (msg == WM_MOUSEWHEEL) {
+        __nexa_gfx_wheel_add(0.0, (double)GET_WHEEL_DELTA_WPARAM(wParam) / (double)WHEEL_DELTA);
+        return 0;
+    }
+    // Windows reports a positive WM_MOUSEHWHEEL delta for a rightward tilt,
+    // which is the sign gfx.wheel_x() promises.
+    if (msg == WM_MOUSEHWHEEL) {
+        __nexa_gfx_wheel_add((double)GET_WHEEL_DELTA_WPARAM(wParam) / (double)WHEEL_DELTA, 0.0);
+        return 0;
+    }
     if (msg == WM_DROPFILES) {
         HDROP drop = (HDROP)wParam;
         char path[MAX_PATH];
@@ -380,10 +535,29 @@ static LRESULT CALLBACK __nexa_gfx_wndproc(HWND hwnd, UINT msg, WPARAM wParam, L
 #endif
 
 #ifdef __EMSCRIPTEN__
+// True when a DOM KeyboardEvent.key holds a single character rather than a key
+// name: "a", "A", "€", " " are text; "ArrowUp", "Shift", "Enter" are not.
+static int __nexa_gfx_dom_key_is_text(const char* k) {
+    if (!k || !k[0]) return 0;
+    unsigned char b = (unsigned char)k[0];
+    size_t want = 1;
+    if ((b & 0xE0u) == 0xC0u) want = 2;
+    else if ((b & 0xF0u) == 0xE0u) want = 3;
+    else if ((b & 0xF8u) == 0xF0u) want = 4;
+    else if (b >= 0x80u) return 0;
+    return std::strlen(k) == want;
+}
+
 static EM_BOOL __nexa_gfx_ekey(int type, const EmscriptenKeyboardEvent* e, void*) {
     int down = (type == EMSCRIPTEN_EVENT_KEYDOWN) ? 1 : 0;
     int code = (int)e->keyCode;
     if (code >= 0 && code < 512) __nexa_g.keys[code] = down;
+    // keypress is deprecated, so character input comes off keydown: the browser
+    // has already applied shift and the keyboard layout to e->key.
+    if (down && !e->ctrlKey && !e->altKey && !e->metaKey &&
+        __nexa_gfx_dom_key_is_text(e->key)) {
+        __nexa_gfx_type_push_utf8(e->key, -1);
+    }
     if (code == 27 && down && __nexa_g.fullscreen) {
         __nexa_gfx_fullscreen(0);
         return EM_TRUE;
@@ -406,6 +580,17 @@ static EM_BOOL __nexa_gfx_emouse(int type, const EmscriptenMouseEvent* e, void*)
     int inside = __nexa_gfx_map_mouse((int)e->targetX, (int)e->targetY, cw, ch, &ox, &oy);
     unsigned short bt = e->buttons;
     __nexa_gfx_mouse_apply(ox, oy, inside, (bt & 1) != 0, (bt & 4) != 0, (bt & 2) != 0);
+    return EM_TRUE;
+}
+
+static EM_BOOL __nexa_gfx_ewheel(int, const EmscriptenWheelEvent* e, void*) {
+    // DOM deltas depend on deltaMode: 0 is pixels, 1 is lines, 2 is pages. Scale
+    // each to notches. DOM deltaY is positive scrolling *down*, the opposite of
+    // gfx.wheel(), so it is negated; deltaX is already positive to the right.
+    double div = 120.0;
+    if (e->deltaMode == DOM_DELTA_LINE) div = 3.0;
+    else if (e->deltaMode == DOM_DELTA_PAGE) div = 1.0;
+    __nexa_gfx_wheel_add(e->deltaX / div, -e->deltaY / div);
     return EM_TRUE;
 }
 #endif
@@ -494,6 +679,13 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
     __nexa_g.drop_path.clear();
     std::memset(__nexa_g.k_now, 0, sizeof(__nexa_g.k_now));
     std::memset(__nexa_g.k_prev, 0, sizeof(__nexa_g.k_prev));
+    __nexa_g.wheel_acc_x = 0.0;
+    __nexa_g.wheel_acc_y = 0.0;
+    __nexa_g.wheel_x = 0;
+    __nexa_g.wheel_y = 0;
+    __nexa_g.type_acc.clear();
+    __nexa_g.type_buf.clear();
+    __nexa_g.type_lead = 0;
     __nexa_g.fb = new unsigned char[(size_t)w * (size_t)h * 4];
     std::memset(__nexa_g.fb, 0, (size_t)w * (size_t)h * 4);
     __nexa_gfx_clear(0, 0, 0);
@@ -557,6 +749,7 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
     emscripten_set_mousedown_callback("#canvas", 0, 1, __nexa_gfx_emouse);
     emscripten_set_mouseup_callback("#canvas", 0, 1, __nexa_gfx_emouse);
     emscripten_set_mouseleave_callback("#canvas", 0, 1, __nexa_gfx_emouse);
+    emscripten_set_wheel_callback("#canvas", 0, 1, __nexa_gfx_ewheel);
     __nexa_g.ready = 1;
     __nexa_gfx_present();
     return 1;
@@ -801,6 +994,33 @@ static void __nexa_gfx_close() {
     __nexa_gfx_free();
 }
 
+// Turns everything the backends accumulated since the last gfx.poll() into the
+// values gfx.wheel()/gfx.wheel_x()/gfx.typed() report for this frame. Whole
+// notches are published and the fraction is carried forward.
+//
+// Like gfx.key and gfx.mouse, this input is only visible while the window has
+// focus: anything that arrived while it did not is dropped rather than queued
+// up to land in the program's lap the moment it comes back.
+static void __nexa_gfx_input_publish() {
+    if (!__nexa_gfx_has_focus()) {
+        __nexa_g.wheel_acc_x = 0.0;
+        __nexa_g.wheel_acc_y = 0.0;
+        __nexa_g.wheel_x = 0;
+        __nexa_g.wheel_y = 0;
+        __nexa_g.type_acc.clear();
+        __nexa_g.type_buf.clear();
+        return;
+    }
+    int nx = (int)__nexa_g.wheel_acc_x;   // truncates toward zero
+    int ny = (int)__nexa_g.wheel_acc_y;
+    __nexa_g.wheel_acc_x -= (double)nx;
+    __nexa_g.wheel_acc_y -= (double)ny;
+    __nexa_g.wheel_x = nx;
+    __nexa_g.wheel_y = ny;
+    __nexa_g.type_buf.swap(__nexa_g.type_acc);
+    __nexa_g.type_acc.clear();
+}
+
 static void __nexa_gfx_poll() {
     if (!__nexa_g.ready) return;
 #ifdef _WIN32
@@ -818,6 +1038,22 @@ static void __nexa_gfx_poll() {
             untilDate:[NSDate distantPast]
             inMode:NSDefaultRunLoopMode
             dequeue:YES])) {
+            NSEventType et = [ev type];
+            if (et == NSEventTypeScrollWheel) {
+                // A trackpad reports pixels ("precise deltas"); a wheel reports
+                // whole lines. Scale the former into the same notch unit.
+                double s = [ev hasPreciseScrollingDeltas] ? 0.1 : 1.0;
+                __nexa_gfx_wheel_add((double)[ev scrollingDeltaX] * s,
+                                     (double)[ev scrollingDeltaY] * s);
+            } else if (et == NSEventTypeKeyDown) {
+                // -characters has already applied shift and the layout. Function
+                // keys arrive here too, as private-use code points, and the
+                // printable filter in the push helper drops them. Auto-repeat is
+                // deliberately not filtered: holding a key types it again, which
+                // is what X11 and Win32 do and what a text field wants.
+                NSString* chars = [ev characters];
+                if (chars) __nexa_gfx_type_push_utf8([chars UTF8String], -1);
+            }
             [NSApp sendEvent:ev];
         }
     }
@@ -827,6 +1063,27 @@ static void __nexa_gfx_poll() {
         XNextEvent(__nexa_g.dpy, &ev);
         if (ev.type == ClientMessage && (int)ev.xclient.data.l[0] == __nexa_g.wm_delete) __nexa_g.closed = 1;
         if (ev.type == DestroyNotify) __nexa_g.closed = 1;
+        if (ev.type == ButtonPress) {
+            // X11 sends scrolling as button clicks: 4/5 are up/down and 6/7 are
+            // left/right. The matching ButtonRelease is ignored so one click of
+            // the wheel counts once.
+            switch (ev.xbutton.button) {
+                case 4: __nexa_gfx_wheel_add(0.0, 1.0); break;
+                case 5: __nexa_gfx_wheel_add(0.0, -1.0); break;
+                case 6: __nexa_gfx_wheel_add(-1.0, 0.0); break;
+                case 7: __nexa_gfx_wheel_add(1.0, 0.0); break;
+                default: break;
+            }
+        }
+        if (ev.type == KeyPress) {
+            // XLookupString applies shift and the layout, but only reaches
+            // Latin-1: scripts beyond it need an input method, which the
+            // runtime does not open (it would mean changing the process locale).
+            char buf[32];
+            KeySym ks = 0;
+            int n = XLookupString(&ev.xkey, buf, (int)sizeof(buf), &ks, nullptr);
+            if (n > 0) __nexa_gfx_type_push_latin1(buf, n);
+        }
     }
 #endif
 #ifdef __EMSCRIPTEN__
@@ -844,6 +1101,7 @@ static void __nexa_gfx_poll() {
 #endif
     __nexa_gfx_mouse_refresh();
     __nexa_gfx_key_snapshot();
+    __nexa_gfx_input_publish();
 }
 
 static int __nexa_gfx_closed() {
@@ -1853,6 +2111,32 @@ static int __nexa_gfx_pressed(const std::string& name) {
     int slot = __nexa_gfx_key_slot(name);
     if (slot < 0) return 0;
     return (__nexa_g.k_now[slot] && !__nexa_g.k_prev[slot]) ? 1 : 0;
+}
+
+// The mirror of gfx.pressed, off the same two snapshots gfx.poll() keeps.
+static int __nexa_gfx_released(const std::string& name) {
+    if (!__nexa_g.ready) return 0;
+    int slot = __nexa_gfx_key_slot(name);
+    if (slot < 0) return 0;
+    return (!__nexa_g.k_now[slot] && __nexa_g.k_prev[slot]) ? 1 : 0;
+}
+
+static int __nexa_gfx_wheel() {
+    if (!__nexa_g.ready) return 0;
+    return __nexa_g.wheel_y;
+}
+
+static int __nexa_gfx_wheel_x() {
+    if (!__nexa_g.ready) return 0;
+    return __nexa_g.wheel_x;
+}
+
+// Consuming, like gfx.drop(): the text belongs to whoever asks for it first.
+static std::string __nexa_gfx_typed() {
+    if (!__nexa_g.ready) return std::string();
+    std::string s;
+    s.swap(__nexa_g.type_buf);
+    return s;
 }
 
 // [nexa:imgstore-begin]

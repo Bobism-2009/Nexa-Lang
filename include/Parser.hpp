@@ -4099,9 +4099,11 @@ private:
         else if (method == "close" || method == "poll" || method == "present" || method == "closed"
                  || method == "mouse_x" || method == "mouse_y" || method == "drop"
                  || method == "width" || method == "height" || method == "scale"
+                 || method == "wheel" || method == "wheel_x" || method == "typed"
                  || method == "audio_queued" || method == "audio_flush") argc = 0;
         else if (method == "fullscreen") { argc = 0; argcMax = 1; }
-        else if (method == "key" || method == "pressed" || method == "mouse") argc = 1;
+        else if (method == "key" || method == "pressed" || method == "released"
+                 || method == "mouse") argc = 1;
         else if (method == "get") argc = 2;
         else if (method == "clear") argc = 3;
         else if (method == "plot") argc = 5;
@@ -4126,7 +4128,7 @@ private:
         else {
             throw std::runtime_error("Unknown gfx method 'gfx." + method +
                 "' at line " + std::to_string(methodTok.line) +
-                " (use open, close, resize, width, height, scale, title, poll, closed, clear, plot, fill, rect, line, circle, fill_circle, ellipse, fill_ellipse, tri, fill_tri, poly, fill_poly, text, text_size, text_width, text_height, get, present, image, decode, image_w, image_h, blit, alpha, save, key, pressed, mouse_x, mouse_y, mouse, audio, sample, audio_queued, audio_flush, fullscreen)");
+                " (use open, close, resize, width, height, scale, title, poll, closed, clear, plot, fill, rect, line, circle, fill_circle, ellipse, fill_ellipse, tri, fill_tri, poly, fill_poly, text, text_size, text_width, text_height, get, present, image, decode, image_w, image_h, blit, alpha, save, key, pressed, released, wheel, wheel_x, typed, mouse_x, mouse_y, mouse, audio, sample, audio_queued, audio_flush, fullscreen)");
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after gfx." + method + " at line " + std::to_string(peek().line));
