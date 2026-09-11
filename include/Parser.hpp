@@ -117,6 +117,12 @@ struct AstNode {
     bool isExtern = false;         // Function: true = extern fn (C linkage declaration, no body)
     bool isVariadic = false;       // Function: true = trailing ... (C varargs)
     std::string receiverType = ""; // Function: "struct:Point" when this is a method inside a struct
+    // Source provenance, stamped by the parser on statements and on primary expressions.
+    // Semantic checks that run after parsing (Transpiler::checkSemantics) report through
+    // these, so a diagnosis can name the file and line even for nodes that came from an
+    // included .nxa. 0/"" means "not stamped" — callers fall back to the nearest parent.
+    size_t line = 0;
+    std::string srcFile = "";
 };
 
 inline bool nexaIsIntegerType(const std::string& t) {
@@ -239,6 +245,8 @@ public:
         while (pos_ < tokens_.size()) {
             const Token& t = peek();
             if (t.type == TokenType::Eof) break;
+            const size_t stmtLine = t.line;
+            const size_t stampFrom = ast.size();
             if (t.type == TokenType::Include) {
                 std::vector<AstNode> incNodes = parseInclude();
                 noteTypeDefs(incNodes);
@@ -271,11 +279,20 @@ public:
             } else {
                 throw std::runtime_error("Unexpected token at line " + std::to_string(t.line));
             }
+            for (size_t i = stampFrom; i < ast.size(); ++i) stampSourceLoc(ast[i], stmtLine);
         }
         return ast;
     }
 
 private:
+    // Record where a node came from. Nodes parsed out of an #include'd .nxa are stamped by
+    // that file's sub-parser first, so an already-stamped node keeps its own origin.
+    void stampSourceLoc(AstNode& n, size_t line) {
+        if (n.line != 0) return;
+        n.line = line;
+        n.srcFile = currentFilePath_;
+    }
+
     std::vector<Token> tokens_;
     Modules& modules_;
     size_t pos_;
@@ -1195,6 +1212,7 @@ private:
             if (t.type == TokenType::RBrace) break;
             if (singleStatement && t.type == TokenType::Semicolon) { advance(); break; }
             size_t before = stmts.size();
+            const size_t stmtLine = t.line;
             if (t.type == TokenType::Let) {
                 stmts.push_back(parseVariable());
             } else if (t.type == TokenType::If) {
@@ -1326,6 +1344,7 @@ private:
             } else {
                 throw std::runtime_error("Unexpected token at line " + std::to_string(t.line));
             }
+            for (size_t i = before; i < stmts.size(); ++i) stampSourceLoc(stmts[i], stmtLine);
             if (singleStatement && stmts.size() > before) break;
         }
         return stmts;
@@ -2552,7 +2571,16 @@ private:
         return node;
     }
 
+    // Every primary expression flows through here, so this is the one place that has to
+    // stamp expression nodes for later semantic diagnostics (undefined names, bad fields).
     AstNode parseFactor() {
+        const size_t exprLine = peek().line;
+        AstNode n = parseFactorInner();
+        stampSourceLoc(n, exprLine);
+        return n;
+    }
+
+    AstNode parseFactorInner() {
         if (peek().type == TokenType::Fn) {
             return parsePostfixCalls(parseLambda());
         }

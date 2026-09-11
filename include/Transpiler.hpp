@@ -512,6 +512,10 @@ public:
         varStructScopes_.clear();
         varStructScopes_.push_back({});
         buildFnOverloadTableAndInitGlobalNexaDecl();
+        // Diagnose undefined names, redeclarations, bad initializers, unknown fields and
+        // stray break/continue here, while a Nexa file and line are still attached to the
+        // AST. Anything that survives this is the C++ backend's problem.
+        checkSemantics();
         for (const auto& kv : globalNexaDecl_) {
             if (isStructDeclType(kv.second)) {
                 varStructScopes_[0][kv.first] = structNameFromDecl(kv.second);
@@ -1891,6 +1895,397 @@ private:
             globalNexaDecl_[node.value] = t;
         }
         nexaDeclStack_.clear();
+    }
+
+    // =====================================================================
+    // Semantic checks
+    //
+    // A read-only walk over the AST, run after the struct/enum/function tables
+    // are built and before any code is emitted. Its job is to turn mistakes that
+    // used to reach clang++ (or silently produce invalid C++) into Nexa errors
+    // that name a file and a line:
+    //
+    //   1. use of an undefined name
+    //   2. two `let`s of the same name in one scope
+    //   3. an initializer whose type is clearly incompatible with `let x: T`
+    //   4. a field that the struct does not have
+    //   5. `break` / `continue` outside a loop or switch
+    //
+    // Scoping model: the walk reuses nexaDeclStack_ (name -> Nexa type) so that
+    // inferExprNexaType/lookupNexaDecl work unchanged. Scope 0 holds globals; a
+    // function pushes one scope for its parameters and the body pushes another,
+    // so a local may shadow a parameter or a global but not a sibling `let`.
+    // nexaDeclStack_ is left empty afterwards, which is the state emission expects.
+    //
+    // Where the checker cannot be sure, it stays quiet. Deliberate blind spots:
+    //  - undefined-name checking is skipped entirely for programs that do C/C++
+    //    interop (a user header or inline_cpp can introduce names Nexa never sees);
+    //  - type mismatches are only reported between categories that are definite
+    //    from the syntax alone, so implicit numeric conversions still compile.
+    // =====================================================================
+
+    void checkSemantics() {
+        semNameChecks_ = !modules_.hasInlineCpp();
+        if (semNameChecks_) {
+            for (const AstNode& n : ast_) {
+                if (n.type == AstNode::Type::CppHeaderInclude || n.type == AstNode::Type::InlineCpp) {
+                    semNameChecks_ = false;
+                    break;
+                }
+            }
+        }
+        semLoc_ = nullptr;
+        semLoopDepth_ = 0;
+        semSwitchDepth_ = 0;
+
+        std::set<std::string> seenGlobals;
+        for (const AstNode& n : ast_) {
+            if (n.type != AstNode::Type::Variable) continue;
+            if (!seenGlobals.insert(n.value).second) {
+                semError(n, "Redeclaration of '" + n.value + "' in the same scope");
+            }
+        }
+
+        nexaDeclStack_.clear();
+        nexaDeclStack_.push_back(globalNexaDecl_);
+        for (const AstNode& n : ast_) {
+            if (n.type != AstNode::Type::Variable) continue;
+            semNoteLoc(n);
+            for (const AstNode& c : n.children) semExpr(c);
+            semCheckVariableInit(n);
+        }
+        for (const AstNode& n : ast_) {
+            if (n.type == AstNode::Type::Function || n.type == AstNode::Type::MainFunction) {
+                semFunction(n);
+            } else if (n.type == AstNode::Type::StructDef) {
+                for (const AstNode& m : n.children) {
+                    if (m.type == AstNode::Type::Function) semFunction(m);
+                }
+            }
+        }
+        nexaDeclStack_.clear();
+        semLoc_ = nullptr;
+    }
+
+    mutable const AstNode* semLoc_ = nullptr;  // nearest node that carries a source location
+    int semLoopDepth_ = 0;
+    int semSwitchDepth_ = 0;
+    bool semNameChecks_ = true;
+
+    void semNoteLoc(const AstNode& n) const {
+        if (n.line != 0) semLoc_ = &n;
+    }
+
+    [[noreturn]] void semError(const AstNode& at, const std::string& msg) const {
+        const AstNode* loc = (at.line != 0) ? &at : semLoc_;
+        std::string full;
+        if (loc && !loc->srcFile.empty()) full += loc->srcFile + ": ";
+        full += msg;
+        if (loc && loc->line != 0) full += " at line " + std::to_string(loc->line);
+        throw std::runtime_error(full);
+    }
+
+    void semDeclare(const std::string& name, const std::string& type) {
+        if (name.empty() || nexaDeclStack_.empty()) return;
+        nexaDeclStack_.back()[name] = type.empty() ? std::string("int") : type;
+    }
+
+    void semFunction(const AstNode& fn) {
+        if (fn.isExtern) return;
+        nexaDeclStack_.push_back({});
+        if (fn.type == AstNode::Type::MainFunction) {
+            // fn main(argv) receives the command line as []string.
+            for (const std::string& p : fn.paramNames) semDeclare(p, "[]string");
+        } else {
+            for (size_t i = 0; i < fn.paramNames.size(); i++) {
+                semDeclare(fn.paramNames[i], canonicalParamType(fn, i));
+            }
+        }
+        if (!fn.receiverType.empty()) semDeclare("self", fn.receiverType);
+        for (const AstNode& d : fn.paramDefaults) semExpr(d);
+
+        const int savedLoop = semLoopDepth_;
+        const int savedSwitch = semSwitchDepth_;
+        semLoopDepth_ = 0;
+        semSwitchDepth_ = 0;
+        semBlock(fn.children);
+        semLoopDepth_ = savedLoop;
+        semSwitchDepth_ = savedSwitch;
+        nexaDeclStack_.pop_back();
+    }
+
+    void semBlock(const std::vector<AstNode>& stmts) {
+        nexaDeclStack_.push_back({});
+        for (const AstNode& s : stmts) semStmt(s);
+        nexaDeclStack_.pop_back();
+    }
+
+    void semStmt(const AstNode& s) {
+        semNoteLoc(s);
+        switch (s.type) {
+            case AstNode::Type::Variable: {
+                if (!nexaDeclStack_.empty() && nexaDeclStack_.back().count(s.value)) {
+                    semError(s, "Redeclaration of '" + s.value + "' in the same scope");
+                }
+                // The initializer is checked before the name is bound, so
+                // `let x = x;` reports the outer x (or an undefined name).
+                for (const AstNode& c : s.children) semExpr(c);
+                semCheckVariableInit(s);
+                semDeclare(s.value, nexaDeclFromVariableAst(s));
+                break;
+            }
+            case AstNode::Type::Block:
+                semBlock(s.children);
+                break;
+            case AstNode::Type::IfElse: {
+                if (!s.children.empty()) semExpr(s.children[0]);
+                if (s.children.size() > 1) semBlock(s.children[1].children);
+                if (s.children.size() > 2) {
+                    const AstNode& tail = s.children[2];
+                    if (tail.type == AstNode::Type::IfElse) semStmt(tail);
+                    else semBlock(tail.children);
+                }
+                break;
+            }
+            case AstNode::Type::While: {
+                if (!s.children.empty()) semExpr(s.children[0]);
+                semLoopDepth_++;
+                if (s.children.size() > 1) semBlock(s.children[1].children);
+                semLoopDepth_--;
+                break;
+            }
+            case AstNode::Type::For: {
+                if (!s.children.empty()) semExpr(s.children[0]);
+                nexaDeclStack_.push_back({});
+                semDeclare(s.value, "int");
+                semLoopDepth_++;
+                if (s.children.size() > 1) semBlock(s.children[1].children);
+                semLoopDepth_--;
+                nexaDeclStack_.pop_back();
+                break;
+            }
+            case AstNode::Type::ForIn: {
+                if (!s.children.empty()) semExpr(s.children[0]);
+                std::string collT = s.children.empty() ? std::string() : inferExprNexaType(s.children[0]);
+                std::string keyT = "int";
+                std::string valT = "int";
+                if (nexaIsSliceType(collT)) {
+                    keyT = nexaSliceElem(collT);
+                } else if (nexaIsMapType(collT)) {
+                    nexaSplitMapType(collT, keyT, valT);
+                } else if (collT == "string") {
+                    keyT = "string";
+                }
+                nexaDeclStack_.push_back({});
+                semDeclare(s.value, keyT);
+                if (!s.initValue.empty()) semDeclare(s.initValue, valT);
+                semLoopDepth_++;
+                if (s.children.size() > 1) semBlock(s.children[1].children);
+                semLoopDepth_--;
+                nexaDeclStack_.pop_back();
+                break;
+            }
+            case AstNode::Type::Switch: {
+                if (!s.children.empty()) semExpr(s.children[0]);
+                semSwitchDepth_++;
+                for (size_t i = 1; i < s.children.size(); i++) {
+                    if (s.children[i].type != AstNode::Type::SwitchCase) continue;
+                    semBlock(s.children[i].children);
+                }
+                semSwitchDepth_--;
+                break;
+            }
+            case AstNode::Type::TryCatch: {
+                if (!s.children.empty()) semBlock(s.children[0].children);
+                nexaDeclStack_.push_back({});
+                if (!s.value.empty()) semDeclare(s.value, "string");  // catch binds the message
+                if (s.children.size() > 1) semBlock(s.children[1].children);
+                nexaDeclStack_.pop_back();
+                break;
+            }
+            case AstNode::Type::Break:
+                if (semLoopDepth_ == 0 && semSwitchDepth_ == 0) {
+                    semError(s, "'break' outside of a loop or switch");
+                }
+                break;
+            case AstNode::Type::Continue:
+                if (semLoopDepth_ == 0) {
+                    semError(s, "'continue' outside of a loop");
+                }
+                break;
+            case AstNode::Type::Label:
+            case AstNode::Type::Goto:
+            case AstNode::Type::InlineCpp:
+                break;
+            // Assignment forms name their target in `value` rather than through an
+            // ExprVarRef child, so the target has to be checked explicitly.
+            case AstNode::Type::Assignment:
+            case AstNode::Type::AssnAdd:
+            case AstNode::Type::AssnSub:
+            case AstNode::Type::AssnMul:
+            case AstNode::Type::AssnDiv:
+            case AstNode::Type::AssnMod:
+            case AstNode::Type::AssnBitAnd:
+            case AstNode::Type::AssnBitOr:
+            case AstNode::Type::AssnBitXor:
+            case AstNode::Type::AssnShl:
+            case AstNode::Type::AssnShr:
+            case AstNode::Type::AssnIndex:
+            case AstNode::Type::IncPost:
+            case AstNode::Type::DecPost:
+                semCheckNameUse(s, s.value);
+                for (const AstNode& c : s.children) semExpr(c);
+                break;
+            default:
+                semExpr(s);
+                break;
+        }
+    }
+
+    void semExpr(const AstNode& e) {
+        semNoteLoc(e);
+        switch (e.type) {
+            case AstNode::Type::ExprVarRef:
+                semCheckNameUse(e, e.value);
+                break;
+            case AstNode::Type::ExprMember:
+                semCheckMemberAccess(e);
+                break;
+            case AstNode::Type::ExprLambda: {
+                nexaDeclStack_.push_back({});
+                for (size_t i = 0; i < e.paramNames.size(); i++) {
+                    semDeclare(e.paramNames[i], i < e.paramTypes.size() ? e.paramTypes[i] : std::string("int"));
+                }
+                const int savedLoop = semLoopDepth_;
+                const int savedSwitch = semSwitchDepth_;
+                semLoopDepth_ = 0;
+                semSwitchDepth_ = 0;
+                for (const AstNode& c : e.children) semStmt(c);
+                semLoopDepth_ = savedLoop;
+                semSwitchDepth_ = savedSwitch;
+                nexaDeclStack_.pop_back();
+                break;
+            }
+            case AstNode::Type::Block:
+                semBlock(e.children);
+                break;
+            case AstNode::Type::InlineCpp:
+                break;
+            default:
+                for (const AstNode& c : e.children) semExpr(c);
+                break;
+        }
+    }
+
+    void semCheckNameUse(const AstNode& at, const std::string& name) {
+        if (!semNameChecks_ || name.empty()) return;
+        if (!lookupNexaDecl(name).empty()) return;
+        if (name == "self" || name == "null" || name == "true" || name == "false") return;
+        if (hasNexaFnNamed(name)) return;          // a function used as a value
+        if (enumCppNames_.count(name)) return;     // bare enum type name
+        if (structCppNames_.count(name)) return;   // bare struct type name
+        semError(at, "Undefined variable '" + name + "'");
+    }
+
+    void semCheckMemberAccess(const AstNode& e) {
+        if (e.children.empty()) return;
+        const AstNode& base = e.children[0];
+        if (base.type == AstNode::Type::ExprVarRef && lookupNexaDecl(base.value).empty()) {
+            auto ev = enumVariants_.find(base.value);
+            if (ev != enumVariants_.end()) {
+                if (!ev->second.count(e.value)) {
+                    semError(e, "Unknown enum variant '" + e.value + "' for '" + base.value + "'");
+                }
+                return;  // Enum.Variant: the base names a type, not a variable
+            }
+        }
+        semExpr(base);
+        std::string baseT = inferExprNexaType(base);
+        if (isPointerType(baseT)) baseT = pointerPointeeType(baseT);
+        if (!isStructDeclType(baseT)) return;  // not a known Nexa struct: no opinion
+        const std::string sname = structNameFromDecl(baseT);
+        auto fields = structFields_.find(sname);
+        if (fields == structFields_.end()) return;
+        if (fields->second.count(e.value)) return;
+        auto methods = structMethods_.find(sname);
+        if (methods != structMethods_.end() && methods->second.count(e.value)) return;
+        semError(e, "Struct '" + sname + "' has no field '" + e.value + "'");
+    }
+
+    // Coarse type category used only for the "clearly incompatible" initializer check.
+    // "" means "cannot tell from the syntax", which suppresses the diagnosis.
+    static std::string semCategoryOfType(const std::string& t) {
+        if (t == "string") return "string";
+        if (t == "float") return "float";
+        if (t == "bool") return "bool";
+        if (t == "char") return "char";
+        if (nexaIsNumericIntType(t)) return "int";
+        if (nexaIsSliceType(t)) return "slice";
+        if (isStructDeclType(t)) return "struct";
+        return "";
+    }
+
+    static bool semIsScalarCat(const std::string& c) {
+        return c == "int" || c == "float" || c == "char" || c == "bool";
+    }
+
+    std::string semCategoryOfExpr(const AstNode& e) const {
+        switch (e.type) {
+            case AstNode::Type::ExprStringLiteral: return "string";
+            case AstNode::Type::ExprIntLiteral: return "int";
+            case AstNode::Type::ExprFloatLiteral: return "float";
+            case AstNode::Type::ExprCharLiteral: return "char";
+            case AstNode::Type::ExprBoolLiteral: return "bool";
+            case AstNode::Type::ExprArrayLiteral: return "slice";
+            case AstNode::Type::ExprStructLit: return "struct";
+            case AstNode::Type::ExprVarRef: return semCategoryOfType(lookupNexaDecl(e.value));
+            case AstNode::Type::ExprAdd: {
+                if (e.children.size() != 2) return "";
+                const std::string a = semCategoryOfExpr(e.children[0]);
+                const std::string b = semCategoryOfExpr(e.children[1]);
+                if (a == "string" || b == "string") return "string";  // concatenation
+                return "";
+            }
+            default: return "";
+        }
+    }
+
+    // `let x: T = init` where T and init have definite, incompatible categories.
+    // Numeric widening/narrowing (int <-> float <-> char <-> bool) is left alone:
+    // those are the implicit conversions Nexa already supports.
+    void semCheckVariableInit(const AstNode& v) {
+        if (v.declType.empty() || v.initUninitialized || v.isFixedArray) return;
+        const std::string declCat = semCategoryOfType(v.declType);
+        if (declCat.empty()) return;
+
+        std::string initCat;
+        if (!v.children.empty()) {
+            initCat = semCategoryOfExpr(v.children[0]);
+        } else if (v.initFromReadln || v.initFromFileRead) {
+            initCat = "string";
+        } else if (v.initFromDllLoad) {
+            return;
+        }
+        if (initCat.empty() || initCat == declCat) return;
+
+        const bool declScalar = semIsScalarCat(declCat);
+        const bool initScalar = semIsScalarCat(initCat);
+        if (declScalar && initScalar) return;  // implicit numeric conversion
+
+        semError(v, "Type mismatch: '" + v.value + "' is declared " + semTypeLabel(v.declType) +
+                    " but the initializer is " + semCatLabel(initCat));
+    }
+
+    static std::string semTypeLabel(const std::string& t) {
+        if (isStructDeclType(t)) return "struct " + structNameFromDecl(t);
+        return "'" + t + "'";
+    }
+
+    static std::string semCatLabel(const std::string& c) {
+        if (c == "slice") return "an array";
+        if (c == "struct") return "a struct value";
+        if (c == "int") return "an integer";
+        return "a " + c;
     }
 
     static bool isStructDeclType(const std::string& declType) {

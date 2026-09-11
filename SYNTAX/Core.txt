@@ -405,3 +405,29 @@ RESULT (Result[T])
   Write `: Result[T]` on functions that return one (return type is not inferred
   as Result). Uninitialized `let r: Result[int];` starts as not-ok.
   `ok` and `err` are builtins.
+
+COMPILE-TIME CHECKS
+  NexaC rejects these before it emits C++, with a "[Nexa] Error:" that names the
+  file and the line. They used to reach clang++ as C++ diagnostics, or compile to
+  invalid C++ with no diagnostic at all.
+
+  - Undefined name:        io.println(nope);      // no `let nope` in scope
+  - Redeclaration:         let x = 1; let x = 2;  // same scope
+  - Initializer mismatch:  let x: int = "hello";  // string vs numeric
+  - Unknown struct field:  p.zz = 5;              // struct P has no zz
+  - Stray break/continue:  break;                 // outside any loop or switch
+
+  What stays legal:
+  - Shadowing a name in a nested block, a loop body, a lambda, or over a
+    parameter — those are new scopes, not redeclarations.
+  - Implicit numeric conversions in a typed let: let f: float = 3;
+  - break inside a switch with no loop around it; continue inside a switch
+    that is inside a loop.
+
+  Undefined-name checking is skipped for a program that does C/C++ interop
+  (a user `#include "header.h"` or inline_cpp), because such a program can
+  legitimately name symbols Nexa never sees.
+
+  Still undefined behaviour by design, not diagnosed: division by zero,
+  out-of-bounds indexing on a fixed array, reading an uninitialized local,
+  and popping an empty slice.

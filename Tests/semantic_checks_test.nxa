@@ -1,0 +1,236 @@
+// The legal side of the transpiler's semantic checks (BOB-8).
+//
+// Tests/semantic_error_cases.sh covers the programs that must now be rejected.
+// This file covers the ones that must still compile and run, because every one
+// of them is something the undefined-name / redeclaration / type-mismatch /
+// unknown-field / stray-break checks could plausibly get wrong:
+//
+//   - shadowing a name in a nested block, a loop body, or a lambda
+//   - break and continue in nested loops, in a switch, and in a switch in a loop
+//   - reading a struct field, calling a method, and going through a pointer
+//   - enum variants, which look like field access on an undeclared name
+//   - implicit numeric conversions in an explicitly typed `let`
+//   - names bound by something other than `let`: parameters, loop variables,
+//     for (k, v in map), a catch binding, `self`, a function used as a value
+#include <std/io>
+
+struct Point {
+    x: int;
+    y: int;
+    fn sum(): int {
+        return self.x + self.y;
+    }
+}
+
+enum Color {
+    Red;
+    Green;
+    Blue;
+}
+
+let globalCount = 7;
+
+fn expect(label: string, got: int, want: int) {
+    if (got == want) {
+        io.println("ok " + label);
+    } else {
+        io.println("FAIL " + label + " got=" + got + " want=" + want);
+    }
+}
+
+fn addOne(n: int): int {
+    return n + 1;
+}
+
+fn shadowsAParam(x: int): int {
+    // A local may shadow a parameter; that is a new scope, not a redeclaration.
+    if (x > 0) {
+        let x = 100;
+        return x;
+    }
+    return x;
+}
+
+fn main() {
+    // --- names that are not bound by a `let` --------------------------------
+    expect("global visible", globalCount, 7);
+    expect("param shadow", shadowsAParam(1), 100);
+
+    let f = addOne;
+    expect("fn as value", f(4), 5);
+
+    // --- shadowing in nested blocks ----------------------------------------
+    let v = 1;
+    if (true) {
+        let v = 2;
+        if (true) {
+            let v = 3;
+            expect("shadow depth 3", v, 3);
+        }
+        expect("shadow depth 2", v, 2);
+    }
+    expect("shadow depth 1", v, 1);
+
+    // A `let` of the same name in two sibling blocks is fine: neither is in
+    // scope when the other is declared.
+    if (true) {
+        let sibling = 10;
+        expect("sibling a", sibling, 10);
+    }
+    if (true) {
+        let sibling = 20;
+        expect("sibling b", sibling, 20);
+    }
+
+    // --- break / continue --------------------------------------------------
+    let hits = 0;
+    for (i, 5) {
+        if (i == 3) {
+            break;
+        }
+        hits += 1;
+    }
+    expect("break in for", hits, 3);
+
+    let odd = 0;
+    for (i, 6) {
+        if (i % 2 == 0) {
+            continue;
+        }
+        odd += 1;
+    }
+    expect("continue in for", odd, 3);
+
+    // nested loops: the inner break must not need the outer loop to exist
+    let inner = 0;
+    for (i, 3) {
+        let j = 0;
+        while (j < 10) {
+            if (j == 2) {
+                break;
+            }
+            inner += 1;
+            j += 1;
+        }
+    }
+    expect("break in nested while", inner, 6);
+
+    // break inside a switch, with no loop anywhere around it
+    let picked = 0;
+    switch (2) {
+        case 1:
+            picked = 11;
+            break;
+        case 2:
+            picked = 22;
+            break;
+        default:
+            picked = 99;
+    }
+    expect("break in switch", picked, 22);
+
+    // continue inside a switch refers to the enclosing loop
+    let skipped = 0;
+    for (i, 4) {
+        switch (i) {
+            case 0:
+                continue;
+            default:
+                skipped += 1;
+        }
+    }
+    expect("continue through switch", skipped, 3);
+
+    // a string switch lowers to if/else, so its `break` is dropped, not emitted
+    let word = "two";
+    let n = 0;
+    switch (word) {
+        case "one":
+            n = 1;
+            break;
+        case "two":
+            n = 2;
+            break;
+        default:
+            n = 0;
+    }
+    expect("break in string switch", n, 2);
+
+    // --- struct fields, methods and pointers -------------------------------
+    let p = Point{x: 3, y: 4};
+    expect("struct field", p.x, 3);
+    expect("struct method", p.sum(), 7);
+    p.y = 10;
+    expect("struct field assign", p.y, 10);
+
+    let pp: *Point = &p;
+    expect("field through pointer", pp->x, 3);
+    pp->x = 5;
+    expect("assign through pointer", p.x, 5);
+
+    let pts: []Point;
+    pts.push(Point{x: 1, y: 2});
+    expect("field on indexed struct", pts[0].y, 2);
+
+    // --- enum variants ------------------------------------------------------
+    let c: enum Color = Color.Green;
+    let seen = 0;
+    switch (c) {
+        case Color.Red:
+            seen = 1;
+            break;
+        case Color.Green:
+            seen = 2;
+            break;
+        default:
+            seen = 3;
+    }
+    expect("enum variant", seen, 2);
+
+    // --- implicit numeric conversions in a typed let ------------------------
+    let asFloat: float = 3;
+    expect("int to float", (int)asFloat, 3);
+    let asChar: char = 65;
+    expect("int to char", (int)asChar, 65);
+    let asBool: bool = true;
+    expect("bool decl", (int)asBool, 1);
+    let asLong: long = 12;
+    expect("int to long", (int)asLong, 12);
+    let fromFloat: int = 2;
+    expect("int decl", fromFloat, 2);
+
+    // --- loop variables, map iteration, lambdas, catch ----------------------
+    let xs = [4, 5, 6];
+    let total = 0;
+    for (e in xs) {
+        total += e;
+    }
+    expect("for-in element", total, 15);
+
+    let m: map[string]int;
+    m["a"] = 1;
+    m["b"] = 2;
+    let mtotal = 0;
+    for (k, val in m) {
+        mtotal += val + len(k);
+    }
+    expect("for-in key/value", mtotal, 5);
+
+    let double = fn(a: int): int { return a * 2; };
+    expect("lambda param", double(21), 42);
+
+    // a lambda may shadow an enclosing name and capture another one
+    let captured = 9;
+    let shadowing = fn(v: int): int { return v + captured; };
+    expect("lambda shadow+capture", shadowing(1), 10);
+
+    let caught = 0;
+    try {
+        throw "boom";
+    } catch (err) {
+        caught = len(err);
+    }
+    expect("catch binding", (int)(caught > 0), 1);
+
+    io.println("semantic_checks ok");
+}
