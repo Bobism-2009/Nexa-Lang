@@ -52,8 +52,11 @@ fn main() {
     io.println("wide_sum=" + (9223372036854775806 + 1));
 
     // Literals in the places that are easy to get wrong.
-    // A wide literal inside a slice literal does not build at all -- see
-    // Tests/Lang/known_bugs/wide_literal_in_slice.nxa.
+    let arr = [2147483648, 1];
+    io.println("literal_in_slice=" + arr[0]);
+    let wide = [9223372036854775807];
+    io.println("literal_in_slice_i64_max=" + wide[0]);
+
     let m: map[string]int;
     m["big"] = 2000000000;
     io.println("literal_in_map=", m["big"]);

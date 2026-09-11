@@ -1,0 +1,10 @@
+// A negative element needs a signed type; an element above i64 max needs an
+// unsigned one. No integer type is both, so the slice literal has no element
+// type -- and NexaC has to say so itself, naming this file and this line,
+// rather than letting clang complain about a std::vector it generated.
+// Reference: SYNTAX/Core.txt (COMPILE-TIME CHECKS)
+#include <std/io>
+fn main() {
+    let bad = [-1, 18446744073709551615];
+    io.println(bad[0]);
+}
