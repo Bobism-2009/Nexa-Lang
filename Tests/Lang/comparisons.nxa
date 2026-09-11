@@ -1,0 +1,91 @@
+// Pins Nexa comparison and logical semantics. The headline difference from C:
+// relational binds tighter than equality and both chain, and every arithmetic
+// or bitwise operator binds tighter than any comparison.
+// Reference: SYNTAX/ControlFlow.txt (COMPARISONS, LOGICAL OPERATORS, TERNARY)
+#include <std/io>
+
+fn isEven(n: int): bool {
+    return n % 2 == 0;
+}
+
+fn main() {
+    // Booleans render as 1/0.
+    io.println("true_literal=", true);
+    io.println("false_literal=", false);
+
+    // Plain comparisons.
+    io.println("lt=", 1 < 2);
+    io.println("le_equal=", 2 <= 2);
+    io.println("gt=", 1 > 2);
+    io.println("ge_equal=", 2 >= 2);
+    io.println("eq=", 3 == 3);
+    io.println("ne=", 3 != 3);
+
+    // Relational binds tighter than equality: (3 > 2) == (1 < 2) -> true.
+    io.println("chain_rel_eq=", 3 > 2 == 1 < 2);
+    io.println("chain_rel_ne=", 3 > 2 != 1 < 2);
+    // Relational chains left-to-right: (5 > 4) > 0 -> 1 > 0 -> true.
+    io.println("chain_rel_rel=", 5 > 4 > 0);
+    // Equality chains left-to-right: (1 == 1) == 1 -> true.
+    io.println("chain_eq_eq=", 1 == 1 == 1);
+
+    // Arithmetic and bitwise bind tighter than comparison (unlike C for &).
+    io.println("and_then_eq=", 6 & 2 == 2);        // (6 & 2) == 2
+    io.println("or_then_eq=", 4 | 1 == 5);         // (4 | 1) == 5
+    io.println("xor_then_eq=", 6 ^ 3 == 5);        // (6 ^ 3) == 5
+    io.println("shift_then_lt=", 1 << 3 < 9);      // (1 << 3) < 9
+    io.println("add_then_eq=", 1 + 1 == 2);
+    io.println("mod_then_eq=", 7 % 4 == 3);
+
+    // A bool-returning call compares like any other bool.
+    io.println("fn_eq_true=", isEven(4) == true);
+    io.println("fn_eq_false=", isEven(3) == false);
+
+    // sizeof participates in comparisons (it is an ordinary int expression).
+    io.println("sizeof_cmp=", sizeof 'c' == sizeof(char));
+
+    // Logical: ! binds tightest, then &&, then ||.
+    io.println("not=", !false);
+    io.println("not_before_and=", !false && true);
+    io.println("and_before_or=", true || false && false);
+    io.println("and_before_or2=", false || true && true);
+    io.println("not_parens=", !(1 > 0));
+    io.println("word_and=", 1 < 2 && 2 < 3);
+    io.println("word_or=", 1 > 2 || 2 < 3);
+
+    // && short-circuits: the right side must not run when the left is false.
+    let calls = 0;
+    let fired = false;
+    if (false && bump(&calls)) { fired = true; }
+    io.println("and_shortcircuit_calls=", calls);
+    if (true || bump(&calls)) { fired = true; }
+    io.println("or_shortcircuit_calls=", calls);
+    io.println("shortcircuit_fired=", fired);
+
+    // Ternary: right-associative, lower precedence than ||.
+    let enabled = true;
+    io.println("ternary=", enabled ? "on" : "off");
+    io.println("ternary_nested=", 0 ? "a" : 1 ? "b" : "c");
+    io.println("ternary_under_or=", (false || true) ? "yes" : "no");
+    io.println("ternary_in_concat=" + (enabled ? "Enabled" : "Disabled"));
+    io.println("ternary_numeric=", 3 > 2 ? 10 : 20);
+
+    // String comparison is by value.
+    let a = "abc";
+    let b = "abc";
+    io.println("str_eq=", a == b);
+    io.println("str_ne=", a != "abd");
+    io.println("str_lt=", a < "abd");
+    // "abc" < "abd" with literals on BOTH sides compares addresses -- see
+    // Tests/Lang/known_bugs/string_literal_compare.nxa.
+
+    // char comparisons.
+    let c: char = 'b';
+    io.println("char_gt=", c > 'a');
+    io.println("char_eq_code=", c == 98);
+}
+
+fn bump(p: *int): bool {
+    *p = *p + 1;
+    return true;
+}

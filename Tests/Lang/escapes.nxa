@@ -1,0 +1,82 @@
+// Pins the escape set. Escapes are checked by byte value rather than printed
+// raw, so a regression shows up as a number instead of as invisible damage to
+// the harness's own diff.
+// Reference: SYNTAX/Core.txt ("String escapes"), Tests/lexer_error_cases.sh
+// covers the rejection side (unknown escapes, short \x, unterminated literals).
+#include <std/io>
+
+// The byte value, 0..255. Nexa's char is signed, so high bytes have to come
+// back through unsigned char to read as the byte the escape named.
+fn code(s: string, i: int): int {
+    return (int)(unsigned char)s[i];
+}
+
+// The same character read as a signed char, which is what s[i] yields directly.
+fn signed_code(s: string, i: int): int {
+    return (int)s[i];
+}
+
+fn main() {
+    // The full C escape set Nexa accepts, one byte each.
+    io.println("bs_n=", code("\n", 0));
+    io.println("bs_t=", code("\t", 0));
+    io.println("bs_r=", code("\r", 0));
+    io.println("bs_a=", code("\a", 0));
+    io.println("bs_b=", code("\b", 0));
+    io.println("bs_f=", code("\f", 0));
+    io.println("bs_v=", code("\v", 0));
+    io.println("bs_backslash=", code("\\", 0));
+    io.println("bs_dquote=", code("\"", 0));
+    io.println("bs_squote=", code("\'", 0));
+
+    // \xHH is exactly two hex digits and keeps the raw byte.
+    io.println("hex_41=", code("\x41", 0));
+    io.println("hex_7f=", code("\x7F", 0));
+    io.println("hex_lower=", code("\x6a", 0));
+    io.println("hex_high=", code("\x80", 0));
+    io.println("hex_ff=", code("\xFF", 0));
+    io.println("hex_high_signed=", signed_code("\x80", 0));
+    io.println("hex_ff_signed=", signed_code("\xFF", 0));
+
+    // A \x byte prints as the character it names.
+    io.println("hex_prints=", "\x41\x42\x43");
+
+    // Character literals take the same escapes.
+    let nl: char = '\n';
+    let tab: char = '\t';
+    let quote: char = '\'';
+    let slash: char = '\\';
+    let hex: char = '\x41';
+    io.println("char_nl=", (int)nl);
+    io.println("char_tab=", (int)tab);
+    io.println("char_squote=", (int)quote);
+    io.println("char_backslash=", (int)slash);
+    io.println("char_hex=", (int)hex);
+
+    // Escapes inside a longer string, and their effect on len().
+    let mixed = "a\tb\\c\"d";
+    io.println("mixed_len=", len(mixed));
+    io.println("mixed_1=", code(mixed, 1));
+    io.println("mixed_3=", code(mixed, 3));
+    io.println("mixed_5=", code(mixed, 5));
+
+    // Raw strings: no escape processing at all.
+    let raw = R"(a\tb\n)";
+    io.println("raw_len=", len(raw));
+    io.println("raw_text=", raw);
+    io.println("raw_first_backslash=", code(raw, 1));
+
+    // A custom delimiter lets a raw string hold )" itself.
+    let delim = R"x(has )" inside)x";
+    io.println("raw_delim_len=", len(delim));
+    io.println("raw_delim=", delim);
+
+    // Raw strings may span lines: the newline is a real byte.
+    let multi = R"(one
+two)";
+    io.println("raw_multiline_len=", len(multi));
+    io.println("raw_multiline_has_nl=", code(multi, 3));
+
+    // \n actually terminates a line when printed.
+    io.print("two\nlines\n");
+}

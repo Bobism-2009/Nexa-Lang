@@ -1,0 +1,5 @@
+// Hex literals are range-checked the same way decimal ones are.
+#include <std/io>
+fn main() {
+    io.println(0x10000000000000000);
+}

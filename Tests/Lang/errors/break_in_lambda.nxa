@@ -1,0 +1,8 @@
+// A lambda is its own function: the enclosing loop does not reach into it.
+#include <std/io>
+fn main() {
+    for (i, 3) {
+        let f = fn (): int { break; };
+        io.println(f());
+    }
+}

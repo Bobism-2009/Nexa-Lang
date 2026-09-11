@@ -1,0 +1,5 @@
+// \xHH is exactly two hex digits; one is not enough.
+#include <std/io>
+fn main() {
+    io.println("\x4");
+}

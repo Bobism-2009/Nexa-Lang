@@ -67,8 +67,14 @@ win-exe: NexaC
 pkgtest: NexaC
 	cd Tests/PkgTest && ../../NexaC nexapkg install && ../../NexaC main.nxa -o pkgtest && ./pkgtest
 
+# Language regression suite: compiles and runs Tests/Lang, checks the
+# must-not-compile cases, and drives the Tests/*_cases.sh suites.
+# See Tests/Lang/README.md.
+test: NexaC
+	./Tests/run_tests.sh
+
 clean:
 	rm -f NexaC nexapkg
 	$(MAKE) -C WIN clean
 
-.PHONY: install install-deps win installer dll so dylib wasm win-exe clean pkgtest
+.PHONY: install install-deps win installer dll so dylib wasm win-exe clean pkgtest test

@@ -1,0 +1,6 @@
+// An unrecognised escape is an error, not a silently dropped backslash.
+// Reference: SYNTAX/Core.txt ("String escapes")
+#include <std/io>
+fn main() {
+    io.println("oops \q here");
+}

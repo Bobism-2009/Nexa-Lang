@@ -1,0 +1,127 @@
+// Pins assignment forms: ++/--, every compound operator, and compound
+// assignment through indices, map keys, struct fields, pointers and
+// chained subscripts.
+// Reference: SYNTAX/Core.txt (VARIABLES -> Reassignment)
+#include <std/io>
+
+struct Point {
+    x: int;
+    y: int;
+}
+
+fn main() {
+    // Increment / decrement.
+    let n = 5;
+    n++;
+    io.println("inc=", n);
+    n--;
+    n--;
+    io.println("dec=", n);
+
+    // Every arithmetic compound operator on a plain variable.
+    let a = 10;
+    a += 5;  io.println("plus_eq=", a);
+    a -= 3;  io.println("minus_eq=", a);
+    a *= 4;  io.println("times_eq=", a);
+    a /= 6;  io.println("div_eq=", a);
+    a %= 5;  io.println("mod_eq=", a);
+
+    // Bitwise compound operators.
+    let b = 12;
+    b &= 10; io.println("and_eq=", b);
+    b |= 5;  io.println("or_eq=", b);
+    b ^= 3;  io.println("xor_eq=", b);
+    b <<= 2; io.println("shl_eq=", b);
+    b >>= 1; io.println("shr_eq=", b);
+
+    // The right-hand side is a full expression, not just a literal.
+    let c = 2;
+    c += 3 * 4;
+    io.println("rhs_expression=", c);
+
+    // Strings concatenate with +=.
+    let s = "a";
+    s += "b";
+    s += "c" + "d";
+    io.println("string_plus_eq=", s);
+    io.println("string_len=", len(s));
+
+    // Slices: compound assignment through an index.
+    let xs = [1, 2, 3];
+    xs[0] += 10;
+    xs[1] *= 5;
+    xs[2] -= 3;
+    io.println("slice=", xs[0], ",", xs[1], ",", xs[2]);
+    xs[0] = 99;
+    io.println("slice_plain_assign=", xs[0]);
+
+    // An index expression, not just a literal index.
+    let i = 1;
+    xs[i + 1] += 7;
+    io.println("slice_computed_index=", xs[2]);
+
+    // Slice growth operations.
+    xs.push(4);
+    io.println("push_len=", len(xs));
+    let popped: int = xs.pop();
+    io.println("pop_value=", popped);
+    xs.insert(0, 42);
+    io.println("insert_front=", xs[0]);
+    io.println("contains=", xs.contains(42));
+    io.println("index_of=", xs.index_of(42));
+    xs.clear();
+    io.println("clear_len=", len(xs));
+
+    // Maps: compound assignment auto-creates the zero value first.
+    let m: map[string]int;
+    m["k"] += 3;
+    m["k"] += 4;
+    io.println("map_plus_eq=", m["k"]);
+    m["k"] *= 2;
+    io.println("map_times_eq=", m["k"]);
+    io.println("map_missing_is_zero=", m["absent"]);
+    io.println("map_has=", m.has("k"));
+    m.remove("k");
+    io.println("map_after_remove=", m.has("k"));
+
+    // Chained subscripts.
+    let grid: [][]int;
+    grid.push([1, 2]);
+    grid[0][1] += 7;
+    grid[0][0] <<= 4;
+    io.println("grid=", grid[0][0], ",", grid[0][1]);
+
+    // Struct fields, by value and through a pointer.
+    let p = Point { x: 3, y: 4 };
+    p.x *= 2;
+    p.y += 1;
+    io.println("field=", p.x, ",", p.y);
+
+    let q: *Point = &p;
+    q->x -= 1;
+    q->y = 0;
+    io.println("field_via_ptr=", p.x, ",", p.y);
+
+    // Through a dereferenced pointer.
+    let v = 10;
+    let r: *int = &v;
+    *r += 5;
+    io.println("deref_plus_eq=", v);
+    *r = 1;
+    io.println("deref_assign=", v);
+
+    // Through a pointer into a slice's backing storage.
+    let ys = [1, 2, 3];
+    ys[1] += ys[0] + ys[2];
+    io.println("self_referencing_rhs=", ys[1]);
+
+    // Single characters in a string.
+    let word = "cat";
+    word[0] = 'b';
+    io.println("char_assign=", word);
+    io.println("char_read=", (int)word[1]);
+
+    // const cannot be reassigned, but it can be read anywhere.
+    let const limit: int = 7;
+    io.println("const_read=", limit * 2);
+}

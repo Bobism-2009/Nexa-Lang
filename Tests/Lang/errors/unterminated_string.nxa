@@ -1,0 +1,6 @@
+// A string literal may not contain a raw newline.
+#include <std/io>
+fn main() {
+    io.println("open
+);
+}

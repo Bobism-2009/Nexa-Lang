@@ -1,0 +1,6 @@
+// Character literals use the same escape set as strings.
+#include <std/io>
+fn main() {
+    let c: char = '\q';
+    io.println(c);
+}

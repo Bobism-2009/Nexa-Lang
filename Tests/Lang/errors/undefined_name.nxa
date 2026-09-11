@@ -1,0 +1,6 @@
+// Using a name that was never declared.
+// Reference: SYNTAX/Core.txt (COMPILE-TIME CHECKS)
+#include <std/io>
+fn main() {
+    io.println(nope);
+}
