@@ -1,0 +1,70 @@
+// Regression cover for core parser/transpiler hardening:
+//  - comparisons now chain: relational (< <= > >=) binds tighter than
+//    equality (== !=), both left-associative, so a > b == c < d works
+//  - compound assignment on indexed lvalues: xs[i] += n, m["k"] += n,
+//    grid[i][j] <<= n (previously only plain '=' parsed)
+//  - block scoping: a `let` shadow inside a nested block no longer hijacks
+//    the outer variable's emitted name after the block ends
+// Also fixed (not testable from a passing program, guarded by clean errors):
+//  - unterminated character literals are rejected instead of accepted
+//  - pathological nesting errors out instead of segfaulting the compiler
+//  - a missing fn main() is a Nexa error, not a linker error
+#include <std/io>
+
+fn expect(label: string, got: int, want: int) {
+    if (got == want) {
+        io.println("ok " + label);
+    } else {
+        io.println("FAIL " + label + " got=" + got + " want=" + want);
+    }
+}
+
+fn isEven(n: int): bool {
+    return n % 2 == 0;
+}
+
+fn main() {
+    // chained comparisons: (3 > 2) == (1 < 2) -> true
+    expect("cmp chain", (int)(3 > 2 == 1 < 2), 1);
+    expect("cmp eq-chain", (int)(isEven(4) == true), 1);
+    expect("cmp sizeof", (int)(sizeof 'c' == sizeof(char)), 1);
+
+    // compound assignment through indices
+    let xs = [1, 2, 3];
+    xs[0] += 10;
+    xs[1] *= 5;
+    xs[2] -= 3;
+    expect("slice +=", xs[0], 11);
+    expect("slice *=", xs[1], 10);
+    expect("slice -=", xs[2], 0);
+
+    let m: map[string]int;
+    m["k"] += 3;
+    m["k"] += 4;
+    expect("map +=", m["k"], 7);
+
+    let grid: [][]int;
+    grid.push([1, 2]);
+    grid[0][1] += 7;
+    grid[0][0] <<= 4;
+    expect("grid +=", grid[0][1], 9);
+    expect("grid <<=", grid[0][0], 16);
+
+    // block scoping: the inner shadow must not leak out of its block
+    let x = 1;
+    if (true) {
+        let x = 2;
+        expect("shadow inner", x, 2);
+    }
+    expect("shadow outer", x, 1);
+
+    let s = "a";
+    if (true) {
+        let s = 99;
+        expect("shadow retype", s, 99);
+    }
+    s += "b";
+    expect("shadow str len", len(s), 2);
+
+    io.println("core_hardening ok");
+}

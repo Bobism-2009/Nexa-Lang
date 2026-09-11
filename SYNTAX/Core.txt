@@ -253,6 +253,8 @@ HEAP ALLOCATION (no GC — manual, C-style)
     x += n;  x -= n;  x *= n;  x /= n;  x %= n;  (compound assignment)
     x &= n;  x |= n;  x ^= n;  x <<= n;  x >>= n;  (bitwise compound assignment)
     s += "x";  (string concatenation - += works for strings)
+    Compound assignment also works through indices, fields, and pointers:
+    xs[i] += n;  m["k"] += n;  grid[i][j] <<= n;  p.x *= 2;  ptr->x -= 1;  *q += n;
 
 ARITHMETIC
   + - * / %

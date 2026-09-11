@@ -1968,6 +1968,15 @@ int main(int argc, char* argv[]) {
         std::cout << "[Nexa] Transpiling...\n";
 
         bool isLib = buildDll || buildShared || buildStaticLib;
+        if (!isLib) {
+            bool hasMain = false;
+            for (const nexa::AstNode& n : ast) {
+                if (n.type == nexa::AstNode::Type::MainFunction) { hasMain = true; break; }
+            }
+            if (!hasMain) {
+                throw std::runtime_error("No fn main() found: an executable needs exactly one fn main() (library builds --dll/--shared/--static-lib do not)");
+            }
+        }
         nexa::CppTarget cppTarget = nexa::hostCppTarget();
         if (buildWasm) cppTarget = nexa::CppTarget::Wasm;
         else if (buildWin) cppTarget = nexa::CppTarget::Windows;

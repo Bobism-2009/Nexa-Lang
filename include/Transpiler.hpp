@@ -2542,7 +2542,24 @@ private:
             for (const auto& kv : *injectNexaDecl) nexaDeclStack_.back()[kv.first] = kv.second;
         }
         varStructPush();
+        // Lexical scoping: declarations inside this block (including shadows of
+        // outer names) must not survive past it, so snapshot the name map and
+        // per-variable type flags and restore them on exit.
+        std::map<std::string, std::string> savedVarMap = varMap;
+        std::map<std::string, bool> savedIsString = varIsString;
+        std::map<std::string, bool> savedIsConst = varIsConst;
+        std::map<std::string, bool> savedIsFloat = varIsFloat;
+        std::map<std::string, bool> savedIsChar = varIsChar;
+        std::map<std::string, bool> savedIsBool = varIsBool;
+        std::map<std::string, bool> savedIsEnum = varIsEnum;
         emitBlockStatements(out, children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent, inStringSwitchCase);
+        varMap = std::move(savedVarMap);
+        varIsString = std::move(savedIsString);
+        varIsConst = std::move(savedIsConst);
+        varIsFloat = std::move(savedIsFloat);
+        varIsChar = std::move(savedIsChar);
+        varIsBool = std::move(savedIsBool);
+        varIsEnum = std::move(savedIsEnum);
         varStructPop();
         nexaDeclStack_.pop_back();
     }
@@ -3139,7 +3156,10 @@ private:
                 std::string val = emitExpr(rhs, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 std::string baseT = lookupNexaDecl(child.value);
                 const bool single = child.children.size() == 2;
-                if (baseT == "json") {
+                const std::string idxOp = child.initValue.empty() ? "=" : child.initValue;
+                if (idxOp != "=") {
+                    out << indent << lhs << " " << idxOp << " " << val << ";\n";
+                } else if (baseT == "json") {
                     std::string rhsT = inferExprNexaType(rhs);
                     if (rhsT != "json") val = "__nexa_json_from(" + val + ")";
                     out << indent << lhs << " = " << val << ";\n";
@@ -3629,6 +3649,28 @@ private:
         }
     }
 
+    // A comparison operand may itself be a comparison (a > b == c < d);
+    // route those through emitCond with parens, everything else through emitExpr.
+    std::string emitCmpOperand(const AstNode& c, const std::map<std::string, std::string>& varMap,
+                               const std::map<std::string, bool>* varIsString = nullptr,
+                               const std::map<std::string, bool>* varIsFloat = nullptr,
+                               const std::map<std::string, bool>* varIsChar = nullptr,
+                               const std::map<std::string, bool>* varIsBool = nullptr) {
+        switch (c.type) {
+            case AstNode::Type::CondEq:
+            case AstNode::Type::CondNe:
+            case AstNode::Type::CondLt:
+            case AstNode::Type::CondLe:
+            case AstNode::Type::CondGt:
+            case AstNode::Type::CondGe:
+            case AstNode::Type::CondAnd:
+            case AstNode::Type::CondOr:
+                return "(" + emitCond(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
+            default:
+                return emitExpr(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+        }
+    }
+
     std::string emitCond(const AstNode& c, const std::map<std::string, std::string>& varMap,
                          const std::map<std::string, bool>* varIsString = nullptr,
                          const std::map<std::string, bool>* varIsFloat = nullptr,
@@ -3643,8 +3685,8 @@ private:
                         }
                     }
                 }
-                return emitExpr(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " == " +
-                       emitExpr(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                return emitCmpOperand(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " == " +
+                       emitCmpOperand(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::CondNe:
                 if (c.children.size() >= 2) {
                     if (auto L = tryFoldComparableString(c.children[0], varIsString)) {
@@ -3653,16 +3695,16 @@ private:
                         }
                     }
                 }
-                return emitExpr(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " != " +
-                       emitExpr(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                return emitCmpOperand(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " != " +
+                       emitCmpOperand(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::CondLt:
-                return emitExpr(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " < " + emitExpr(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                return emitCmpOperand(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " < " + emitCmpOperand(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::CondLe:
-                return emitExpr(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " <= " + emitExpr(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                return emitCmpOperand(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " <= " + emitCmpOperand(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::CondGt:
-                return emitExpr(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " > " + emitExpr(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                return emitCmpOperand(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " > " + emitCmpOperand(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::CondGe:
-                return emitExpr(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " >= " + emitExpr(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                return emitCmpOperand(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " >= " + emitCmpOperand(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::CondAnd: {
                 std::string L = emitCond(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 if (c.children[0].type == AstNode::Type::CondOr) L = "(" + L + ")";

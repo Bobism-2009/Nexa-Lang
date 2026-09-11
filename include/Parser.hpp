@@ -285,6 +285,21 @@ private:
     std::set<std::string> structNames_;
     std::map<std::string, std::set<std::string>> structFieldNames_;
     std::set<std::string> enumNames_;
+    // Recursive-descent depth across expressions and statement bodies combined.
+    // Without a cap, pathological nesting (hundreds of parens or braces)
+    // overflows the C++ stack and segfaults the compiler instead of erroring.
+    int nestDepth_ = 0;
+    static constexpr int kMaxNestDepth = 256;
+    struct NestGuard {
+        Parser& p;
+        NestGuard(Parser& p_, size_t line) : p(p_) {
+            if (++p.nestDepth_ > kMaxNestDepth) {
+                throw std::runtime_error("Code is nested too deeply (limit " +
+                    std::to_string(kMaxNestDepth) + " levels) at line " + std::to_string(line));
+            }
+        }
+        ~NestGuard() { --p.nestDepth_; }
+    };
 
     static bool exprProducesString(const AstNode& e) {
         if (e.type == AstNode::Type::OsInfo) {
@@ -1319,6 +1334,7 @@ private:
     // Parse a braced block { ... } OR a single braceless statement (C-style),
     // returning a Block node either way.
     AstNode parseBody(AstNode* parentIf = nullptr) {
+        NestGuard guard(*this, peek().line);
         AstNode block{AstNode::Type::Block, "", {}};
         if (match(TokenType::LBrace)) {
             block.children = parseBlock(parentIf);
@@ -1750,14 +1766,27 @@ private:
             }
             return {AstNode::Type::AssnMember, op, {std::move(cur), std::move(expr)}};
         }
-        if (!match(TokenType::Assign)) {
-            throw std::runtime_error("Expected '=' at line " + std::to_string(peek().line));
+        std::string idxOp = "=";
+        if (match(TokenType::Assign)) idxOp = "=";
+        else if (match(TokenType::PlusAssign)) idxOp = "+=";
+        else if (match(TokenType::MinusAssign)) idxOp = "-=";
+        else if (match(TokenType::StarAssign)) idxOp = "*=";
+        else if (match(TokenType::SlashAssign)) idxOp = "/=";
+        else if (match(TokenType::PercentAssign)) idxOp = "%=";
+        else if (match(TokenType::BitAndAssign)) idxOp = "&=";
+        else if (match(TokenType::BitOrAssign)) idxOp = "|=";
+        else if (match(TokenType::BitXorAssign)) idxOp = "^=";
+        else if (match(TokenType::ShlAssign)) idxOp = "<<=";
+        else if (match(TokenType::ShrAssign)) idxOp = ">>=";
+        else {
+            throw std::runtime_error("Expected '=' or compound assignment at line " + std::to_string(peek().line));
         }
         AstNode expr = parseExpression();
         if (!match(TokenType::Semicolon)) {
             throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
         }
         AstNode node{AstNode::Type::AssnIndex, name, {}};
+        node.initValue = idxOp;
         node.children = std::move(indices);
         node.children.push_back(std::move(expr));
         return node;
@@ -1835,31 +1864,37 @@ private:
         return node;
     }
 
-    AstNode parseCondition() {
+    // Relational level: < <= > >=, left-associative, chains freely.
+    AstNode parseRelational() {
         AstNode left = parseExpression();
-        if (match(TokenType::Equals)) {
-            AstNode n{AstNode::Type::CondEq, "", {left, parseExpression()}};
-            return n;
+        while (true) {
+            if (match(TokenType::Less)) {
+                left = AstNode{AstNode::Type::CondLt, "", {std::move(left), parseExpression()}};
+            } else if (match(TokenType::LessEq)) {
+                left = AstNode{AstNode::Type::CondLe, "", {std::move(left), parseExpression()}};
+            } else if (match(TokenType::Greater)) {
+                left = AstNode{AstNode::Type::CondGt, "", {std::move(left), parseExpression()}};
+            } else if (match(TokenType::GreaterEq)) {
+                left = AstNode{AstNode::Type::CondGe, "", {std::move(left), parseExpression()}};
+            } else {
+                break;
+            }
         }
-        if (match(TokenType::NotEquals)) {
-            AstNode n{AstNode::Type::CondNe, "", {left, parseExpression()}};
-            return n;
-        }
-        if (match(TokenType::Less)) {
-            AstNode n{AstNode::Type::CondLt, "", {left, parseExpression()}};
-            return n;
-        }
-        if (match(TokenType::LessEq)) {
-            AstNode n{AstNode::Type::CondLe, "", {left, parseExpression()}};
-            return n;
-        }
-        if (match(TokenType::Greater)) {
-            AstNode n{AstNode::Type::CondGt, "", {left, parseExpression()}};
-            return n;
-        }
-        if (match(TokenType::GreaterEq)) {
-            AstNode n{AstNode::Type::CondGe, "", {left, parseExpression()}};
-            return n;
+        return left;
+    }
+
+    // Equality level: == !=, looser than relational, so a > b == c < d
+    // parses as (a > b) == (c < d).
+    AstNode parseCondition() {
+        AstNode left = parseRelational();
+        while (true) {
+            if (match(TokenType::Equals)) {
+                left = AstNode{AstNode::Type::CondEq, "", {std::move(left), parseRelational()}};
+            } else if (match(TokenType::NotEquals)) {
+                left = AstNode{AstNode::Type::CondNe, "", {std::move(left), parseRelational()}};
+            } else {
+                break;
+            }
         }
         return left;
     }
@@ -2439,6 +2474,7 @@ private:
     }
 
     AstNode parseUnary() {
+        NestGuard guard(*this, peek().line);
         // C-style cast: (int)x, (float)y, (string)z, ...
         if (peek().type == TokenType::LParen && pos_ + 2 < tokens_.size()) {
             const Token& t1 = tokens_[pos_ + 1];

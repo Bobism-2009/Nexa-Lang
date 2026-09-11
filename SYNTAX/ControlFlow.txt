@@ -17,6 +17,10 @@ CONDITIONALS
 
 COMPARISONS
   ==  !=  <  <=  >  >=
+  Relational (< <= > >=) binds tighter than equality (== !=); both chain
+  left-to-right, so a > b == c < d is (a > b) == (c < d).
+  Arithmetic and bitwise operators bind tighter than any comparison:
+  x & 2 == 2 is (x & 2) == 2 (unlike C).
 
 LOGICAL OPERATORS
   &&   and

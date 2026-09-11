@@ -529,12 +529,14 @@ private:
         size_t startLine = line_;
         pos_++;
         if (pos_ >= source_.size()) {
-            return {TokenType::Char, "", startLine};
+            throw std::runtime_error("Unterminated character literal at line " + std::to_string(startLine));
         }
         std::string value;
         if (source_[pos_] == '\\') {
             pos_++;
-            if (pos_ >= source_.size()) return {TokenType::Char, "", startLine};
+            if (pos_ >= source_.size()) {
+                throw std::runtime_error("Unterminated character literal at line " + std::to_string(startLine));
+            }
             char c = source_[pos_++];
             if (c == 'n') value = "\n";
             else if (c == 't') value = "\t";
@@ -556,7 +558,11 @@ private:
         } else {
             value = std::string(1, source_[pos_++]);
         }
-        if (pos_ < source_.size() && source_[pos_] == '\'') pos_++;
+        if (pos_ < source_.size() && source_[pos_] == '\'') {
+            pos_++;
+        } else {
+            throw std::runtime_error("Unterminated character literal at line " + std::to_string(startLine));
+        }
         return {TokenType::Char, value, startLine};
     }
 
