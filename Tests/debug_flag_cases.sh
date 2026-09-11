@@ -193,6 +193,105 @@ expect_reject() {
 expect_reject "--debug --small is rejected" "--debug and --small are contradictory" --debug --small
 expect_reject "--debug --wasm is rejected" "--debug is not supported with --wasm" --debug --wasm
 
+# --- 5. #line directives map the generated C++ back to the .nxa source --------
+# A program spanning two .nxa files, so the per-statement mapping has to name the
+# right one rather than assuming everything came from the entry file.
+cat > "$WORK/lib.nxa" <<'NXA'
+#include <std/io>
+
+fn lib_triple(n: int): int {
+    let t = n * 3;
+    return t;
+}
+NXA
+cat > "$WORK/twofile.nxa" <<'NXA'
+#include <std/io>
+#include "lib.nxa"
+
+fn main() {
+    let v = 5;
+    io.println("triple=", lib_triple(v));
+}
+NXA
+
+out=$("$NEXAC" "$WORK/twofile.nxa" --debug -o "$WORK/two" 2>&1)
+if [ $? -ne 0 ]; then
+    fail "#line build" "NexaC exited non-zero" "$out"
+elif [ ! -f "$WORK/two.debug.cpp" ]; then
+    fail "#line build" "no generated C++ to inspect"
+else
+    GEN="$WORK/two.debug.cpp"
+
+    if grep -q '^#line [0-9][0-9]* ".*twofile\.nxa"$' "$GEN"; then
+        pass "generated C++ carries #line directives for the entry .nxa"
+    else
+        fail "#line" "no #line directive names twofile.nxa" "$(grep -c '^#line' "$GEN") #line directives total"
+    fi
+
+    # Statements parsed out of an included file must map to that file. This is the
+    # case a single "current file" variable would get wrong.
+    if grep -q '^#line [0-9][0-9]* ".*lib\.nxa"$' "$GEN"; then
+        pass "included .nxa statements map to the included file"
+    else
+        fail "#line" "no #line directive names lib.nxa; included statements were mis-attributed"
+    fi
+
+    # The markers are an internal encoding. One surviving in the output means it was
+    # spliced into the middle of a line, where it could not be rewritten.
+    if grep -q '__nexa_line_mark__' "$GEN"; then
+        fail "#line" "an unrewritten marker survived" "$(grep -n '__nexa_line_mark__' "$GEN" | head -3)"
+    else
+        pass "no internal line markers survive in the output"
+    fi
+
+    # The invariant the whole scheme rests on: a directive that hands line info back
+    # to the generated file must name the line that physically follows it. If any
+    # pass added or dropped a line after the rewrite, these drift and a debugger
+    # silently shows the wrong source.
+    bad=$(awk '
+        /^#line [0-9]+ ".*\.debug\.cpp"$/ {
+            want = NR + 1
+            got = $2
+            if (got != want) printf "line %d says %d\n", NR, got
+        }
+    ' "$GEN")
+    if [ -n "$bad" ]; then
+        fail "#line" "snap-back directives do not name the following line" "$bad"
+    else
+        pass "snap-back directives name the line that follows them"
+    fi
+
+    # End to end: the linked binary's line table, not just the text we emitted.
+    if command -v readelf >/dev/null 2>&1; then
+        if readelf --debug-dump=decodedline "$WORK/two" 2>/dev/null | grep -q 'twofile\.nxa'; then
+            pass "DWARF line table names the .nxa source"
+        else
+            fail "#line" "the binary's line table never mentions twofile.nxa"
+        fi
+    else
+        echo "skip DWARF line table check (no readelf)"
+    fi
+
+    got=$("$WORK/two" 2>&1)
+    if [ "$got" = "triple=15" ]; then
+        pass "a #line-annotated debug binary still runs correctly"
+    else
+        fail "#line" "wrong output from the debug binary" "$got"
+    fi
+fi
+
+# Release builds must not carry the mapping. --source is the only way to see the
+# C++ for a non-debug build, since a normal build deletes it.
+out=$("$NEXAC" "$WORK/twofile.nxa" --source "$WORK/rel.cpp" 2>&1)
+if [ $? -ne 0 ] || [ ! -f "$WORK/rel.cpp" ]; then
+    fail "release #line" "--source did not produce C++" "$out"
+elif grep -qE '^#line|__nexa_line_mark__' "$WORK/rel.cpp"; then
+    fail "release #line" "default build emits line directives; only --debug should" \
+        "$(grep -nE '^#line|__nexa_line_mark__' "$WORK/rel.cpp" | head -3)"
+else
+    pass "default build emits no #line directives"
+fi
+
 if [ $fails -eq 0 ]; then
     echo "All --debug cases passed."
     exit 0
