@@ -1,0 +1,57 @@
+// Regression cover for parser/lexer expression bugs.
+//  - `x-1` with no spaces used to lex as x followed by the literal -1
+//  - comparisons / && / || / ?: were rejected in return values, call
+//    arguments, array elements and io.println arguments
+//  - `and` / `or` / `not` are documented in SYNTAX/ControlFlow.txt
+#include <std/io>
+
+fn gt(a: int, b: int): bool {
+    return a > b;              // comparison as a return value
+}
+
+fn show(flag: bool) {
+    io.println(flag);
+}
+
+fn expect(label: string, got: int, want: int) {
+    if (got == want) {
+        io.println("ok " + label);
+    } else {
+        io.println("FAIL " + label + " got=" + got + " want=" + want);
+    }
+}
+
+fn main() {
+    // Subtraction without surrounding spaces.
+    let x = 10;
+    expect("x-1", x-1, 9);
+    expect("x-1-2", x-1-2, 7);
+
+    let xs = [1, 2, 3];
+    expect("index expr", xs[len(xs)-1], 3);
+    expect("nested", xs[2-1], 2);
+
+    // Negative literals still work in prefix position.
+    let neg = -5;
+    expect("neg literal", neg, -5);
+    expect("minus neg", 3 - -2, 5);
+    expect("negative index arg", xs[0]-(-1), 2);
+
+    // Comparisons in value positions.
+    show(gt(2, 1));
+    show(1 == 1);
+    let flags = [1 == 1, 2 == 3];
+    show(flags[0]);
+    show(flags[1]);
+    io.println(x > 5 && x < 20);
+    io.println(true ? 1 : 2);
+
+    // Word spellings of the logical operators.
+    let a = true;
+    let b = false;
+    if (a and b) { io.println("both"); } else { io.println("not both"); }
+    if (a or b) { io.println("either"); }
+    if (not b) { io.println("not b"); }
+
+    io.println("expr_regression ok");
+}

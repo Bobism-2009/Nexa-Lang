@@ -428,6 +428,21 @@ public:
                 needsVector = true;
             }
             if (n.type == AstNode::Type::ExprSlice) needsVector = true;
+            // checkNeedsVector above only walks statement positions, so container uses
+            // nested inside an expression (io.println(s.split(v)[0])) land here instead.
+            if (n.type == AstNode::Type::ExprArrayLiteral || n.type == AstNode::Type::ExprArrayIndex ||
+                n.type == AstNode::Type::AssnIndex || n.type == AstNode::Type::ForIn) {
+                needsVector = true;
+            }
+            if (n.type == AstNode::Type::StrMethod && n.value == "split") {
+                needsVector = true;
+                needsString = true;
+            }
+            // len()/slicing over a folded string literal promotes it with std::string(...).
+            if (n.type == AstNode::Type::ExprLen || n.type == AstNode::Type::ExprSlice ||
+                (n.type == AstNode::Type::ExprAdd && exprProducesString(n))) {
+                needsString = true;
+            }
             if (n.type == AstNode::Type::FnCall && (n.value == "has" || n.value == "remove" ||
                     n.value == "keys" || n.value == "values")) {
                 needsMap = true;
@@ -1574,7 +1589,17 @@ private:
                     return "string";
                 }
                 return "int";
+            // Comparisons and the logical operators yield bool, not int — overload
+            // resolution needs this to match `fn f(x: bool)` against `f(a == b)`.
             case AstNode::Type::CondNot:
+            case AstNode::Type::CondEq:
+            case AstNode::Type::CondNe:
+            case AstNode::Type::CondLt:
+            case AstNode::Type::CondGt:
+            case AstNode::Type::CondLe:
+            case AstNode::Type::CondGe:
+            case AstNode::Type::CondAnd:
+            case AstNode::Type::CondOr:
                 return "bool";
             case AstNode::Type::ExprTernary:
                 if (e.children.size() >= 3) {
@@ -2064,7 +2089,10 @@ private:
         } else if (exprIsC) {
             out << indent << "printf(\"%c" << (newline ? "\\n" : "") << "\", " << expr << ");\n";
         } else if (exprIsBoolT) {
-            out << indent << "printf(\"%d" << (newline ? "\\n" : "") << "\", " << expr << ");\n";
+            // printf is variadic, so the argument must already be an int. std::vector<bool>
+            // indexes to a proxy reference rather than a bool, and passing that through
+            // varargs is undefined — io.println(flags[0]) printed garbage without this cast.
+            out << indent << "printf(\"%d" << (newline ? "\\n" : "") << "\", static_cast<int>(" << expr << "));\n";
         } else if (exprIsPtr) {
             out << indent << "printf(\"%p" << (newline ? "\\n" : "") << "\", (void*)(" << expr << "));\n";
         } else if (ntype == "json") {
@@ -3913,8 +3941,11 @@ private:
                 throw std::runtime_error("Internal: unknown file method '" + fn + "'");
             }
             case AstNode::Type::ExprLen: {
+                if (e.children[0].type == AstNode::Type::ExprStringLiteral) {
+                    return std::to_string(e.children[0].value.size());  // len("abc") is a constant
+                }
                 std::string s = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
-                return "(int)((" + s + ").size())";
+                return "(int)((" + asCppStdString(s) + ").size())";
             }
             case AstNode::Type::ExprTrim: {
                 std::string w = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
@@ -4314,11 +4345,11 @@ private:
                     " if (__nexa_a > __nexa_n) __nexa_a = __nexa_n; if (__nexa_b > __nexa_n) __nexa_b = __nexa_n;"
                     " if (__nexa_b < __nexa_a) __nexa_b = __nexa_a; ";
                 if (baseT == "string") {
-                    return "([&](){ const auto& __nexa_s = " + v + "; " + bounds +
+                    return "([&](){ const auto& __nexa_s = " + asCppStdString(v) + "; " + bounds +
                         "return __nexa_s.substr((size_t)__nexa_a, (size_t)(__nexa_b - __nexa_a)); })()";
                 }
                 std::string cppT = nexaTypeToCpp(nexaIsSliceType(baseT) ? baseT : std::string("[]int"));
-                return "([&](){ const auto& __nexa_s = " + v + "; " + bounds +
+                return "([&](){ const auto& __nexa_s = " + asCppStdString(v) + "; " + bounds +
                     "return " + cppT + "(__nexa_s.begin() + __nexa_a, __nexa_s.begin() + __nexa_b); })()";
             }
             case AstNode::Type::ExprMember: {
@@ -4769,7 +4800,8 @@ private:
             if (auto folded = tryFoldStringLiteralChain(child, varIsString)) {
                 return emitCppStringValue(*folded);
             }
-            return "(" + emitConcatOperand(child.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " + "
+            // Promote the left side: at least one operand of + must be a std::string.
+            return "(" + asCppStdString(emitConcatOperand(child.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool)) + " + "
                 + emitConcatOperand(child.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
         }
         if (child.type == AstNode::Type::ExprAdd) {
@@ -4837,6 +4869,19 @@ private:
             start = nl + 1;
         }
         out << indent << "}\n";
+    }
+
+    // String literals (and compile-time folds of them, e.g. "AB".lower() or
+    // crypto.hex_encode("AB")) are emitted as bare C++ literals of type const char[N] so
+    // that the common cases stay allocation-free. Any context that calls a std::string
+    // member on the result, or adds two of them together, has to promote first —
+    // `("a" + "b")` and `("abc").size()` are both ill-formed C++.
+    static bool isBareCppStringLiteral(const std::string& emitted) {
+        return !emitted.empty() && emitted[0] == '"';
+    }
+
+    static std::string asCppStdString(const std::string& emitted) {
+        return isBareCppStringLiteral(emitted) ? "std::string(" + emitted + ")" : emitted;
     }
 
     std::string emitCppStringValue(const std::string& s) const {

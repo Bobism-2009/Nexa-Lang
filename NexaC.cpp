@@ -1975,8 +1975,10 @@ int main(int argc, char* argv[]) {
         // Decide which C++ machinery the generated code can safely omit. Exceptions/unwind tables
         // are only needed for try/catch, throw, Result.value(), std::stoi (io.to_int), or inline_cpp.
         // RTTI is never emitted by the transpiler, so it is dropped unless inline_cpp is present.
+        // usage.result matters even without an explicit .value() call: the Result runtime header
+        // itself contains `throw`, which -fno-exceptions rejects outright.
         const nexa::Modules::CppUsage& usage = transpiler.cppUsage();
-        const bool noExceptions = !usage.exceptions && !usage.ioToInt && !modules.hasInlineCpp();
+        const bool noExceptions = !usage.exceptions && !usage.result && !usage.ioToInt && !modules.hasInlineCpp();
         const bool noRtti = !modules.hasInlineCpp();
 
         std::ofstream out(cppPath);

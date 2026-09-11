@@ -1,0 +1,34 @@
+// Regression cover for two codegen bugs around bools and Result:
+//  - []bool indexes to a std::vector<bool> proxy; passing it straight to the
+//    variadic printf is undefined and printed garbage
+//  - a program that mentions Result without calling .value() still emits the
+//    Result runtime, which contains `throw`, so -fno-exceptions must stay off
+#include <std/io>
+
+fn expect(label: string, got: int, want: int) {
+    if (got == want) {
+        io.println("ok " + label);
+    } else {
+        io.println("FAIL " + label + " got=" + got + " want=" + want);
+    }
+}
+
+fn main() {
+    let flags: []bool;
+    flags.push(true);
+    flags.push(false);
+    io.println(flags[0]);
+    io.println(flags[1]);
+    expect("len", len(flags), 2);
+    if (flags[0]) { io.println("first is true"); }
+    for (f in flags) { io.println(f); }
+
+    // Result used without .value() — must still compile and run.
+    let r: Result[void] = ok();
+    io.println(r.ok());
+    let e: Result[int] = err("nope");
+    io.println(e.ok());
+    io.println(e.error());
+
+    io.println("bool_result ok");
+}

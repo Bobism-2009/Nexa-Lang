@@ -111,6 +111,9 @@ public:
             if (pos_ >= source_.size()) break;
 
             char c = source_[pos_];
+            // '-' only starts a negative literal in prefix position. After a token that can
+            // end an expression it is the binary operator, so `x-1` is x - 1, not x (-1).
+            const bool minusIsSign = !endsExpression(tokens);
 
             if (c == '/' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '/') {
                 while (pos_ < source_.size() && source_[pos_] != '\n') pos_++;
@@ -120,7 +123,8 @@ public:
                     if (source_[pos_] == '\n') line_++;
                     pos_++;
                 }
-                if (pos_ + 1 < source_.size()) pos_ += 2;
+                // Unterminated: swallow the rest instead of leaking the final byte as a token.
+                pos_ = (pos_ + 1 < source_.size()) ? pos_ + 2 : source_.size();
             } else if (c == '#') {
                 tokens.push_back(scanInclude());
             } else if (c == 'R' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '"') {
@@ -129,9 +133,9 @@ public:
                 tokens.push_back(scanString());
             } else if (c == '\'') {
                 tokens.push_back(scanChar());
-            } else if (std::isdigit(c) || (c == '-' && pos_ + 1 < source_.size() && std::isdigit(source_[pos_ + 1]))) {
+            } else if (isDigit(c) || (minusIsSign && c == '-' && pos_ + 1 < source_.size() && isDigit(source_[pos_ + 1]))) {
                 tokens.push_back(scanNumber());
-            } else if (std::isalpha(c) || c == '_') {
+            } else if (isAlpha(c) || c == '_') {
                 Token id = scanIdentifier();
                 if (id.type == TokenType::InlineCpp) {
                     size_t lineStart = id.line;
@@ -174,7 +178,7 @@ public:
             } else if (c == '.' && pos_ + 2 < source_.size() && source_[pos_ + 1] == '.' && source_[pos_ + 2] == '.') {
                 tokens.push_back({TokenType::Ellipsis, "...", line_});
                 pos_ += 3;
-            } else if (c == '.' && pos_ + 1 < source_.size() && std::isdigit(source_[pos_ + 1])) {
+            } else if (c == '.' && pos_ + 1 < source_.size() && isDigit(source_[pos_ + 1])) {
                 tokens.push_back(scanFloatFromDot());
             } else if (c == '.') {
                 tokens.push_back({TokenType::Dot, ".", line_});
@@ -306,6 +310,34 @@ private:
     size_t pos_;
     size_t line_;
 
+    // <cctype> is undefined for negative values, and `char` is signed on x86, so every
+    // byte >= 0x80 (UTF-8 source, \xHH bytes) would be UB. Classify through unsigned char.
+    static bool isDigit(char c) { return std::isdigit(static_cast<unsigned char>(c)) != 0; }
+    static bool isAlpha(char c) { return std::isalpha(static_cast<unsigned char>(c)) != 0; }
+    static bool isAlnum(char c) { return std::isalnum(static_cast<unsigned char>(c)) != 0; }
+
+    // True when the last token can terminate an expression, which makes a following
+    // '-' the binary subtraction operator rather than the sign of a numeric literal.
+    static bool endsExpression(const std::vector<Token>& tokens) {
+        if (tokens.empty()) return false;
+        switch (tokens.back().type) {
+            case TokenType::Identifier:
+            case TokenType::Number:
+            case TokenType::Float:
+            case TokenType::String:
+            case TokenType::Char:
+            case TokenType::True:
+            case TokenType::False:
+            case TokenType::RParen:
+            case TokenType::RBracket:
+            case TokenType::PlusPlus:
+            case TokenType::MinusMinus:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     void skipWhitespace() {
         while (pos_ < source_.size()) {
             char c = source_[pos_];
@@ -364,6 +396,7 @@ private:
                     value += c;  // unknown escape, pass through (e.g. \0)
                 }
             } else {
+                if (source_[pos_] == '\n') line_++;  // keep later error lines accurate
                 value += source_[pos_++];
             }
         }
@@ -402,7 +435,7 @@ private:
     Token scanIdentifier() {
         size_t start = pos_;
         size_t startLine = line_;
-        while (pos_ < source_.size() && (std::isalnum(source_[pos_]) || source_[pos_] == '_')) {
+        while (pos_ < source_.size() && (isAlnum(source_[pos_]) || source_[pos_] == '_')) {
             pos_++;
         }
         std::string value = source_.substr(start, pos_ - start);
@@ -435,6 +468,10 @@ private:
         else if (value == "delete") type = TokenType::Delete;
         else if (value == "sizeof") type = TokenType::Sizeof;
         else if (value == "inline_cpp") type = TokenType::InlineCpp;
+        // Word spellings of the logical operators (SYNTAX/ControlFlow.txt).
+        else if (value == "and") type = TokenType::And;
+        else if (value == "or") type = TokenType::Or;
+        else if (value == "not") type = TokenType::Not;
 
         return {type, value, startLine};
     }
@@ -479,10 +516,10 @@ private:
             while (pos_ < source_.size() && std::isxdigit(static_cast<unsigned char>(source_[pos_]))) pos_++;
             return {TokenType::Number, source_.substr(start, pos_ - start), startLine};
         }
-        while (pos_ < source_.size() && std::isdigit(source_[pos_])) pos_++;
-        if (pos_ < source_.size() && source_[pos_] == '.' && pos_ + 1 < source_.size() && std::isdigit(source_[pos_ + 1])) {
+        while (pos_ < source_.size() && isDigit(source_[pos_])) pos_++;
+        if (pos_ < source_.size() && source_[pos_] == '.' && pos_ + 1 < source_.size() && isDigit(source_[pos_ + 1])) {
             pos_++;
-            while (pos_ < source_.size() && std::isdigit(source_[pos_])) pos_++;
+            while (pos_ < source_.size() && isDigit(source_[pos_])) pos_++;
             return {TokenType::Float, source_.substr(start, pos_ - start), startLine};
         }
         return {TokenType::Number, source_.substr(start, pos_ - start), startLine};
@@ -527,7 +564,7 @@ private:
         size_t start = pos_;
         size_t startLine = line_;
         pos_++;
-        while (pos_ < source_.size() && std::isdigit(source_[pos_])) pos_++;
+        while (pos_ < source_.size() && isDigit(source_[pos_])) pos_++;
         return {TokenType::Float, "0" + source_.substr(start, pos_ - start), startLine};
     }
 };

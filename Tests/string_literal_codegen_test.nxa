@@ -1,0 +1,46 @@
+// Regression cover for string literals leaking into C++ as `const char*`.
+// A folded literal ("AB".lower(), crypto.hex_encode("AB"), "a" + "b") has to be
+// promoted to std::string before it is concatenated, measured or sliced —
+// `("a" + "b")` and `("abc").size()` are both ill-formed C++.
+#include <std/io>
+#include <std/crypto>
+
+fn expect(label: string, got: string, want: string) {
+    if (got == want) {
+        io.println("ok " + label);
+    } else {
+        io.println("FAIL " + label + " got=" + got + " want=" + want);
+    }
+}
+
+fn expectInt(label: string, got: int, want: int) {
+    if (got == want) {
+        io.println("ok " + label);
+    } else {
+        io.println("FAIL " + label + " got=" + got + " want=" + want);
+    }
+}
+
+fn main() {
+    // Concatenation where a folded method result meets a plain literal.
+    expect("lit+lit", "a" + "b", "ab");
+    expect("lit+fold", "x" + "Y".lower(), "xy");
+    expect("fold+fold", "A".lower() + "B".lower(), "ab");
+    expect("wrapped fold", "[" + "  Hello  ".trim() + "]", "[Hello]");
+
+    // len() over literals and folded literals.
+    expectInt("len literal", len("abc"), 3);
+    expectInt("len fold", len("AB".lower()), 2);
+    expectInt("len concat", len("ab") + len("cde"), 5);
+    expectInt("len hex", len(crypto.hex_encode("AB")), 4);
+
+    // Slicing a literal receiver.
+    expect("slice literal", "abcdef"[1:3], "bc");
+    expect("slice open end", "abcdef"[4:], "ef");
+
+    // split() nested inside an expression still pulls in <vector>.
+    let sep = ",";
+    expect("split index", "a,b,c".split(sep)[1], "b");
+
+    io.println("string_literal_codegen ok");
+}

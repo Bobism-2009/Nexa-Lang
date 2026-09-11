@@ -1476,7 +1476,7 @@ private:
             call.children.push_back(std::move(e));
             if (peek().type != TokenType::RParen) {
                 for (;;) {
-                    call.children.push_back(parseExpression());
+                    call.children.push_back(parseValueExpr());
                     if (!match(TokenType::Comma)) break;
                 }
             }
@@ -1496,7 +1496,7 @@ private:
         std::vector<AstNode> args;
         if (peek().type != TokenType::RParen) {
             for (;;) {
-                args.push_back(parseExpression());
+                args.push_back(parseValueExpr());
                 if (!match(TokenType::Comma)) break;
             }
         }
@@ -1516,7 +1516,7 @@ private:
         if (match(TokenType::Semicolon)) {
             return {AstNode::Type::Return, "", {}};
         }
-        AstNode expr = parseExpression();
+        AstNode expr = parseValueExpr();
         if (!match(TokenType::Semicolon)) {
             throw std::runtime_error("Expected ';' after return at line " + std::to_string(peek().line));
         }
@@ -2314,8 +2314,17 @@ private:
         return cur;
     }
 
+    // Arithmetic/bitwise level only. parseCondition() layers comparisons on top of this,
+    // so this must NOT reach parseTernary() or the grammar becomes left-recursive.
     AstNode parseExpression() {
         return parseBitOr();
+    }
+
+    // Full expression: arithmetic, comparisons, && / || / !, and ?:. Use this wherever a
+    // value is expected (call arguments, return values, array elements) so that
+    // `f(a == b)`, `return a > b;` and `io.println(c ? 1 : 2)` parse as documented.
+    AstNode parseValueExpr() {
+        return parseTernary();
     }
 
     AstNode parseBitOr() {
@@ -2464,7 +2473,7 @@ private:
         AstNode node{AstNode::Type::ExprArrayLiteral, "", {}};
         if (peek().type != TokenType::RBracket) {
             for (;;) {
-                node.children.push_back(parseExpression());
+                node.children.push_back(parseValueExpr());
                 if (!match(TokenType::Comma)) break;
             }
         }
@@ -2672,9 +2681,9 @@ private:
             argTok.type == TokenType::Minus || argTok.type == TokenType::Not ||
             argTok.type == TokenType::BitNot || argTok.type == TokenType::New ||
             argTok.type == TokenType::Sizeof) {
-            result.children.push_back(parseExpression());
+            result.children.push_back(parseValueExpr());
             while (match(TokenType::Comma)) {
-                result.children.push_back(parseExpression());
+                result.children.push_back(parseValueExpr());
             }
         } else {
             throw std::runtime_error("Expected string or expression at line " + std::to_string(argTok.line));
