@@ -1,0 +1,217 @@
+// Nexa Paint -- the std/gfx showcase.
+//
+// A small paint program that leans on every part of the module at once: the
+// shape rasterizers for the brushes, the global draw alpha for building colour
+// up stroke by stroke, gfx.save for writing the picture out, and the wheel /
+// released / typed input calls for a control scheme a key-down-only program
+// cannot express.
+//
+//   build: NexaC Examples/paint_demo.nxa -o paint_demo && ./paint_demo
+//
+//   left mouse      paint with the current brush
+//   1 2 3 4         brush: disc, square, triangle, star
+//   wheel           brush size (1..40)
+//   wheel sideways  brush alpha; , and . do the same on a mouse without it
+//   tab             next colour
+//   hold e          erase (release to go back to painting)
+//   type            text; enter stamps it at the cursor, backspace rubs it out
+//   c               clear the paper
+//   s               save painting.bmp next to the program
+//   escape          quit
+//
+// The canvas is the framebuffer itself: nothing clears it between frames, so
+// what you see is what accumulates. Only the strip along the bottom is redrawn
+// each frame, which is what keeps the HUD from smearing into the picture.
+#include <std/gfx>
+#include <std/io>
+#include <std/time>
+
+// The paper colour, and the height of the drawing area. Everything below
+// CANVAS_H belongs to the HUD.
+fn paper_r(): int { return 244; }
+fn paper_g(): int { return 240; }
+fn paper_b(): int { return 232; }
+
+fn clampi(v: int, lo: int, hi: int): int {
+    if (v < lo) { return lo; }
+    if (v > hi) { return hi; }
+    return v;
+}
+
+fn brush_name(b: int): string {
+    if (b == 0) { return "disc"; }
+    if (b == 1) { return "square"; }
+    if (b == 2) { return "tri"; }
+    return "star";
+}
+
+// One dab of the current brush. Every one of these is an alpha-blended draw, so
+// dragging slowly over the same spot builds the colour up -- the repeated blend
+// SYNTAX/Modules.txt warns about, used here on purpose.
+fn stamp(b: int, x: int, y: int, s: int, r: int, g: int, bl: int) {
+    if (b == 0) {
+        gfx.fill_circle(x, y, s, r, g, bl);
+        return;
+    }
+    if (b == 1) {
+        gfx.fill(x - s, y - s, s * 2 + 1, s * 2 + 1, r, g, bl);
+        return;
+    }
+    if (b == 2) {
+        gfx.fill_tri(x - s, y + s, x + s, y + s, x, y - s, r, g, bl);
+        return;
+    }
+
+    // A five-pointed star, drawn as one self-crossing loop: the points are
+    // visited in the order 0-2-4-1-3, so the even-odd rule in gfx.fill_poly
+    // leaves the pentagon in the middle of it hollow.
+    let ux: []int = [0, -6, 10, -10, 6];
+    let uy: []int = [-10, 8, -3, 8, -3];
+    let px: []int = [0, 0, 0, 0, 0];
+    let py: []int = [0, 0, 0, 0, 0];
+    for (i, 5) {
+        px[i] = x + ux[i] * s / 10;
+        py[i] = y + uy[i] * s / 10;
+    }
+    gfx.fill_poly(px, py, r, g, bl);
+}
+
+fn main() {
+    let W: int = 260;
+    let H: int = 150;
+    let CANVAS_H: int = 132;
+
+    if (gfx.open("Nexa Paint", W, H, 4) != 1) {
+        io.println("paint_demo: no window");
+        return 1;
+    }
+    gfx.text_size(1);
+
+    let pr: []int = [225,  60, 235, 240,  60,  30];
+    let pg: []int = [ 60, 150, 200, 120, 190,  30];
+    let pb: []int = [ 60, 235,  70, 200, 130,  30];
+
+    let brush: int = 0;
+    let size: int = 8;
+    let alpha: int = 160;
+    let ci: int = 0;
+    let erasing: int = 0;
+    let caption: string = "";
+
+    // The paper starts blank. gfx.clear ignores the draw alpha by design, which
+    // is exactly what a reset wants.
+    gfx.alpha(255);
+    gfx.clear(paper_r(), paper_g(), paper_b());
+
+    while (gfx.closed() == 0) {
+        gfx.poll();
+
+        if (gfx.pressed("escape") == 1) {
+            gfx.close();
+            return 0;
+        }
+
+        // --- input: the three calls BOB-21 added ---------------------------
+        // The wheel is not sticky: it reports one frame's worth of notches and
+        // the next gfx.poll() replaces it, so it can be added straight on.
+        let wy: int = gfx.wheel();
+        if (wy != 0) { size = clampi(size + wy, 1, 40); }
+
+        let wx: int = gfx.wheel_x();
+        if (wx != 0) { alpha = clampi(alpha + wx * 16, 8, 255); }
+        if (gfx.pressed(",") == 1) { alpha = clampi(alpha - 16, 8, 255); }
+        if (gfx.pressed(".") == 1) { alpha = clampi(alpha + 16, 8, 255); }
+
+        // gfx.typed gives characters rather than key names -- shift and the
+        // keyboard layout are already applied. It consumes its queue, so this
+        // is the only place the frame's text can be read.
+        let t: string = gfx.typed();
+        if (t.len() > 0 && caption.len() < 40) { caption = caption + t; }
+        if (gfx.pressed("backspace") == 1 && caption.len() > 0) {
+            caption = caption[0:caption.len() - 1];
+        }
+
+        // pressed and released are the two edges of the same key, which is what
+        // makes "hold to erase" a two-line affair.
+        if (gfx.pressed("e") == 1) { erasing = 1; }
+        if (gfx.released("e") == 1) { erasing = 0; }
+
+        if (gfx.pressed("1") == 1) { brush = 0; }
+        if (gfx.pressed("2") == 1) { brush = 1; }
+        if (gfx.pressed("3") == 1) { brush = 2; }
+        if (gfx.pressed("4") == 1) { brush = 3; }
+        if (gfx.pressed("tab") == 1) { ci = (ci + 1) % 6; }
+
+        if (gfx.pressed("c") == 1) {
+            gfx.alpha(255);
+            gfx.clear(paper_r(), paper_g(), paper_b());
+        }
+
+        // --- painting -------------------------------------------------------
+        let mx: int = gfx.mouse_x();
+        let my: int = gfx.mouse_y();
+        let on_paper: int = 0;
+        if (my < CANVAS_H - size) { on_paper = 1; }
+
+        if (gfx.mouse("left") == 1 && on_paper == 1) {
+            if (erasing == 1) {
+                // The eraser is just an opaque dab of the paper colour.
+                gfx.alpha(255);
+                stamp(brush, mx, my, size, paper_r(), paper_g(), paper_b());
+            } else {
+                gfx.alpha(alpha);
+                stamp(brush, mx, my, size, pr[ci], pg[ci], pb[ci]);
+            }
+        }
+
+        // Enter stamps whatever has been typed, at the cursor, in the current
+        // colour and alpha.
+        if (gfx.pressed("enter") == 1 && caption.len() > 0 && on_paper == 1) {
+            gfx.alpha(alpha);
+            gfx.text(mx, my, caption, pr[ci], pg[ci], pb[ci]);
+            caption = "";
+        }
+
+        // --- the HUD strip, repainted every frame ---------------------------
+        gfx.alpha(255);
+        gfx.fill(0, CANVAS_H, W, H - CANVAS_H, 26, 26, 34);
+        gfx.line(0, CANVAS_H, W - 1, CANVAS_H, 70, 70, 86);
+
+        for (i, 6) {
+            gfx.fill(4 + i * 10, CANVAS_H + 5, 8, 8, pr[i], pg[i], pb[i]);
+        }
+        gfx.rect(3 + ci * 10, CANVAS_H + 4, 10, 10, 255, 255, 255);
+
+        let state: string = brush_name(brush) + " " + (string)size + "px a" + (string)alpha;
+        if (erasing == 1) { state = "ERASE " + (string)size + "px"; }
+        gfx.text(70, CANVAS_H + 6, state, 220, 220, 235);
+        if (caption.len() > 0) {
+            gfx.text(162, CANVAS_H + 6, ">" + caption, 150, 220, 150);
+        }
+
+        // A preview of the brush, off to the right, so size and alpha can be
+        // judged without painting first.
+        gfx.alpha(alpha);
+        stamp(brush, W - 14, CANVAS_H + 9, clampi(size, 1, 7), pr[ci], pg[ci], pb[ci]);
+
+        // --- saving ----------------------------------------------------------
+        // gfx.save writes the framebuffer at its own size, HUD and all, so the
+        // strip is wiped back to paper first and left for the next frame to
+        // redraw. gfx.present() is not required before saving.
+        if (gfx.pressed("s") == 1) {
+            gfx.alpha(255);
+            gfx.fill(0, CANVAS_H, W, H - CANVAS_H, paper_r(), paper_g(), paper_b());
+            if (gfx.save("painting.bmp") == 1) {
+                io.println("wrote painting.bmp");
+            } else {
+                io.println("could not write painting.bmp");
+            }
+        }
+
+        gfx.present();
+        time.sleep(16);
+    }
+
+    gfx.close();
+    return 0;
+}
