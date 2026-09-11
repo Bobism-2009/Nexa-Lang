@@ -82,6 +82,7 @@ static __nexa_Gfx __nexa_g = {};
 
 static void __nexa_gfx_clear(int r, int g, int b);
 static void __nexa_gfx_present();
+static int __nexa_gfx_alpha_set(int a);
 
 static int __nexa_gfx_map_mouse(int px, int py, int cw, int ch, int* ox, int* oy) {
     if (cw < 1 || ch < 1 || __nexa_g.w < 1 || __nexa_g.h < 1) return 0;
@@ -475,6 +476,8 @@ static void __nexa_gfx_apply_window_size(int w, int h, int scale) {
 static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
     __nexa_gfx_clamp_whs(&w, &h, &scale, 12);
     __nexa_gfx_free();
+    // A new window starts opaque, the same way it starts at text size 1.
+    __nexa_gfx_alpha_set(255);
     __nexa_g.w = w;
     __nexa_g.h = h;
     __nexa_g.scale = scale;
@@ -931,6 +934,11 @@ static int __nexa_gfx_mouse(const std::string& name) {
 // Keep window, audio and image code out of the block, and keep the markers
 // spelled exactly as they are: the test fails loudly if it cannot find them.
 //
+// Three more marker pairs further down do the same job for the code that needs
+// the image store or the filesystem and so cannot live in this block --
+// [nexa:imgstore-*] (the loaded-image table), [nexa:blit-*] (the blit itself)
+// and [nexa:screenshot-*] (gfx.save). Tests/gfx_alpha_cases.sh lifts all four.
+//
 // [nexa:rasterizers-begin]
 static void __nexa_gfx_put(int i, unsigned char R, unsigned char G, unsigned char B) {
 #ifdef _WIN32
@@ -944,6 +952,54 @@ static void __nexa_gfx_put(int i, unsigned char R, unsigned char G, unsigned cha
     __nexa_g.fb[i + 2] = B;
     __nexa_g.fb[i + 3] = 255;
 #endif
+}
+
+// The global draw alpha behind gfx.alpha(). 255 -- the default, and what
+// gfx.open() puts it back to -- means every draw below takes the opaque path
+// in __nexa_gfx_put_a and writes exactly the bytes it always has.
+static int __nexa_gfx_alpha_v = 255;
+
+static int __nexa_gfx_alpha_get() {
+    return __nexa_gfx_alpha_v;
+}
+
+static int __nexa_gfx_alpha_set(int a) {
+    if (a < 0) a = 0;
+    if (a > 255) a = 255;
+    __nexa_gfx_alpha_v = a;
+    return a;
+}
+
+// Source-over blend of one pixel, in integers: dst = (src*A + dst*(255-A))/255,
+// rounded to nearest. A == 255 is the plain opaque write and A == 0 leaves the
+// pixel untouched, so both ends of the range cost nothing extra.
+static void __nexa_gfx_put_a(int i, unsigned char R, unsigned char G, unsigned char B, unsigned char A) {
+    if (!__nexa_g.fb || A == 0) return;
+    if (A == 255) {
+        __nexa_gfx_put(i, R, G, B);
+        return;
+    }
+    unsigned char* d = __nexa_g.fb + i;
+#ifdef _WIN32
+    d[0] = (unsigned char)((B * A + d[0] * (255 - A) + 127) / 255);
+    d[1] = (unsigned char)((G * A + d[1] * (255 - A) + 127) / 255);
+    d[2] = (unsigned char)((R * A + d[2] * (255 - A) + 127) / 255);
+#else
+    d[0] = (unsigned char)((R * A + d[0] * (255 - A) + 127) / 255);
+    d[1] = (unsigned char)((G * A + d[1] * (255 - A) + 127) / 255);
+    d[2] = (unsigned char)((B * A + d[2] * (255 - A) + 127) / 255);
+#endif
+    d[3] = 255;
+}
+
+// Every shape puts its pixels down through here, which is what makes the
+// global alpha apply to all of them without a rasterizer having to know it
+// exists. Two consequences worth knowing, both documented in SYNTAX/Modules.txt:
+// gfx.clear does NOT go through here (clearing is a reset, not a draw), and a
+// shape that covers a pixel twice -- the corners of a triangle outline, the
+// joins of a thick line -- blends that pixel twice at alpha < 255.
+static void __nexa_gfx_draw(int i, unsigned char R, unsigned char G, unsigned char B) {
+    __nexa_gfx_put_a(i, R, G, B, (unsigned char)__nexa_gfx_alpha_v);
 }
 
 static void __nexa_gfx_clear(int r, int g, int b) {
@@ -961,7 +1017,7 @@ static void __nexa_gfx_plot(int x, int y, int r, int g, int b) {
     unsigned char R = (unsigned char)(r < 0 ? 0 : (r > 255 ? 255 : r));
     unsigned char G = (unsigned char)(g < 0 ? 0 : (g > 255 ? 255 : g));
     unsigned char B = (unsigned char)(b < 0 ? 0 : (b > 255 ? 255 : b));
-    __nexa_gfx_put((y * __nexa_g.w + x) * 4, R, G, B);
+    __nexa_gfx_draw((y * __nexa_g.w + x) * 4, R, G, B);
 }
 
 static int __nexa_gfx_get(int x, int y) {
@@ -1006,7 +1062,7 @@ static void __nexa_gfx_fill(int x, int y, int w, int h, int r, int g, int b) {
     for (int yy = y0; yy < y1; yy++) {
         int row = yy * __nexa_g.w;
         for (int xx = x0; xx < x1; xx++) {
-            __nexa_gfx_put((row + xx) * 4, R, G, B);
+            __nexa_gfx_draw((row + xx) * 4, R, G, B);
         }
     }
 }
@@ -1078,7 +1134,7 @@ static void __nexa_gfx_line(int x0, int y0, int x1, int y1, int r, int g, int b)
     int y = y0;
     for (;;) {
         if (x >= 0 && y >= 0 && x < __nexa_g.w && y < __nexa_g.h) {
-            __nexa_gfx_put((y * __nexa_g.w + x) * 4, R, G, B);
+            __nexa_gfx_draw((y * __nexa_g.w + x) * 4, R, G, B);
         }
         if (x == x1 && y == y1) break;
         int e2 = err + err;
@@ -1099,7 +1155,7 @@ static void __nexa_gfx_span(long long y, long long xa, long long xb,
     if (xb > (long long)__nexa_g.w - 1) xb = (long long)__nexa_g.w - 1;
     if (xa > xb) return;
     long long row = y * (long long)__nexa_g.w;
-    for (long long x = xa; x <= xb; x++) __nexa_gfx_put((int)((row + x) * 4), R, G, B);
+    for (long long x = xa; x <= xb; x++) __nexa_gfx_draw((int)((row + x) * 4), R, G, B);
 }
 
 // Rows of the framebuffer a shape spanning [ya, yb] can actually touch.
@@ -1420,7 +1476,7 @@ static void __nexa_gfx_glyph(int x, int y, int ch, unsigned char R, unsigned cha
                 for (int sx = 0; sx < scale; sx++) {
                     int px = x + i * scale + sx;
                     if (px < 0 || px >= __nexa_g.w) continue;
-                    __nexa_gfx_put((row + px) * 4, R, G, B);
+                    __nexa_gfx_draw((row + px) * 4, R, G, B);
                 }
             }
         }
@@ -1799,6 +1855,7 @@ static int __nexa_gfx_pressed(const std::string& name) {
     return (__nexa_g.k_now[slot] && !__nexa_g.k_prev[slot]) ? 1 : 0;
 }
 
+// [nexa:imgstore-begin]
 struct __nexa_GfxImg {
     int w;
     int h;
@@ -1807,6 +1864,7 @@ struct __nexa_GfxImg {
 
 static std::vector<__nexa_GfxImg> __nexa_imgs;
 static std::vector<std::string> __nexa_img_paths;
+// [nexa:imgstore-end]
 
 static int __nexa_gfx_pixels_ok(int w, int h) {
     if (w < 1 || h < 1 || w > 4096 || h > 4096) return 0;
@@ -2037,36 +2095,7 @@ static int __nexa_gfx_image_h(int id) {
     return __nexa_imgs[(size_t)id].h;
 }
 
-static void __nexa_gfx_put_a(int i, unsigned char R, unsigned char G, unsigned char B, unsigned char A) {
-    if (!__nexa_g.fb || A == 0) return;
-    unsigned char* d = __nexa_g.fb + i;
-#ifdef _WIN32
-    if (A == 255) {
-        d[0] = B;
-        d[1] = G;
-        d[2] = R;
-        d[3] = 255;
-        return;
-    }
-    d[0] = (unsigned char)((B * A + d[0] * (255 - A) + 127) / 255);
-    d[1] = (unsigned char)((G * A + d[1] * (255 - A) + 127) / 255);
-    d[2] = (unsigned char)((R * A + d[2] * (255 - A) + 127) / 255);
-    d[3] = 255;
-#else
-    if (A == 255) {
-        d[0] = R;
-        d[1] = G;
-        d[2] = B;
-        d[3] = 255;
-        return;
-    }
-    d[0] = (unsigned char)((R * A + d[0] * (255 - A) + 127) / 255);
-    d[1] = (unsigned char)((G * A + d[1] * (255 - A) + 127) / 255);
-    d[2] = (unsigned char)((B * A + d[2] * (255 - A) + 127) / 255);
-    d[3] = 255;
-#endif
-}
-
+// [nexa:blit-begin]
 static int __nexa_gfx_blit(int x, int y, int id, int dw, int dh, int sx, int sy, int sw, int sh) {
     if (!__nexa_g.fb || !__nexa_g.ready) return 0;
     if (id < 1 || id >= (int)__nexa_imgs.size()) return 0;
@@ -2085,32 +2114,125 @@ static int __nexa_gfx_blit(int x, int y, int id, int dw, int dh, int sx, int sy,
         sw = im.w;
         sh = im.h;
     }
-    if (dw < 1) dw = sw;
-    if (dh < 1) dh = sh;
+    // A negative destination size mirrors the image on that axis. The box the
+    // image lands in does not move: it is still |dw| wide starting at x and
+    // |dh| tall starting at y, only the sampling runs the other way. Widths
+    // are carried as long long from here on, so INT_MIN negates and a
+    // destination the size of the coordinate space cannot overflow.
+    long long DW = dw;
+    long long DH = dh;
+    int flipx = DW < 0;
+    int flipy = DH < 0;
+    if (flipx) DW = -DW;
+    if (flipy) DH = -DH;
+    if (DW < 1) DW = sw;
+    if (DH < 1) DH = sh;
+    long long X = x;
+    long long Y = y;
+    // Walk only the part of the destination box that is on screen. Clipping
+    // per pixel instead would make a blit scaled to two billion pixels wide
+    // spin for an hour to draw the twelve of them that are visible.
+    long long yy0 = -Y > 0 ? -Y : 0;
+    long long yy1 = DH < (long long)__nexa_g.h - Y ? DH : (long long)__nexa_g.h - Y;
+    long long xx0 = -X > 0 ? -X : 0;
+    long long xx1 = DW < (long long)__nexa_g.w - X ? DW : (long long)__nexa_g.w - X;
+    if (yy0 >= yy1 || xx0 >= xx1) return 0;
+    int ga = __nexa_gfx_alpha_get();
     int drew = 0;
-    for (int yy = 0; yy < dh; yy++) {
-        int py = y + yy;
-        if (py < 0 || py >= __nexa_g.h) continue;
-        int srcy = sy + yy * sh / dh;
+    for (long long yy = yy0; yy < yy1; yy++) {
+        int py = (int)(Y + yy);
+        long long ty = flipy ? DH - 1 - yy : yy;
+        int srcy = sy + (int)(ty * sh / DH);
         if (srcy < sy) srcy = sy;
         if (srcy >= sy + sh) srcy = sy + sh - 1;
-        for (int xx = 0; xx < dw; xx++) {
-            int px = x + xx;
-            if (px < 0 || px >= __nexa_g.w) continue;
-            int srcx = sx + xx * sw / dw;
+        for (long long xx = xx0; xx < xx1; xx++) {
+            int px = (int)(X + xx);
+            long long tx = flipx ? DW - 1 - xx : xx;
+            int srcx = sx + (int)(tx * sw / DW);
             if (srcx < sx) srcx = sx;
             if (srcx >= sx + sw) srcx = sx + sw - 1;
             const unsigned char* s = im.px + ((size_t)srcy * (size_t)im.w + (size_t)srcx) * 4;
-            __nexa_gfx_put_a((py * __nexa_g.w + px) * 4, s[0], s[1], s[2], s[3]);
+            // Image alpha and the global draw alpha multiply, so gfx.alpha
+            // fades a blit the same way it fades a shape, and an opaque image
+            // at the default alpha still takes the straight-copy path.
+            int A = s[3];
+            if (ga != 255) A = (A * ga + 127) / 255;
+            __nexa_gfx_put_a((py * __nexa_g.w + px) * 4, s[0], s[1], s[2], (unsigned char)A);
             drew = 1;
         }
     }
     return drew;
 }
+// [nexa:blit-end]
 
 static int __nexa_gfx_blit_path(int x, int y, const std::string& path, int dw, int dh, int sx, int sy, int sw, int sh) {
     return __nexa_gfx_blit(x, y, __nexa_gfx_image(path), dw, dh, sx, sy, sw, sh);
 }
+
+// [nexa:screenshot-begin]
+// gfx.save writes a 24-bit uncompressed BMP: every platform can read one, and
+// writing one needs nothing but fwrite -- no encoder, no OS imaging library, no
+// new dependency on the WASM build. The framebuffer is read back through
+// __nexa_gfx_get, so the BGRA/RGBA difference between the platforms is already
+// handled in one place.
+static void __nexa_gfx_le32(std::string& out, unsigned int v) {
+    out.push_back((char)(unsigned char)(v & 0xFF));
+    out.push_back((char)(unsigned char)((v >> 8) & 0xFF));
+    out.push_back((char)(unsigned char)((v >> 16) & 0xFF));
+    out.push_back((char)(unsigned char)((v >> 24) & 0xFF));
+}
+
+static void __nexa_gfx_le16(std::string& out, unsigned int v) {
+    out.push_back((char)(unsigned char)(v & 0xFF));
+    out.push_back((char)(unsigned char)((v >> 8) & 0xFF));
+}
+
+static int __nexa_gfx_save(const std::string& path) {
+    if (path.empty()) return 0;
+    if (!__nexa_g.fb || !__nexa_g.ready) return 0;
+    int w = __nexa_g.w;
+    int h = __nexa_g.h;
+    if (w < 1 || h < 1) return 0;
+    size_t stride = ((size_t)w * 3 + 3) & ~(size_t)3;
+    size_t pixels = stride * (size_t)h;
+    std::string out;
+    out.reserve(54 + pixels);
+    out.push_back('B');
+    out.push_back('M');
+    __nexa_gfx_le32(out, (unsigned int)(54 + pixels));
+    __nexa_gfx_le32(out, 0);
+    __nexa_gfx_le32(out, 54);
+    __nexa_gfx_le32(out, 40);
+    __nexa_gfx_le32(out, (unsigned int)w);
+    __nexa_gfx_le32(out, (unsigned int)h);
+    __nexa_gfx_le16(out, 1);
+    __nexa_gfx_le16(out, 24);
+    __nexa_gfx_le32(out, 0);
+    __nexa_gfx_le32(out, (unsigned int)pixels);
+    __nexa_gfx_le32(out, 2835);
+    __nexa_gfx_le32(out, 2835);
+    __nexa_gfx_le32(out, 0);
+    __nexa_gfx_le32(out, 0);
+    // A BMP with a positive height is stored bottom row first.
+    for (int y = h - 1; y >= 0; y--) {
+        size_t row = out.size();
+        for (int x = 0; x < w; x++) {
+            int c = __nexa_gfx_get(x, y);
+            if (c < 0) c = 0;
+            out.push_back((char)(unsigned char)(c & 0xFF));
+            out.push_back((char)(unsigned char)((c >> 8) & 0xFF));
+            out.push_back((char)(unsigned char)((c >> 16) & 0xFF));
+        }
+        while (out.size() - row < stride) out.push_back('\0');
+    }
+    FILE* f = std::fopen(path.c_str(), "wb");
+    if (!f) return 0;
+    size_t n = std::fwrite(out.data(), 1, out.size(), f);
+    // A short write is a full failure: a truncated BMP is not a screenshot.
+    if (std::fclose(f) != 0 || n != out.size()) return 0;
+    return 1;
+}
+// [nexa:screenshot-end]
 
 static std::string __nexa_gfx_filter_safe(const std::string& spec) {
     std::string o;

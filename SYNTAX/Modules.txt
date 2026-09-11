@@ -277,6 +277,31 @@ Nexa Standard Modules
                                    All of these are clipped to the framebuffer and
                                    do nothing (0 for poly / fill_poly) when the
                                    window is closed or was never opened.
+  gfx.alpha()                    - the current global draw alpha, 0..255
+  gfx.alpha(a)                   - set it (clamped to 0..255) and return what was set.
+                                   255 is opaque and is the default; gfx.open() puts it
+                                   back to 255. Every later plot, fill, rect, line,
+                                   circle, ellipse, tri, poly, text and blit is blended
+                                   onto what is already there: new = (draw*a + old*(255-a))
+                                   / 255, per channel, in integers. 0 draws nothing.
+                                   gfx.clear is deliberately NOT affected -- clearing is
+                                   a reset, not a draw -- and neither is gfx.get, which
+                                   always reports the pixel that is really there.
+                                   Blits multiply the two alphas: a 50%-alpha pixel of a
+                                   PNG drawn at gfx.alpha(128) lands at about 25%.
+                                   A shape that covers a pixel twice blends it twice at
+                                   a < 255: the corners of a triangle outline, the joins
+                                   of a thick line, and two shapes that overlap. Draw
+                                   translucent pieces so they do not overlap if that
+                                   matters, or draw them opaque into a cleared frame.
+  gfx.save(path)                 - write the framebuffer to path as a 24-bit uncompressed
+                                   BMP; 1 on success, 0 if the window is closed, the path
+                                   is empty, or the file could not be written whole. The
+                                   image is the framebuffer at its own size -- w by h
+                                   pixels, not the scaled-up window -- and the extension
+                                   is not inspected: gfx.save writes a BMP whatever the
+                                   name says. Call it after drawing; gfx.present() is not
+                                   required first.
   gfx.text(x, y, s, r, g, b[, scale]) - 5x7 ASCII (32..126); optional scale 1..64
                                    omits scale: uses gfx.text_size(); 6x8 cell * scale; \\n / \\t
                                    returns pixel width of the longest line (int)
@@ -310,7 +335,20 @@ Nexa Standard Modules
                                  - sprite: copy source rect (sx,sy,sw,sh) from the image
                                    omit dw,dh to draw 1:1; else nearest-neighbor scale
                                    source rect is clipped to the image
-                                   PNG alpha blends onto the buffer
+                                   Returns 1 if any of it landed in the framebuffer.
+                                   Alpha: a source pixel is blended by its own alpha
+                                   channel (PNG/GIF transparency), then by gfx.alpha().
+                                   A fully opaque pixel is a straight copy, so opaque
+                                   images cost and look exactly what they always did.
+                                   MIRRORING: a negative destination size flips that
+                                   axis. The box does not move -- it is still |w| wide
+                                   from x and |h| tall from y -- only the sampling runs
+                                   backwards, so blit(x, y, id, -gfx.image_w(id), 0)
+                                   draws the image at native size, mirrored left to
+                                   right, in the same place as blit(x, y, id). Both
+                                   sizes may be negative to flip both ways. This is the
+                                   9-argument form's dw/dh and the 5-argument form's
+                                   w/h alike; 0 still means "native / 1:1".
   gfx.key(name)                  - 1 if that key is down ("w", "1", "escape", "space", "up",
                                    "shift", "ctrl", "alt", "tab", "backspace", "delete",
                                    "f11", ...)

@@ -1,0 +1,80 @@
+// Global draw alpha, mirrored blits and screenshots (BOB-20).
+//
+// Build and run:  ./NexaC Examples/alpha_demo.nxa -o alpha_demo && ./alpha_demo
+//
+//   1..9 / 0   set the draw alpha (1 = 25, 5 = 128, 0 = 255 = opaque)
+//   m          mirror the sprite left-to-right
+//   s          write shot.bmp next to the program
+//   escape     quit
+#include <std/gfx>
+#include <std/io>
+
+fn main() {
+    if (gfx.open("nexa alpha", 160, 100, 6) != 1) {
+        io.println("no window");
+        return 1;
+    }
+    gfx.text_size(1);
+
+    // Any image works here; without one the demo still runs, it just has no
+    // sprite to mirror.
+    let sprite: int = gfx.image("Examples/sprite.png");
+    let mirror: int = 0;
+    let a: int = 255;
+
+    while (gfx.closed() == 0) {
+        gfx.poll();
+        if (gfx.pressed("escape") == 1) {
+            gfx.close();
+            return 0;
+        }
+        if (gfx.pressed("m") == 1) {
+            if (mirror == 1) { mirror = 0; } else { mirror = 1; }
+        }
+        if (gfx.pressed("0") == 1) { a = 255; }
+        if (gfx.pressed("1") == 1) { a = 25; }
+        if (gfx.pressed("5") == 1) { a = 128; }
+        if (gfx.pressed("9") == 1) { a = 230; }
+
+        // The backdrop is drawn opaque: gfx.clear ignores the draw alpha, but
+        // the stripes under the translucent shapes should not be faded either.
+        gfx.alpha(255);
+        gfx.clear(16, 16, 24);
+        let x: int = 0;
+        while (x < 160) {
+            gfx.fill(x, 0, 8, 100, 30, 30, 46);
+            x = x + 16;
+        }
+
+        // Three overlapping discs at the chosen alpha. Where two of them meet
+        // the pixel is blended twice -- that is what SYNTAX/Modules.txt warns
+        // about, and it is easiest to see at an alpha around 128.
+        gfx.alpha(a);
+        gfx.fill_circle(60, 50, 26, 230, 60, 60);
+        gfx.fill_circle(80, 50, 26, 60, 230, 90);
+        gfx.fill_circle(70, 66, 26, 70, 120, 240);
+
+        if (sprite != 0) {
+            let w: int = gfx.image_w(sprite);
+            if (mirror == 1) {
+                gfx.blit(120, 20, sprite, 0 - w, 0);
+            } else {
+                gfx.blit(120, 20, sprite, w, 0);
+            }
+        }
+
+        gfx.alpha(255);
+        gfx.text(4, 4, "alpha " + (string)a + "  m=mirror  s=save", 235, 235, 245);
+
+        if (gfx.pressed("s") == 1) {
+            if (gfx.save("shot.bmp") == 1) {
+                io.println("wrote shot.bmp");
+            } else {
+                io.println("could not write shot.bmp");
+            }
+        }
+        gfx.present();
+    }
+    gfx.close();
+    return 0;
+}

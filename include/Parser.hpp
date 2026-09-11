@@ -4121,10 +4121,12 @@ private:
                  || method == "sample") argc = 1;
         else if (method == "audio") { argc = 0; argcMax = 1; }
         else if (method == "blit") { argc = 3; argcMax = 9; }
+        else if (method == "alpha") { argc = 0; argcMax = 1; }
+        else if (method == "save") argc = 1;
         else {
             throw std::runtime_error("Unknown gfx method 'gfx." + method +
                 "' at line " + std::to_string(methodTok.line) +
-                " (use open, close, resize, width, height, scale, title, poll, closed, clear, plot, fill, rect, line, circle, fill_circle, ellipse, fill_ellipse, tri, fill_tri, poly, fill_poly, text, text_size, text_width, text_height, get, present, image, decode, image_w, image_h, blit, key, pressed, mouse_x, mouse_y, mouse, audio, sample, audio_queued, audio_flush, fullscreen)");
+                " (use open, close, resize, width, height, scale, title, poll, closed, clear, plot, fill, rect, line, circle, fill_circle, ellipse, fill_ellipse, tri, fill_tri, poly, fill_poly, text, text_size, text_width, text_height, get, present, image, decode, image_w, image_h, blit, alpha, save, key, pressed, mouse_x, mouse_y, mouse, audio, sample, audio_queued, audio_flush, fullscreen)");
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after gfx." + method + " at line " + std::to_string(peek().line));
@@ -4188,12 +4190,18 @@ private:
                 if (method == "audio") {
                     throw std::runtime_error("gfx.audio([rate]) at line " + std::to_string(line));
                 }
+                if (method == "alpha") {
+                    throw std::runtime_error("gfx.alpha() or gfx.alpha(a) at line " + std::to_string(line));
+                }
                 if (method == "fullscreen") {
                     throw std::runtime_error("gfx.fullscreen() or gfx.fullscreen(on) at line " + std::to_string(line));
                 }
                 throw std::runtime_error("gfx.open(title, w, h[, scale]) at line " + std::to_string(line));
             }
         } else if (got != argc) {
+            if (method == "save") {
+                throw std::runtime_error("gfx.save(path) at line " + std::to_string(line));
+            }
             std::string sig = shapeSignature(method);
             if (!sig.empty()) {
                 throw std::runtime_error(sig + " at line " + std::to_string(line));

@@ -245,6 +245,8 @@ export const MODULE_MEMBERS: Record<string, { name: string; detail: string }[]> 
     { name: "image_w", detail: "gfx.image_w(id) — image width" },
     { name: "image_h", detail: "gfx.image_h(id) — image height" },
     { name: "blit", detail: "gfx.blit(x, y, src[, w, h] | src, sx, sy, sw, sh[, dw, dh]) — image or sprite" },
+    { name: "alpha", detail: "gfx.alpha() / gfx.alpha(a) — global draw alpha 0..255 (255 = opaque)" },
+    { name: "save", detail: "gfx.save(path) — write the framebuffer to a 24-bit BMP; 1/0" },
     { name: "key", detail: "gfx.key(name) — 1 if that key is down (window focused; includes f11)" },
     { name: "pressed", detail: "gfx.pressed(name) — 1 if that key went down this poll (window focused)" },
     { name: "mouse_x", detail: "gfx.mouse_x() — cursor X in framebuffer pixels" },

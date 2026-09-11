@@ -1891,6 +1891,7 @@ private:
                     || e.value == "text_height" || e.value == "get"
                     || e.value == "image" || e.value == "decode" || e.value == "image_w"
                     || e.value == "image_h" || e.value == "blit"
+                    || e.value == "alpha" || e.value == "save"
                     || e.value == "poly" || e.value == "fill_poly") return "int";
                 return "void";
             case AstNode::Type::StrMethod:
@@ -2533,6 +2534,7 @@ private:
             case AstNode::Type::GfxCall:
                 for (const AstNode& c : e.children) semExpr(c);
                 semCheckGfxPoly(e);
+                semCheckGfxSave(e);
                 break;
             default:
                 for (const AstNode& c : e.children) semExpr(c);
@@ -2562,6 +2564,16 @@ private:
             semError(e, "gfx." + e.value + "(xs, ys, r, g, b) expects []int point lists, but " +
                 std::string(i == 0 ? "xs" : "ys") + " is '" + (t.empty() ? std::string("unknown") : t) + "'");
         }
+    }
+
+    // gfx.save takes a filesystem path. Passing it a number is a plausible slip
+    // (gfx.save(1) reads like "save slot 1"), and without this it lands as a C++
+    // conversion error inside a generated call the user never wrote.
+    void semCheckGfxSave(const AstNode& e) const {
+        if (e.value != "save" || e.children.empty()) return;
+        std::string t = inferExprNexaType(e.children[0]);
+        if (t == "string" || t.empty()) return;
+        semError(e, "gfx.save(path) expects a string path, but got '" + t + "'");
     }
 
     void semCheckNameUse(const AstNode& at, const std::string& name) {
@@ -5155,6 +5167,11 @@ private:
                     std::string f = e.children.empty() ? "std::string()" : a(0);
                     return "__nexa_gfx_opendialog(" + f + ")";
                 }
+                if (fn == "alpha") {
+                    if (e.children.empty()) return "__nexa_gfx_alpha_get()";
+                    return "__nexa_gfx_alpha_set(" + a(0) + ")";
+                }
+                if (fn == "save") return "__nexa_gfx_save(" + a(0) + ")";
                 if (fn == "image") return "__nexa_gfx_image(" + a(0) + ")";
                 if (fn == "decode") return "__nexa_gfx_decode(" + a(0) + ")";
                 if (fn == "image_w") return "__nexa_gfx_image_w(" + a(0) + ")";

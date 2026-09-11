@@ -1,0 +1,123 @@
+// std/gfx alpha, mirrored blits and gfx.save, read back through gfx.get (BOB-20).
+//
+// Like Tests/gfx_shapes_test.nxa this one needs a display: gfx.get only answers
+// while a window is open, and linking std/gfx pulls in the window backend, so
+// it cannot even be built on a headless box. The cover that runs everywhere
+// lives in Tests/gfx_alpha_cases.sh, which lifts the blend, the blit and the
+// BMP writer out of include/GfxRuntime.hpp and drives them with no window.
+//
+// Reference: SYNTAX/Modules.txt (#include <std/gfx>). Every expectation below
+// comes from there, not from what NexaC currently draws.
+//
+// Prints "ok" and exits 0 when alpha behaves; otherwise it names the check that
+// moved and exits with that check's number.
+#include <std/gfx>
+#include <std/io>
+
+fn main() {
+    if (gfx.open("nexa-gfx-alpha", 16, 12, 4) != 1) {
+        io.println("fail open");
+        return 1;
+    }
+    let white: int = 16777215;
+
+    // --- the default is opaque, and gfx.open resets it ----------------------
+    if (gfx.alpha() != 255) {
+        io.println("fail alpha default");
+        gfx.close();
+        return 2;
+    }
+
+    // --- setting it clamps and reports back ---------------------------------
+    if (gfx.alpha(128) != 128 || gfx.alpha() != 128) {
+        io.println("fail alpha set");
+        gfx.close();
+        return 3;
+    }
+    if (gfx.alpha(-5) != 0 || gfx.alpha(300) != 255) {
+        io.println("fail alpha clamp");
+        gfx.close();
+        return 4;
+    }
+
+    // --- half alpha over black is half the colour ---------------------------
+    gfx.alpha(255);
+    gfx.clear(0, 0, 0);
+    gfx.alpha(128);
+    gfx.fill(1, 1, 4, 4, 255, 255, 255);
+    // (255*128 + 0*127 + 127) / 255 == 128 on each channel.
+    if (gfx.get(1, 1) != 8421504) {
+        io.println("fail alpha blend");
+        gfx.close();
+        return 5;
+    }
+
+    // --- alpha 0 draws nothing; alpha 255 is the plain opaque write ---------
+    gfx.alpha(0);
+    gfx.fill(6, 1, 4, 4, 255, 255, 255);
+    if (gfx.get(6, 1) != 0) {
+        io.println("fail alpha zero");
+        gfx.close();
+        return 6;
+    }
+    gfx.alpha(255);
+    gfx.fill(6, 1, 4, 4, 255, 255, 255);
+    if (gfx.get(6, 1) != white) {
+        io.println("fail alpha opaque");
+        gfx.close();
+        return 7;
+    }
+
+    // --- gfx.clear is a reset, not a draw: alpha does not touch it ----------
+    gfx.alpha(128);
+    gfx.clear(255, 255, 255);
+    if (gfx.get(0, 0) != white) {
+        io.println("fail clear ignores alpha");
+        gfx.close();
+        return 8;
+    }
+    gfx.alpha(255);
+
+    // --- gfx.save writes a BMP the size of the framebuffer ------------------
+    gfx.clear(0, 0, 0);
+    gfx.fill(0, 0, 4, 4, 255, 0, 0);
+    if (gfx.save("nexa_gfx_alpha_shot.bmp") != 1) {
+        io.println("fail save");
+        gfx.close();
+        return 9;
+    }
+    // 16 * 12 pixels, 3 bytes each with no row padding (16*3 = 48), plus the
+    // 54-byte header.
+    let shot: int = gfx.image("nexa_gfx_alpha_shot.bmp");
+    if (shot == 0 || gfx.image_w(shot) != 16 || gfx.image_h(shot) != 12) {
+        io.println("fail save readback");
+        gfx.close();
+        return 10;
+    }
+    if (gfx.save("") != 0) {
+        io.println("fail save empty path");
+        gfx.close();
+        return 11;
+    }
+
+    // --- a mirrored blit lands in the same box ------------------------------
+    gfx.clear(0, 0, 0);
+    gfx.blit(0, 0, shot, -16, 0);
+    // The red square was at the left; mirrored it is at the right edge.
+    if (gfx.get(15, 0) != 16711680 || gfx.get(0, 0) != 0) {
+        io.println("fail mirrored blit");
+        gfx.close();
+        return 12;
+    }
+    gfx.clear(0, 0, 0);
+    gfx.blit(0, 0, shot, 16, -12);
+    if (gfx.get(0, 11) != 16711680 || gfx.get(0, 0) != 0) {
+        io.println("fail vertically mirrored blit");
+        gfx.close();
+        return 13;
+    }
+
+    gfx.close();
+    io.println("ok");
+    return 0;
+}

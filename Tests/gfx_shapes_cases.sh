@@ -439,6 +439,22 @@ int main() {
     __nexa_gfx_rect(0, 0, 4, 4, 300, -5, 128);
     std::printf("colour_clamped=%d\n", __nexa_gfx_get(0, 0));
 
+    // --- the global draw alpha, at its default, changes nothing here --------
+    // BOB-20 put every rasterizer above behind __nexa_gfx_draw. At the default
+    // alpha -- and at an explicitly opaque 255 -- that has to still be the
+    // plain write this suite has always expected. Every other alpha belongs to
+    // Tests/gfx_alpha_cases.sh.
+    fb_open(12, 8);
+    std::printf("alpha_default=%d\n", __nexa_gfx_alpha_get());
+    __nexa_gfx_fill_circle(5, 4, 3, 200, 30, 60);
+    __nexa_gfx_line_thick(1, 1, 10, 6, 10, 240, 90, 3);
+    std::vector<unsigned char> at_default = snapshot();
+    fb_open(12, 8);
+    __nexa_gfx_alpha_set(255);
+    __nexa_gfx_fill_circle(5, 4, 3, 200, 30, 60);
+    __nexa_gfx_line_thick(1, 1, 10, 6, 10, 240, 90, 3);
+    same("alpha255_matches_default", at_default, snapshot());
+
     // --- coordinates far outside the framebuffer ----------------------------
     // Clipping happens per row, so these cost nothing and, more to the point,
     // finish: a shape is never allowed to loop over its own coordinate space.
@@ -641,6 +657,8 @@ thick_dot
 .........
 .........
 colour_clamped=16711808
+alpha_default=255
+alpha255_matches_default=yes
 extremes=done
 closed_poly=0
 closed_fill_poly=0
