@@ -1,0 +1,7 @@
+// gfx.blit has two shapes -- 3 or 5 arguments for a whole image, 7 or 9 for a
+// source rect. Six sits between them: it is neither, and taking it would mean
+// silently ignoring an argument the caller meant.
+#include <std/gfx>
+fn main() {
+    gfx.blit(0, 0, 1, 2, 3, 4);
+}

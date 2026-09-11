@@ -1,0 +1,7 @@
+// gfx.plot takes exactly x, y, r, g, b. A short call must be caught in Nexa:
+// the transpiler indexes the argument list positionally, so an unchecked
+// gfx.plot(1, 2) reads past the end of it.
+#include <std/gfx>
+fn main() {
+    gfx.plot(1, 2);
+}

@@ -1,0 +1,6 @@
+// An unknown gfx method is named back to the user, not handed to clang as a
+// call to a function that does not exist.
+#include <std/gfx>
+fn main() {
+    gfx.sparkle(1, 2);
+}

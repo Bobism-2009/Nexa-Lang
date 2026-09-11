@@ -221,13 +221,22 @@ Nexa Standard Modules
   macOS links Cocoa automatically. Linux executables embed X11 statically
   (need libx11-dev / libxcb1-dev on the *build* machine). The binary does not
   need libX11.so at runtime. libc stays dynamic (present on every Linux).
-  gfx.open(title, w, h[, scale]) - create a w*h framebuffer scaled up (default scale 12)
+  gfx.open(title, w, h[, scale]) - create a w*h framebuffer scaled up (default scale 12); 1/0
+                                   w,h clamp into 1..4096 and scale into 1..64 rather than
+                                   failing; a scale below 1 means the default
   gfx.resize(w, h[, scale])      - change framebuffer size at runtime (keeps scale if omitted)
+                                   returns 1, or 0 if no window is open. Clamps like gfx.open.
+                                   Pixels inside the old and new buffer both survive; any
+                                   newly exposed area is black
   gfx.width() / height() / scale() - current framebuffer size and integer scale (0 if closed)
   gfx.title() / title(s)             - get or set the window title (set returns 1/0)
+                                   the title is remembered across gfx.close(), so title()
+                                   still reports it; title(s) with no window stores it and
+                                   returns 0
   gfx.close()                    - destroy the window
   gfx.poll()                     - process events (call each frame)
-  gfx.closed()                   - 1 if the user closed the window
+  gfx.closed()                   - 1 if the user closed the window; 0 before the first
+                                   gfx.open()
   gfx.clear(r, g, b)             - fill the framebuffer
   gfx.plot(x, y, r, g, b)        - set one pixel (0..255)
   gfx.get(x, y)                  - pixel as 0xRRGGBB, or -1 if out of bounds / closed
@@ -235,14 +244,22 @@ Nexa Standard Modules
   gfx.line(x1, y1, x2, y2, r, g, b) - clipped line (0..255)
   gfx.text(x, y, s, r, g, b[, scale]) - 5x7 ASCII (32..126); optional scale 1..64
                                    omits scale: uses gfx.text_size(); 6x8 cell * scale; \\n / \\t
-                                   returns pixel width of the longest line (int)
+                                   \\t advances to the next multiple of 4 cells (24*scale px)
+                                   measured from x, not from the left of the buffer
+                                   returns pixel width of the longest line (int), or 0 if
+                                   no window is open
   gfx.text_size() / text_size(n)     - get or set default text scale (1..64), lasts until changed
+                                   n outside 1..64 is clamped into it, and the value actually
+                                   used is returned. The default is 1
   gfx.text_width(s[, scale])         - pixel width of longest line (does not draw)
   gfx.text_height(s[, scale])        - pixel height including \\n (does not draw)
+                                   both measure 6x8 cells, so they answer with or without a
+                                   window. A scale below 1 means "use gfx.text_size()", above
+                                   64 clamps to 64, and "" measures 0 wide and 0 high
   gfx.present()                  - blit framebuffer to the window (Windows: offscreen
                                    back buffer, then one BitBlt; letterboxed integer scale.
                                    wasm: putImageData, then yield so the tab can composite)
-  gfx.fullscreen()               - 1 if the window is fullscreen, else 0
+  gfx.fullscreen()               - 1 if the window is fullscreen, else 0 (0 if closed)
   gfx.fullscreen(on)             - set fullscreen (1) or windowed (0); returns new state
                                    Windows: borderless monitor; maximize enters it; Esc / F11 /
                                    restore leaves it. Minimize keeps a taskbar button and can
@@ -258,8 +275,11 @@ Nexa Standard Modules
   gfx.audio_queued()             - samples still waiting to play
   gfx.audio_flush()              - submit a partial buffer so playback starts sooner
   gfx.image(path)                - load PNG/JPEG/BMP/GIF (and OS formats); handle, or 0
+                                   the result is cached: the same path gives the same handle
   gfx.decode(bytes)              - same decode from a string (os.load / http.get(...).value())
+                                   not cached; each call decodes and returns a new handle
   gfx.image_w(id) / image_h(id)  - pixel size of a loaded image (0 if invalid)
+                                   handles start at 1, so 0 and negatives are never valid
   gfx.blit(x, y, src[, w, h])    - draw whole image at x,y; src is handle or path
                                    omit w,h for native size; nearest-neighbor scale
   gfx.blit(x, y, src, sx, sy, sw, sh[, dw, dh])
@@ -267,15 +287,26 @@ Nexa Standard Modules
                                    omit dw,dh to draw 1:1; else nearest-neighbor scale
                                    source rect is clipped to the image
                                    PNG alpha blends onto the buffer
+                                   Both forms return 1 when at least one pixel landed in the
+                                   framebuffer, else 0 -- so a bad handle, a source rect
+                                   entirely outside the image, a destination entirely off
+                                   screen, and a closed window all read as 0
+                                   Loading and measuring an image works with no window open;
+                                   drawing it does not
   gfx.key(name)                  - 1 if that key is down ("w", "1", "escape", "space", "up",
                                    "shift", "ctrl", "alt", "tab", "backspace", "delete",
                                    "f11", ...)
+                                   names are case-insensitive, and "return", "control",
+                                   "bksp" and "del" name the same keys as "enter", "ctrl",
+                                   "backspace" and "delete"
   gfx.pressed(name)              - 1 if that key went down since the last gfx.poll()
   gfx.mouse_x() / gfx.mouse_y()  - cursor in framebuffer pixels (last in-window position)
   gfx.mouse(button)              - 1 if that button is down in the window ("left", "right", "middle")
+                                   also "l"/"lmb", "r"/"rmb", "m"/"mmb"; case-insensitive
                                    Keys and mouse are read only while the gfx window is focused
                                    (Windows: foreground HWND. macOS: key window.
                                    Linux: X input focus. wasm: document.hasFocus()).
+                                   A name none of these calls recognises is 0, not an error.
   gfx.drop()                     - path of a file dropped on the window (consumes; empty if none)
   gfx.opendialog([filter])       - native file picker; filter like "*.ch8;*.hex" (empty if cancelled)
                                    alias: gfx.openfile([filter])
@@ -284,6 +315,14 @@ Nexa Standard Modules
   Images are 1..4096 on each side. Windows uses WIC (PNG/JPEG/BMP/GIF/TIFF/ICO, plus
   WebP/HEIF when the OS has the codec). macOS uses ImageIO. Linux/wasm decode
   PNG, JPEG (including progressive), BMP, and GIF.
+  With no window open -- before the first gfx.open(), after gfx.close(), or when
+  gfx.open() failed -- no gfx call is an error. Drawing (clear, plot, fill, line,
+  text, blit, present, poll) does nothing; width, height, scale, resize, blit,
+  text, fullscreen, mouse_x, mouse_y, mouse, key and pressed return 0; get
+  returns -1; title and drop return what they last held. The calls with no window
+  in them still work: text_width, text_height, text_size, image, decode, image_w
+  and image_h. A program can therefore load and measure its assets before it
+  opens a window, and keep running after the user closes one.
   --wasm + gfx writes a sibling .html (the .js embeds the .wasm, so file:// works).
   The page stays blank/gray until the runtime yields: call gfx.present() and
   time.sleep(...) in your loop. NexaC links those builds with -sASYNCIFY.
