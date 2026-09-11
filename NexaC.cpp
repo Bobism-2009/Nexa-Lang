@@ -1518,9 +1518,11 @@ static int printHelp(int page = 1) {
         std::cout << "    Use with: let s = file.read(\"data.txt\");\n\n";
         std::cout << "  file.write(path, content)\n";
         std::cout << "    Writes content to file (overwrites).\n";
-        std::cout << "    path, content: string or int (content)\n\n";
+        std::cout << "    path, content: string or int (content)\n";
+        std::cout << "    Statement, or returns 1 on success / 0 on failure.\n\n";
         std::cout << "  file.append(path, content)\n";
-        std::cout << "    Appends content to file.\n\n";
+        std::cout << "    Appends content to file.\n";
+        std::cout << "    Statement, or returns 1 on success / 0 on failure.\n\n";
         std::cout << "  file.exists(path)\n";
         std::cout << "    Returns 1 if file exists, 0 otherwise.\n";
         std::cout << "    Use: io.println(file.exists(\"x.txt\"));\n\n";

@@ -3920,6 +3920,16 @@ private:
             case AstNode::Type::FileRead: {
                 return "__nexa_file_read(" + emitFilePathCStr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             }
+            case AstNode::Type::FileWrite:
+            case AstNode::Type::FileAppend: {
+                static const std::map<std::string, bool> emptyFlags;
+                return emitFileWriteOrAppendExpr(e, varMap,
+                                                 varIsString ? *varIsString : emptyFlags,
+                                                 varIsFloat ? *varIsFloat : emptyFlags,
+                                                 varIsChar ? *varIsChar : emptyFlags,
+                                                 varIsBool ? *varIsBool : emptyFlags,
+                                                 e.type == AstNode::Type::FileAppend ? 1 : 0);
+            }
             case AstNode::Type::FileExists: {
                 return "(__nexa_file_exists(" + emitFilePathCStr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + "))";
             }
@@ -4565,6 +4575,35 @@ private:
         return "(" + emitExpr(path, varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ").c_str()";
     }
 
+    // file.write/file.append as a single int-valued C++ expression (1 = success, 0 = failure).
+    // Used for both statement position (the caller appends ';') and value position
+    // (`let ok: int = file.write(p, s);`) so the two can never disagree.
+    //
+    // A foldable literal payload becomes a direct call. Anything else is passed to a lambda
+    // taking `const std::string&`, which binds a string lvalue without copying and extends the
+    // lifetime of a concat temporary across the call. The content argument is evaluated before
+    // the path expression in the lambda body, matching the previous statement-only codegen.
+    std::string emitFileWriteOrAppendExpr(const AstNode& child,
+                                          const std::map<std::string, std::string>& varMap,
+                                          const std::map<std::string, bool>& varIsString,
+                                          const std::map<std::string, bool>& varIsFloat,
+                                          const std::map<std::string, bool>& varIsChar,
+                                          const std::map<std::string, bool>& varIsBool,
+                                          int append) {
+        std::string path = emitFilePathCStr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+        const AstNode& content = child.children[1];
+        const std::string appendArg = std::to_string(append);
+        if (auto folded = tryFoldStringLiteralChain(content, varIsString)) {
+            return "__nexa_file_write(" + path + ", \"" + escapeString(*folded) + "\", " +
+                   std::to_string(folded->size()) + ", " + appendArg + ")";
+        }
+        std::string contentCpp = exprIsString(content, varIsString)
+            ? emitExpr(content, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool)
+            : emitConcatOperand(content, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+        return "([&](const std::string& __nexa_fc) -> int { return __nexa_file_write(" + path +
+               ", __nexa_fc.data(), __nexa_fc.size(), " + appendArg + "); })(" + contentCpp + ")";
+    }
+
     void emitFileWriteOrAppend(std::ostringstream& out, const std::string& indent, const AstNode& child,
                                const std::map<std::string, std::string>& varMap,
                                const std::map<std::string, bool>& varIsString,
@@ -4572,26 +4611,10 @@ private:
                                const std::map<std::string, bool>& varIsChar,
                                const std::map<std::string, bool>& varIsBool,
                                int append) {
-        std::string path = emitFilePathCStr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
-        const AstNode& content = child.children[1];
-        if (auto folded = tryFoldStringLiteralChain(content, varIsString)) {
-            out << indent << "__nexa_file_write(" << path << ", \"" << escapeString(*folded) << "\", "
-                << folded->size() << ", " << append << ");\n";
-            return;
-        }
-        if (exprIsString(content, varIsString)) {
-            out << indent << "{\n";
-            out << indent << "    const std::string& __nexa_fc = "
-                << emitExpr(content, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
-            out << indent << "    __nexa_file_write(" << path << ", __nexa_fc.data(), __nexa_fc.size(), " << append << ");\n";
-            out << indent << "}\n";
-            return;
-        }
-        out << indent << "{\n";
-        out << indent << "    const std::string __nexa_fc = "
-            << emitConcatOperand(content, varMap, varIsString, varIsFloat, varIsChar, varIsBool) << ";\n";
-        out << indent << "    __nexa_file_write(" << path << ", __nexa_fc.data(), __nexa_fc.size(), " << append << ");\n";
-        out << indent << "}\n";
+        // The int result is deliberately discarded here: bare `file.write(p, s);` stays legal.
+        out << indent
+            << emitFileWriteOrAppendExpr(child, varMap, varIsString, varIsFloat, varIsChar, varIsBool, append)
+            << ";\n";
     }
 
     static std::optional<int> tryFoldIntLiteral(const AstNode& n) {

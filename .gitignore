@@ -20,3 +20,4 @@ Tests/PkgTest/nexapkg.lock
 dist/
 # Test scratch output
 Tests/_io_roundtrip.txt
+Tests/_write_status.txt

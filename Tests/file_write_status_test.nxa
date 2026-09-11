@@ -1,0 +1,73 @@
+// file.write / file.append return 1 on success and 0 on failure (BOB-6).
+// Covers both codegen paths (folded string literal, and a runtime string expression)
+// and confirms the bare-statement form still compiles and still writes.
+#include <std/file>
+#include <std/io>
+
+fn main() {
+    let p: string = "Tests/_write_status.txt";
+
+    // Value position, literal content -> folded direct call.
+    let w: int = file.write(p, "hello");
+    if (w != 1) {
+        io.println("write should return 1, got ", w);
+        return 1;
+    }
+    let a: int = file.append(p, "\nworld");
+    if (a != 1) {
+        io.println("append should return 1, got ", a);
+        return 2;
+    }
+    if (file.read(p) != "hello\nworld") {
+        io.println("roundtrip after checked write/append failed");
+        return 3;
+    }
+
+    // Value position, runtime string expression -> lambda codegen path.
+    let body: string = "abc";
+    let w2: int = file.write(p, body + "def");
+    if (w2 != 1) {
+        io.println("write of concat expr should return 1, got ", w2);
+        return 4;
+    }
+    if (file.read(p) != "abcdef") {
+        io.println("concat write did not round-trip");
+        return 5;
+    }
+
+    // Bare statements must stay legal and keep working (return value discarded).
+    file.write(p, "z");
+    file.append(p, "!");
+    if (file.read(p) != "z!") {
+        io.println("bare statement write/append changed behaviour");
+        return 6;
+    }
+
+    // A path whose parent is an existing regular file can never be opened (ENOTDIR).
+    // No root and no full disk required.
+    let bad: string = "Tests/file_write_status_test.nxa/nope.txt";
+    let bw: int = file.write(bad, "hello");
+    if (bw != 0) {
+        io.println("write to impossible path should return 0, got ", bw);
+        return 7;
+    }
+    let ba: int = file.append(bad, "hello");
+    if (ba != 0) {
+        io.println("append to impossible path should return 0, got ", ba);
+        return 8;
+    }
+
+    // Ignoring a failing write must not abort the program.
+    file.write(bad, "hello");
+    file.append(bad, "hello");
+
+    // The result is usable directly in a condition.
+    if (file.write(p, "q") != 1) {
+        io.println("write in condition position should be 1");
+        return 9;
+    }
+
+    file.remove(p);
+    io.println("write status ok");
+    return 0;
+}

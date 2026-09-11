@@ -340,6 +340,9 @@ SLICES ([]T)
     io.println(xs.index_of(9));   // index, or -1
     for (x in xs) { ... }
 
+  xs.pop() on an empty slice is undefined behaviour, the same as indexing out of range.
+  There is no bounds check; check len(xs) first if the slice may be empty.
+
   Element type can be anything parseTypeName accepts: []string, []Point, [][]int, []*int.
   `fn f(xs: []int)` and struct fields work the same way.
   Empty: `let xs: []int;` (length 0).

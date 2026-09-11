@@ -3542,9 +3542,6 @@ private:
         }
         std::string method = canonicalizeFileMethod(methodTok.value);
         advance();
-        if (method == "write" || method == "append") {
-            throw std::runtime_error("file." + method + " cannot be used as an expression at line " + std::to_string(methodTok.line));
-        }
         if (!isLegacyFileMethod(method) && !isExtendedFileMethod(method)) {
             throw std::runtime_error("Unknown file method 'file." + methodTok.value + "' at line " + std::to_string(methodTok.line));
         }
@@ -3554,6 +3551,10 @@ private:
         AstNode node;
         if (method == "read") {
             node = {AstNode::Type::FileRead, "", {}};
+        } else if (method == "write") {
+            node = {AstNode::Type::FileWrite, "", {}};
+        } else if (method == "append") {
+            node = {AstNode::Type::FileAppend, "", {}};
         } else if (method == "exists") {
             node = {AstNode::Type::FileExists, "", {}};
         } else if (method == "mkdir") {
@@ -3568,7 +3569,8 @@ private:
             return node;
         }
         node.children.push_back(parseExpression());
-        if (method == "rename" || method == "copy" || method == "join") {
+        if (method == "write" || method == "append" ||
+            method == "rename" || method == "copy" || method == "join") {
             if (!match(TokenType::Comma)) {
                 throw std::runtime_error("Expected ',' in file." + method + "(a, b) at line " + std::to_string(peek().line));
             }

@@ -5,13 +5,17 @@
 namespace nexa {
 
 // write/append — C stdio only, no std::string.
+// Returns 1 on success, 0 on failure (open failed, short write, or close failed).
+// fclose is checked too: a full-disk error on a buffered write only surfaces at flush time.
 inline std::string fileWriteRuntimeCpp() {
     return R"NEXA_FILE_WR(
-static void __nexa_file_write(const char* __path, const char* __data, size_t __n, int __append) {
+static int __nexa_file_write(const char* __path, const char* __data, size_t __n, int __append) {
   FILE* __f = std::fopen(__path, __append ? "ab" : "wb");
-  if (!__f) return;
-  if (__n && __data) std::fwrite(__data, 1, __n, __f);
-  std::fclose(__f);
+  if (!__f) return 0;
+  int __ok = 1;
+  if (__n && __data && std::fwrite(__data, 1, __n, __f) != __n) __ok = 0;
+  if (std::fclose(__f) != 0) __ok = 0;
+  return __ok;
 }
 )NEXA_FILE_WR";
 }
