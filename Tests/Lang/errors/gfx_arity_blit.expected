@@ -1,0 +1,2 @@
+gfx.blit(x, y, src[, w, h]) or gfx.blit(x, y, src, sx, sy, sw, sh[, dw, dh])
+at line 6

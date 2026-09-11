@@ -1,0 +1,114 @@
+// std/gfx without a window.
+//
+// Tests/gfx_open_close_test.nxa needs a display: it opens a real window and
+// reads pixels back. This one deliberately never calls gfx.open, so it pins the
+// half of std/gfx that has no display in it at all -- the closed-window return
+// values, the text metrics, and image decoding -- and it gives the same answer
+// on a developer's desktop and on a headless CI box.
+//
+// Reference: SYNTAX/Modules.txt (#include <std/gfx>). Derive .expected from
+// there, not from what NexaC currently prints.
+//
+// Driven by Tests/gfx_cases.sh, which skips it when std/gfx cannot be built
+// here (Linux needs the X11 headers to link the window backend in).
+#include <std/gfx>
+#include <std/io>
+#include <std/os>
+
+fn main() {
+    // --- the closed-window contract ------------------------------------
+    // Nothing has been opened, so every call that needs a framebuffer takes
+    // its documented closed-window path. No call may crash or invent a window.
+    io.println("closed=", gfx.closed());
+    io.println("width=", gfx.width());
+    io.println("height=", gfx.height());
+    io.println("scale=", gfx.scale());
+    io.println("title=", gfx.title());
+    io.println("get=", gfx.get(0, 0));
+    io.println("get_negative=", gfx.get(-1, -1));
+    io.println("resize=", gfx.resize(16, 16));
+    io.println("fullscreen=", gfx.fullscreen());
+    io.println("text=", gfx.text(0, 0, "hi", 255, 255, 255));
+    io.println("drop=", gfx.drop());
+
+    // Input is read only while a gfx window is focused; with no window there is
+    // nothing to read, and an unknown name is 0 rather than an error.
+    io.println("mouse_x=", gfx.mouse_x());
+    io.println("mouse_y=", gfx.mouse_y());
+    io.println("mouse_left=", gfx.mouse("left"));
+    io.println("mouse_unknown=", gfx.mouse("nope"));
+    io.println("key_escape=", gfx.key("escape"));
+    io.println("pressed_escape=", gfx.pressed("escape"));
+    io.println("pressed_unknown=", gfx.pressed("nope"));
+
+    // Drawing into no framebuffer is a no-op, not a crash.
+    gfx.clear(1, 2, 3);
+    gfx.plot(0, 0, 4, 5, 6);
+    gfx.fill(0, 0, 2, 2, 7, 8, 9);
+    gfx.line(0, 0, 4, 4, 10, 11, 12);
+    gfx.poll();
+    gfx.present();
+    io.println("draw_no_window=ok");
+
+    // --- text metrics: pure arithmetic on a 6x8 cell -------------------
+    // These never touch the window, so they answer the same with or without one.
+    io.println("width_Ok=", gfx.text_width("Ok"));
+    io.println("height_Ok=", gfx.text_height("Ok"));
+    io.println("width_empty=", gfx.text_width(""));
+    io.println("height_empty=", gfx.text_height(""));
+    // text_width is the longest line; text_height counts the lines.
+    io.println("width_two_lines=", gfx.text_width("A\nBB"));
+    io.println("height_two_lines=", gfx.text_height("A\nB"));
+    io.println("width_scale2=", gfx.text_width("Hi", 2));
+    io.println("height_scale2=", gfx.text_height("Hi", 2));
+    // A tab advances to the next multiple of four cells (24 px at scale 1),
+    // measured from the start of the line.
+    io.println("width_tab=", gfx.text_width("\tX"));
+    // Scale is clamped into 1..64; below 1 means "use the current default".
+    io.println("width_scale_zero=", gfx.text_width("Hi", 0));
+    io.println("width_scale_huge=", gfx.text_width("Hi", 1000));
+    io.println("width_scale_64=", gfx.text_width("Hi", 64));
+
+    // --- the default text scale ---------------------------------------
+    io.println("text_size_default=", gfx.text_size());
+    io.println("text_size_set=", gfx.text_size(3));
+    io.println("text_size_get=", gfx.text_size());
+    // The default follows through to an unscaled measurement.
+    io.println("width_follows_default=", gfx.text_width("Hi"));
+    io.println("text_size_clamp_low=", gfx.text_size(0));
+    io.println("text_size_clamp_high=", gfx.text_size(1000));
+    io.println("text_size_reset=", gfx.text_size(1));
+
+    // --- images decode with no window ---------------------------------
+    io.println("decode_junk=", gfx.decode("not-an-image"));
+    io.println("decode_empty=", gfx.decode(""));
+    io.println("image_missing=", gfx.image("nexa_missing_image_xyz.png"));
+    io.println("image_empty_path=", gfx.image(""));
+
+    // The suite runs from the repo root; fall back for a run from Tests/.
+    let pngPath: string = "Tests/gfx_2x2.png";
+    if (os.load(pngPath) == "") {
+        pngPath = "gfx_2x2.png";
+    }
+    let img: int = gfx.decode(os.load(pngPath));
+    io.println("decode_png_ok=", img != 0);
+    io.println("decode_png_w=", gfx.image_w(img));
+    io.println("decode_png_h=", gfx.image_h(img));
+
+    // gfx.image caches by path: the same path gives back the same handle.
+    let first: int = gfx.image(pngPath);
+    let second: int = gfx.image(pngPath);
+    io.println("image_path_ok=", first != 0);
+    io.println("image_path_cached=", first == second);
+
+    // Handles are 1-based, so 0 and negatives are never valid.
+    io.println("image_w_zero=", gfx.image_w(0));
+    io.println("image_h_negative=", gfx.image_h(-1));
+    io.println("image_w_unused=", gfx.image_w(9999));
+
+    // A decoded image is still not something to draw without a window.
+    io.println("blit_no_window=", gfx.blit(0, 0, img));
+    io.println("blit_path_no_window=", gfx.blit(0, 0, pngPath));
+
+    return 0;
+}

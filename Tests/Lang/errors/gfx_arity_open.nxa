@@ -1,0 +1,5 @@
+// gfx.open's scale is the only optional argument; the window size is not.
+#include <std/gfx>
+fn main() {
+    gfx.open("title-only");
+}
