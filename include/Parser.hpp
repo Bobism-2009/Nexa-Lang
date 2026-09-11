@@ -2080,6 +2080,8 @@ private:
         while (pos_ < tokens_.size()) {
             const Token& t = peek();
             if (t.type == TokenType::RBrace || t.type == TokenType::Case || t.type == TokenType::Default) break;
+            const size_t before = stmts.size();
+            const size_t stmtLine = t.line;
             if (t.type == TokenType::Let) {
                 stmts.push_back(parseVariable());
             } else if (t.type == TokenType::If) {
@@ -2208,6 +2210,9 @@ private:
             } else {
                 break;
             }
+            // Same as parseBlock: a statement in a case body has to carry its own origin, or a
+            // later diagnostic about it falls back to the enclosing switch's line.
+            for (size_t i = before; i < stmts.size(); ++i) stampSourceLoc(stmts[i], stmtLine);
         }
         return stmts;
     }

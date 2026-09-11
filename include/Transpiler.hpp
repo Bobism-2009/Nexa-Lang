@@ -4227,7 +4227,7 @@ private:
                 const AstNode& c = node.children[i];
                 if (c.type != AstNode::Type::SwitchCase) continue;
                 if (c.value == "default") {
-                    out << indent << "default:\n";
+                    out << indent << "default:";
                 } else if (c.caseIsEnum) {
                     auto enIt = enumCppNames_.find(c.value);
                     if (enIt == enumCppNames_.end()) {
@@ -4237,11 +4237,18 @@ private:
                     if (vsIt == enumVariants_.end() || !vsIt->second.count(c.initValue)) {
                         throw std::runtime_error("Unknown enum variant '" + c.initValue + "' for '" + c.value + "'");
                     }
-                    out << indent << "case " << enIt->second << "::" << c.initValue << ":\n";
+                    out << indent << "case " << enIt->second << "::" << c.initValue << ":";
                 } else {
-                    out << indent << "case " << c.value << ":\n";
+                    out << indent << "case " << c.value << ":";
                 }
+                // Each case body gets its own braces. A case body is already a scope on the Nexa
+                // side (the semantic checker and emitBlock both pop its declarations), and without
+                // the braces a `let` here is a declaration a later case label jumps over, which
+                // C++ rejects outright. Braces keep fall-through working: control still leaves the
+                // block at the closing brace and lands on the next case label.
+                out << " {\n";
                 emitBlock(out, c.children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "    ");
+                out << indent << "}\n";
             }
             out << indent << "}\n";
         }
