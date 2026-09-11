@@ -225,9 +225,19 @@ HEAP ALLOCATION (no GC — manual, C-style)
     delete[] pts;
   Cannot new void. new *T allocates a pointer-sized cell (type **T).
 
-  String escapes: \n \t \r \\ \" \xHH (exactly two hex digits, e.g. \x41 = 'A', \x00 = NUL)
+  String escapes: \n \t \r \a \b \f \v \0 \\ \" \' \xHH
+  \xHH is exactly two hex digits (e.g. \x41 = 'A', \x00 = NUL); fewer is an error.
   \xHH keeps the raw byte; high bytes (\\x80..\\xFF) survive into the binary and file I/O.
+  Any other escape is a compile error - "\q" does not silently become "q".
+  Character literals ('c') accept the same escapes.
+  A string literal may not contain a raw newline; an unterminated one is an error
+  reported at the line where the quote opened. Use a raw string for multi-line text.
   Raw strings: R"()" or R"delim(...)delim" - no escapes, can contain newlines and "
+
+  Integer literals: decimal (42), hex (0x2A), or octal (052 - a leading 0 means
+  octal, as in C). A literal must fit a 64-bit integer: 0 .. 18446744073709551615,
+  or down to -9223372036854775808 with a leading '-'. Anything wider is a Nexa
+  error, not a C++ compiler error.
 
   Initializers:
     - Number:     let x = 42;

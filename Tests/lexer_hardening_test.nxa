@@ -1,0 +1,91 @@
+// Regression cover for the lexer/literal layer (BOB-7).
+//
+// crypto.hex_encode is used as the oracle: it reports the exact bytes a literal
+// decoded to, so a dropped backslash or a truncated \xHH shows up as a wrong
+// byte string rather than as text that merely looks right when printed.
+//
+// The error paths belonging to this change are not expressible in a program that
+// compiles, so they live in Tests/lexer_error_cases.sh:
+//   - unknown escape sequences  ("\q")
+//   - unterminated string / char / raw-string literals
+//   - unterminated block comments
+//   - integer literals that do not fit a 64-bit integer
+#include <std/io>
+#include <std/crypto>
+
+fn expect(label: string, got: string, want: string) {
+    if (got == want) {
+        io.println("ok " + label);
+    } else {
+        io.println("FAIL " + label + " got=" + got + " want=" + want);
+    }
+}
+
+fn expectInt(label: string, got: long, want: long) {
+    if (got == want) {
+        io.println("ok " + label);
+    } else {
+        io.println("FAIL " + label + " got=" + got + " want=" + want);
+    }
+}
+
+fn main() {
+    // Every escape the lexer accepts, checked byte-for-byte.
+    expect("esc n", crypto.hex_encode("\n"), "0a");
+    expect("esc t", crypto.hex_encode("\t"), "09");
+    expect("esc r", crypto.hex_encode("\r"), "0d");
+    expect("esc a", crypto.hex_encode("\a"), "07");
+    expect("esc b", crypto.hex_encode("\b"), "08");
+    expect("esc f", crypto.hex_encode("\f"), "0c");
+    expect("esc v", crypto.hex_encode("\v"), "0b");
+    expect("esc backslash", crypto.hex_encode("\\"), "5c");
+    expect("esc quote", crypto.hex_encode("\""), "22");
+    expect("esc apostrophe", crypto.hex_encode("\'"), "27");
+
+    // \xHH is exactly two hex digits, and the byte after it is not absorbed
+    // into the escape even when it is itself a hex digit.
+    expect("esc hex A", crypto.hex_encode("\x41"), "41");
+    expect("esc hex upper X", crypto.hex_encode("\X41"), "41");
+    expect("esc hex high", crypto.hex_encode("\xff"), "ff");
+    expect("esc hex then hexdigit", crypto.hex_encode("\x41B"), "4142");
+    expect("esc hex then letter", crypto.hex_encode("\x89PNG"), "89504e47");
+
+    // A backslash escape adjacent to ordinary text keeps both intact. The old
+    // lexer dropped the backslash of an unknown escape silently; these are the
+    // known ones, so the decoded byte must be the control character, not the letter.
+    expect("mixed", crypto.hex_encode("a\tb"), "610962");
+    expectInt("escaped len", len("a\nb"), 3);
+    expectInt("backslash len", len("a\\b"), 3);
+
+    // Character literals accept the same escape set.
+    expectInt("char n", (long)'\n', 10);
+    expectInt("char v", (long)'\v', 11);
+    expectInt("char hex", (long)'\x41', 65);
+    expectInt("char quote", (long)'\'', 39);
+    expectInt("char backslash", (long)'\\', 92);
+
+    // Raw strings still take no escapes at all.
+    expect("raw", R"(a\nb)", "a\\nb");
+    expectInt("raw len", len(R"(a\tb)"), 4);
+    expect("raw delim", R"nx(has )" inside)nx", "has )\" inside");
+
+    // Integer literals at the edges of the 64-bit range are accepted; one step
+    // further is a Nexa error (see lexer_error_cases.sh), not a raw clang error.
+    let uMax: unsigned long = 18446744073709551615;
+    let iMin: long = -9223372036854775808;
+    let iMax: long = 9223372036854775807;
+    let hMax: unsigned long = 0xFFFFFFFFFFFFFFFF;
+    if (uMax != 18446744073709551615) { io.println("FAIL u64 max"); } else { io.println("ok u64 max"); }
+    if (iMin + 1 != -9223372036854775807) { io.println("FAIL i64 min"); } else { io.println("ok i64 min"); }
+    expectInt("i64 max", iMax, 9223372036854775807);
+    if (hMax != uMax) { io.println("FAIL hex u64 max"); } else { io.println("ok hex u64 max"); }
+
+    // A leading 0 means octal, as in C, and the range check reads it that way
+    // rather than as decimal. `09` is rejected by the lexer, not by clang.
+    expectInt("octal", 042, 34);
+    expectInt("zero", 0, 0);
+    let oMax: unsigned long = 01777777777777777777777;
+    if (oMax != uMax) { io.println("FAIL octal max"); } else { io.println("ok octal max"); }
+
+    io.println("lexer_hardening ok");
+}

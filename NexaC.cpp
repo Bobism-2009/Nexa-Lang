@@ -1946,11 +1946,12 @@ int main(int argc, char* argv[]) {
     try {
         std::cout << "[Nexa] Parsing...\n";
 
-        nexa::Lexer lexer(source);
+        std::string absInputPath = std::filesystem::absolute(std::filesystem::path(inputPath)).string();
+
+        nexa::Lexer lexer(source, absInputPath);
         std::vector<nexa::Token> tokens = lexer.tokenize();
 
         nexa::Modules modules;
-        std::string absInputPath = std::filesystem::absolute(std::filesystem::path(inputPath)).string();
         std::set<std::string> includedFiles;
         includedFiles.insert(absInputPath);  // prevent main from being included (circular)
         std::vector<std::string> packagePaths;

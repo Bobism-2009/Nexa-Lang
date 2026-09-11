@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 #include <cctype>
+#include <cstdio>
+#include <limits>
 #include <stdexcept>
 
 namespace nexa {
@@ -101,8 +103,10 @@ struct Token {
 
 class Lexer {
 public:
-    explicit Lexer(const std::string& source)
-        : source_(source), pos_(0), line_(1) {}
+    // filePath is only used to prefix diagnostics; passing it is optional so that
+    // ad-hoc lexing (tests, tooling) still works without a file on disk.
+    explicit Lexer(const std::string& source, const std::string& filePath = "")
+        : source_(source), filePath_(filePath), pos_(0), line_(1) {}
 
     std::vector<Token> tokenize() {
         std::vector<Token> tokens;
@@ -118,13 +122,21 @@ public:
             if (c == '/' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '/') {
                 while (pos_ < source_.size() && source_[pos_] != '\n') pos_++;
             } else if (c == '/' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '*') {
+                // An unterminated /* used to swallow the rest of the file silently, so a
+                // stray comment opener could delete arbitrary code with no diagnostic.
+                size_t commentLine = line_;
                 pos_ += 2;
-                while (pos_ + 1 < source_.size() && !(source_[pos_] == '*' && source_[pos_ + 1] == '/')) {
+                bool closed = false;
+                while (pos_ + 1 < source_.size()) {
+                    if (source_[pos_] == '*' && source_[pos_ + 1] == '/') {
+                        pos_ += 2;
+                        closed = true;
+                        break;
+                    }
                     if (source_[pos_] == '\n') line_++;
                     pos_++;
                 }
-                // Unterminated: swallow the rest instead of leaking the final byte as a token.
-                pos_ = (pos_ + 1 < source_.size()) ? pos_ + 2 : source_.size();
+                if (!closed) fail("Unterminated block comment (opened with '/*')", commentLine);
             } else if (c == '#') {
                 tokens.push_back(scanInclude());
             } else if (c == 'R' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '"') {
@@ -141,15 +153,15 @@ public:
                     size_t lineStart = id.line;
                     skipWhitespace();
                     if (pos_ >= source_.size() || source_[pos_] != '!') {
-                        throw std::runtime_error("Expected '!' after inline_cpp at line " + std::to_string(lineStart));
+                        fail("Expected '!' after inline_cpp", lineStart);
                     }
                     pos_++;
                     skipWhitespace();
                     if (pos_ >= source_.size() || source_[pos_] != '{') {
-                        throw std::runtime_error("Expected '{' after inline_cpp! at line " + std::to_string(lineStart));
+                        fail("Expected '{' after inline_cpp!", lineStart);
                     }
                     pos_++;
-                    std::string body = scanInlineCppBody();
+                    std::string body = scanInlineCppBody(lineStart);
                     tokens.push_back({TokenType::InlineCppBlock, body, lineStart});
                 } else {
                     tokens.push_back(id);
@@ -307,8 +319,70 @@ public:
 
 private:
     std::string source_;
+    std::string filePath_;
     size_t pos_;
     size_t line_;
+
+    // Every lexer diagnostic goes through here so they all carry the same
+    // "<file>: <what> at line N" shape that the parser's errors already use.
+    [[noreturn]] void fail(const std::string& what, size_t line) const {
+        std::string msg;
+        if (!filePath_.empty()) msg += filePath_ + ": ";
+        msg += what + " at line " + std::to_string(line);
+        throw std::runtime_error(msg);
+    }
+
+    // Renders a byte the way it appeared in source, so the diagnostic for an
+    // unknown escape can quote it without emitting a raw control character.
+    static std::string describeEscape(char c) {
+        unsigned char u = static_cast<unsigned char>(c);
+        if (u >= 32 && u < 127) return std::string("\\") + c;
+        char buf[16];
+        snprintf(buf, sizeof(buf), "\\x%02X", u);
+        return buf;
+    }
+
+    static int hexValue(char c) {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    }
+
+    // \xHH is documented as exactly two hex digits (SYNTAX/Core.txt). Anything
+    // shorter used to silently produce a different byte, or none at all.
+    char scanHexEscape(size_t startLine, const char* inWhat) {
+        int value = 0;
+        for (int i = 0; i < 2; i++) {
+            int d = (pos_ < source_.size()) ? hexValue(source_[pos_]) : -1;
+            if (d < 0) {
+                fail(std::string("Escape '\\x' in ") + inWhat +
+                     " needs exactly two hex digits (e.g. \\x41)", startLine);
+            }
+            value = value * 16 + d;
+            pos_++;
+        }
+        return static_cast<char>(value);
+    }
+
+    // Shared by string and character literals so both accept the same set.
+    // Returns false when `c` is not a recognized escape letter.
+    bool decodeSimpleEscape(char c, char& out) const {
+        switch (c) {
+            case 'n':  out = '\n'; return true;
+            case 't':  out = '\t'; return true;
+            case 'r':  out = '\r'; return true;
+            case 'a':  out = '\a'; return true;
+            case 'b':  out = '\b'; return true;
+            case 'f':  out = '\f'; return true;
+            case 'v':  out = '\v'; return true;
+            case '0':  out = '\0'; return true;
+            case '\\': out = '\\'; return true;
+            case '"':  out = '"';  return true;
+            case '\'': out = '\''; return true;
+            default:   return false;
+        }
+    }
 
     // <cctype> is undefined for negative values, and `char` is signed on x86, so every
     // byte >= 0x80 (UTF-8 source, \xHH bytes) would be UB. Classify through unsigned char.
@@ -372,35 +446,33 @@ private:
         pos_++;  // skip opening "
         std::string value;
         while (pos_ < source_.size() && source_[pos_] != '"') {
+            // A raw newline never continues a string: a missing closing quote used to
+            // swallow following lines and surface as a bogus parse error far away.
+            // Multi-line text is spelled R"(...)" instead.
+            if (source_[pos_] == '\n') {
+                fail("Unterminated string literal", startLine);
+            }
             if (source_[pos_] == '\\') {
                 pos_++;
-                if (pos_ >= source_.size()) break;
+                if (pos_ >= source_.size()) fail("Unterminated string literal", startLine);
                 char c = source_[pos_++];
-                if (c == 'n') value += '\n';
-                else if (c == 't') value += '\t';
-                else if (c == 'r') value += '\r';
-                else if (c == '\\') value += '\\';
-                else if (c == '"') value += '"';
-                else if (c == 'x' || c == 'X') {
-                    int hex = 0;
-                    int digits = 0;
-                    while (pos_ < source_.size() && digits < 2) {
-                        char h = source_[pos_];
-                        if (h >= '0' && h <= '9') { hex = hex * 16 + (h - '0'); pos_++; digits++; }
-                        else if (h >= 'a' && h <= 'f') { hex = hex * 16 + (h - 'a' + 10); pos_++; digits++; }
-                        else if (h >= 'A' && h <= 'F') { hex = hex * 16 + (h - 'A' + 10); pos_++; digits++; }
-                        else break;
-                    }
-                    if (digits > 0) value += static_cast<char>(hex & 0xFF);
+                char decoded;
+                if (decodeSimpleEscape(c, decoded)) {
+                    value += decoded;
+                } else if (c == 'x' || c == 'X') {
+                    value += scanHexEscape(startLine, "string literal");
                 } else {
-                    value += c;  // unknown escape, pass through (e.g. \0)
+                    // Previously the backslash was dropped and the letter kept, so
+                    // "\q" compiled to "q" with no diagnostic at all.
+                    fail("Unknown escape sequence '" + describeEscape(c) + "' in string literal",
+                         startLine);
                 }
             } else {
-                if (source_[pos_] == '\n') line_++;  // keep later error lines accurate
                 value += source_[pos_++];
             }
         }
-        if (pos_ < source_.size()) pos_++;  // skip closing "
+        if (pos_ >= source_.size()) fail("Unterminated string literal", startLine);
+        pos_++;  // skip closing "
         return {TokenType::String, value, startLine};
     }
 
@@ -416,7 +488,8 @@ private:
             pos_++;
         }
         if (pos_ >= source_.size() || source_[pos_ - 1] != '(') {
-            return {TokenType::String, "", startLine};  // malformed, return empty
+            fail("Malformed raw string literal (expected R\"(...)\" or R\"delim(...)delim\")",
+                 startLine);
         }
         std::string value;
         std::string closing = ")" + delimiter + "\"";
@@ -429,7 +502,7 @@ private:
             if (source_[pos_] == '\n') line_++;
             value += source_[pos_++];
         }
-        return {TokenType::String, value, startLine};  // unclosed, return what we have
+        fail("Unterminated raw string literal (expected closing " + closing + ")", startLine);
     }
 
     Token scanIdentifier() {
@@ -477,7 +550,7 @@ private:
     }
 
     // Body inside inline_cpp! { ... }; brace depth only (strings/comments with } may need workarounds).
-    std::string scanInlineCppBody() {
+    std::string scanInlineCppBody(size_t startLine) {
         int depth = 1;
         std::string out;
         while (pos_ < source_.size() && depth > 0) {
@@ -501,9 +574,63 @@ private:
             }
         }
         if (depth != 0) {
-            throw std::runtime_error("Unclosed inline_cpp! { ... } block");
+            fail("Unclosed inline_cpp! { ... } block", startLine);
         }
         return out;
+    }
+
+    // The widest integers Nexa exposes are 64-bit (`long` / `unsigned long` / `size_t`),
+    // so a literal must fit u64, or i64 when it carries a leading '-'. Out-of-range
+    // literals used to be copied verbatim into the generated C++, where the user got a
+    // raw clang "integer literal is too large" error pointing at machine-written code.
+    void checkIntegerRange(const std::string& text, size_t line) const {
+        bool negative = !text.empty() && text[0] == '-';
+        size_t i = negative ? 1 : 0;
+        int base = 10;
+        if (text.size() >= i + 2 && text[i] == '0' && (text[i + 1] == 'x' || text[i + 1] == 'X')) {
+            base = 16;
+            i += 2;
+            if (i >= text.size()) {
+                fail("Hexadecimal literal '" + text + "' has no digits", line);
+            }
+        } else if (text.size() >= i + 2 && text[i] == '0') {
+            // The literal is copied through to C++, where a leading 0 means octal.
+            // Read it the same way so the range check matches the emitted value and
+            // so an out-of-octal-range digit is a Nexa error instead of a clang one.
+            base = 8;
+            i++;
+        }
+
+        const unsigned long long uMax = std::numeric_limits<unsigned long long>::max();
+        // Magnitude of the most negative i64; `-9223372036854775808` is in range.
+        const unsigned long long negMax = 9223372036854775808ULL;
+        const unsigned long long limit = negative ? negMax : uMax;
+
+        unsigned long long value = 0;
+        bool overflow = false;
+        for (; i < text.size() && !overflow; i++) {
+            int d = hexValue(text[i]);
+            if (d < 0) break;  // scanNumber only ever produces digits for the base it scanned
+            if (d >= base) {
+                if (base == 8) {
+                    fail("Invalid digit '" + std::string(1, text[i]) + "' in octal literal '" +
+                             text + "' (a leading 0 makes a literal octal, as in C)",
+                         line);
+                }
+                break;
+            }
+            if (value > (uMax - static_cast<unsigned long long>(d)) / base) {
+                overflow = true;  // past u64 entirely, so past every limit we check
+                break;
+            }
+            value = value * base + static_cast<unsigned long long>(d);
+        }
+        if (overflow || value > limit) {
+            fail("Integer literal '" + text + "' is out of range for a 64-bit integer (" +
+                     (negative ? std::string("min -9223372036854775808")
+                               : "max " + std::to_string(uMax)) + ")",
+                 line);
+        }
     }
 
     Token scanNumber() {
@@ -514,7 +641,9 @@ private:
             (source_[pos_ + 1] == 'x' || source_[pos_ + 1] == 'X')) {
             pos_ += 2;
             while (pos_ < source_.size() && std::isxdigit(static_cast<unsigned char>(source_[pos_]))) pos_++;
-            return {TokenType::Number, source_.substr(start, pos_ - start), startLine};
+            std::string text = source_.substr(start, pos_ - start);
+            checkIntegerRange(text, startLine);
+            return {TokenType::Number, text, startLine};
         }
         while (pos_ < source_.size() && isDigit(source_[pos_])) pos_++;
         if (pos_ < source_.size() && source_[pos_] == '.' && pos_ + 1 < source_.size() && isDigit(source_[pos_ + 1])) {
@@ -522,46 +651,37 @@ private:
             while (pos_ < source_.size() && isDigit(source_[pos_])) pos_++;
             return {TokenType::Float, source_.substr(start, pos_ - start), startLine};
         }
-        return {TokenType::Number, source_.substr(start, pos_ - start), startLine};
+        std::string text = source_.substr(start, pos_ - start);
+        checkIntegerRange(text, startLine);
+        return {TokenType::Number, text, startLine};
     }
 
     Token scanChar() {
         size_t startLine = line_;
         pos_++;
-        if (pos_ >= source_.size()) {
-            throw std::runtime_error("Unterminated character literal at line " + std::to_string(startLine));
-        }
+        if (pos_ >= source_.size()) fail("Unterminated character literal", startLine);
         std::string value;
         if (source_[pos_] == '\\') {
             pos_++;
-            if (pos_ >= source_.size()) {
-                throw std::runtime_error("Unterminated character literal at line " + std::to_string(startLine));
-            }
+            if (pos_ >= source_.size()) fail("Unterminated character literal", startLine);
             char c = source_[pos_++];
-            if (c == 'n') value = "\n";
-            else if (c == 't') value = "\t";
-            else if (c == 'r') value = "\r";
-            else if (c == '\\') value = "\\";
-            else if (c == '\'') value = "'";
-            else if (c == 'x' || c == 'X') {
-                int hex = 0;
-                int digits = 0;
-                while (pos_ < source_.size() && digits < 2) {
-                    char h = source_[pos_];
-                    if (h >= '0' && h <= '9') { hex = hex * 16 + (h - '0'); pos_++; digits++; }
-                    else if (h >= 'a' && h <= 'f') { hex = hex * 16 + (h - 'a' + 10); pos_++; digits++; }
-                    else if (h >= 'A' && h <= 'F') { hex = hex * 16 + (h - 'A' + 10); pos_++; digits++; }
-                    else break;
-                }
-                value = std::string(1, static_cast<char>(hex & 0xFF));
-            } else value = std::string(1, c);
+            char decoded;
+            if (decodeSimpleEscape(c, decoded)) {
+                value = std::string(1, decoded);
+            } else if (c == 'x' || c == 'X') {
+                value = std::string(1, scanHexEscape(startLine, "character literal"));
+            } else {
+                fail("Unknown escape sequence '" + describeEscape(c) + "' in character literal",
+                     startLine);
+            }
         } else {
+            if (source_[pos_] == '\n') fail("Unterminated character literal", startLine);
             value = std::string(1, source_[pos_++]);
         }
         if (pos_ < source_.size() && source_[pos_] == '\'') {
             pos_++;
         } else {
-            throw std::runtime_error("Unterminated character literal at line " + std::to_string(startLine));
+            fail("Unterminated character literal", startLine);
         }
         return {TokenType::Char, value, startLine};
     }

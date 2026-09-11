@@ -6,7 +6,8 @@ Nexa Standard Modules
   io.println(arg[, ...])  - Print args in order, then a newline
                     - Multiple args are written back-to-back (no extra spaces)
   io.flush()        - Flush stdout (fflush); use when output must appear immediately
-  Strings support escapes: \n \t \r \\ \" \xHH (hex ASCII)
+  Strings support escapes: \n \t \r \a \b \f \v \0 \\ \" \' \xHH (hex ASCII); see SYNTAX/Core.txt.
+  Any other escape is a compile error, not a silently dropped backslash.
   s += "x";        - string concatenation (compound assign)
   len(s)           - string or array length, returns int (built-in)
   trim(s[, prefix]) / io.trim(s[, prefix]) - trim ASCII whitespace; if prefix is given, remove it once from the start after that (e.g. trim("  x:5  ", "x:") -> "5")

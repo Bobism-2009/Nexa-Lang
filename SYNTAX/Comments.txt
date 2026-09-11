@@ -7,3 +7,6 @@ LINE COMMENT
 BLOCK COMMENT
   /* ... */
   - Can span multiple lines
+  - Does not nest: the first */ closes it
+  - A /* with no closing */ is an error naming the line it opened on, so a
+    stray opener cannot silently swallow the rest of the file

@@ -931,7 +931,7 @@ private:
                         std::stringstream buf;
                         buf << in.rdbuf();
                         in.close();
-                        Lexer lexer(buf.str());
+                        Lexer lexer(buf.str(), absPath);
                         std::vector<Token> subTokens = lexer.tokenize();
                         Parser subParser(std::move(subTokens), modules_, absPath, includedFiles_, packagePaths_);
                         return subParser.parse();
@@ -976,7 +976,7 @@ private:
             std::stringstream buf;
             buf << in.rdbuf();
             in.close();
-            Lexer lexer(buf.str());
+            Lexer lexer(buf.str(), absPath);
             std::vector<Token> subTokens = lexer.tokenize();
             Parser subParser(std::move(subTokens), modules_, absPath, includedFiles_, packagePaths_);
             return subParser.parse();
