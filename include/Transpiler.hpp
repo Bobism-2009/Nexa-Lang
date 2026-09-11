@@ -1499,6 +1499,147 @@ private:
         return "";
     }
 
+    // What a Nexa integer type can hold, as the two numbers a slice literal has to fit inside:
+    // the largest value, and the magnitude of the most negative one (0 for an unsigned type).
+    // Nexa's integer types *are* the C++ types, so the widths follow the target's data model --
+    // `long` is 32-bit on LLP64 Windows and on wasm32, 64-bit on the LP64 Unixes, and `size_t`
+    // is 64-bit everywhere but wasm32. `valid` is false for anything that is not one of them.
+    struct NexaIntRange {
+        bool valid = false;
+        unsigned long long maxValue = 0;
+        unsigned long long maxNegMagnitude = 0;
+    };
+
+    NexaIntRange nexaIntTypeRange(const std::string& t) const {
+        const bool long64 = (target_ != CppTarget::Windows && target_ != CppTarget::Wasm);
+        const bool sizeT64 = (target_ != CppTarget::Wasm);
+        const unsigned long long i32Max = 2147483647ULL;
+        const unsigned long long u32Max = 4294967295ULL;
+        const unsigned long long i64Max = 9223372036854775807ULL;
+        const unsigned long long u64Max = 18446744073709551615ULL;
+        const unsigned long long longMax = long64 ? i64Max : i32Max;
+        NexaIntRange r;
+        r.valid = true;
+        if (t == "short")               { r.maxValue = 32767ULL;   r.maxNegMagnitude = 32768ULL; }
+        else if (t == "unsigned short") { r.maxValue = 65535ULL; }
+        else if (t == "int")            { r.maxValue = i32Max;     r.maxNegMagnitude = i32Max + 1; }
+        else if (t == "unsigned int")   { r.maxValue = u32Max; }
+        else if (t == "long")           { r.maxValue = longMax;    r.maxNegMagnitude = longMax + 1; }
+        else if (t == "unsigned long")  { r.maxValue = long64 ? u64Max : u32Max; }
+        else if (t == "size_t")         { r.maxValue = sizeT64 ? u64Max : u32Max; }
+        else r.valid = false;
+        return r;
+    }
+
+    // What one slice literal's elements need from their common type. `maxAt`/`negAt` name the
+    // element that set each bound, so a refusal can point at real .nxa source rather than at
+    // the generated C++. `usable` is false when the list is not all integers, in which case
+    // nothing here is meaningful and the caller keeps its old answer.
+    struct SliceLiteralNeed {
+        bool usable = false;
+        unsigned long long maxValue = 0;
+        unsigned long long maxNegMagnitude = 0;
+        const AstNode* maxAt = nullptr;
+        const AstNode* negAt = nullptr;
+    };
+
+    // Noun phrase for one slice element, for use inside a diagnostic.
+    std::string sliceElemDesc(const AstNode* e) const {
+        if (!e) return "an element";
+        if (e->type == AstNode::Type::ExprIntLiteral) return "the element " + e->value;
+        std::string t = inferExprNexaType(*e);
+        if (t.size() >= 9 && t.compare(0, 9, "arrayelt:") == 0) t = t.substr(9);
+        return "the '" + t + "' element";
+    }
+
+    // The element type a slice literal needs so that every element keeps its value.
+    //
+    // Only the first element used to decide this, so `[2147483648, 1]` became a
+    // std::vector<int> holding a number no int can represent. List-initialization refuses to
+    // narrow, so the user got a clang error about machine-written C++ for a literal
+    // SYNTAX/Core.txt calls legal. The type now has to hold *every* element: an integer
+    // literal contributes its own value, and any other element contributes the full range of
+    // its type (an `int` variable can hold a negative, so it forces a signed common type).
+    //
+    // The first element's type is still the answer whenever it already fits, so every slice
+    // literal that compiled before is emitted exactly as it was. Otherwise the type climbs the
+    // int -> long -> unsigned long -> size_t ladder to the first rung that holds the whole
+    // list. It stays signed as long as it can because that is what the rest of NexaC does with
+    // a wide literal -- emitIntLiteral only reaches for an unsigned type past i64 max -- so
+    // `[2147483648][0] - 1` means what the bare literal would mean. A target whose `long` is
+    // 32-bit lands on a different rung: Nexa's integer types are the C++ ones, and those are
+    // not the same width everywhere. The value is held either way.
+    //
+    // When no rung holds it -- a list mixing a negative with a value above i64 max, or, on a
+    // target whose `long` is 32-bit, anything that needs 64 bits and a sign -- `failing` is set
+    // to the element to blame and `why` to the reason. checkSemantics turns that into a
+    // [Nexa] Error naming the .nxa line, so codegen never emits the impossible vector.
+    std::string arrayLiteralElemNexaType(const AstNode& arr, const AstNode** failing = nullptr,
+                                         std::string* why = nullptr) const {
+        if (failing) *failing = nullptr;
+        if (arr.children.empty()) return "int";
+        std::string elemT = inferExprNexaType(arr.children[0]);
+        if (elemT.size() >= 9 && elemT.compare(0, 9, "arrayelt:") == 0) elemT = elemT.substr(9);
+        // Strings, floats, chars, bools, structs, nested slices: not this function's business.
+        if (!nexaIsNumericIntType(elemT)) return elemT;
+
+        SliceLiteralNeed need;
+        need.usable = true;
+        for (const AstNode& c : arr.children) {
+            unsigned long long maxV = 0;
+            unsigned long long negV = 0;
+            if (c.type == AstNode::Type::ExprIntLiteral) {
+                const IntLiteralText lit = parseIntLiteralText(c.value);
+                if (!lit.valid) { need.usable = false; break; }
+                if (lit.negative) negV = lit.magnitude;
+                else maxV = lit.magnitude;
+            } else {
+                std::string t = inferExprNexaType(c);
+                if (t.size() >= 9 && t.compare(0, 9, "arrayelt:") == 0) t = t.substr(9);
+                const NexaIntRange r = nexaIntTypeRange(t);
+                if (!nexaIsNumericIntType(t) || !r.valid) { need.usable = false; break; }
+                maxV = r.maxValue;
+                negV = r.maxNegMagnitude;
+            }
+            if (!need.maxAt || maxV > need.maxValue) { need.maxValue = maxV; need.maxAt = &c; }
+            if (negV > need.maxNegMagnitude) { need.maxNegMagnitude = negV; need.negAt = &c; }
+        }
+        if (!need.usable) return elemT;
+
+        auto holds = [&](const std::string& t) {
+            const NexaIntRange r = nexaIntTypeRange(t);
+            return r.valid && need.maxValue <= r.maxValue && need.maxNegMagnitude <= r.maxNegMagnitude;
+        };
+        if (holds(elemT)) return elemT;
+        static const char* const ladder[] = {"int", "long", "unsigned long", "size_t"};
+        for (const char* t : ladder) {
+            if (holds(t)) return t;
+        }
+
+        if (failing) {
+            const NexaIntRange longR = nexaIntTypeRange("long");
+            const std::string hint = (longR.maxValue <= 2147483647ULL)
+                ? " (this target's 'long' is 32-bit)" : "";
+            if (need.maxNegMagnitude > longR.maxNegMagnitude) {
+                *failing = need.negAt;
+                if (why) *why = "Slice literal: " + sliceElemDesc(need.negAt) +
+                                " does not fit any integer type" + hint;
+            } else if (need.negAt) {
+                *failing = need.maxAt;
+                if (why) *why = "Slice literal: no integer type holds both " +
+                                sliceElemDesc(need.negAt) + " and " + sliceElemDesc(need.maxAt) + hint;
+            } else {
+                *failing = need.maxAt;
+                if (why) *why = "Slice literal: " + sliceElemDesc(need.maxAt) +
+                                " does not fit any integer type" + hint;
+            }
+        }
+        // Unreachable in a build that ran checkSemantics; the widest rung keeps codegen honest
+        // for any caller that did not.
+        return nexaIntTypeRange("size_t").maxValue >= nexaIntTypeRange("unsigned long").maxValue
+            ? "size_t" : "unsigned long";
+    }
+
     std::string nexaDeclFromVariableAst(const AstNode& v) const {
         if (v.initUninitialized) {
             if (!v.declType.empty()) return v.declType;
@@ -1520,8 +1661,7 @@ private:
             if (!v.children.empty() && v.children[0].type == AstNode::Type::ExprArrayLiteral) {
                 const AstNode& arr = v.children[0];
                 if (arr.children.empty()) return "[]int";
-                std::string et = inferExprNexaType(arr.children[0]);
-                if (et.size() >= 9 && et.compare(0, 9, "arrayelt:") == 0) et = et.substr(9);
+                std::string et = arrayLiteralElemNexaType(arr);
                 if (nexaIsSliceType(et)) return et;
                 return "[]" + et;
             }
@@ -1688,8 +1828,7 @@ private:
             case AstNode::Type::ExprTrim: return "string";
             case AstNode::Type::ExprArrayLiteral:
                 if (!e.children.empty()) {
-                    std::string et = inferExprNexaType(e.children[0]);
-                    if (et.size() >= 9 && et.compare(0, 9, "arrayelt:") == 0) et = et.substr(9);
+                    std::string et = arrayLiteralElemNexaType(e);
                     if (nexaIsSliceType(et)) return et;
                     return "[]" + et;
                 }
@@ -2386,10 +2525,23 @@ private:
                 break;
             case AstNode::Type::InlineCpp:
                 break;
+            case AstNode::Type::ExprArrayLiteral:
+                for (const AstNode& c : e.children) semExpr(c);
+                semCheckSliceLiteralWidth(e);
+                break;
             default:
                 for (const AstNode& c : e.children) semExpr(c);
                 break;
         }
+    }
+
+    // A slice literal whose elements share no integer type is refused here, by line, instead of
+    // reaching clang as a narrowing error about generated C++ the user never wrote.
+    void semCheckSliceLiteralWidth(const AstNode& e) const {
+        const AstNode* bad = nullptr;
+        std::string why;
+        arrayLiteralElemNexaType(e, &bad, &why);
+        if (bad) semError(*bad, why);
     }
 
     void semCheckNameUse(const AstNode& at, const std::string& name) {
@@ -5083,11 +5235,8 @@ private:
                 return s;
             }
             case AstNode::Type::ExprArrayLiteral: {
-                std::string elemT = "int";
-                if (!e.children.empty()) {
-                    elemT = inferExprNexaType(e.children[0]);
-                    if (elemT.size() >= 9 && elemT.compare(0, 9, "arrayelt:") == 0) elemT = elemT.substr(9);
-                }
+                const std::string elemT = e.children.empty() ? std::string("int")
+                                                             : arrayLiteralElemNexaType(e);
                 std::string s = "std::vector<" + nexaTypeToCpp(elemT) + ">{";
                 for (size_t i = 0; i < e.children.size(); i++) {
                     if (i > 0) s += ", ";

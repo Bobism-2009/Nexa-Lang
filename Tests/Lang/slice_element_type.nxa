@@ -1,0 +1,65 @@
+// Pins the element type an inferred slice literal gets: it has to hold every
+// element, not just the first one. A std::vector<int> that cannot represent its
+// own initializer is a C++ narrowing error about generated code, which is not a
+// diagnosis the user can act on.
+//
+// SYNTAX/Core.txt says an integer literal is legal up to 18446744073709551615
+// and does not carve slice literals out of that, so each case below is a
+// literal the language already promises to accept.
+// Reference: SYNTAX/Core.txt ("Integer literals", "SLICES")
+#include <std/io>
+
+fn main() {
+    // The element past int range is first, then not first: position must not matter.
+    let a = [2147483648, 1];
+    io.println("wide_first=" + a[0]);
+    let b = [1, 2147483648];
+    io.println("wide_last=" + b[1]);
+
+    // The widened type stays signed while it can, so subtraction below zero still
+    // works. SYNTAX/ does not spell this out; it is the rule NexaC already applies
+    // to a bare wide literal (unsigned only past i64 max), applied to slices too.
+    io.println("stays_signed=" + (a[1] - 2));
+
+    // Past i64 max the type has to go unsigned, in decimal and in hex.
+    let u = [18446744073709551615];
+    io.println("u64_max=" + u[0]);
+    let h = [0xFFFFFFFFFFFFFFFF, 0];
+    io.println("hex_u64_max=" + h[0]);
+
+    // Negative elements keep the type signed, down to the documented limit.
+    let n = [-2147483649, 1];
+    io.println("neg_past_i32=" + n[0]);
+    let m = [-9223372036854775808, 0];
+    io.println("i64_min=" + m[0]);
+
+    // The int boundaries themselves stay int, and stay exact.
+    let edge = [-2147483648, 2147483647];
+    io.println("i32_min=" + edge[0]);
+    io.println("i32_max=" + edge[1]);
+
+    // A variable element widens the slice the same way a literal does.
+    let big: long = 3000000000;
+    let mixed = [1, big];
+    io.println("long_var_last=" + mixed[1]);
+    let mixedFirst = [big, 1];
+    io.println("long_var_first=" + mixedFirst[0]);
+
+    let ul: unsigned long = 18446744073709551615;
+    let unsignedVar = [ul, 0];
+    io.println("ulong_var=" + unsignedVar[0]);
+
+    // A widened slice is still an ordinary slice: index, assign, push, len.
+    let ops = [4294967296, 1];
+    ops[1] = 4294967297;
+    ops.push(4294967298);
+    io.println("assigned=" + ops[1]);
+    io.println("pushed=" + ops[2]);
+    io.println("len=", len(ops));
+
+    // Ordinary slices are untouched by any of this.
+    let small = [1, 2, 3];
+    io.println("small_sum=", small[0] + small[1] + small[2]);
+    let strs = ["a", "b"];
+    io.println("strings=" + strs[1]);
+}
