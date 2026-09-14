@@ -270,7 +270,17 @@ public:
                     cppUsage.http = true;
                     cppUsage.result = true;
                     break;
-                case AstNode::Type::GfxCall: cppUsage.gfx = true; break;
+                case AstNode::Type::GfxCall:
+                    cppUsage.gfx = true;
+                    // The three calls that can reach the image decoder. blit is in the list
+                    // because its path overload loads the file itself, and which overload it
+                    // takes is not known until the third argument's type is inferred, well
+                    // after this scan. Listing it costs nothing: a handle blit has to get its
+                    // handle from gfx.image or gfx.decode, which set the flag anyway.
+                    if (n.value == "image" || n.value == "decode" || n.value == "blit") {
+                        cppUsage.gfxImage = true;
+                    }
+                    break;
                 case AstNode::Type::JsonCall: cppUsage.json = true; break;
                 case AstNode::Type::ResultMake: cppUsage.result = true; break;
                 case AstNode::Type::StrMethod:
@@ -1107,7 +1117,9 @@ public:
         }
         std::string src = stripInactivePlatformGuards(filtered.str(), target_);
         if (cppUsage_.gfx && (target_ == CppTarget::Linux || target_ == CppTarget::Wasm)) {
-            src += gfxStbImageRuntimeCpp();
+            // Only a program that can reach the decoder needs it; everything else gets a
+            // two-line stub instead of ~8,000 lines of stb. See the GfxCall usage scan.
+            src += cppUsage_.gfxImage ? gfxStbImageRuntimeCpp() : gfxStbImageStubCpp();
         }
         // Last, once nothing else will add or drop a line: turn the statement markers into
         // `#line` directives. The appended gfx runtime carries no markers, and the final

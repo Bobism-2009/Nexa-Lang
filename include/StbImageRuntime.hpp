@@ -8004,4 +8004,17 @@ void __nexa_gfx_stbi_free(void* p) {
 )NEXA_STB3");
 }
 
+// Stands in for the blob above when the program uses std/gfx but can never decode an
+// image. The gfx runtime still emits __nexa_gfx_decode_rgba, which calls these two, so
+// they have to exist to link -- but nothing can reach them, because reaching them takes a
+// gfx.image, gfx.decode or gfx.blit call, any of which pulls in the real decoder instead.
+inline std::string gfxStbImageStubCpp() {
+    return std::string(R"NEXA_STBSTUB(
+unsigned char* __nexa_gfx_stbi_load_rgba(const unsigned char*, int, int*, int*) {
+    return nullptr;
+}
+void __nexa_gfx_stbi_free(void*) {}
+)NEXA_STBSTUB");
+}
+
 }  // namespace nexa

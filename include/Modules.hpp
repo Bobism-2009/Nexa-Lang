@@ -82,6 +82,9 @@ public:
         bool dll = false;
         bool exceptions = false;
         bool gfx = false;
+        // Set by the gfx calls that can reach the image decoder. The stb blob is ~8,000
+        // lines and dominates compile time, so it is emitted only when one of them is used.
+        bool gfxImage = false;
         bool json = false;
         bool result = false;
     };
