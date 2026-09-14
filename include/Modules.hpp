@@ -82,9 +82,30 @@ public:
         bool dll = false;
         bool exceptions = false;
         bool gfx = false;
-        // Set by the gfx calls that can reach the image decoder. The stb blob is ~8,000
-        // lines and dominates compile time, so it is emitted only when one of them is used.
+        // Which gfx feature groups the program's calls can reach, so that
+        // gfxRuntimeCpp emits only those. See GfxNeed in GfxRuntime.hpp: these
+        // are its fields, and the GfxCall walk in Transpiler.hpp sets them.
+        // gfxImage is GfxNeed::imageLoad -- it also gates the ~8,000-line stb
+        // blob, which dominates the compile time of a gfx program.
         bool gfxImage = false;
+        bool gfxAlpha = false;
+        bool gfxPlot = false;
+        bool gfxGet = false;
+        bool gfxShapesFill = false;
+        bool gfxShapesOutline = false;
+        bool gfxLine = false;
+        bool gfxLineThick = false;
+        bool gfxText = false;
+        bool gfxMouse = false;
+        bool gfxKeys = false;
+        bool gfxTyped = false;
+        bool gfxWheel = false;
+        bool gfxImageStore = false;
+        bool gfxBlit = false;
+        bool gfxSave = false;
+        bool gfxDialogs = false;
+        bool gfxAudio = false;
+        bool gfxWindow = false;
         bool json = false;
         bool result = false;
     };
@@ -1411,7 +1432,33 @@ public:
             out += httpRuntimeCpp();
         }
         if (hasGfx() && usage.gfx) {
-            out += gfxRuntimeCpp();
+            GfxNeed need;
+            need.alpha = usage.gfxAlpha;
+            need.plot = usage.gfxPlot;
+            need.get = usage.gfxGet;
+            need.shapesFill = usage.gfxShapesFill;
+            need.shapesOutline = usage.gfxShapesOutline;
+            need.line = usage.gfxLine;
+            need.lineThick = usage.gfxLineThick;
+            need.text = usage.gfxText;
+            need.mouse = usage.gfxMouse;
+            need.keys = usage.gfxKeys;
+            need.typed = usage.gfxTyped;
+            need.wheel = usage.gfxWheel;
+            need.imageStore = usage.gfxImageStore;
+            need.imageLoad = usage.gfxImage;
+            need.blit = usage.gfxBlit;
+            need.save = usage.gfxSave;
+            need.dialogs = usage.gfxDialogs;
+            need.audio = usage.gfxAudio;
+            need.window = usage.gfxWindow;
+            // Cross-group dependency, the same way hmac pulls in sha256: a blit
+            // needs the table it blits out of, and loading an image needs
+            // somewhere to put what it loaded. (A blit already implies the load:
+            // the usage scan counts every gfx.blit as one, because a path blit
+            // decodes the file itself.)
+            if (need.blit || need.imageLoad) need.imageStore = true;
+            out += gfxRuntimeCpp(need);
         }
         if (hasJson() && usage.json) {
             out += jsonRuntimeCpp();

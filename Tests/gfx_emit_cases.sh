@@ -1,28 +1,32 @@
 #!/bin/sh
-# What a gfx program has to carry: the image decoder (BOB-24).
+# What a gfx program has to carry: the image decoder (BOB-24) and the gfx
+# runtime itself (BOB-25).
 #
-# stb_image is about 8,000 of the lines NexaC emits for a gfx program, and on a
-# fresh -O2 build it is roughly three quarters of the compile time. A program
-# that never decodes an image should not pay for it, so the transpiler emits the
-# decoder only when one of the three calls that can reach it is used, and a
-# two-line stub otherwise -- the gfx runtime always emits
-# __nexa_gfx_decode_rgba, which calls into stb, so something has to be there for
-# it to link against.
+# The std/gfx runtime is ~2,800 lines and stb_image another ~8,000, and a
+# program that opens a window and draws reaches a small corner of either. Both
+# are therefore sliced: the transpiler records which gfx builtins a program
+# calls, and only the feature groups those can reach are emitted. This suite is
+# the cover for the slicing, not for what the features do -- the other
+# Tests/gfx_*_cases.sh suites test the behaviour of the code that survives.
 #
-# Two layers, cheapest first, matching the other Tests/gfx_*_cases.sh suites:
+# Three layers, cheapest first, matching the other Tests/gfx_*_cases.sh suites:
 #
-#   slicing   Which programs carry the decoder. Transpile only (--source), for
+#   decoder  Which programs carry stb_image. Transpile only (--source), for
 #            both targets that append it (native Linux and --wasm). Never
 #            invokes the C++ compiler, so it runs anywhere NexaC does.
 #
-#   link     The stub actually satisfies the reference. Build a draw-only gfx
-#            program against the fake X11 in Tests/gfx_x11_stub and run it. No
-#            display needed -- the program never opens a window. Skipped when
-#            this machine has no C++ compiler.
+#   groups   Which feature groups of the gfx runtime a program carries: each
+#            group is present when a call reaches it and absent from a draw
+#            loop that cannot. Transpile only, both targets.
 #
-# The decoder's own behaviour is not retested here; Tests/gfx_cases.sh already
-# decodes Tests/gfx_2x2.png through the headless layer, and it is one of the
-# programs that must still carry stb.
+#   link     The slicing leaves a program that still compiles and links. Every
+#            gfx builtin gets a one-call program of its own, built against the
+#            fake X11 in Tests/gfx_x11_stub and run -- which is what proves the
+#            dependency closure: a lone gfx.fill_circle has to drag in the
+#            ellipse maths and the span writer, a lone gfx.save the little-
+#            endian writers and gfx.get. No display needed; none of these
+#            programs opens a window. Skipped when this machine has no C++
+#            compiler.
 #
 # Usage: Tests/gfx_emit_cases.sh [path-to-NexaC]        (run from the repo root)
 
@@ -36,6 +40,7 @@ fi
 NEXAC=$(cd "$(dirname "$NEXAC")" && pwd)/$(basename "$NEXAC")
 
 SUITE=$(cd "$(dirname "$0")" && pwd)
+ROOT=$(cd "$SUITE/.." && pwd)
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT INT TERM
@@ -70,15 +75,13 @@ transpile() {
     return 0
 }
 
+# --- decoder: which gfx programs carry stb_image ----------------------------
+
 # stb_image's internals are all named stbi__*, so counting those lines
-# distinguishes "the blob is here" from "the two-line stub is here" without
-# depending on any particular line of it.
+# distinguishes "the blob is here" from "it is not" without depending on any
+# particular line of it.
 has_stb() {
     grep -q 'stbi__' "$1"
-}
-
-has_stub() {
-    grep -q '^unsigned char\* __nexa_gfx_stbi_load_rgba(const unsigned char\*, int, int\*, int\*)' "$1"
 }
 
 # expect_no_decoder <label> <body> [flags...]
@@ -91,15 +94,12 @@ expect_no_decoder() {
         fails=$((fails + 1))
         return
     fi
-    # Without the stub the program would still compile and then fail to link,
-    # because the gfx runtime declares and calls both of these.
-    if ! has_stub "$WORK/$label.cpp"; then
-        echo "FAIL $label: dropped stb_image without leaving the stub behind"
-        fails=$((fails + 1))
-        return
-    fi
-    if ! grep -q '^void __nexa_gfx_stbi_free(void\*) {}' "$WORK/$label.cpp"; then
-        echo "FAIL $label: stub is missing __nexa_gfx_stbi_free"
+    # And nothing is left referring to it. __nexa_gfx_decode_rgba is the only
+    # caller of the two stb entry points and it is sliced out by the same flag,
+    # so there is no reference left to satisfy and no stub is emitted for one.
+    if grep -q '__nexa_gfx_stbi' "$WORK/$label.cpp"; then
+        echo "FAIL $label: dropped stb_image but left a reference to it behind"
+        grep -n '__nexa_gfx_stbi' "$WORK/$label.cpp" | head -n 3 | sed 's/^/  /'
         fails=$((fails + 1))
         return
     fi
@@ -116,15 +116,15 @@ expect_decoder() {
         fails=$((fails + 1))
         return
     fi
-    if has_stub "$WORK/$label.cpp"; then
-        echo "FAIL $label: emitted both the decoder and the stub"
+    if ! grep -q '__nexa_gfx_decode_rgba' "$WORK/$label.cpp"; then
+        echo "FAIL $label: the decoder is there but nothing dispatches to it"
         fails=$((fails + 1))
         return
     fi
     echo "ok $label"
 }
 
-echo "-- slicing: which gfx programs carry the image decoder"
+echo "-- decoder: which gfx programs carry the image decoder"
 
 expect_no_decoder "draw_only_has_no_decoder" "$DRAW_ONLY"
 
@@ -134,6 +134,12 @@ expect_no_decoder "save_and_text_have_no_decoder" \
     '    gfx.text(0, 0, "a", 1, 2, 3);
     let w: int = gfx.text_width("a");
     gfx.save("out.bmp");'
+
+# Reading the size of an image needs the table images are stored in, but not
+# the decoder that fills it: there is no way to have put one there.
+expect_no_decoder "image_size_alone_has_no_decoder" \
+    '    let w: int = gfx.image_w(1);
+    let h: int = gfx.image_h(1);'
 
 # The three calls that can reach __nexa_gfx_decode_rgba.
 expect_decoder "image_has_the_decoder" \
@@ -155,20 +161,142 @@ expect_no_decoder "wasm_draw_only_has_no_decoder" "$DRAW_ONLY" --wasm
 expect_decoder "wasm_image_has_the_decoder" \
     '    let i: int = gfx.image("a.png");' --wasm
 
-# The point of all this is the size of the file the C++ compiler is handed. The
-# draw loop measured 9,591 lines with the blob and 1,602 without; 3,000 is a
-# loose ceiling that a re-introduced blob (~8,000 lines) cannot sneak under.
-lines=$(wc -l < "$WORK/draw_only_has_no_decoder.cpp")
-if [ "$lines" -gt 3000 ]; then
-    echo "FAIL draw_only_stays_small: $lines lines of C++ for a draw loop"
+# --- groups: which of the gfx runtime a program carries ---------------------
+
+echo "-- groups: which feature groups of the gfx runtime a program carries"
+
+# One sentinel per group: a definition only that group emits. Matching the
+# definition rather than a call means the program's own main cannot satisfy it.
+#
+# group <name> <sentinel-ERE> <body> [flags...]
+# Asserts the sentinel is in the emission for `body` and is not in the draw
+# loop's, which reaches nothing but the core.
+group() {
+    name=$1
+    want=$2
+    body=$3
+    shift 3
+    label="group_$name"
+    transpile "$label" "$body" "$@" || return
+    if ! grep -Eq "$want" "$WORK/$label.cpp"; then
+        echo "FAIL $label: a program that uses it did not carry /$want/"
+        fails=$((fails + 1))
+        return
+    fi
+    if grep -Eq "$want" "$WORK/$DRAW_LABEL.cpp"; then
+        echo "FAIL $label: a draw loop carried /$want/, which it cannot reach"
+        fails=$((fails + 1))
+        return
+    fi
+    echo "ok $label"
+}
+
+# run_groups <suffix> [flags...] -- the whole table against one target.
+run_groups() {
+    suffix=$1
+    shift
+    DRAW_LABEL="draw_only$suffix"
+    transpile "$DRAW_LABEL" "$DRAW_ONLY" "$@" || return
+
+    group "alpha$suffix" '^static int __nexa_gfx_alpha_get' \
+        '    let a: int = gfx.alpha();' "$@"
+    group "get$suffix" '^static int __nexa_gfx_get\(' \
+        '    let p: int = gfx.get(1, 2);' "$@"
+    group "shapes_fill$suffix" '^static void __nexa_gfx_fill_poly_pts' \
+        '    gfx.fill_tri(0, 0, 1, 0, 0, 1, 1, 2, 3);' "$@"
+    group "shapes_outline$suffix" '^static void __nexa_gfx_poly_pts' \
+        '    gfx.tri(0, 0, 1, 0, 0, 1, 1, 2, 3);' "$@"
+    group "line$suffix" '^static void __nexa_gfx_line\(' \
+        '    gfx.line(0, 0, 1, 1, 1, 2, 3);' "$@"
+    group "line_thick$suffix" '^static void __nexa_gfx_line_thick' \
+        '    gfx.line(0, 0, 1, 1, 1, 2, 3, 4);' "$@"
+    group "text$suffix" '^static const unsigned char __nexa_gfx_font5x7' \
+        '    gfx.text(0, 0, "a", 1, 2, 3);' "$@"
+    group "mouse$suffix" '^static int __nexa_gfx_mouse_x' \
+        '    let n: int = gfx.mouse_x();' "$@"
+    group "keys$suffix" '^static int __nexa_gfx_vk' \
+        '    let k: int = gfx.pressed("space");' "$@"
+    group "typed$suffix" '^static std::string __nexa_gfx_typed' \
+        '    let s: string = gfx.typed();' "$@"
+    group "wheel$suffix" '^static int __nexa_gfx_wheel\(\)' \
+        '    let n: int = gfx.wheel();' "$@"
+    group "image_store$suffix" '^struct __nexa_GfxImg' \
+        '    let n: int = gfx.image_w(1);' "$@"
+    group "blit$suffix" '^static int __nexa_gfx_blit\(' \
+        '    gfx.blit(0, 0, 1);' "$@"
+    group "save$suffix" '^static int __nexa_gfx_save' \
+        '    let ok: int = gfx.save("o.bmp");' "$@"
+    group "dialogs$suffix" '^static std::string __nexa_gfx_opendialog' \
+        '    let p: string = gfx.opendialog();' "$@"
+    group "audio$suffix" '^static int __nexa_gfx_sample' \
+        '    let n: int = gfx.sample(1);' "$@"
+    group "window$suffix" '^static int __nexa_gfx_resize' \
+        '    gfx.resize(4, 4);' "$@"
+}
+
+run_groups ""
+# The wasm target slices the same runtime, so the whole table runs twice.
+run_groups "_wasm" --wasm
+
+# gfx.typed() is the only reader of the typed-text queue, but the backends feed
+# it from inside the window procedure and the X11 event loop, which are core.
+# Slicing the queue therefore has to leave those callees behind as no-ops.
+if ! grep -q 'static void __nexa_gfx_type_push_latin1(const char\*, int) {}' \
+        "$WORK/draw_only.cpp"; then
+    echo "FAIL typed_stub: a draw loop lost the no-op typed-text helpers"
     fails=$((fails + 1))
 else
-    echo "ok draw_only_stays_small ($lines lines)"
+    echo "ok typed_stub"
 fi
 
-# --- link: the stub satisfies the reference ---------------------------------
+# gfx.close() calls the audio shutdown itself, so slicing audio out has to
+# leave that behind too.
+if ! grep -q 'static void __nexa_gfx_audio_close() {}' "$WORK/draw_only.cpp"; then
+    echo "FAIL audio_close_stub: a draw loop lost the no-op audio shutdown"
+    fails=$((fails + 1))
+else
+    echo "ok audio_close_stub"
+fi
 
-echo "-- link: a program with the stub still builds and runs"
+# --- size: the point of all of it -------------------------------------------
+
+echo "-- size: the file the C++ compiler is handed"
+
+# size_under <label> <file> <ceiling>
+size_under() {
+    lines=$(wc -l < "$2")
+    if [ "$lines" -gt "$3" ]; then
+        echo "FAIL $1: $lines lines of C++ (ceiling $3)"
+        fails=$((fails + 1))
+    else
+        echo "ok $1 ($lines lines)"
+    fi
+}
+
+# The draw loop measured 9,591 lines with the stb blob, 1,602 with the whole
+# gfx runtime and 490 sliced. The ceilings are loose enough not to be a
+# tripwire for an honest new line of core runtime, and tight enough that a
+# re-introduced blob (~8,000 lines) or an unsliced runtime (~1,600) cannot
+# sneak under them.
+size_under "draw_only_stays_small" "$WORK/draw_only.cpp" 900
+size_under "wasm_draw_only_stays_small" "$WORK/draw_only_wasm.cpp" 900
+
+# Examples/paint_demo.nxa is the program the founder measured: 217 lines of
+# Nexa that transpiled to 1,793 lines of C++ before the slicing and 1,341
+# after. It uses 24 gfx builtins, so it is the case where slicing has the
+# least to remove.
+if "$NEXAC" "$ROOT/Examples/paint_demo.nxa" --source "$WORK/paint_demo.cpp" \
+        > "$WORK/paint_demo.log" 2>&1; then
+    size_under "paint_demo_stays_small" "$WORK/paint_demo.cpp" 1500
+else
+    echo "FAIL paint_demo_stays_small: NexaC could not transpile it"
+    sed 's/^/  /' "$WORK/paint_demo.log"
+    fails=$((fails + 1))
+fi
+
+# --- link: the sliced runtime still builds and runs -------------------------
+
+echo "-- link: one program per gfx builtin, against the X11 stub"
 
 pick_cxx() {
     if [ -n "${NEXA_CXX:-}" ]; then
@@ -188,49 +316,121 @@ CXX=$(pick_cxx)
 
 # Same route as the headless layer of Tests/gfx_cases.sh: a real gfx link needs
 # the X11 development libraries, so fall back to the fake X11 in
-# Tests/gfx_x11_stub. Sound here because this program never opens a window.
-if [ -z "$CXX" ]; then
-    echo "SKIP stub_links: no C++ compiler on this machine"
-    skips=$((skips + 1))
-elif [ ! -f "$WORK/save_and_text_have_no_decoder.cpp" ]; then
-    echo "SKIP stub_links: the program did not transpile (reported above)"
-    skips=$((skips + 1))
-else
-    # Reuse the no-window program from the slicing layer: with no gfx.open it
-    # runs to completion under the stub instead of spinning in a draw loop.
+# Tests/gfx_x11_stub. Sound here because none of these programs opens a window.
+link_probe_done=0
+link_ok=1
+
+# link_case <label> <body>
+# Transpiles one call on its own, builds it and runs it. A missing dependency
+# in a feature group's closure surfaces here as a compile or link error.
+link_case() {
+    label="link_$1"
+    body=$2
+    [ "$link_ok" -eq 1 ] || return
+    transpile "$label" "$body" || return
     if ! "$CXX" -std=c++17 -O0 -I "$SUITE/gfx_x11_stub" \
-            "$WORK/save_and_text_have_no_decoder.cpp" \
-            "$SUITE/gfx_x11_stub/x11_stub.cpp" -o "$WORK/prog" \
-            > "$WORK/link.log" 2>&1 || [ ! -x "$WORK/prog" ]; then
-        # An unresolved __nexa_gfx_stbi_load_rgba lands here, and so does a box
-        # that cannot build gfx at all. Tell the two apart.
-        if grep -q '__nexa_gfx_stbi' "$WORK/link.log"; then
-            echo "FAIL stub_links: the stub does not satisfy the decoder reference"
-            grep '__nexa_gfx_stbi' "$WORK/link.log" | head -n 3 | sed 's/^/  /'
-            fails=$((fails + 1))
-        else
-            echo "SKIP stub_links: this machine cannot build a gfx program"
-            grep -E 'error|Error' "$WORK/link.log" | head -n 3 | sed 's/^/       /'
-            skips=$((skips + 1))
-        fi
-    else
-        diags=$(grep -E '\.cpp:[0-9]+:[0-9]+: (warning|error):' "$WORK/link.log")
-        if [ -n "$diags" ]; then
-            echo "FAIL stub_links: the C++ compiler had something to say about generated code"
-            printf '%s\n' "$diags" | sed 's/^/  /'
-            fails=$((fails + 1))
-        else
-            out=$(cd "$WORK" && ./prog 2>&1)
-            rc=$?
-            if [ $rc -ne 0 ]; then
-                echo "FAIL stub_links: program exited $rc"
-                printf '%s\n' "$out" | sed 's/^/  /'
-                fails=$((fails + 1))
-            else
-                echo "ok stub_links (via the X11 stub)"
+            "$WORK/$label.cpp" "$SUITE/gfx_x11_stub/x11_stub.cpp" \
+            -o "$WORK/$label.bin" > "$WORK/$label.build" 2>&1 \
+            || [ ! -x "$WORK/$label.bin" ]; then
+        if [ "$link_probe_done" -eq 0 ]; then
+            # The first failure might mean this machine cannot build a gfx
+            # program at all rather than that the slicing is wrong. Tell the
+            # two apart once, and skip the rest of the layer if so.
+            if ! grep -qE '__nexa_gfx|__nexa_var|undefined (symbol|reference)' \
+                    "$WORK/$label.build"; then
+                echo "SKIP link: this machine cannot build a gfx program"
+                grep -E 'error|Error' "$WORK/$label.build" | head -n 3 | sed 's/^/       /'
+                skips=$((skips + 1))
+                link_ok=0
+                return
             fi
         fi
+        link_probe_done=1
+        echo "FAIL $label: the sliced runtime does not build"
+        grep -E 'error:|undefined' "$WORK/$label.build" | head -n 5 | sed 's/^/  /'
+        fails=$((fails + 1))
+        return
     fi
+    link_probe_done=1
+    diags=$(grep -E '\.cpp:[0-9]+:[0-9]+: (warning|error):' "$WORK/$label.build")
+    if [ -n "$diags" ]; then
+        echo "FAIL $label: the C++ compiler had something to say about generated code"
+        printf '%s\n' "$diags" | head -n 5 | sed 's/^/  /'
+        fails=$((fails + 1))
+        return
+    fi
+    if ! (cd "$WORK" && "./$label.bin" > "$label.run" 2>&1); then
+        echo "FAIL $label: program exited non-zero"
+        sed 's/^/  /' "$WORK/$label.run"
+        fails=$((fails + 1))
+        return
+    fi
+    echo "ok $label"
+}
+
+if [ -z "$CXX" ]; then
+    echo "SKIP link: no C++ compiler on this machine"
+    skips=$((skips + 1))
+else
+    link_case "close" '    gfx.close();'
+    link_case "closed" '    let c: int = gfx.closed();'
+    link_case "poll" '    gfx.poll();'
+    link_case "present" '    gfx.present();'
+    link_case "clear" '    gfx.clear(1, 2, 3);'
+    link_case "plot" '    gfx.plot(1, 2, 3, 4, 5);'
+    link_case "get" '    let p: int = gfx.get(1, 2);'
+    link_case "alpha_get" '    let a: int = gfx.alpha();'
+    link_case "alpha_set" '    gfx.alpha(128);'
+    link_case "fill" '    gfx.fill(1, 2, 3, 4, 5, 6, 7);'
+    link_case "rect" '    gfx.rect(1, 2, 3, 4, 5, 6, 7);'
+    link_case "line" '    gfx.line(1, 2, 3, 4, 5, 6, 7);'
+    link_case "line_thick" '    gfx.line(1, 2, 3, 4, 5, 6, 7, 2);'
+    link_case "circle" '    gfx.circle(1, 2, 3, 4, 5, 6);'
+    link_case "fill_circle" '    gfx.fill_circle(1, 2, 3, 4, 5, 6);'
+    link_case "ellipse" '    gfx.ellipse(1, 2, 3, 4, 5, 6, 7);'
+    link_case "fill_ellipse" '    gfx.fill_ellipse(1, 2, 3, 4, 5, 6, 7);'
+    link_case "tri" '    gfx.tri(0, 0, 4, 0, 0, 4, 1, 2, 3);'
+    link_case "fill_tri" '    gfx.fill_tri(0, 0, 4, 0, 0, 4, 1, 2, 3);'
+    link_case "poly" '    let xs: []int = [0, 4, 0];
+    let ys: []int = [0, 0, 4];
+    let n: int = gfx.poly(xs, ys, 1, 2, 3);'
+    link_case "fill_poly" '    let xs: []int = [0, 4, 0];
+    let ys: []int = [0, 0, 4];
+    let n: int = gfx.fill_poly(xs, ys, 1, 2, 3);'
+    link_case "text" '    let w: int = gfx.text(0, 0, "a", 1, 2, 3);'
+    link_case "text_size_get" '    let n: int = gfx.text_size();'
+    link_case "text_size_set" '    gfx.text_size(2);'
+    link_case "text_width" '    let w: int = gfx.text_width("a");'
+    link_case "text_height" '    let h: int = gfx.text_height("a");'
+    link_case "key" '    let k: int = gfx.key("space");'
+    link_case "pressed" '    let k: int = gfx.pressed("space");'
+    link_case "released" '    let k: int = gfx.released("space");'
+    link_case "typed" '    let s: string = gfx.typed();'
+    link_case "wheel" '    let n: int = gfx.wheel();'
+    link_case "wheel_x" '    let n: int = gfx.wheel_x();'
+    link_case "mouse_x" '    let n: int = gfx.mouse_x();'
+    link_case "mouse_y" '    let n: int = gfx.mouse_y();'
+    link_case "mouse" '    let n: int = gfx.mouse("left");'
+    link_case "width" '    let n: int = gfx.width();'
+    link_case "height" '    let n: int = gfx.height();'
+    link_case "scale" '    let n: int = gfx.scale();'
+    link_case "resize" '    let ok: int = gfx.resize(4, 4);'
+    link_case "title_get" '    let s: string = gfx.title();'
+    link_case "title_set" '    gfx.title("hi");'
+    link_case "fullscreen" '    let f: int = gfx.fullscreen();'
+    link_case "drop" '    let s: string = gfx.drop();'
+    link_case "opendialog" '    let p: string = gfx.opendialog();'
+    link_case "save" '    let ok: int = gfx.save("/dev/null");'
+    link_case "image" '    let i: int = gfx.image("nope.png");'
+    link_case "decode" '    let i: int = gfx.decode("xx");'
+    link_case "image_w" '    let n: int = gfx.image_w(1);'
+    link_case "image_h" '    let n: int = gfx.image_h(1);'
+    link_case "blit_handle" '    let n: int = gfx.blit(0, 0, 1);'
+    link_case "blit_path" '    let n: int = gfx.blit(0, 0, "nope.png");'
+    link_case "audio" '    let ok: int = gfx.audio();'
+    link_case "sample" '    let n: int = gfx.sample(1);'
+    link_case "audio_queued" '    let n: int = gfx.audio_queued();'
+    link_case "audio_flush" '    let n: int = gfx.audio_flush();'
 fi
 
 # --- report -----------------------------------------------------------------

@@ -272,14 +272,7 @@ public:
                     break;
                 case AstNode::Type::GfxCall:
                     cppUsage.gfx = true;
-                    // The three calls that can reach the image decoder. blit is in the list
-                    // because its path overload loads the file itself, and which overload it
-                    // takes is not known until the third argument's type is inferred, well
-                    // after this scan. Listing it costs nothing: a handle blit has to get its
-                    // handle from gfx.image or gfx.decode, which set the flag anyway.
-                    if (n.value == "image" || n.value == "decode" || n.value == "blit") {
-                        cppUsage.gfxImage = true;
-                    }
+                    noteGfxUsage(n, cppUsage);
                     break;
                 case AstNode::Type::JsonCall: cppUsage.json = true; break;
                 case AstNode::Type::ResultMake: cppUsage.result = true; break;
@@ -1116,10 +1109,13 @@ public:
             filtered << key << "\n";
         }
         std::string src = stripInactivePlatformGuards(filtered.str(), target_);
-        if (cppUsage_.gfx && (target_ == CppTarget::Linux || target_ == CppTarget::Wasm)) {
-            // Only a program that can reach the decoder needs it; everything else gets a
-            // two-line stub instead of ~8,000 lines of stb. See the GfxCall usage scan.
-            src += cppUsage_.gfxImage ? gfxStbImageRuntimeCpp() : gfxStbImageStubCpp();
+        if (cppUsage_.gfx && cppUsage_.gfxImage &&
+            (target_ == CppTarget::Linux || target_ == CppTarget::Wasm)) {
+            // ~8,000 lines of stb, so only a program that can reach the decoder gets it.
+            // Nothing needs a stub in its place: __nexa_gfx_decode_rgba is the only caller
+            // and it is emitted by the same flag, so a program without the decoder has no
+            // reference to satisfy. See the GfxCall usage scan.
+            src += gfxStbImageRuntimeCpp();
         }
         // Last, once nothing else will add or drop a line: turn the statement markers into
         // `#line` directives. The appended gfx runtime carries no markers, and the final
@@ -5731,6 +5727,68 @@ private:
             return p == std::string::npos ? "-1" : std::to_string(static_cast<int>(p));
         }
         return std::nullopt;
+    }
+
+    // Records which gfx feature group a call reaches, so gfxRuntimeCpp can emit only
+    // those (see GfxNeed in GfxRuntime.hpp). Only the program's own calls are recorded
+    // here; the runtime's internal dependencies -- a blit needing the image table, a
+    // filled circle needing the ellipse maths -- are closed over in Modules.hpp and
+    // gfxRuntimeCpp respectively.
+    //
+    // open/close/closed/poll/present/clear/fullscreen need no flag: they are always
+    // emitted. Anything not listed below is a call that reaches only core.
+    static void noteGfxUsage(const AstNode& n, Modules::CppUsage& cppUsage) {
+        const std::string& fn = n.value;
+        // gfx.alpha(v) is the setter, which gfx.open calls itself; gfx.alpha() is the
+        // reader, and only that needs emitting.
+        if (fn == "alpha") {
+            if (n.children.empty()) cppUsage.gfxAlpha = true;
+        } else if (fn == "plot") {
+            cppUsage.gfxPlot = true;
+        } else if (fn == "get") {
+            cppUsage.gfxGet = true;
+        } else if (fn == "fill" || fn == "rect" || fn == "fill_circle" ||
+                   fn == "fill_ellipse" || fn == "fill_tri" || fn == "fill_poly") {
+            cppUsage.gfxShapesFill = true;
+        } else if (fn == "circle" || fn == "ellipse" || fn == "tri" || fn == "poly") {
+            cppUsage.gfxShapesOutline = true;
+        } else if (fn == "line") {
+            // An eighth argument is the thickness, which is a different rasterizer.
+            if (n.children.size() >= 8) cppUsage.gfxLineThick = true;
+            else cppUsage.gfxLine = true;
+        } else if (fn == "text" || fn == "text_size" || fn == "text_width" ||
+                   fn == "text_height") {
+            cppUsage.gfxText = true;
+        } else if (fn == "mouse" || fn == "mouse_x" || fn == "mouse_y") {
+            cppUsage.gfxMouse = true;
+        } else if (fn == "key" || fn == "pressed" || fn == "released") {
+            cppUsage.gfxKeys = true;
+        } else if (fn == "typed") {
+            cppUsage.gfxTyped = true;
+        } else if (fn == "wheel" || fn == "wheel_x") {
+            cppUsage.gfxWheel = true;
+        } else if (fn == "image" || fn == "decode") {
+            cppUsage.gfxImage = true;
+        } else if (fn == "blit") {
+            // A path blit loads the file itself, and which overload a gfx.blit takes is
+            // not known until the third argument's type is inferred, well after this
+            // scan. Counting every blit as a load costs nothing: a handle blit has to
+            // get its handle from gfx.image or gfx.decode, which set the flag anyway.
+            cppUsage.gfxImage = true;
+            cppUsage.gfxBlit = true;
+        } else if (fn == "image_w" || fn == "image_h") {
+            cppUsage.gfxImageStore = true;
+        } else if (fn == "save") {
+            cppUsage.gfxSave = true;
+        } else if (fn == "opendialog" || fn == "openfile" || fn == "drop") {
+            cppUsage.gfxDialogs = true;
+        } else if (fn == "audio" || fn == "sample" || fn == "audio_queued" ||
+                   fn == "audio_flush") {
+            cppUsage.gfxAudio = true;
+        } else if (fn == "resize" || fn == "width" || fn == "height" ||
+                   fn == "scale" || fn == "title") {
+            cppUsage.gfxWindow = true;
+        }
     }
 
     static bool cryptoArgIsLiteral(const AstNode& a) {

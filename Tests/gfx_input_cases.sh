@@ -227,9 +227,19 @@ CXX=$(pick_cxx)
 if [ -z "$CXX" ]; then
     echo "skip gfx input semantics: no C++ compiler (set NEXA_CXX to force one)"
 else
+    # The driver program has to call everything the driver below reaches: the
+    # runtime is sliced to the gfx builtins a program uses (BOB-25), so a bare
+    # gfx.poll() would not carry the wheel, the key snapshots or the typed
+    # queue at all.
     printf '%s' '#include <std/gfx>
 fn main() {
     gfx.poll();
+    let wy: int = gfx.wheel();
+    let wx: int = gfx.wheel_x();
+    let k: int = gfx.key("space");
+    let p: int = gfx.pressed("space");
+    let r: int = gfx.released("space");
+    let t: string = gfx.typed();
 }
 ' > "$WORK/gen.nxa"
     if ! "$NEXAC" "$WORK/gen.nxa" --source "$WORK/gen.cpp" > "$WORK/gen.log" 2>&1; then

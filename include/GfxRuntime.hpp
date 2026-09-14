@@ -4,8 +4,63 @@
 
 namespace nexa {
 
-inline std::string gfxRuntimeCpp() {
-    return R"NEXA_GFX(
+// Which gfx helpers to emit. The runtime is ~2,800 lines and a program that
+// only opens a window and draws reaches a small corner of it, so the
+// transpiler records which gfx builtins were called (Modules::CppUsage) and
+// every group below is emitted only when something can reach it. This is dead
+// code removal: a program that uses a feature gets byte-identical code.
+//
+// The groups are deliberately coarse. `shapesFill` is one flag for
+// fill/rect/fill_circle/fill_ellipse/fill_tri/fill_poly rather than six,
+// because a six-way dependency table is a maintenance cost that buys back
+// eighty lines. The internal helpers -- spans, line clipping, the ellipse
+// maths, the u8 clamp -- are derived from these flags in gfxRuntimeCpp below
+// rather than tracked separately.
+//
+// Window open/close/poll/present/closed/clear, the framebuffer plumbing every
+// draw goes through, and gfx.fullscreen are always emitted. fullscreen is not
+// optional because the Win32 window procedure and the Emscripten key handler
+// call it themselves: maximising a window is a way into fullscreen that does
+// not go through gfx.fullscreen, so slicing it would change behaviour rather
+// than remove dead code.
+struct GfxNeed {
+    bool alpha = false;          // gfx.alpha() -- the reader; the setter is core
+    bool plot = false;           // gfx.plot
+    bool get = false;            // gfx.get
+    bool shapesFill = false;     // fill, rect, fill_circle/ellipse/tri/poly
+    bool shapesOutline = false;  // circle, ellipse, tri, poly
+    bool line = false;           // gfx.line, 7 arguments
+    bool lineThick = false;      // gfx.line, 8 arguments
+    bool text = false;           // text, text_size, text_width, text_height
+    bool mouse = false;          // mouse, mouse_x, mouse_y
+    bool keys = false;           // key, pressed, released
+    bool typed = false;          // typed
+    bool wheel = false;          // wheel, wheel_x
+    bool imageStore = false;     // the loaded-image table: image_w, image_h, blit
+    bool imageLoad = false;      // image, decode -- the decoder and the file read
+    bool blit = false;           // blit
+    bool save = false;           // gfx.save
+    bool dialogs = false;        // opendialog, drop
+    bool audio = false;          // audio, sample, audio_queued, audio_flush
+    bool window = false;         // resize, width, height, scale, title
+};
+
+inline std::string gfxRuntimeCpp(const GfxNeed& need) {
+    // Internal dependency closure: each of these is "some helper we are about
+    // to emit calls it", worked out once here instead of at every use.
+    const bool wantLine = need.line || need.lineThick || need.shapesOutline;
+    const bool wantSpan = need.shapesFill || need.shapesOutline || need.lineThick;
+    const bool wantEllipse = need.shapesFill || need.shapesOutline;
+    const bool wantPolyTake = need.shapesFill || need.shapesOutline;
+    const bool wantU8 = need.shapesFill || need.shapesOutline || need.line ||
+                        need.lineThick || need.text;
+    const bool wantGet = need.get || need.save;
+    const bool wantDraw = need.plot || need.shapesFill || need.shapesOutline ||
+                          need.line || need.lineThick || need.text;
+    const bool wantPutA = wantDraw || need.blit;
+
+    std::string out;
+    out += R"NEXA_GFX(
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -95,7 +150,8 @@ static __nexa_Gfx __nexa_g = {};
 static void __nexa_gfx_clear(int r, int g, int b);
 static void __nexa_gfx_present();
 static int __nexa_gfx_alpha_set(int a);
-
+)NEXA_GFX";
+    if (need.typed) out += R"NEXA_GFX(
 // --- typed-text queue -------------------------------------------------------
 // gfx.typed() reports characters, not keys, so every backend hands its own
 // notion of "the user typed something" to these two helpers and they do the
@@ -168,7 +224,21 @@ static void __nexa_gfx_type_push_latin1(const char* s, int n) {
     for (int i = 0; i < n; i++) __nexa_gfx_type_push_cp((unsigned char)s[i]);
 }
 #endif
+)NEXA_GFX";
+    else out += R"NEXA_GFX(
+// gfx.typed() is never called, so nothing reads the typed-text queue. The
+// backends still report "the user typed something" -- that is wired into the
+// window procedure and the X11 event loop -- so the helpers they hand it to
+// stay, as no-ops.
+#if defined(_WIN32) || defined(__APPLE__) || defined(__EMSCRIPTEN__)
+static void __nexa_gfx_type_push_utf8(const char*, int) {}
+#endif
 
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+static void __nexa_gfx_type_push_latin1(const char*, int) {}
+#endif
+)NEXA_GFX";
+    out += R"NEXA_GFX(
 // --- wheel accumulator ------------------------------------------------------
 // Backends report scrolling in wildly different units (whole notches on X11,
 // 1/120ths on Win32, pixels from a trackpad). Each converts to fractional
@@ -208,8 +278,9 @@ static int __nexa_gfx_map_mouse(int px, int py, int cw, int ch, int* ox, int* oy
 }
 
 static void __nexa_gfx_mouse_refresh();
-static void __nexa_gfx_key_snapshot();
-static int __nexa_gfx_has_focus();
+)NEXA_GFX";
+    if (need.keys) out += "static void __nexa_gfx_key_snapshot();\n";
+    out += R"NEXA_GFX(static int __nexa_gfx_has_focus();
 
 static void __nexa_gfx_mouse_apply(int x, int y, int inside, int left, int middle, int right) {
     if (inside) {
@@ -605,7 +676,8 @@ static void __nexa_gfx_clamp_whs(int* w, int* h, int* scale, int defaultScale) {
     if (*scale < 1) *scale = defaultScale < 1 ? 12 : defaultScale;
     if (*scale > 64) *scale = 64;
 }
-
+)NEXA_GFX";
+    if (need.window) out += R"NEXA_GFX(
 static void __nexa_gfx_drop_x11_image() {
 #if defined(__linux__) && !defined(__EMSCRIPTEN__)
     if (__nexa_g.img) {
@@ -657,7 +729,8 @@ static void __nexa_gfx_apply_window_size(int w, int h, int scale) {
     }
 #endif
 }
-
+)NEXA_GFX";
+    out += R"NEXA_GFX(
 static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
     __nexa_gfx_clamp_whs(&w, &h, &scale, 12);
     __nexa_gfx_free();
@@ -835,7 +908,8 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
     return 0;
 #endif
 }
-
+)NEXA_GFX";
+    if (need.window) out += R"NEXA_GFX(
 static int __nexa_gfx_resize(int w, int h, int scale) {
     if (!__nexa_g.ready || !__nexa_g.fb) return 0;
     __nexa_gfx_clamp_whs(&w, &h, &scale, __nexa_g.scale);
@@ -871,7 +945,8 @@ static int __nexa_gfx_height() {
 static int __nexa_gfx_scale() {
     return __nexa_g.ready ? __nexa_g.scale : 0;
 }
-
+)NEXA_GFX";
+    out += R"NEXA_GFX(
 static int __nexa_gfx_fullscreen(int on) {
     if (!__nexa_g.ready) return 0;
     if (on < 0) return __nexa_g.fullscreen;
@@ -958,7 +1033,8 @@ static int __nexa_gfx_fullscreen(int on) {
     return 0;
 #endif
 }
-
+)NEXA_GFX";
+    if (need.window) out += R"NEXA_GFX(
 static std::string __nexa_gfx_title_get() {
     return __nexa_g.title;
 }
@@ -985,9 +1061,10 @@ static int __nexa_gfx_title_set(const std::string& s) {
     return 0;
 #endif
 }
-
-static void __nexa_gfx_audio_close();
-
+)NEXA_GFX";
+    out += need.audio ? "\nstatic void __nexa_gfx_audio_close();\n"
+                      : "\nstatic void __nexa_gfx_audio_close() {}\n";
+    out += R"NEXA_GFX(
 static void __nexa_gfx_close() {
     __nexa_gfx_audio_close();
     __nexa_g.closed = 1;
@@ -1100,8 +1177,9 @@ static void __nexa_gfx_poll() {
     }
 #endif
     __nexa_gfx_mouse_refresh();
-    __nexa_gfx_key_snapshot();
-    __nexa_gfx_input_publish();
+)NEXA_GFX";
+    if (need.keys) out += "    __nexa_gfx_key_snapshot();\n";
+    out += R"NEXA_GFX(    __nexa_gfx_input_publish();
 }
 
 static int __nexa_gfx_closed() {
@@ -1157,7 +1235,8 @@ static void __nexa_gfx_mouse_refresh() {
         (mask & Button1Mask) != 0, (mask & Button2Mask) != 0, (mask & Button3Mask) != 0);
 #endif
 }
-
+)NEXA_GFX";
+    if (need.mouse) out += R"NEXA_GFX(
 static int __nexa_gfx_mouse_x() {
     if (!__nexa_g.ready) return 0;
     __nexa_gfx_mouse_refresh();
@@ -1180,24 +1259,33 @@ static int __nexa_gfx_mouse(const std::string& name) {
     if (s == "middle" || s == "mmb" || s == "m") return __nexa_g.mmb;
     return 0;
 }
-
+)NEXA_GFX";
+    // --- framebuffer rasterizers --------------------------------------------
+    //
+    // Everything in the chunks that follow reaches the screen only through
+    // __nexa_g.fb / __nexa_gfx_put: no window handle, no display connection, no
+    // platform call. That is what lets Tests/gfx_shapes_cases.sh lift them out
+    // of this header and unit-test the shapes against a stub framebuffer on a
+    // machine with no display and no X11 development headers.
+    //
+    // Each one is bracketed by a [nexa:rasterizers-*] pair sitting on the glue
+    // lines either side of the raw literal, so the test's awk lifts the union
+    // of the chunk bodies and none of the glue. Keep window, audio and image
+    // code out of them, keep the markers spelled exactly as they are, put the
+    // begin marker before the `R"NEXA_GFX(` rather than after it -- anything
+    // after it lands in the emitted program -- and never spell a marker out in
+    // full inside a literal, which would switch the lift on in the middle of a
+    // comment. The test fails loudly if it cannot find what it needs.
+    //
+    // Three more marker pairs further down do the same job for the code that
+    // needs the image store or the filesystem and so cannot live in these
+    // chunks -- [nexa:imgstore-*] (the loaded-image table), [nexa:blit-*] (the
+    // blit itself) and [nexa:screenshot-*] (gfx.save). Tests/gfx_alpha_cases.sh
+    // lifts all four.
+    out += R"NEXA_GFX(
 // --- framebuffer rasterizers ------------------------------------------------
-//
-// Everything between the two markers below reaches the screen only through
-// __nexa_g.fb / __nexa_gfx_put: no window handle, no display connection, no
-// platform call. That is what lets Tests/gfx_shapes_cases.sh slice this block
-// out of the header and unit-test the shapes against a stub framebuffer on a
-// machine with no display and no X11 development headers.
-//
-// Keep window, audio and image code out of the block, and keep the markers
-// spelled exactly as they are: the test fails loudly if it cannot find them.
-//
-// Three more marker pairs further down do the same job for the code that needs
-// the image store or the filesystem and so cannot live in this block --
-// [nexa:imgstore-*] (the loaded-image table), [nexa:blit-*] (the blit itself)
-// and [nexa:screenshot-*] (gfx.save). Tests/gfx_alpha_cases.sh lifts all four.
-//
-// [nexa:rasterizers-begin]
+)NEXA_GFX";
+    out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 static void __nexa_gfx_put(int i, unsigned char R, unsigned char G, unsigned char B) {
 #ifdef _WIN32
     __nexa_g.fb[i + 0] = B;
@@ -1216,18 +1304,21 @@ static void __nexa_gfx_put(int i, unsigned char R, unsigned char G, unsigned cha
 // gfx.open() puts it back to -- means every draw below takes the opaque path
 // in __nexa_gfx_put_a and writes exactly the bytes it always has.
 static int __nexa_gfx_alpha_v = 255;
-
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (need.alpha || need.blit) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 static int __nexa_gfx_alpha_get() {
     return __nexa_gfx_alpha_v;
 }
-
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 static int __nexa_gfx_alpha_set(int a) {
     if (a < 0) a = 0;
     if (a > 255) a = 255;
     __nexa_gfx_alpha_v = a;
     return a;
 }
-
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (wantPutA) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 // Source-over blend of one pixel, in integers: dst = (src*A + dst*(255-A))/255,
 // rounded to nearest. A == 255 is the plain opaque write and A == 0 leaves the
 // pixel untouched, so both ends of the range cost nothing extra.
@@ -1249,7 +1340,8 @@ static void __nexa_gfx_put_a(int i, unsigned char R, unsigned char G, unsigned c
 #endif
     d[3] = 255;
 }
-
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (wantDraw) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 // Every shape puts its pixels down through here, which is what makes the
 // global alpha apply to all of them without a rasterizer having to know it
 // exists. Two consequences worth knowing, both documented in SYNTAX/Modules.txt:
@@ -1259,7 +1351,8 @@ static void __nexa_gfx_put_a(int i, unsigned char R, unsigned char G, unsigned c
 static void __nexa_gfx_draw(int i, unsigned char R, unsigned char G, unsigned char B) {
     __nexa_gfx_put_a(i, R, G, B, (unsigned char)__nexa_gfx_alpha_v);
 }
-
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 static void __nexa_gfx_clear(int r, int g, int b) {
     if (!__nexa_g.fb) return;
     unsigned char R = (unsigned char)(r < 0 ? 0 : (r > 255 ? 255 : r));
@@ -1268,7 +1361,8 @@ static void __nexa_gfx_clear(int r, int g, int b) {
     int n = __nexa_g.w * __nexa_g.h;
     for (int i = 0; i < n; i++) __nexa_gfx_put(i * 4, R, G, B);
 }
-
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (need.plot) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 static void __nexa_gfx_plot(int x, int y, int r, int g, int b) {
     if (!__nexa_g.fb) return;
     if (x < 0 || y < 0 || x >= __nexa_g.w || y >= __nexa_g.h) return;
@@ -1277,7 +1371,8 @@ static void __nexa_gfx_plot(int x, int y, int r, int g, int b) {
     unsigned char B = (unsigned char)(b < 0 ? 0 : (b > 255 ? 255 : b));
     __nexa_gfx_draw((y * __nexa_g.w + x) * 4, R, G, B);
 }
-
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (wantGet) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 static int __nexa_gfx_get(int x, int y) {
     if (!__nexa_g.fb || !__nexa_g.ready) return -1;
     if (x < 0 || y < 0 || x >= __nexa_g.w || y >= __nexa_g.h) return -1;
@@ -1293,13 +1388,15 @@ static int __nexa_gfx_get(int x, int y) {
 #endif
     return (r << 16) | (g << 8) | b;
 }
-
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (wantU8) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 static unsigned char __nexa_gfx_u8(int v) {
     if (v < 0) return 0;
     if (v > 255) return 255;
     return (unsigned char)v;
 }
-
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (need.shapesFill) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 static void __nexa_gfx_fill(int x, int y, int w, int h, int r, int g, int b) {
     if (!__nexa_g.fb) return;
     if (w < 0) { x += w; w = -w; }
@@ -1324,7 +1421,8 @@ static void __nexa_gfx_fill(int x, int y, int w, int h, int r, int g, int b) {
         }
     }
 }
-
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (wantLine) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 static int __nexa_gfx_outcode(int x, int y) {
     int c = 0;
     if (x < 0) c |= 1;
@@ -1400,7 +1498,8 @@ static void __nexa_gfx_line(int x0, int y0, int x1, int y1, int r, int g, int b)
         if (e2 < dx) { err += dx; y += sy; }
     }
 }
-
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (wantSpan) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 // One horizontal run, both ends inclusive, clipped to the framebuffer. Every
 // shape below is drawn as a stack of these, so clipping lives in one place and
 // a shape whose coordinates are millions of pixels off screen costs nothing
@@ -1423,7 +1522,8 @@ static void __nexa_gfx_row_range(long long ya, long long yb, long long* first, l
     *first = ya;
     *last = yb;
 }
-
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (need.shapesFill) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 // Rectangle outline: the border of the pixels gfx.fill would have filled, so
 // gfx.rect and gfx.fill agree on which pixels a rectangle covers. Negative
 // w/h flip the same way, and the arithmetic is done in 64 bits because
@@ -1448,7 +1548,8 @@ static void __nexa_gfx_rect(int x, int y, int w, int h, int r, int g, int b) {
         if (x1 != x0) __nexa_gfx_span(yy, x1, x1, R, G, B);
     }
 }
-
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (wantEllipse) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 // Half width of the ellipse (rx, ry) on the row dy away from its centre, or -1
 // when that row misses the ellipse entirely. Rows are sampled at their centre,
 // so a radius of 0 is one pixel and rx == ry gives a circle.
@@ -1468,7 +1569,8 @@ static long long __nexa_gfx_radius(int v) {
     if (v < 0) return -1;
     return v > 1048576 ? 1048576 : (long long)v;
 }
-
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (need.shapesFill) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 static void __nexa_gfx_fill_ellipse(int cx, int cy, int rx, int ry, int r, int g, int b) {
     if (!__nexa_g.fb) return;
     long long RX = __nexa_gfx_radius(rx);
@@ -1485,7 +1587,8 @@ static void __nexa_gfx_fill_ellipse(int cx, int cy, int rx, int ry, int r, int g
         __nexa_gfx_span(y, (long long)cx - hw, (long long)cx + hw, R, G, B);
     }
 }
-
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (need.shapesOutline) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 // Outline: the pixels of the filled ellipse that the two neighbouring rows do
 // not both cover. Where the curve is flat (top and bottom) that is a long run,
 // where it is steep it is the two end pixels, which is what keeps the ring
@@ -1520,11 +1623,13 @@ static void __nexa_gfx_ellipse(int cx, int cy, int rx, int ry, int r, int g, int
 static void __nexa_gfx_circle(int cx, int cy, int rad, int r, int g, int b) {
     __nexa_gfx_ellipse(cx, cy, rad, rad, r, g, b);
 }
-
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (need.shapesFill) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 static void __nexa_gfx_fill_circle(int cx, int cy, int rad, int r, int g, int b) {
     __nexa_gfx_fill_ellipse(cx, cy, rad, rad, r, g, b);
 }
-
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (need.shapesFill) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 // Even-odd scanline fill. A pixel belongs to the polygon when its centre does,
 // with the same half-open rule gfx.fill uses: an edge exactly on the left or
 // top boundary is inside, one exactly on the right or bottom boundary is not.
@@ -1559,7 +1664,8 @@ static void __nexa_gfx_fill_poly_pts(const int* xs, const int* ys, int n,
         }
     }
 }
-
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (need.shapesOutline) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 static void __nexa_gfx_poly_pts(const int* xs, const int* ys, int n, int r, int g, int b) {
     if (!__nexa_g.fb || n < 3) return;
     for (int i = 0; i < n; i++) {
@@ -1567,20 +1673,23 @@ static void __nexa_gfx_poly_pts(const int* xs, const int* ys, int n, int r, int 
         __nexa_gfx_line(xs[i], ys[i], xs[j], ys[j], r, g, b);
     }
 }
-
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (need.shapesOutline) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 static void __nexa_gfx_tri(int x1, int y1, int x2, int y2, int x3, int y3, int r, int g, int b) {
     int xs[3] = {x1, x2, x3};
     int ys[3] = {y1, y2, y3};
     __nexa_gfx_poly_pts(xs, ys, 3, r, g, b);
 }
-
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (need.shapesFill) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 static void __nexa_gfx_fill_tri(int x1, int y1, int x2, int y2, int x3, int y3, int r, int g, int b) {
     if (!__nexa_g.fb) return;
     int xs[3] = {x1, x2, x3};
     int ys[3] = {y1, y2, y3};
     __nexa_gfx_fill_poly_pts(xs, ys, 3, __nexa_gfx_u8(r), __nexa_gfx_u8(g), __nexa_gfx_u8(b));
 }
-
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (wantPolyTake) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 // A Nexa []int is a std::vector of whatever integer type held the literals, so
 // the points arrive through a template and are narrowed here, once.
 template <class TX, class TY>
@@ -1601,7 +1710,8 @@ static int __nexa_gfx_poly_take(const TX& xs, const TY& ys, std::vector<int>& px
     }
     return 1;
 }
-
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (need.shapesOutline) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 template <class TX, class TY>
 static int __nexa_gfx_poly(const TX& xs, const TY& ys, int r, int g, int b) {
     std::vector<int> px, py;
@@ -1609,7 +1719,8 @@ static int __nexa_gfx_poly(const TX& xs, const TY& ys, int r, int g, int b) {
     __nexa_gfx_poly_pts(px.data(), py.data(), (int)px.size(), r, g, b);
     return 1;
 }
-
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (need.shapesFill) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 template <class TX, class TY>
 static int __nexa_gfx_fill_poly(const TX& xs, const TY& ys, int r, int g, int b) {
     std::vector<int> px, py;
@@ -1618,7 +1729,8 @@ static int __nexa_gfx_fill_poly(const TX& xs, const TY& ys, int r, int g, int b)
                              __nexa_gfx_u8(r), __nexa_gfx_u8(g), __nexa_gfx_u8(b));
     return 1;
 }
-
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (need.lineThick) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 // Thick line: the pixels whose centre lies within t/2 of the segment, i.e. a
 // capsule with round caps. A capsule is convex, so each row meets it in one
 // run, and that run is the widest of the two end discs and the body quad.
@@ -1681,8 +1793,8 @@ static void __nexa_gfx_line_thick(int x0, int y0, int x1, int y1, int r, int g, 
         __nexa_gfx_span(y, (long long)std::ceil(lo), (long long)std::floor(hi), R, G, B);
     }
 }
-// [nexa:rasterizers-end]
-
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (need.text) out += R"NEXA_GFX(
 // 5x7, columns left-to-right, bit 0 = top. Printable ASCII 32..126.
 static const unsigned char __nexa_gfx_font5x7[95][5] = {
     {0x00,0x00,0x00,0x00,0x00}, {0x00,0x00,0x5F,0x00,0x00}, {0x00,0x07,0x00,0x07,0x00},
@@ -1842,7 +1954,8 @@ static int __nexa_gfx_text(int x, int y, const std::string& s, int r, int g, int
     if (w > maxw) maxw = w;
     return maxw;
 }
-
+)NEXA_GFX";
+    out += R"NEXA_GFX(
 #if defined(__linux__) && !defined(__EMSCRIPTEN__)
 static void __nexa_gfx_x11_present() {
     if (!__nexa_g.dpy || !__nexa_g.win || !__nexa_g.fb) return;
@@ -1937,13 +2050,15 @@ static void __nexa_gfx_present() {
     __nexa_gfx_poll();
 #endif
 }
-
+)NEXA_GFX";
+    if (need.keys) out += R"NEXA_GFX(
 #ifdef __APPLE__
 static int __nexa_gfx_mac_held(unsigned short kc) {
     return CGEventSourceKeyState(kCGEventSourceStateHIDSystemState, kc) ? 1 : 0;
 }
 #endif
-
+)NEXA_GFX";
+    out += R"NEXA_GFX(
 static int __nexa_gfx_has_focus() {
 #ifdef _WIN32
     return (__nexa_g.hwnd && GetForegroundWindow() == __nexa_g.hwnd) ? 1 : 0;
@@ -1961,7 +2076,8 @@ static int __nexa_gfx_has_focus() {
     return 1;
 #endif
 }
-
+)NEXA_GFX";
+    if (need.keys) out += R"NEXA_GFX(
 static int __nexa_gfx_vk(const std::string& name) {
     if (name.empty()) return 0;
     if (!__nexa_gfx_has_focus()) return 0;
@@ -2120,7 +2236,8 @@ static int __nexa_gfx_released(const std::string& name) {
     if (slot < 0) return 0;
     return (!__nexa_g.k_now[slot] && __nexa_g.k_prev[slot]) ? 1 : 0;
 }
-
+)NEXA_GFX";
+    if (need.wheel) out += R"NEXA_GFX(
 static int __nexa_gfx_wheel() {
     if (!__nexa_g.ready) return 0;
     return __nexa_g.wheel_y;
@@ -2130,7 +2247,8 @@ static int __nexa_gfx_wheel_x() {
     if (!__nexa_g.ready) return 0;
     return __nexa_g.wheel_x;
 }
-
+)NEXA_GFX";
+    if (need.typed) out += R"NEXA_GFX(
 // Consuming, like gfx.drop(): the text belongs to whoever asks for it first.
 static std::string __nexa_gfx_typed() {
     if (!__nexa_g.ready) return std::string();
@@ -2138,7 +2256,8 @@ static std::string __nexa_gfx_typed() {
     s.swap(__nexa_g.type_buf);
     return s;
 }
-
+)NEXA_GFX";
+    if (need.imageStore) out += R"NEXA_GFX(
 // [nexa:imgstore-begin]
 struct __nexa_GfxImg {
     int w;
@@ -2149,7 +2268,8 @@ struct __nexa_GfxImg {
 static std::vector<__nexa_GfxImg> __nexa_imgs;
 static std::vector<std::string> __nexa_img_paths;
 // [nexa:imgstore-end]
-
+)NEXA_GFX";
+    if (need.imageLoad) out += R"NEXA_GFX(
 static int __nexa_gfx_pixels_ok(int w, int h) {
     if (w < 1 || h < 1 || w > 4096 || h > 4096) return 0;
     return 1;
@@ -2368,7 +2488,8 @@ static int __nexa_gfx_image(const std::string& path) {
     }
     return __nexa_gfx_store_img(w, h, px, path);
 }
-
+)NEXA_GFX";
+    if (need.imageStore) out += R"NEXA_GFX(
 static int __nexa_gfx_image_w(int id) {
     if (id < 1 || id >= (int)__nexa_imgs.size() || !__nexa_imgs[(size_t)id].px) return 0;
     return __nexa_imgs[(size_t)id].w;
@@ -2378,7 +2499,8 @@ static int __nexa_gfx_image_h(int id) {
     if (id < 1 || id >= (int)__nexa_imgs.size() || !__nexa_imgs[(size_t)id].px) return 0;
     return __nexa_imgs[(size_t)id].h;
 }
-
+)NEXA_GFX";
+    if (need.blit) out += R"NEXA_GFX(
 // [nexa:blit-begin]
 static int __nexa_gfx_blit(int x, int y, int id, int dw, int dh, int sx, int sy, int sw, int sh) {
     if (!__nexa_g.fb || !__nexa_g.ready) return 0;
@@ -2452,7 +2574,8 @@ static int __nexa_gfx_blit(int x, int y, int id, int dw, int dh, int sx, int sy,
 static int __nexa_gfx_blit_path(int x, int y, const std::string& path, int dw, int dh, int sx, int sy, int sw, int sh) {
     return __nexa_gfx_blit(x, y, __nexa_gfx_image(path), dw, dh, sx, sy, sw, sh);
 }
-
+)NEXA_GFX";
+    if (need.save) out += R"NEXA_GFX(
 // [nexa:screenshot-begin]
 // gfx.save writes a 24-bit uncompressed BMP: every platform can read one, and
 // writing one needs nothing but fwrite -- no encoder, no OS imaging library, no
@@ -2517,7 +2640,8 @@ static int __nexa_gfx_save(const std::string& path) {
     return 1;
 }
 // [nexa:screenshot-end]
-
+)NEXA_GFX";
+    if (need.dialogs) out += R"NEXA_GFX(
 static std::string __nexa_gfx_filter_safe(const std::string& spec) {
     std::string o;
     for (char c : spec) {
@@ -2609,7 +2733,8 @@ static std::string __nexa_gfx_opendialog(const std::string& spec) {
     return std::string();
 #endif
 }
-
+)NEXA_GFX";
+    if (need.audio) out += R"NEXA_GFX(
 #ifdef _WIN32
 #define NEXA_PCM_BUFS 4
 #define NEXA_PCM_LEN 2048
@@ -2806,6 +2931,8 @@ static int __nexa_gfx_audio_queued() { return 0; }
 static void __nexa_gfx_audio_flush() {}
 #endif
 )NEXA_GFX";
+
+    return out;
 }
 
 }  // namespace nexa
