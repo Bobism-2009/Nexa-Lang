@@ -290,6 +290,7 @@ public:
             if (t.type == TokenType::Include) {
                 std::vector<AstNode> incNodes = parseInclude();
                 noteTypeDefs(incNodes);
+                noteModuleTypes();
                 for (AstNode& n : incNodes) ast.push_back(std::move(n));
             } else if (t.type == TokenType::Extern) {
                 ast.push_back(parseExternFunction());
@@ -579,6 +580,19 @@ private:
         structNames_.insert(n.value);
         std::set<std::string>& fields = structFieldNames_[n.value];
         for (const std::string& f : n.paramNames) fields.insert(f);
+    }
+
+    // Struct types a module brings with it. HttpResponse is std/http's, and is
+    // named here so `let r: HttpResponse` and `r.value().status` type the same
+    // way a user struct does; Transpiler.hpp maps it onto the runtime's
+    // __nexa_http_response and so never emits a definition for it.
+    void noteModuleTypes() {
+        if (!modules_.hasHttp() || structNames_.count("HttpResponse")) return;
+        structNames_.insert("HttpResponse");
+        std::set<std::string>& fields = structFieldNames_["HttpResponse"];
+        fields.insert("status");
+        fields.insert("body");
+        fields.insert("headers");
     }
 
     void noteTypeDefs(const std::vector<AstNode>& nodes) {
@@ -2718,7 +2732,8 @@ private:
             return parseGfxCall(false);
         }
         if (peek().type == TokenType::Identifier && peek().value == "http" && pos_ + 2 < tokens_.size() &&
-            tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
+            tokens_[pos_ + 1].type == TokenType::Dot &&
+            (tokens_[pos_ + 2].type == TokenType::Identifier || tokens_[pos_ + 2].type == TokenType::Delete)) {
             return applyIndexAndDotPostfix(parseHttpCall());
         }
         if (peek().type == TokenType::Identifier && peek().value == "json" && pos_ + 2 < tokens_.size() &&
@@ -3921,28 +3936,43 @@ private:
             throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
         }
         const Token& methodTok = peek();
-        if (methodTok.type != TokenType::Identifier) {
-            throw std::runtime_error("Expected http method at line " + std::to_string(methodTok.line));
-        }
-        std::string method = methodTok.value;
+        // `delete` is a keyword, but after `http.` there is nothing else it
+        // could be, so http.delete(url) reads the way the verb does.
+        std::string method;
+        if (methodTok.type == TokenType::Identifier) method = methodTok.value;
+        else if (methodTok.type == TokenType::Delete) method = "delete";
+        else throw std::runtime_error("Expected http method at line " + std::to_string(methodTok.line));
         advance();
-        if (method != "get" && method != "post") {
+        // Arguments before the optional trailing []string of raw header lines.
+        int fixed;
+        std::string shape;
+        if (method == "get" || method == "delete") { fixed = 1; shape = "url"; }
+        else if (method == "post" || method == "put" || method == "patch") { fixed = 2; shape = "url, body"; }
+        else if (method == "request") { fixed = 3; shape = "method, url, body"; }
+        else {
             throw std::runtime_error("Unknown http function 'http." + method +
-                "' at line " + std::to_string(methodTok.line) + " (use get, post)");
+                "' at line " + std::to_string(methodTok.line) +
+                " (use get, post, put, patch, delete, request)");
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after http." + method + " at line " + std::to_string(peek().line));
         }
         AstNode node{AstNode::Type::HttpCall, method, {}};
         node.children.push_back(parseExpression());
-        if (method == "post") {
+        for (int i = 1; i < fixed; i++) {
             if (!match(TokenType::Comma)) {
-                throw std::runtime_error("Expected ',' in http.post(url, body) at line " + std::to_string(peek().line));
+                throw std::runtime_error("Expected ',' in http." + method + "(" + shape + ") at line " +
+                    std::to_string(peek().line));
             }
             node.children.push_back(parseExpression());
         }
+        if (peek().type == TokenType::Comma) {
+            advance();
+            node.children.push_back(parseExpression());
+        }
         if (!match(TokenType::RParen)) {
-            throw std::runtime_error("Expected ')' after http." + method + "(...) at line " + std::to_string(peek().line));
+            throw std::runtime_error("Expected ')' after http." + method + "(" + shape +
+                "[, headers]) at line " + std::to_string(peek().line));
         }
         return node;
     }

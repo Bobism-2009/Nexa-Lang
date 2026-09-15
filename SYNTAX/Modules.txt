@@ -167,12 +167,52 @@ Nexa Standard Modules
   macOS:   CFNetwork (HTTP + HTTPS)
   Linux:   POSIX sockets + HTTPS via system libssl.so (dlopen; needs
            libssl1.1/libssl3 at runtime, usual on desktop/server Linux)
-  http.get(url)           - GET; returns Result[string] (body on success, .error() on failure)
-  http.post(url, body)    - POST; returns Result[string]
+  http.get(url)            - GET;    returns Result[string]
+  http.post(url, body)     - POST;   returns Result[string]
+  http.put(url, body)      - PUT;    returns Result[string]
+  http.patch(url, body)    - PATCH;  returns Result[string]
+  http.delete(url)         - DELETE; returns Result[string]
+  These five carry the body on success. A non-2xx status is a failure, with
+  .error() = "HTTP <status>" (404 -> "HTTP 404"); so is a transport failure,
+  with the reason ("could not connect", "TLS handshake failed", ...). Same on
+  every platform. Empty successful body is still ok (unlike the old
+  ""-means-fail rule). Reach for http.request when the status itself matters.
   Use: let page = http.get("https://example.com/");
        if (page.ok()) { io.println(page.value()); }
        else { io.println(page.error()); }
-  Empty successful body is still ok (unlike the old ""-means-fail rule).
+
+  Every verb takes an optional trailing []string of raw request header lines:
+  http.get(url, headers)        http.delete(url, headers)
+  http.post(url, body, headers) http.put(...) http.patch(...)
+  Use: let r = http.get(url, ["Authorization: Bearer " + token]);
+       let p = http.post(url, payload, ["Content-Type: application/json"]);
+  A Content-Type you supply replaces the default application/octet-stream.
+  Content-Length and Connection belong to the transport and are ignored.
+
+  http.request(method, url, body)            - any method, full response
+  http.request(method, url, body, headers)
+  Returns Result[HttpResponse]. Only a transport failure is an error here: any
+  status the server answered with, 404 and 500 included, is a success.
+    struct HttpResponse {
+        status:  int;         // 404
+        body:    string;
+        headers: []string;    // raw lines, "Content-Type: text/html"
+    }
+  HttpResponse is std/http's own type -- a program that includes the module
+  cannot declare another one by that name.
+  Use: let r = http.request("DELETE", url, "", ["X-Token: " + t]);
+       if (!r.ok()) { io.println(r.error()); return 1; }
+       let resp = r.value();
+       io.println(resp.status);
+       for (i, len(resp.headers)) { io.println(resp.headers[i]); }
+
+  Redirects are followed, up to 5 hops; past that the call fails with
+  "too many redirects". A redirected POST/PUT/PATCH becomes a GET on 301/302/
+  303 and keeps its method on 307/308, matching WinHTTP and CFNetwork.
+  Chunked transfer-encoding is the transport's business and never reaches the
+  body you are handed.
+  A program carries only the half it calls: the five simple verbs and
+  http.request are emitted independently.
 
 #include <std/json>
   Nested JSON objects and arrays (not a flat string map).

@@ -72,6 +72,11 @@ public:
         bool cryptoHmac = false;
         bool cryptoRandom = false;
         bool http = false;
+        // The two halves of std/http above the transport: httpSimple is
+        // get/post/put/patch/delete, httpResponse is http.request and the
+        // response struct it hands back. A program carries what it calls.
+        bool httpSimple = false;
+        bool httpResponse = false;
         bool str = false;
         bool time = false;
         bool timeSleep = false;
@@ -1429,7 +1434,7 @@ public:
             out += resultRuntimeCpp();
         }
         if (hasHttp() && usage.http) {
-            out += httpRuntimeCpp();
+            out += httpRuntimeCpp(usage.httpSimple, usage.httpResponse);
         }
         if (hasGfx() && usage.gfx) {
             GfxNeed need;

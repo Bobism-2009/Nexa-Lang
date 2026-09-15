@@ -1,0 +1,5 @@
+// post needs a body. The missing argument is NexaC's complaint, not clang's.
+#include <std/http>
+fn main() {
+    http.post("http://example.com/");
+}

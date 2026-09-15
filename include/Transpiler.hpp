@@ -269,6 +269,8 @@ public:
                 case AstNode::Type::HttpCall:
                     cppUsage.http = true;
                     cppUsage.result = true;
+                    if (n.value == "request") cppUsage.httpResponse = true;
+                    else cppUsage.httpSimple = true;
                     break;
                 case AstNode::Type::GfxCall:
                     cppUsage.gfx = true;
@@ -346,6 +348,18 @@ public:
         std::set<std::string> typeNames;
         int structId = 0;
         int enumId = 0;
+        if (modules_.hasHttp()) {
+            // std/http's HttpResponse: known like any struct, but defined by
+            // the runtime, so it is seeded here and never emitted below. The
+            // name belongs to the module -- a program that redefines it lands
+            // in the duplicate-type-name check with everything else.
+            structFields_["HttpResponse"]["status"] = "int";
+            structFields_["HttpResponse"]["body"] = "string";
+            structFields_["HttpResponse"]["headers"] = "[]string";
+            structFieldOrder_["HttpResponse"] = { "status", "body", "headers" };
+            structCppNames_["HttpResponse"] = "__nexa_http_response";
+            typeNames.insert("HttpResponse");
+        }
         for (const AstNode& node : ast_) {
             if (node.type == AstNode::Type::StructDef) {
                 if (!typeNames.insert(node.value).second) {
@@ -2271,6 +2285,7 @@ private:
             case AstNode::Type::CryptoCall:
                 return "string";
             case AstNode::Type::HttpCall:
+                if (e.value == "request") return nexaMakeResultType("struct:HttpResponse");
                 return nexaMakeResultType("string");
             case AstNode::Type::ResultMake:
                 if (e.value == "err") return nexaMakeResultType("void");
@@ -3713,6 +3728,12 @@ private:
             if (ft.size() >= 7 && ft.compare(0, 7, "struct:") == 0) return ft.substr(7);
             return "";
         }
+        // Anything else that is known to yield a struct -- a call returning
+        // one, r.value() on a Result[struct] -- so that .field on it reads the
+        // field's type instead of falling back to int.
+        std::string t = inferExprNexaType(e);
+        if (isPointerType(t)) t = pointerPointeeType(t);
+        if (isStructDeclType(t)) return structNameFromDecl(t);
         return "";
     }
     std::string fieldTypeOfMemberExpr(const AstNode& e) const {
@@ -5689,13 +5710,27 @@ private:
             }
             case AstNode::Type::HttpCall: {
                 const std::string& fn = e.value;
-                std::string url = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
-                if (fn == "get") return "__nexa_http_get(" + url + ")";
-                if (fn == "post") {
-                    std::string body = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
-                    return "__nexa_http_post(" + url + ", " + body + ")";
+                auto arg = [&](size_t i) {
+                    return emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                };
+                // The optional trailing []string of raw header lines; absent
+                // means an empty one, which every backend treats as "none".
+                auto headers = [&](size_t i) {
+                    return e.children.size() > i ? arg(i) : std::string("std::vector<std::string>()");
+                };
+                if (fn == "request") {
+                    return "__nexa_http_request(" + arg(0) + ", " + arg(1) + ", " + arg(2) + ", " +
+                        headers(3) + ")";
                 }
-                throw std::runtime_error("Internal: unknown http method '" + fn + "'");
+                std::string verb;
+                for (size_t i = 0; i < fn.size(); i++) verb += (char)std::toupper((unsigned char)fn[i]);
+                bool sendsBody = (fn == "post" || fn == "put" || fn == "patch");
+                if (!sendsBody && fn != "get" && fn != "delete") {
+                    throw std::runtime_error("Internal: unknown http method '" + fn + "'");
+                }
+                std::string body = sendsBody ? arg(1) : std::string("std::string()");
+                return "__nexa_http_simple(\"" + verb + "\", " + arg(0) + ", " + body + ", " +
+                    headers(sendsBody ? 2 : 1) + ")";
             }
             case AstNode::Type::ResultMake: {
                 if (e.value == "err") {

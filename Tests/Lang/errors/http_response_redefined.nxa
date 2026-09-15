@@ -1,0 +1,12 @@
+// HttpResponse is std/http's type; a program cannot also define one.
+#include <std/http>
+#include <std/io>
+
+struct HttpResponse {
+    status: int;
+}
+
+fn main() {
+    let r = http.get("http://example.com/");
+    io.println(r.ok());
+}

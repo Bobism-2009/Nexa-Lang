@@ -1,0 +1,70 @@
+// std/http against Tests/http_server.py on loopback (BOB-35). argv[1] is the
+// base URL. Driven by the loopback layer of Tests/http_cases.sh, which starts
+// the server and diffs this against http_loopback_test.expected.
+#include <std/http>
+#include <std/io>
+
+fn main(args: []string) {
+    let base = args[1];
+
+    // Chunked framing is the transport's, not the body's.
+    let chunked = http.get(base + "/chunked");
+    io.println("chunked " + chunked.ok() + " [" + chunked.value() + "]");
+
+    // Two hops, the second a Location relative to /deep/.
+    let redir = http.get(base + "/redir");
+    io.println("redir " + redir.ok() + " [" + redir.value() + "]");
+
+    // A redirected POST becomes a GET and drops its body, as WinHTTP does.
+    let posted = http.post(base + "/redir", "payload");
+    io.println("postredir " + posted.ok() + " [" + posted.value() + "]");
+
+    // Bounded: a server that redirects to itself is an error, not a hang.
+    let looped = http.get(base + "/loop");
+    io.println("loop " + looped.ok() + " [" + looped.error() + "]");
+
+    // Request headers arrive, and Content-Type overrides the default.
+    let echo = http.post(base + "/echo", "P", ["X-Token: t1", "Content-Type: application/json"]);
+    io.println("echo " + echo.ok() + " [" + echo.value() + "]");
+
+    let put = http.put(base + "/echo", "U");
+    io.println("put " + put.ok() + " [" + put.value() + "]");
+
+    let patch = http.patch(base + "/echo", "A", ["X-Token: t2"]);
+    io.println("patch " + patch.ok() + " [" + patch.value() + "]");
+
+    let del = http.delete(base + "/echo", ["X-Token: t3"]);
+    io.println("delete " + del.ok() + " [" + del.value() + "]");
+
+    let plain = http.get(base + "/echo");
+    io.println("get " + plain.ok() + " [" + plain.value() + "]");
+
+    // A non-2xx is an error for the simple verbs...
+    let missing = http.get(base + "/404");
+    io.println("404 " + missing.ok() + " [" + missing.error() + "]");
+
+    // ...and a success, with the status, for http.request.
+    let raw = http.request("GET", base + "/404", "");
+    io.println("request404 " + raw.ok() + " " + raw.value().status + " [" + raw.value().body + "]");
+
+    // Content-Length is believed over what else arrived on the socket.
+    let extra = http.get(base + "/extra");
+    io.println("extra " + extra.ok() + " [" + extra.value() + "]");
+
+    // Response headers come back as raw lines.
+    let full = http.request("POST", base + "/echo", "B", ["X-Token: t4"]);
+    let resp = full.value();
+    io.println("request " + resp.status + " [" + resp.body + "]");
+    let seen = 0;
+    for (i, len(resp.headers)) {
+        if (resp.headers[i].starts_with("X-Echo:")) {
+            seen = 1;
+        }
+    }
+    io.println("echo-header " + seen);
+
+    // Nothing listening is a transport failure, not a status.
+    let dead = http.get("http://127.0.0.1:1/nope");
+    io.println("dead " + dead.ok() + " [" + dead.error() + "]");
+    return 0;
+}

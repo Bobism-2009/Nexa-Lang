@@ -93,6 +93,7 @@ exports.NEXA_TYPES = [
     "fn",
     "Json",
     "Result",
+    "HttpResponse",
 ];
 exports.STD_INCLUDES = [
     "std/io",
@@ -211,8 +212,12 @@ exports.MODULE_MEMBERS = {
         { name: "base64_encode", detail: "crypto.base64_encode(data)" },
     ],
     http: [
-        { name: "get", detail: "http.get(url) — Result[string]; .ok() / .value() / .error()" },
-        { name: "post", detail: "http.post(url, body) — Result[string]; .ok() / .value() / .error()" },
+        { name: "get", detail: "http.get(url[, headers]) — Result[string]; .ok() / .value() / .error()" },
+        { name: "post", detail: "http.post(url, body[, headers]) — Result[string]" },
+        { name: "put", detail: "http.put(url, body[, headers]) — Result[string]" },
+        { name: "patch", detail: "http.patch(url, body[, headers]) — Result[string]" },
+        { name: "delete", detail: "http.delete(url[, headers]) — Result[string]" },
+        { name: "request", detail: "http.request(method, url, body[, headers]) — Result[HttpResponse]" },
     ],
     json: [
         { name: "parse", detail: "json.parse(s) — nested JSON; .ok() is false on error" },
@@ -320,8 +325,12 @@ exports.STRING_METHODS = [
     "error",
 ];
 exports.HOVER_DOCS = {
-    "http.get": "GET a URL. Returns Result[string]: .ok() / .value() for the body, .error() on failure.",
-    "http.post": "POST a URL. Returns Result[string]: .ok() / .value() for the body, .error() on failure.",
+    "http.get": "GET a URL. Returns Result[string]: .ok() / .value() for the body. A non-2xx status is a failure with .error() = HTTP <status>. Takes an optional trailing []string of raw request header lines.",
+    "http.post": "POST a URL. Returns Result[string]: .ok() / .value() for the body. A non-2xx status is a failure with .error() = HTTP <status>. Takes an optional trailing []string of raw request header lines.",
+    "http.put": "PUT a URL. Returns Result[string]: .ok() / .value() for the body. A non-2xx status is a failure with .error() = HTTP <status>. Takes an optional trailing []string of raw request header lines.",
+    "http.patch": "PATCH a URL. Returns Result[string]: .ok() / .value() for the body. A non-2xx status is a failure with .error() = HTTP <status>. Takes an optional trailing []string of raw request header lines.",
+    "http.delete": "DELETE a URL. Returns Result[string]: .ok() / .value() for the body. A non-2xx status is a failure with .error() = HTTP <status>. Takes an optional trailing []string of raw request header lines.",
+    "http.request": "Any method, with the full response. Returns Result[HttpResponse] — .status, .body, .headers. Only a transport failure is an error; any status the server answered with is a success.",
     "json.parse": "Parse JSON text into a Json value. On failure .ok() is false and .as_string() is the error.",
     "json.stringify": "Serialize Json (or a native value via json.of) to text. Optional indent pretty-prints.",
     "json.of": "Convert int, float, bool, string, Json, []T, or map[string]T to Json.",

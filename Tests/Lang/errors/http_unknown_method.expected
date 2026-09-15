@@ -1,0 +1,3 @@
+Unknown http function 'http.fetch'
+use get, post, put, patch, delete, request
+at line 4
