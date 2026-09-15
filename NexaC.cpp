@@ -2139,7 +2139,18 @@ int main(int argc, char* argv[]) {
             : std::filesystem::absolute(std::filesystem::path(cppPath)).string();
         nexa::Transpiler transpiler(ast, modules, preserveNames || isLib, isLib, cppTarget,
                                     debugBuild, absCppPath);  // library: preserve + export C names
-        std::string cpp = transpiler.transpile();
+        // Name the source file the way parse errors do -- a transpile-stage
+        // complaint is still about the program the user handed us.
+        std::string cpp;
+        try {
+            cpp = transpiler.transpile();
+        } catch (const std::runtime_error& e) {
+            const std::string msg = e.what();
+            if (msg.find(absInputPath) == std::string::npos) {
+                throw std::runtime_error(absInputPath + ": " + msg);
+            }
+            throw;
+        }
 
         // Decide which C++ machinery the generated code can safely omit. Exceptions/unwind tables
         // are only needed for try/catch, throw, Result.value(), std::stoi (io.to_int), or inline_cpp.
