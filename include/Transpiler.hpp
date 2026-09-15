@@ -630,6 +630,9 @@ public:
         varStructScopes_.clear();
         varStructScopes_.push_back({});
         buildFnOverloadTableAndInitGlobalNexaDecl();
+        // Give every empty `[]` the element type of the place it was written, so
+        // that the checks below and codegen both see []string rather than []int.
+        stampEmptySliceLiterals();
         // Diagnose undefined names, redeclarations, bad initializers, unknown fields and
         // stray break/continue here, while a Nexa file and line are still attached to the
         // AST. Anything that survives this is the C++ backend's problem.
@@ -2219,13 +2222,15 @@ private:
                 return "int";
             case AstNode::Type::ExprLen: return "int";
             case AstNode::Type::ExprTrim: return "string";
-            case AstNode::Type::ExprArrayLiteral:
+            case AstNode::Type::ExprArrayLiteral: {
                 if (!e.children.empty()) {
                     std::string et = arrayLiteralElemNexaType(e);
                     if (nexaIsSliceType(et)) return et;
                     return "[]" + et;
                 }
-                return "[]int";
+                const std::string want = emptySliceTypeOf(e);
+                return want.empty() ? std::string("[]int") : want;
+            }
             case AstNode::Type::ExprArrayIndex: {
                 if (e.children.size() < 2) {
                     std::string baseT = lookupNexaDecl(e.value);
@@ -2675,6 +2680,285 @@ private:
     //  - type mismatches are only reported between categories that are definite
     //    from the syntax alone, so implicit numeric conversions still compile.
     // =====================================================================
+
+    // =====================================================================
+    // EMPTY SLICE LITERALS
+    // =====================================================================
+    // `[]` has no element to infer an element type from, so on its own it types
+    // as []int. That made the obvious way to start an empty list wrong for every
+    // element type but int: `let names: []string = [];` emitted
+    // `std::vector<std::string> x = std::vector<int>{}` and handed the user a
+    // C++ error about a program they wrote correctly.
+    //
+    // The element type is always written down at the use site - the variable's
+    // declared type, the struct field, the parameter, the return type - so this
+    // walk runs once, before checkSemantics, and records it per literal, keyed by
+    // node address. ast_ is const for the whole of transpile(), so the addresses
+    // are stable; paramByRef_ keys the same way. Recording it before the checks
+    // means overload resolution and inferExprNexaType see the real type too, not
+    // just codegen.
+    //
+    // Variable types come from one flat map per function rather than a scope
+    // stack: the walk only ever asks "what type was this name declared with",
+    // and a name declared twice with two different types is marked unknown
+    // instead of guessed. A literal the walk cannot place is absent from the map
+    // and keeps the historical []int, so this only ever turns a broken program
+    // into a working one.
+
+    std::map<const AstNode*, std::string> emptySliceType_;
+    std::map<std::string, std::string> stampVarTypes_;  // name -> declared type; "" = ambiguous
+
+    // The slice type an empty `[]` was written for, or "" when it had no context.
+    std::string emptySliceTypeOf(const AstNode& e) const {
+        auto it = emptySliceType_.find(&e);
+        return it == emptySliceType_.end() ? std::string() : it->second;
+    }
+
+    // Its element type, for codegen. An unplaced literal keeps the historical int.
+    std::string emptySliceElemNexaType(const AstNode& e) const {
+        const std::string want = emptySliceTypeOf(e);
+        return nexaIsSliceType(want) ? nexaSliceElem(want) : std::string("int");
+    }
+
+    void stampEmptySliceLiterals() {
+        for (const AstNode& n : ast_) {
+            if (n.type == AstNode::Type::Variable) {
+                stampVarTypes_ = globalNexaDecl_;
+                for (const AstNode& c : n.children) stampNode(c, n.declType, "");
+            } else if (n.type == AstNode::Type::Function || n.type == AstNode::Type::MainFunction) {
+                stampFunction(n);
+            } else if (n.type == AstNode::Type::StructDef) {
+                for (const AstNode& m : n.children) {
+                    if (m.type == AstNode::Type::Function) stampFunction(m);
+                }
+            }
+        }
+        stampVarTypes_.clear();
+    }
+
+    void stampFunction(const AstNode& fn) {
+        if (fn.isExtern) return;
+        stampVarTypes_ = globalNexaDecl_;
+        if (fn.type == AstNode::Type::MainFunction) {
+            for (const std::string& p : fn.paramNames) stampVarTypes_[p] = "[]string";
+        } else {
+            for (size_t i = 0; i < fn.paramNames.size(); i++) {
+                stampVarTypes_[fn.paramNames[i]] = canonicalParamType(fn, i);
+            }
+        }
+        if (!fn.receiverType.empty()) stampVarTypes_["self"] = fn.receiverType;
+        stampCollectLocals(fn.children);
+        const std::string ret = inferReturnNexaType(fn);
+        // A default is substituted at the call site, so it is typed by its own parameter.
+        for (size_t i = 0; i < fn.paramDefaults.size(); i++) {
+            stampNode(fn.paramDefaults[i], canonicalParamType(fn, i), ret);
+        }
+        for (const AstNode& c : fn.children) stampNode(c, "", ret);
+    }
+
+    // Records every `let` in the body. A second `let` of the same name with a
+    // different type, or a for-in binding reusing a name, makes it unknown rather
+    // than wrong - the flat map has no way to tell the two scopes apart.
+    void stampCollectLocals(const std::vector<AstNode>& body) {
+        for (const AstNode& s : body) {
+            if (s.type == AstNode::Type::Variable) {
+                auto it = stampVarTypes_.find(s.value);
+                if (it == stampVarTypes_.end()) stampVarTypes_[s.value] = s.declType;
+                else if (it->second != s.declType) it->second = "";
+            } else if (s.type == AstNode::Type::ForIn) {
+                if (!s.value.empty()) stampVarTypes_[s.value] = "";
+                if (!s.initValue.empty()) stampVarTypes_[s.initValue] = "";
+            }
+            stampCollectLocals(s.children);
+        }
+    }
+
+    std::string stampTypeOfName(const std::string& name) const {
+        auto it = stampVarTypes_.find(name);
+        return it == stampVarTypes_.end() ? std::string() : it->second;
+    }
+
+    // Nexa type of a plain lvalue chain (a name, a field of one, an index of one),
+    // resolved from stampVarTypes_ alone. "" means the walk cannot place it.
+    std::string stampChainType(const AstNode& e) const {
+        switch (e.type) {
+            case AstNode::Type::ExprVarRef:
+                return stampTypeOfName(e.value);
+            case AstNode::Type::ExprDeref: {
+                if (e.children.empty()) return std::string();
+                const std::string base = stampChainType(e.children[0]);
+                return isPointerType(base) ? pointerPointeeType(base) : std::string();
+            }
+            case AstNode::Type::ExprMember: {
+                if (e.children.empty()) return std::string();
+                std::string base = stampChainType(e.children[0]);
+                if (isPointerType(base)) base = pointerPointeeType(base);
+                if (!isStructDeclType(base)) return std::string();
+                auto sit = structFields_.find(structNameFromDecl(base));
+                if (sit == structFields_.end()) return std::string();
+                auto fit = sit->second.find(e.value);
+                return fit == sit->second.end() ? std::string() : fit->second;
+            }
+            case AstNode::Type::ExprArrayIndex: {
+                const std::string base = e.children.size() >= 2 ? stampChainType(e.children[0])
+                                                                : stampTypeOfName(e.value);
+                return base.empty() ? base : nexaIndexResultType(base);
+            }
+            default:
+                return std::string();
+        }
+    }
+
+    // Declared type of parameter `i` of `name`, when every function with that
+    // name agrees on it. Overloads that disagree leave the argument unplaced.
+    std::string stampParamType(const std::string& name, size_t i) const {
+        std::string found;
+        bool any = false;
+        for (const FnOverloadSlot& sl : fnOverloadSlots_) {
+            if (sl.name != name || i >= sl.paramTypes.size()) continue;
+            if (!any) { found = sl.paramTypes[i]; any = true; }
+            else if (found != sl.paramTypes[i]) return std::string();
+        }
+        return any ? found : std::string();
+    }
+
+    // Walks one node. `want` is the Nexa type this position is declared to hold
+    // ("" when unknown); `fnRet` is the enclosing function's return type.
+    void stampNode(const AstNode& n, const std::string& want, const std::string& fnRet) {
+        switch (n.type) {
+            case AstNode::Type::ExprArrayLiteral: {
+                if (n.children.empty()) {
+                    if (nexaIsSliceType(want)) emptySliceType_[&n] = want;
+                    return;
+                }
+                const std::string elem = nexaIsSliceType(want) ? nexaSliceElem(want) : std::string();
+                for (const AstNode& c : n.children) stampNode(c, elem, fnRet);
+                return;
+            }
+            case AstNode::Type::ExprStructLit: {
+                auto sit = structFields_.find(n.value);
+                for (size_t i = 0; i < n.children.size(); i++) {
+                    std::string field;
+                    if (i < n.paramNames.size() && sit != structFields_.end()) {
+                        auto fit = sit->second.find(n.paramNames[i]);
+                        if (fit != sit->second.end()) field = fit->second;
+                    }
+                    stampNode(n.children[i], field, fnRet);
+                }
+                return;
+            }
+            case AstNode::Type::FnCall: {
+                if (n.initValue == "." || n.initValue == "->") {
+                    if (n.children.empty()) return;
+                    stampNode(n.children[0], "", fnRet);
+                    std::string recv = stampChainType(n.children[0]);
+                    if (isPointerType(recv)) recv = pointerPointeeType(recv);
+                    for (size_t i = 1; i < n.children.size(); i++) {
+                        stampNode(n.children[i], stampMethodArgType(recv, n.value, i), fnRet);
+                    }
+                    return;
+                }
+                for (size_t i = 0; i < n.children.size(); i++) {
+                    stampNode(n.children[i], stampParamType(n.value, i), fnRet);
+                }
+                return;
+            }
+            case AstNode::Type::ExprCall: {
+                if (n.children.empty()) return;
+                stampNode(n.children[0], "", fnRet);
+                std::vector<std::string> params;
+                std::string ret;
+                const bool known = nexaSplitFnType(stampChainType(n.children[0]), params, ret);
+                for (size_t i = 1; i < n.children.size(); i++) {
+                    const size_t p = i - 1;
+                    stampNode(n.children[i], known && p < params.size() ? params[p] : std::string(), fnRet);
+                }
+                return;
+            }
+            case AstNode::Type::ExprTernary: {
+                if (n.children.size() != 3) break;
+                stampNode(n.children[0], "", fnRet);
+                stampNode(n.children[1], want, fnRet);
+                stampNode(n.children[2], want, fnRet);
+                return;
+            }
+            case AstNode::Type::ExprLambda: {
+                const std::string lambdaRet = inferReturnNexaType(n);
+                for (const AstNode& c : n.children) stampNode(c, "", lambdaRet);
+                return;
+            }
+            case AstNode::Type::Variable:
+                for (const AstNode& c : n.children) stampNode(c, n.declType, fnRet);
+                return;
+            case AstNode::Type::Return:
+                for (const AstNode& c : n.children) stampNode(c, fnRet, fnRet);
+                return;
+            case AstNode::Type::Assignment:
+                for (const AstNode& c : n.children) stampNode(c, stampTypeOfName(n.value), fnRet);
+                return;
+            case AstNode::Type::AssnIndex: {
+                if (n.children.empty()) return;
+                std::string t = stampTypeOfName(n.value);
+                for (size_t i = 0; i + 1 < n.children.size(); i++) {
+                    stampNode(n.children[i], "", fnRet);
+                    if (!t.empty()) t = nexaIndexResultType(t);
+                }
+                // A compound form (`xs[i] += e`) is arithmetic, never a fresh slice.
+                const bool plain = n.initValue.empty() || n.initValue == "=";
+                stampNode(n.children.back(), plain ? t : std::string(), fnRet);
+                return;
+            }
+            case AstNode::Type::AssnMember: {
+                if (n.children.size() < 2) break;
+                stampNode(n.children[0], "", fnRet);
+                stampNode(n.children[1], n.value == "=" ? stampChainType(n.children[0]) : std::string(), fnRet);
+                return;
+            }
+            case AstNode::Type::AssnDeref: {
+                if (n.children.size() < 2) break;
+                stampNode(n.children[0], "", fnRet);
+                const std::string ptr = stampChainType(n.children[0]);
+                const bool plain = n.value == "=";
+                stampNode(n.children[1],
+                          (plain && isPointerType(ptr)) ? pointerPointeeType(ptr) : std::string(), fnRet);
+                return;
+            }
+            default:
+                break;
+        }
+        for (const AstNode& c : n.children) stampNode(c, "", fnRet);
+    }
+
+    // Declared type of argument `argIdx` (1-based past the receiver) of a builtin
+    // or user method called on a receiver of type `recv`.
+    std::string stampMethodArgType(const std::string& recv, const std::string& method, size_t argIdx) const {
+        if (recv.empty()) return std::string();
+        if (nexaIsSliceType(recv)) {
+            const std::string elem = nexaSliceElem(recv);
+            if (argIdx == 1 && (method == "push" || method == "has" || method == "contains" ||
+                                method == "index_of")) {
+                return elem;
+            }
+            if (argIdx == 2 && method == "insert") return elem;
+            return std::string();
+        }
+        if (nexaIsMapType(recv)) {
+            std::string k, v;
+            if (!nexaSplitMapType(recv, k, v)) return std::string();
+            if (argIdx == 1 && (method == "has" || method == "remove")) return k;
+            return std::string();
+        }
+        if (isStructDeclType(recv)) {
+            auto mit = structMethods_.find(structNameFromDecl(recv));
+            if (mit == structMethods_.end()) return std::string();
+            auto fit = mit->second.find(method);
+            if (fit == mit->second.end() || fit->second == nullptr) return std::string();
+            const AstNode& fn = *fit->second;
+            const size_t p = argIdx - 1;
+            return p < fn.paramNames.size() ? canonicalParamType(fn, p) : std::string();
+        }
+        return std::string();
+    }
 
     void checkSemantics() {
         semNameChecks_ = !modules_.hasInlineCpp();
@@ -5696,7 +5980,7 @@ private:
                 return s;
             }
             case AstNode::Type::ExprArrayLiteral: {
-                const std::string elemT = e.children.empty() ? std::string("int")
+                const std::string elemT = e.children.empty() ? emptySliceElemNexaType(e)
                                                              : arrayLiteralElemNexaType(e);
                 std::string s = "std::vector<" + nexaTypeToCpp(elemT) + ">{";
                 for (size_t i = 0; i < e.children.size(); i++) {

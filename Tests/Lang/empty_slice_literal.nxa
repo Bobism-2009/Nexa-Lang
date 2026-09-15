@@ -1,0 +1,94 @@
+// Pins the type an empty slice literal gets. `[]` has no element to infer from,
+// so its element type has to come from where it is written: the declared type of
+// the variable, the struct field, the parameter, the return type. Before this was
+// fixed every `[]` was []int, so `let names: []string = [];` handed the user a
+// C++ error about std::vector<int> for a program SYNTAX/Core.txt says is legal.
+//
+// SYNTAX/Core.txt SLICES gives `let xs: []int = [1, 2];` as a slice literal and
+// `let xs: []int;` as the empty slice, and says the element type "can be anything
+// parseTypeName accepts". Nothing carves the empty literal out of that, so each
+// case below is a program the language already promises to accept, and each one
+// has to produce a slice of length 0 of the right element type.
+// Reference: SYNTAX/Core.txt ("SLICES", "STRUCTS", "FUNCTIONS")
+#include <std/io>
+
+struct Pt { x: int; y: int; }
+
+struct Board {
+    names: []string;
+    pts: []Pt;
+    fn reset(): void { self.names = []; self.pts = []; }
+}
+
+fn count(xs: []string): int { return len(xs); }
+fn empty_pts(): []Pt { return []; }
+fn defaulted(xs: []string = [], n: int = 7): int { return len(xs) + n; }
+fn pick(flag: bool): []string { return flag ? ["a", "b"] : []; }
+
+fn main() {
+    // The declared type of the variable names the element type.
+    let s: []string = [];
+    let f: []float = [];
+    let c: []char = [];
+    let b: []bool = [];
+    let p: []Pt = [];
+    let g: [][]string = [];
+    io.println("decl_string=", len(s));
+    io.println("decl_float=", len(f));
+    io.println("decl_char=", len(c));
+    io.println("decl_bool=", len(b));
+    io.println("decl_struct=", len(p));
+    io.println("decl_nested=", len(g));
+
+    // An empty slice is an ordinary slice: it grows, and it grows into the
+    // element type it was declared with, not into int.
+    s.push("first");
+    s.push("second");
+    io.println("pushed_len=", len(s));
+    io.println("pushed_last=" + s[1]);
+
+    // Assigning `[]` back over a slice empties it, and keeps its element type.
+    s = [];
+    io.println("reassigned=", len(s));
+
+    // Nested: the outer literal's element type is itself a slice, so a `[]`
+    // inside one is a slice of the inner element type.
+    g.push([]);
+    g[0].push("inner");
+    io.println("nested_push=", len(g));
+    io.println("nested_inner=" + g[0][0]);
+    let deep: [][]Pt = [[], [Pt{x: 1, y: 2}]];
+    io.println("deep_outer=", len(deep));
+    io.println("deep_first=", len(deep[0]));
+    io.println("deep_second=", len(deep[1]));
+
+    // Struct fields, in a literal and by assignment, and from a method on self.
+    let board: Board = Board{names: [], pts: []};
+    io.println("field_lit=", len(board.names));
+    board.names = [];
+    board.names.push("x");
+    io.println("field_assigned=", len(board.names));
+    board.reset();
+    io.println("field_reset=", len(board.names));
+
+    // Parameters and returns.
+    io.println("arg=", count([]));
+    io.println("ret=", len(empty_pts()));
+    io.println("default_omitted=", defaulted());
+    io.println("default_given=", defaulted([], 1));
+
+    // A ternary branch is typed by the return it feeds.
+    io.println("ternary_false=", len(pick(false)));
+    io.println("ternary_true=", len(pick(true)));
+
+    // Map values.
+    let m: map[string][]float;
+    m["k"] = [];
+    m["k"].push(1.5);
+    io.println("map_len=", len(m));
+    io.println("map_value_len=", len(m["k"]));
+
+    // With no context at all, `[]` is still a slice of length 0.
+    let bare = [];
+    io.println("bare=", len(bare));
+}

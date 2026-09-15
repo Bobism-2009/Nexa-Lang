@@ -374,7 +374,24 @@ SLICES ([]T)
 
   Element type can be anything parseTypeName accepts: []string, []Point, [][]int, []*int.
   `fn f(xs: []int)` and struct fields work the same way.
-  Empty: `let xs: []int;` (length 0).
+  Empty: `let xs: []int;` (length 0), or the empty literal `[]`.
+
+  EMPTY SLICE LITERAL
+    `[]` has no element to take a type from, so it takes the element type of the
+    place it is written — the declared type of the variable, the struct field, the
+    parameter, the return type:
+
+      let names: []string = [];        // []string
+      names = [];                      // empty it again
+      let grid: [][]Point = [[], []];  // each inner [] is []Point
+      let b: Board = Board { items: [] };
+      b.items = [];
+      fn none(): []Point { return []; }
+      fn count(xs: []string = []): int { return len(xs); }
+      count([]);
+      scores["ada"] = [];              // map[string][]int
+
+    Written where nothing says otherwise — `let xs = [];` — it is []int.
 
 MAPS (map[K]V)
     let scores: map[string]int;
