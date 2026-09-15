@@ -1,0 +1,17 @@
+global_alias=1
+global_len_after=2
+transitive_alias=2
+gcount=1
+self_alias=2
+bag_len_after=3
+drop_one=2
+caller_len=3
+total=60
+shout=hi!
+caller_string=hi
+relabel=100
+caller_x=1
+pointer_alias=1
+caller_x_after=5
+look_up=0
+map_len_after=1

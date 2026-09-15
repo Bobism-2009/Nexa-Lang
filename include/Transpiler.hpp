@@ -583,6 +583,12 @@ public:
         }
         if (wroteUserCppHeaders) out << "\n";
 
+        // Decide, once, which parameters can be bound by const reference instead of copied.
+        // This has to happen before the first signature goes out, which is a struct's
+        // in-body method declaration: a declaration and its out-of-line definition have to
+        // agree, and C++ says so with "does not match any declaration".
+        analyzeParamPassing();
+
         for (const AstNode& node : ast_) {
             if (node.type == AstNode::Type::StructDef) {
                 const std::string& nexaName = node.value;
@@ -682,7 +688,7 @@ public:
                     if (i < node.paramTypes.size() && !node.paramTypes[i].empty()) {
                         nexaT = canonicalParamType(node, i);
                     }
-                    out << (buildDll_ ? dllExportParamCpp(nexaT) : nexaTypeToCpp(nexaT));
+                    out << (buildDll_ ? dllExportParamCpp(nexaT) : paramSigCpp(node, i));
                 }
                 out << ");\n";
                 wroteAnyProto = true;
@@ -766,7 +772,7 @@ public:
                         out << "const char* " << cname;
                         dllStringParams.push_back({pname, cname});
                     } else {
-                        out << nexaTypeToCpp(nexaT) << " " << pname;
+                        out << paramSigCpp(node, i) << " " << pname;
                     }
                     varMap[node.paramNames[i]] = pname;
                 }
@@ -1246,6 +1252,385 @@ private:
         const std::string& pt = fn.paramTypes[i];
         return pt.empty() ? "int" : pt;
     }
+
+    // =====================================================================
+    // Pass heavy parameters by const reference
+    //
+    // `fn total(xs: []int)` used to emit `int total(std::vector<int> xs)`, so every call
+    // deep-copied the whole slice — and the same for string, map, struct, Result and json
+    // parameters. C passes a pointer; we emit `const std::vector<int>&` wherever that is
+    // observationally identical to the copy.
+    //
+    // The copy is only observable one way: the callee changes the caller's object during
+    // the call and then reads the parameter, where a copy would still hold the old value.
+    // So a parameter is bound by reference only when all three hold:
+    //
+    //   1. the callee never modifies it — no assignment, element or field store, mutating
+    //      method, `&p`, or hand-off to a function whose signature we cannot see;
+    //   2. the callee, transitively, writes nothing the caller's argument could alias: no
+    //      global, no `self` field (a method can be called as `p.merge(p)`), nothing
+    //      through a pointer;
+    //   3. the program never takes a global's address, never splices in inline_cpp!, and
+    //      never starts a thread — the three ways a write can happen out of this walk's
+    //      sight.
+    //
+    // Anything that fails a test keeps its by-value signature. This removes copies; it
+    // does not change what a program prints.
+    // =====================================================================
+
+    // Root variable of an lvalue chain: xs, xs[i], p.a.b, *p, xs[1:2] all root at a name.
+    static std::string exprRootVarName(const AstNode& e) {
+        switch (e.type) {
+            case AstNode::Type::ExprVarRef:
+                return e.value;
+            case AstNode::Type::ExprArrayIndex:
+            case AstNode::Type::ExprMember:
+            case AstNode::Type::ExprSlice:
+            case AstNode::Type::ExprDeref:
+                return e.children.empty() ? std::string() : exprRootVarName(e.children[0]);
+            default:
+                return std::string();
+        }
+    }
+
+    static void walkAstNode(const AstNode& n, const std::function<void(const AstNode&)>& f) {
+        f(n);
+        for (const AstNode& c : n.children) walkAstNode(c, f);
+        for (const AstNode& d : n.paramDefaults) walkAstNode(d, f);
+    }
+
+    static bool isAssignStmtType(AstNode::Type t) {
+        switch (t) {
+            case AstNode::Type::Assignment:
+            case AstNode::Type::AssnAdd:
+            case AstNode::Type::AssnSub:
+            case AstNode::Type::AssnMul:
+            case AstNode::Type::AssnDiv:
+            case AstNode::Type::AssnMod:
+            case AstNode::Type::AssnBitAnd:
+            case AstNode::Type::AssnBitOr:
+            case AstNode::Type::AssnBitXor:
+            case AstNode::Type::AssnShl:
+            case AstNode::Type::AssnShr:
+            case AstNode::Type::AssnIndex:
+            case AstNode::Type::IncPost:
+            case AstNode::Type::DecPost:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    // Built-in container methods known to leave the receiver alone.
+    static bool isReadOnlyBuiltinMethod(const std::string& m) {
+        return m == "len" || m == "size" || m == "has" || m == "contains" || m == "index_of" ||
+               m == "get" || m == "get_at" || m == "keys" || m == "values" || m == "count" ||
+               m == "empty" || m == "ok" || m == "value" || m == "error" || m == "stringify";
+    }
+
+    // Type of an lvalue chain (xs, p.a.b, xs[i], *p) rooted at `rootName`, given that
+    // name's Nexa type. Empty when the chain leaves what the tables know.
+    std::string chainTypeFrom(const AstNode& e, const std::string& rootName,
+                              const std::string& rootType) const {
+        switch (e.type) {
+            case AstNode::Type::ExprVarRef:
+                return e.value == rootName ? rootType : std::string();
+            case AstNode::Type::ExprDeref: {
+                if (e.children.empty()) return std::string();
+                std::string t = chainTypeFrom(e.children[0], rootName, rootType);
+                return isPointerType(t) ? pointerPointeeType(t) : std::string();
+            }
+            case AstNode::Type::ExprSlice:
+                return e.children.empty() ? std::string()
+                                          : chainTypeFrom(e.children[0], rootName, rootType);
+            case AstNode::Type::ExprArrayIndex: {
+                if (e.children.empty()) return std::string();
+                std::string t = chainTypeFrom(e.children[0], rootName, rootType);
+                if (nexaIsSliceType(t)) return nexaSliceElem(t);
+                if (nexaIsMapType(t)) {
+                    std::string k, v;
+                    return nexaSplitMapType(t, k, v) ? v : std::string();
+                }
+                if (t == "string") return "char";
+                return std::string();
+            }
+            case AstNode::Type::ExprMember: {
+                if (e.children.empty()) return std::string();
+                std::string t = chainTypeFrom(e.children[0], rootName, rootType);
+                if (isPointerType(t)) t = pointerPointeeType(t);
+                if (!isStructDeclType(t)) return std::string();
+                auto s = structFields_.find(structNameFromDecl(t));
+                if (s == structFields_.end()) return std::string();
+                auto f = s->second.find(e.value);
+                return f == s->second.end() ? std::string() : f->second;
+            }
+            default:
+                return std::string();
+        }
+    }
+
+    // Does `call` (a `.`/`->` method call) modify the object it is called on? A user's own
+    // struct method is emitted as a non-const member function, so calling one counts —
+    // both because it may write a field and because it would not compile against a const
+    // reference. An unrecognised receiver type is assumed to be modified.
+    bool methodCallMutatesReceiver(const AstNode& call, const std::string& rootName,
+                                   const std::string& rootType) const {
+        if (call.children.empty()) return true;
+        std::string recvT = chainTypeFrom(call.children[0], rootName, rootType);
+        if (isPointerType(recvT)) recvT = pointerPointeeType(recvT);
+        if (isStructDeclType(recvT)) return true;
+        if (recvT.empty()) return true;
+        return !isReadOnlyBuiltinMethod(call.value);
+    }
+
+    // Deliberately reads ast_ rather than fnOverloadSlots_: this analysis runs before the
+    // overload table is built, because struct method declarations are emitted before that.
+    bool isUserFunctionName(const std::string& name) const {
+        for (const AstNode& n : ast_) {
+            if (n.type == AstNode::Type::Function && !n.isExtern && n.value == name) return true;
+        }
+        return false;
+    }
+
+    // Parameter types worth a reference. Scalars, enums, pointers and closures are already
+    // cheap; `cpp:` header types are left alone because we do not know what they support.
+    bool typeIsHeavyParam(const std::string& t) const {
+        if (t == "string" || t == "json") return true;
+        if (nexaIsSliceType(t) || nexaIsMapType(t) || nexaIsResultType(t)) return true;
+        if (isStructDeclType(t)) return structCppNames_.count(structNameFromDecl(t)) > 0;
+        return false;
+    }
+
+    // std::map::operator[] is non-const and inserts a default element on a miss, so a map
+    // reached through a const reference neither compiles nor keeps today's behaviour. A
+    // parameter whose type contains a map anywhere therefore may not be indexed.
+    bool typeMentionsMap(const std::string& t, std::set<std::string>& seen) const {
+        if (nexaIsMapType(t)) return true;
+        if (nexaIsSliceType(t)) return typeMentionsMap(nexaSliceElem(t), seen);
+        if (nexaIsResultType(t)) return typeMentionsMap(nexaResultInner(t), seen);
+        if (isStructDeclType(t)) {
+            std::string s = structNameFromDecl(t);
+            if (!seen.insert(s).second) return false;
+            auto it = structFields_.find(s);
+            if (it == structFields_.end()) return false;
+            for (const auto& kv : it->second) {
+                if (typeMentionsMap(kv.second, seen)) return true;
+            }
+        }
+        return false;
+    }
+
+    bool bodyMutatesName(const std::vector<AstNode>& body, const std::string& name,
+                         const std::string& nameType, bool indexingIsSafe) const {
+        bool hit = false;
+        std::function<void(const AstNode&)> visit = [&](const AstNode& n) {
+            if (hit) return;
+            if (isAssignStmtType(n.type)) {
+                if (n.value == name) hit = true;
+                return;
+            }
+            switch (n.type) {
+                case AstNode::Type::AssnMember:
+                case AstNode::Type::AssnDeref:
+                case AstNode::Type::ExprAddrOf:
+                case AstNode::Type::StmtDelete:
+                    if (!n.children.empty() && exprRootVarName(n.children[0]) == name) hit = true;
+                    break;
+                case AstNode::Type::ExprArrayIndex:
+                    if (!indexingIsSafe && !n.children.empty() &&
+                        exprRootVarName(n.children[0]) == name) {
+                        hit = true;
+                    }
+                    break;
+                case AstNode::Type::FnCall:
+                case AstNode::Type::ExprCall:
+                    if (n.initValue == "." || n.initValue == "->") {
+                        if (!n.children.empty() && exprRootVarName(n.children[0]) == name &&
+                            methodCallMutatesReceiver(n, name, nameType)) {
+                            hit = true;
+                        }
+                    } else if (!isUserFunctionName(n.value)) {
+                        // A C header, an extern declaration or a closure variable can take
+                        // the argument by non-const reference; we cannot see the signature.
+                        for (const AstNode& a : n.children) {
+                            if (exprRootVarName(a) == name) hit = true;
+                        }
+                    }
+                    break;
+                default:
+                    break;
+            }
+        };
+        for (const AstNode& s : body) walkAstNode(s, visit);
+        return hit;
+    }
+
+    bool bodyWritesNonLocal(const AstNode& fn, const std::set<std::string>& globals) const {
+        const bool isMethod = !fn.receiverType.empty();
+        bool hit = false;
+        auto aliasable = [&](const std::string& root) {
+            return !root.empty() && (globals.count(root) > 0 || (isMethod && root == "self"));
+        };
+        auto rootTypeOf = [&](const std::string& root) -> std::string {
+            if (isMethod && root == "self") return fn.receiverType;
+            auto it = passGlobalTypes_.find(root);
+            return it == passGlobalTypes_.end() ? std::string() : it->second;
+        };
+        std::function<void(const AstNode&)> visit = [&](const AstNode& n) {
+            if (hit) return;
+            if (isAssignStmtType(n.type)) {
+                if (aliasable(n.value)) hit = true;
+                return;
+            }
+            switch (n.type) {
+                case AstNode::Type::AssnDeref:
+                case AstNode::Type::InlineCpp:
+                    hit = true;  // a store through a pointer can land anywhere
+                    break;
+                case AstNode::Type::AssnMember:
+                    if (!n.children.empty()) {
+                        if (n.children[0].isArrowMember) hit = true;
+                        else if (aliasable(exprRootVarName(n.children[0]))) hit = true;
+                    }
+                    break;
+                case AstNode::Type::FnCall:
+                case AstNode::Type::ExprCall:
+                    if (n.initValue == "->") {
+                        if (!isReadOnlyBuiltinMethod(n.value)) hit = true;
+                    } else if (n.initValue == ".") {
+                        std::string root = n.children.empty() ? std::string()
+                                                             : exprRootVarName(n.children[0]);
+                        if (aliasable(root) && methodCallMutatesReceiver(n, root, rootTypeOf(root))) {
+                            hit = true;
+                        }
+                    } else if (!isUserFunctionName(n.value)) {
+                        for (const AstNode& a : n.children) {
+                            if (aliasable(exprRootVarName(a))) hit = true;
+                        }
+                    }
+                    break;
+                default:
+                    break;
+            }
+        };
+        for (const AstNode& s : fn.children) walkAstNode(s, visit);
+        return hit;
+    }
+
+    void collectCalledNames(const AstNode& fn, std::set<std::string>& out) const {
+        std::function<void(const AstNode&)> visit = [&](const AstNode& n) {
+            if (n.type != AstNode::Type::FnCall && n.type != AstNode::Type::ExprCall) return;
+            out.insert(n.value);  // by name: method and free-function names share one table
+        };
+        for (const AstNode& s : fn.children) walkAstNode(s, visit);
+    }
+
+    void analyzeParamPassing() {
+        paramByRef_.clear();
+        passGlobalTypes_.clear();
+        // Exported DLL functions keep the C ABI their declaration promises.
+        if (buildDll_) return;
+
+        std::set<std::string> globals;
+        for (const AstNode& n : ast_) {
+            if (n.type != AstNode::Type::Variable) continue;
+            globals.insert(n.value);
+            // Only the written-down type; an inferred one stays unknown, which makes the
+            // answer more conservative rather than wrong.
+            if (!n.declType.empty()) passGlobalTypes_[n.value] = n.declType;
+        }
+
+        bool aliasUnsafeProgram = false;
+        std::function<void(const AstNode&)> scanProgram = [&](const AstNode& n) {
+            switch (n.type) {
+                case AstNode::Type::InlineCpp:
+                case AstNode::Type::ThreadSpawn:
+                case AstNode::Type::ThreadWorker:
+                case AstNode::Type::ThreadRun:
+                    aliasUnsafeProgram = true;
+                    break;
+                case AstNode::Type::ExprAddrOf:
+                    if (!n.children.empty() && globals.count(exprRootVarName(n.children[0]))) {
+                        aliasUnsafeProgram = true;
+                    }
+                    break;
+                default:
+                    break;
+            }
+        };
+        for (const AstNode& n : ast_) walkAstNode(n, scanProgram);
+        if (aliasUnsafeProgram) return;
+
+        struct PassFn {
+            const AstNode* node = nullptr;
+            bool writes = false;
+            std::set<std::string> calls;
+        };
+        std::vector<PassFn> fns;
+        for (const AstNode& n : ast_) {
+            if (n.type == AstNode::Type::Function && !n.isExtern) {
+                fns.push_back({&n, false, {}});
+            } else if (n.type == AstNode::Type::StructDef) {
+                for (const AstNode& m : n.children) {
+                    if (m.type == AstNode::Type::Function) fns.push_back({&m, false, {}});
+                }
+            }
+        }
+        for (PassFn& f : fns) {
+            f.writes = bodyWritesNonLocal(*f.node, globals);
+            collectCalledNames(*f.node, f.calls);
+        }
+        // Propagate "writes something the caller can see" along the call graph, by name, to
+        // a fixed point. Two functions sharing a name (overloads, or a method and a free
+        // function) share one entry, which only makes the answer more conservative.
+        for (bool changed = true; changed;) {
+            changed = false;
+            std::set<std::string> writerNames;
+            for (const PassFn& f : fns) {
+                if (f.writes) writerNames.insert(f.node->value);
+            }
+            for (PassFn& f : fns) {
+                if (f.writes) continue;
+                for (const std::string& c : f.calls) {
+                    if (writerNames.count(c)) {
+                        f.writes = true;
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        for (const PassFn& f : fns) {
+            std::vector<bool> byRef(f.node->paramNames.size(), false);
+            if (!f.writes) {
+                for (size_t i = 0; i < f.node->paramNames.size(); i++) {
+                    std::string t = canonicalParamType(*f.node, i);
+                    if (!typeIsHeavyParam(t)) continue;
+                    std::set<std::string> seen;
+                    bool indexingIsSafe = !typeMentionsMap(t, seen);
+                    if (!bodyMutatesName(f.node->children, f.node->paramNames[i], t, indexingIsSafe)) {
+                        byRef[i] = true;
+                    }
+                }
+            }
+            paramByRef_[f.node] = std::move(byRef);
+        }
+    }
+
+    bool paramIsByRef(const AstNode& fn, size_t i) const {
+        auto it = paramByRef_.find(&fn);
+        if (it == paramByRef_.end() || i >= it->second.size()) return false;
+        return it->second[i];
+    }
+
+    std::string paramSigCpp(const AstNode& fn, size_t i) const {
+        std::string cpp = nexaTypeToCpp(canonicalParamType(fn, i));
+        return paramIsByRef(fn, i) ? ("const " + cpp + "&") : cpp;
+    }
+
+    std::map<const AstNode*, std::vector<bool>> paramByRef_;
+    std::map<std::string, std::string> passGlobalTypes_;
 
     static size_t fnMinArgs(const AstNode& fn) {
         size_t minArgs = fn.paramNames.size();
@@ -3301,7 +3686,7 @@ private:
         out << "    " << retCpp << " " << node.value << "(";
         for (size_t i = 0; i < node.paramNames.size(); i++) {
             if (i > 0) out << ", ";
-            out << nexaTypeToCpp(canonicalParamType(node, i));
+            out << paramSigCpp(node, i);
         }
         out << ");\n";
     }
@@ -3317,8 +3702,7 @@ private:
         for (size_t i = 0; i < node.paramNames.size(); i++) {
             if (i > 0) out << ", ";
             std::string pname = preserveNames_ ? node.paramNames[i] : ("__nexa_param_" + std::to_string(i));
-            std::string nexaT = canonicalParamType(node, i);
-            out << nexaTypeToCpp(nexaT) << " " << pname;
+            out << paramSigCpp(node, i) << " " << pname;
             varMap[node.paramNames[i]] = pname;
         }
         out << ") {\n";
@@ -4022,7 +4406,12 @@ private:
                 }
                 std::string v = preserveNames_ ? child.value : varMap.at(child.value);
                 if (varIsString.count(child.value) && varIsString.at(child.value)) {
-                    out << indent << v << " = " << v << " + " << emitConcatOperand(child.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) << ";\n";
+                    // `s += x` appends in place. Emitting `s = s + x` instead built a whole
+                    // new string every time, which turns the ordinary "build a string in a
+                    // loop" into quadratic work. A struct field (`p.label += x`) has always
+                    // emitted `+=`; a plain variable now does too. emitConcatOperand always
+                    // yields a string-typed expression, so the two forms are equivalent.
+                    out << indent << v << " += " << emitConcatOperand(child.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) << ";\n";
                 } else {
                     out << indent << v << " = " << v << " + " << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
                 }

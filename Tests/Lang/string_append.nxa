@@ -1,0 +1,48 @@
+// Pins what `s += x` appends for each operand type, and that a string can be
+// appended to itself. NexaC emits this as an in-place append rather than
+// rebuilding the string, so every one of these has to keep its answer.
+//
+// Reference: SYNTAX/Modules.txt (std/io, string concatenation)
+#include <std/io>
+
+struct Tag { label: string; }
+
+fn main() {
+    let s: string = "n=";
+    let n: int = 5;
+    let c: char = 'x';
+    let f: float = 1.5;
+    let b: bool = true;
+
+    s += n;
+    s += 7;
+    s += c;
+    s += f;
+    s += b;
+    s += "!";
+    io.println("mixed=", s);
+
+    // Self-append: the right-hand side is the string being appended to.
+    let d: string = "ab";
+    d += d;
+    d += d;
+    io.println("doubled=", d);
+
+    // A string field appends the same way.
+    let t: Tag;
+    t.label = "a";
+    t.label += "b";
+    t.label += t.label;
+    io.println("field=", t.label);
+
+    // Built in a loop, which is the shape that used to cost a full copy a turn.
+    let built: string = "";
+    for (i, 5) { built += i; }
+    io.println("built=", built, " len=", len(built));
+
+    // += on an empty string, and appending an empty string.
+    let e: string = "";
+    e += "";
+    e += "z";
+    io.println("edge=", e, " len=", len(e));
+}

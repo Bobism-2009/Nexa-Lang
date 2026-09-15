@@ -91,6 +91,23 @@ FUNCTIONS
   - In main(), `return;` is compiled as `return 0;`
   - Use --preserve-names to keep names in output (default: mangle)
 
+  PASSING ARGUMENTS
+    A parameter is a copy. Assigning to it, pushing to it, or changing one of its
+    fields is invisible to the caller, and that holds for every type — string, []T,
+    map[K]V, Result[T], json and structs included. Use a pointer (*T and &x) when the
+    callee is meant to change the caller's value.
+
+      fn drop_one(xs: []int): int { xs.pop(); return len(xs); }  // caller's slice unmoved
+
+    A copy is what the language promises, not what the call costs. NexaC passes such an
+    argument by reference — a pointer, as in C — whenever the copy could not be told
+    apart from one, so a big slice, string or struct is not duplicated on every call.
+    It keeps a real copy where the difference could show: the callee changes the
+    parameter, writes a global or a field of self, stores through a pointer, indexes a
+    map (a map read inserts), or hands the value to a function whose body Nexa cannot
+    see. Programs that take a global's address, use inline_cpp! or start a thread keep
+    copies throughout. Either way the program prints the same thing.
+
 CLOSURES (function values)
   Type:   fn(T, U): Ret     (return type is required on a type)
   Value:  fn (a: T): Ret { ... }

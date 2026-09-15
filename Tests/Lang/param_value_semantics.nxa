@@ -1,0 +1,112 @@
+// Pins Nexa's by-value parameter semantics. A slice, string, map or struct
+// parameter is a COPY: the callee cannot change the caller's value, and the
+// caller cannot change what the callee already holds.
+//
+// NexaC binds such a parameter to a `const&` in the generated C++ when that is
+// indistinguishable from the copy (it is what makes a call cost a pointer
+// instead of a deep copy). Every case below is one where the two would differ,
+// so each one must keep printing exactly what a copy prints.
+//
+// Reference: SYNTAX/Core.txt (FUNCTIONS, VARIABLES)
+#include <std/io>
+
+struct Point { x: int; y: int; }
+
+struct Bag {
+    items: []int;
+
+    // Called as b.absorb(b): the receiver and the argument are the same value,
+    // so pushing to self must not change what `other` holds.
+    fn absorb(other: Bag): int {
+        self.items.push(7);
+        return len(other.items);
+    }
+}
+
+let gxs: []int;
+let gcount = 0;
+
+// Writes a global that the caller may well have passed in as `list`.
+fn count_after_push(list: []int): int {
+    gxs.push(99);
+    return len(list);
+}
+
+// Same, one call deeper: the write is in a function this one calls.
+fn bump_global(): void { gcount = gcount + 1; }
+fn read_after_bump(list: []int): int {
+    bump_global();
+    return len(list);
+}
+
+// Mutates its own parameter; the caller's slice must not move.
+fn drop_one(xs: []int): int {
+    xs.pop();
+    return len(xs);
+}
+
+fn shout(s: string): string {
+    s += "!";
+    return s;
+}
+
+fn relabel(p: Point): int {
+    p.x = 100;
+    return p.x;
+}
+
+// Reading a missing key from a map parameter inserts it into the copy.
+fn look_up(m: map[string]int): int {
+    return m["missing"];
+}
+
+// Writes through a pointer that may alias the by-value parameter.
+fn poke(p: *Point, q: Point): int {
+    p->x = 5;
+    return q.x;
+}
+
+// Pure reader: nothing here can observe a reference, so this is the shape that
+// gets the reference. It must still answer the same numbers.
+fn total(xs: []int): int {
+    let s: int = 0;
+    for (x in xs) { s = s + x; }
+    return s;
+}
+
+fn main() {
+    gxs.push(1);
+    io.println("global_alias=", count_after_push(gxs));
+    io.println("global_len_after=", len(gxs));
+
+    io.println("transitive_alias=", read_after_bump(gxs));
+    io.println("gcount=", gcount);
+
+    let b: Bag;
+    b.items.push(1);
+    b.items.push(2);
+    io.println("self_alias=", b.absorb(b));
+    io.println("bag_len_after=", len(b.items));
+
+    let xs: []int = [10, 20, 30];
+    io.println("drop_one=", drop_one(xs));
+    io.println("caller_len=", len(xs));
+    io.println("total=", total(xs));
+
+    let s: string = "hi";
+    io.println("shout=", shout(s));
+    io.println("caller_string=", s);
+
+    let p: Point;
+    p.x = 1;
+    p.y = 2;
+    io.println("relabel=", relabel(p));
+    io.println("caller_x=", p.x);
+    io.println("pointer_alias=", poke(&p, p));
+    io.println("caller_x_after=", p.x);
+
+    let m: map[string]int;
+    m["present"] = 4;
+    io.println("look_up=", look_up(m));
+    io.println("map_len_after=", len(m.keys()));
+}

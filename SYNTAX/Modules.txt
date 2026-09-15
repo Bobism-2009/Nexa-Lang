@@ -8,7 +8,8 @@ Nexa Standard Modules
   io.flush()        - Flush stdout (fflush); use when output must appear immediately
   Strings support escapes: \n \t \r \a \b \f \v \0 \\ \" \' \xHH (hex ASCII); see SYNTAX/Core.txt.
   Any other escape is a compile error, not a silently dropped backslash.
-  s += "x";        - string concatenation (compound assign)
+  s += "x";        - string concatenation (compound assign); appends in place, so
+                     building a string a piece at a time does not copy it each turn
   len(s)           - string or array length, returns int (built-in)
   trim(s[, prefix]) / io.trim(s[, prefix]) - trim ASCII whitespace; if prefix is given, remove it once from the start after that (e.g. trim("  x:5  ", "x:") -> "5")
   Core string methods (no #include): s.upper() s.lower() s.trim() s.len() s.contains(x)
