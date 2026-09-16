@@ -9,6 +9,8 @@ MODULE INCLUDES (angle brackets)
   #include <std/dll>
   #include <std/time>
   #include <std/thread>
+  #include <std/tcp>      - Raw TCP sockets: tcp.connect/listen/accept/send/recv/port/close
+                            (std/http is the protocol; this is the wire under it)
   #include <std/json>     - Nested JSON parse/stringify (type Json)
   #include <std/gfx>      - Pixel window: gfx.open/plot/text/mouse/drop/opendialog/present
                             shapes: gfx.fill/rect/line (optional thickness), circle,

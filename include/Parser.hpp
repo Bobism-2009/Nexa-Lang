@@ -31,7 +31,7 @@ struct AstNode {
                       DllLoad, DllCall,
                       FileRead, FileWrite, FileAppend, FileExists, FileMkdir, FileCall,
                       RandomInt, RandomSeed,
-                      MathCall, CryptoCall, HttpCall, GfxCall, JsonCall,
+                      MathCall, CryptoCall, HttpCall, TcpCall, GfxCall, JsonCall,
                       ResultMake,
                       StrMethod,
                       TimeSleep, TimeSeconds, TimeMilliseconds, TimeNowMs,
@@ -368,6 +368,9 @@ private:
         if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsExecutable || e.type == AstNode::Type::OsTempDir || e.type == AstNode::Type::OsArch || e.type == AstNode::Type::OsWhich || e.type == AstNode::Type::OsCwd || e.type == AstNode::Type::OsHostname || e.type == AstNode::Type::OsUsername || e.type == AstNode::Type::OsHome || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::OsLoad || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall) return true;
         if (e.type == AstNode::Type::JsonCall && e.value == "stringify") return true;
         if (e.type == AstNode::Type::ExprCast && e.value == "string") return true;
+        // tcp.recv hands back the bytes it read; every other tcp.* call is an
+        // int -- a handle, a byte count, or a 1/0.
+        if (e.type == AstNode::Type::TcpCall) return e.value == "recv";
         if (e.type == AstNode::Type::FileCall) {
             const std::string& m = e.value;
             return m == "cwd" || m == "abspath" || m == "join" || m == "dirname" || m == "basename" || m == "extension";
@@ -938,7 +941,7 @@ private:
     static const std::vector<std::string>& knownStdModules() {
         static const std::vector<std::string> mods = {
             "std/io", "std/os", "std/file", "std/dll", "std/random", "std/math",
-            "std/crypto", "std/http", "std/json", "std/time", "std/thread",
+            "std/crypto", "std/http", "std/tcp", "std/json", "std/time", "std/thread",
             "std/gfx", "std/inline",
         };
         return mods;
@@ -2742,6 +2745,10 @@ private:
             (tokens_[pos_ + 2].type == TokenType::Identifier || tokens_[pos_ + 2].type == TokenType::Delete)) {
             return applyIndexAndDotPostfix(parseHttpCall());
         }
+        if (peek().type == TokenType::Identifier && peek().value == "tcp" && pos_ + 2 < tokens_.size() &&
+            tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
+            return applyIndexAndDotPostfix(parseTcpCall());
+        }
         if (peek().type == TokenType::Identifier && peek().value == "json" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
             return applyIndexAndDotPostfix(parseJsonCall());
@@ -3990,6 +3997,61 @@ private:
         }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' after http." + method + "(" + shape + tail +
+                ") at line " + std::to_string(peek().line));
+        }
+        return node;
+    }
+
+    AstNode parseTcpCall() {
+        size_t line = peek().line;
+        if (!modules_.hasTcp()) {
+            throw std::runtime_error("tcp.* requires #include <std/tcp> at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "tcp") {
+            throw std::runtime_error("Expected 'tcp' at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        const Token& methodTok = peek();
+        if (methodTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected tcp method at line " + std::to_string(methodTok.line));
+        }
+        std::string method = methodTok.value;
+        advance();
+        // The required arguments, then whether one more is allowed after them:
+        // the byte cap on tcp.recv, which defaults when it is left off.
+        int fixed;
+        bool optTail = false;
+        std::string shape, tail;
+        if (method == "connect") { fixed = 2; shape = "host, port"; }
+        else if (method == "listen") { fixed = 1; shape = "port"; }
+        else if (method == "accept") { fixed = 1; shape = "listener"; }
+        else if (method == "send") { fixed = 2; shape = "handle, data"; }
+        else if (method == "recv") { fixed = 1; optTail = true; shape = "handle"; tail = "[, max]"; }
+        else if (method == "port" || method == "close") { fixed = 1; shape = "handle"; }
+        else {
+            throw std::runtime_error("Unknown tcp function 'tcp." + method +
+                "' at line " + std::to_string(methodTok.line) +
+                " (use connect, listen, accept, send, recv, port, close)");
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after tcp." + method + " at line " + std::to_string(peek().line));
+        }
+        AstNode node{AstNode::Type::TcpCall, method, {}};
+        for (int i = 0; i < fixed; i++) {
+            if (i > 0 && !match(TokenType::Comma)) {
+                throw std::runtime_error("Expected ',' in tcp." + method + "(" + shape + ") at line " +
+                    std::to_string(peek().line));
+            }
+            node.children.push_back(parseExpression());
+        }
+        if (optTail && peek().type == TokenType::Comma) {
+            advance();
+            node.children.push_back(parseExpression());
+        }
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' after tcp." + method + "(" + shape + tail +
                 ") at line " + std::to_string(peek().line));
         }
         return node;

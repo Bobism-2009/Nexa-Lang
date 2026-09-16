@@ -1,0 +1,92 @@
+// std/tcp's listening half against std/tcp's dialling half, in one program
+// (BOB-44).
+//
+// Both ends are Nexa here and nothing outside the process is involved: one
+// program binds a port, answers two connections from a worker thread, and is
+// the client that makes them. Tests/tcp_loopback_test.nxa is the other side of
+// this coin -- the same module against a peer that is not Nexa. Driven by the
+// server layer of Tests/tcp_cases.sh.
+#include <std/tcp>
+#include <std/io>
+#include <std/thread>
+
+// A handle is an int, and 0 is the one value that means "no socket" -- so
+// "did it work" is the handle itself, not a field on a struct.
+fn yes(h: int): int {
+    if (h) {
+        return 1;
+    }
+    return 0;
+}
+
+// TCP is a stream: a send does not arrive as a send, so a program that wants a
+// whole line reads until it has one. "" means the peer hung up, and there is
+// no other answer, so that is the loop's other exit.
+fn recv_line(h: int): string {
+    let buf: string = "";
+    while (true) {
+        if (buf.contains("\n")) {
+            break;
+        }
+        let chunk: string = tcp.recv(h);
+        if (len(chunk) == 0) {
+            break;
+        }
+        buf += chunk;
+    }
+    return buf.trim();
+}
+
+// One line per connection, n of them, then the thread is done.
+fn serve(l: int, n: int) {
+    for (i, n) {
+        let peer: int = tcp.accept(l);
+        if (peer == 0) {
+            return;
+        }
+        tcp.send(peer, "echo:" + recv_line(peer) + "\n");
+        tcp.close(peer);
+    }
+}
+
+fn main() {
+    // Port 0 asks the OS for a free one; tcp.port says which, so no test ever
+    // picks a port and hopes it was free.
+    let l: int = tcp.listen(0);
+    io.println("listen " + yes(l));
+    let p: int = tcp.port(l);
+    io.println("port " + yes(p));
+
+    let t = thread.spawn(serve(l, 2));
+
+    let a: int = tcp.connect("127.0.0.1", p);
+    io.println("dial " + yes(a));
+    // The dialling end has a port of its own -- the ephemeral one the OS gave
+    // it -- and it is not the port it dialled.
+    let mine: int = tcp.port(a);
+    io.println("local " + yes(mine));
+    let same: int = 0;
+    if (mine == p) {
+        same = 1;
+    }
+    io.println("same " + same);
+
+    io.println("sent " + tcp.send(a, "one\n"));
+    io.println("back [" + recv_line(a) + "]");
+    // The server answered and closed, so the next read is the hang-up.
+    io.println("eof " + len(tcp.recv(a)));
+    io.println("close " + tcp.close(a));
+
+    // The listener is still up, so a second connection is served too.
+    let b: int = tcp.connect("127.0.0.1", p);
+    io.println("sent " + tcp.send(b, "two\n"));
+    io.println("back [" + recv_line(b) + "]");
+    io.println("close " + tcp.close(b));
+
+    thread.join(t);
+    io.println("shut " + tcp.close(l));
+
+    // Closing the listening socket really closes it: nothing answers after.
+    io.println("dead " + yes(tcp.connect("127.0.0.1", p)));
+    return 0;
+}

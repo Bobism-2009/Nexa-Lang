@@ -1,0 +1,14 @@
+listen 1
+port 1
+dial 1
+local 1
+same 0
+sent 4
+back [echo:one]
+eof 0
+close 1
+sent 4
+back [echo:two]
+close 1
+shut 1
+dead 0

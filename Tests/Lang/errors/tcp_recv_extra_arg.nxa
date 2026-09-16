@@ -1,0 +1,7 @@
+// recv takes a handle and at most one cap; a third argument is a mistake, and
+// the shape NexaC names back is the one that would have been right.
+#include <std/tcp>
+fn main() {
+    let c = tcp.connect("example.com", 7);
+    let s = tcp.recv(c, 16, 32);
+}

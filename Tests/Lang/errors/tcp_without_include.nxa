@@ -1,0 +1,7 @@
+// tcp.* without the module is the include's fault, not the call's, and the
+// diagnostic says which line to put it above rather than failing in clang.
+#include <std/io>
+fn main() {
+    let c = tcp.connect("example.com", 7);
+    io.println(c);
+}

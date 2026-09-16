@@ -1,0 +1,6 @@
+// send needs something to send: a handle on its own is not a call.
+#include <std/tcp>
+fn main() {
+    let c = tcp.connect("example.com", 7);
+    tcp.send(c);
+}

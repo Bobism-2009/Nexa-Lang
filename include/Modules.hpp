@@ -10,6 +10,7 @@
 #include "JsonRuntime.hpp"
 #include "PlatformEmit.hpp"
 #include "ResultRuntime.hpp"
+#include "TcpRuntime.hpp"
 
 namespace nexa {
 
@@ -81,6 +82,12 @@ public:
         bool httpSimple = false;
         bool httpResponse = false;
         bool httpServer = false;
+        bool tcp = false;
+        // The two entry points of std/tcp: tcpConnect is tcp.connect, tcpListen
+        // is tcp.listen and tcp.accept. send/recv/port/close sit under both and
+        // ride along with either.
+        bool tcpConnect = false;
+        bool tcpListen = false;
         bool str = false;
         bool time = false;
         bool timeSleep = false;
@@ -169,6 +176,10 @@ public:
 
     bool hasHttp() const {
         return enabled_.count("std/http") > 0;
+    }
+
+    bool hasTcp() const {
+        return enabled_.count("std/tcp") > 0;
     }
 
     bool hasTime() const {
@@ -1447,6 +1458,9 @@ public:
         }
         if (hasHttp() && usage.http) {
             out += httpRuntimeCpp(usage.httpSimple, usage.httpResponse, usage.httpServer);
+        }
+        if (hasTcp() && usage.tcp) {
+            out += tcpRuntimeCpp(usage.tcpConnect, usage.tcpListen);
         }
         if (hasGfx() && usage.gfx) {
             GfxNeed need;

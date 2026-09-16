@@ -1,0 +1,75 @@
+// std/tcp's client half against a peer that is not Nexa (BOB-44).
+//
+// Tests/tcp_peer.py is plain Python sockets on the other end, so what this
+// test checks is that a Nexa program speaks TCP rather than speaking to its
+// own conventions. Driven by the loopback layer of Tests/tcp_cases.sh, which
+// starts the peer and passes its port as argv[1].
+//
+// The three things a raw socket has to get right, in order: a line-at-a-time
+// text exchange, a payload too big for one send, and bytes that are bytes --
+// a NUL in the middle of a read is data, and a hang-up is an empty read.
+#include <std/tcp>
+#include <std/io>
+
+// TCP is a stream: a send does not arrive as a send, so a program that wants a
+// whole line reads until it has one. "" means the peer hung up, and there is
+// no other answer, so that is the loop's other exit.
+fn recv_line(h: int): string {
+    let buf: string = "";
+    while (true) {
+        if (buf.contains("\n")) {
+            break;
+        }
+        let chunk: string = tcp.recv(h);
+        if (len(chunk) == 0) {
+            break;
+        }
+        buf += chunk;
+    }
+    return buf.trim();
+}
+
+fn main(args: []string) {
+    let port: int = io.to_int(args[1]);
+    let c: int = tcp.connect("127.0.0.1", port);
+    io.println("connect " + tcp_ok(c));
+
+    // 1. A line out, a line back.
+    io.println("ping " + tcp.send(c, "PING\n"));
+    io.println("pong [" + recv_line(c) + "]");
+
+    // 2. A payload no single send can carry. tcp.send writes all of it, so the
+    // count it hands back is the whole string -- and the peer counting the same
+    // number back is the proof it all arrived.
+    let payload: string = "0123456789".repeat(12000);   // 120000 bytes
+    io.println("size " + tcp.send(c, "SIZE " + len(payload) + "\n"));
+    io.println("sent " + tcp.send(c, payload));
+    io.println("acked [" + recv_line(c) + "]");
+
+    // 3. Seven bytes with a NUL at index 3. A program that treated the read as
+    // C text would see three; len() sees the byte count, the way os.load does.
+    io.println("ask " + tcp.send(c, "BLOB\n"));
+    let blob: string = tcp.recv(c);
+    io.println("blob " + len(blob));
+    io.println("head [" + blob.substring(0, 3) + "]");
+
+    // The peer hung up, so the next read is empty -- once, and every time after.
+    io.println("eof " + len(tcp.recv(c)));
+    io.println("eof " + len(tcp.recv(c)));
+
+    io.println("close " + tcp.close(c));
+
+    // Nobody is listening on that port any more: dialling it fails, and a
+    // failed dial is the handle 0.
+    io.println("dead " + tcp_ok(tcp.connect("127.0.0.1", port)));
+    return 0;
+}
+
+// A handle is an int, and 0 is the one value that means "no socket" -- so
+// "did it work" is the handle itself, not a field on a struct.
+fn tcp_ok(h: int): int {
+    if (h) {
+        return 1;
+    }
+    return 0;
+}

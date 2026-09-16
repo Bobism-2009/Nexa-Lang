@@ -1,0 +1,3 @@
+Unknown tcp function 'tcp.open'
+use connect, listen, accept, send, recv, port, close
+at line 4

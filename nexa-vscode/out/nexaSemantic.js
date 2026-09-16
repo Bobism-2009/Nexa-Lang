@@ -38,11 +38,11 @@ exports.buildSemanticTokens = buildSemanticTokens;
 exports.registerSemanticTokens = registerSemanticTokens;
 const vscode = __importStar(require("vscode"));
 const nexaIndex_1 = require("./nexaIndex");
-const MODULES = "io|os|dll|file|random|math|crypto|http|time|thread";
+const MODULES = "io|os|dll|file|random|math|crypto|http|tcp|time|thread";
 const MODULE_CALL = new RegExp(`\\b(${MODULES})\\.([A-Za-z_][A-Za-z0-9_]*)`, "g");
 const INCLUDE_ANGLE = /^\s*(#include)\s*<([^>]+)>/;
 const INCLUDE_QUOTE = /^\s*(#include)\s*"([^"]+)"/;
-const STD_MODULES = "io|os|dll|file|random|math|crypto|http|time|thread|inline";
+const STD_MODULES = "io|os|dll|file|random|math|crypto|http|tcp|time|thread|inline";
 exports.SEMANTIC_LEGEND = new vscode.SemanticTokensLegend(["module", "member", "importKeyword", "importModule", "importPrefix"], []);
 function pushIncludeAngle(builder, line, match) {
     const base = match.index ?? 0;

@@ -1199,6 +1199,7 @@ static std::string nexaBuildCompileCmd(
     bool noConsole,
     bool linkUser32,
     bool linkHttp,
+    bool linkTcp,
     bool linkGfx,
     bool noExceptions,
     bool noRtti,
@@ -1323,6 +1324,15 @@ static std::string nexaBuildCompileCmd(
         cmd += " -static -static-libgcc -static-libstdc++";
 #endif
     }
+#ifndef _WIN32
+    // Cross-built Windows targets (mingw). The import libraries the host-Windows
+    // branch above spells out are not linked by default here either, and the
+    // Windows slice of std/http and std/tcp calls straight into them.
+    if (buildWin) {
+        if (linkHttp) cmd += " -lwinhttp";
+        if (linkHttp || linkTcp) cmd += " -lws2_32";
+    }
+#endif
 #ifdef _WIN32
     if (linkUser32 || linkGfx) {
         // std/os (MessageBoxA, GetConsoleWindow, …) and some inline_cpp; lld does not always pull it implicitly.
@@ -1342,6 +1352,9 @@ static std::string nexaBuildCompileCmd(
         // std/http uses WinHTTP to call out (OS API; HTTPS via Schannel) and
         // Winsock to listen (http.localhost).
         cmd += " -lwinhttp";
+    }
+    if (linkHttp || linkTcp) {
+        // Winsock: http.localhost's listening socket, and all of std/tcp.
         cmd += " -lws2_32";
     }
 #elif defined(__APPLE__)
@@ -2310,6 +2323,7 @@ int main(int argc, char* argv[]) {
         }
         const bool linkUser32 = modules.hasOs() || modules.hasInlineCpp();
         const bool linkHttp = modules.hasHttp();
+        const bool linkTcp = modules.hasTcp() && usage.tcp;
         const bool linkGfx = modules.hasGfx() && usage.gfx;
 
         if (buildWasm) {
@@ -2391,7 +2405,7 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 
-        std::string cmd = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkGfx, noExceptions, noRtti, debugBuild, linkInputs);
+        std::string cmd = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkTcp, linkGfx, noExceptions, noRtti, debugBuild, linkInputs);
         int ret = std::system(cmd.c_str());
 
         if (ret != 0 && sanitizeThisBuild && sanitizer != NexaSanitizer::None) {
@@ -2403,7 +2417,7 @@ int main(int argc, char* argv[]) {
             std::cout.flush();
             sanitizer = NexaSanitizer::None;
             opt = "-g -O0";
-            std::string cmdNoSan = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkGfx, noExceptions, noRtti, debugBuild, linkInputs);
+            std::string cmdNoSan = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkTcp, linkGfx, noExceptions, noRtti, debugBuild, linkInputs);
             ret = std::system(cmdNoSan.c_str());
         }
 
@@ -2433,7 +2447,7 @@ int main(int argc, char* argv[]) {
                 cxx = fallback;
                 targetFlags = "";
                 std::cout.flush();
-                std::string cmd2 = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkGfx, noExceptions, noRtti, debugBuild, linkInputs);
+                std::string cmd2 = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkTcp, linkGfx, noExceptions, noRtti, debugBuild, linkInputs);
                 ret = std::system(cmd2.c_str());
             }
         }

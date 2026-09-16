@@ -1,0 +1,13 @@
+connect 1
+ping 5
+pong [PONG]
+size 12
+sent 120000
+acked [GOT 120000]
+ask 5
+blob 7
+head [bin]
+eof 0
+eof 0
+close 1
+dead 0

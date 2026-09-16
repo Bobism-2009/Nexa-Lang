@@ -273,6 +273,11 @@ public:
                     else if (n.value == "request") cppUsage.httpResponse = true;
                     else cppUsage.httpSimple = true;
                     break;
+                case AstNode::Type::TcpCall:
+                    cppUsage.tcp = true;
+                    if (n.value == "connect") cppUsage.tcpConnect = true;
+                    else if (n.value == "listen" || n.value == "accept") cppUsage.tcpListen = true;
+                    break;
                 case AstNode::Type::GfxCall:
                     cppUsage.gfx = true;
                     noteGfxUsage(n, cppUsage);
@@ -2295,6 +2300,10 @@ private:
                 if (e.value == "accept") return nexaMakeResultType("struct:HttpRequest");
                 if (httpVerbReturnsInt(e.value)) return "int";
                 return nexaMakeResultType("string");
+            case AstNode::Type::TcpCall:
+                // A handle, a byte count or a 1/0 -- all int; only the bytes
+                // tcp.recv read are a string.
+                return e.value == "recv" ? "string" : "int";
             case AstNode::Type::ResultMake:
                 if (e.value == "err") return nexaMakeResultType("void");
                 if (e.children.empty()) return nexaMakeResultType("void");
@@ -3796,6 +3805,8 @@ private:
         // http.reply/raw/close hand back a 1/0 int, so they concatenate as a
         // number; every other http.* call yields a Result.
         if (e.type == AstNode::Type::HttpCall) return !httpVerbReturnsInt(e.value);
+        // tcp.recv hands back the bytes it read; every other tcp.* call is an int.
+        if (e.type == AstNode::Type::TcpCall) return e.value == "recv";
         if (e.type == AstNode::Type::JsonCall && e.value == "stringify") return true;
         if (e.type == AstNode::Type::ExprCast && e.value == "string") return true;
         if (e.type == AstNode::Type::FileCall) {
@@ -3870,6 +3881,8 @@ private:
         // http.reply/raw/close hand back a 1/0 int, so they concatenate as a
         // number; every other http.* call yields a Result.
         if (e.type == AstNode::Type::HttpCall) return !httpVerbReturnsInt(e.value);
+        // tcp.recv hands back the bytes it read; every other tcp.* call is an int.
+        if (e.type == AstNode::Type::TcpCall) return e.value == "recv";
         if (e.type == AstNode::Type::JsonCall && e.value == "stringify") return true;
         if (e.type == AstNode::Type::FileCall) {
             const std::string& m = e.value;
@@ -4435,6 +4448,10 @@ private:
                 // An http call whose answer nobody keeps still has to happen:
                 // http.reply(...) and http.close(...) are written for what they
                 // do, not for the 1/0 they hand back.
+                out << indent << "(void)(" << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ");\n";
+            } else if (child.type == AstNode::Type::TcpCall) {
+                // Same as http: tcp.send(...) and tcp.close(...) are written for
+                // what they do, not for the count or the 1/0 they hand back.
                 out << indent << "(void)(" << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ");\n";
             } else if (child.type == AstNode::Type::RandomSeed) {
                 std::string seedExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
@@ -5387,6 +5404,14 @@ private:
             case AstNode::Type::ExprMember:
             case AstNode::Type::JsonCall:
                 return emitExpr(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+            // Every tcp.* call but recv is an int, and a handle or a byte count
+            // is true exactly when it is not 0 -- so `if (tcp.connect(...))`
+            // reads the way the failure value was chosen to read. recv is the
+            // one that hands back bytes, and there "true" is "got some".
+            case AstNode::Type::TcpCall: {
+                std::string call = emitExpr(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                return c.value == "recv" ? "!(" + call + ").empty()" : call;
+            }
             case AstNode::Type::HttpCall:
             case AstNode::Type::ResultMake:
                 throw std::runtime_error("Result is not a condition; use .ok()");
@@ -5851,6 +5876,25 @@ private:
                 std::string body = sendsBody ? arg(1) : std::string("std::string()");
                 return "__nexa_http_simple(\"" + verb + "\", " + arg(0) + ", " + body + ", " +
                     headers(sendsBody ? 2 : 1) + ")";
+            }
+            case AstNode::Type::TcpCall: {
+                const std::string& fn = e.value;
+                auto arg = [&](size_t i) {
+                    return emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                };
+                if (fn == "connect") return "__nexa_tcp_connect(" + arg(0) + ", " + arg(1) + ")";
+                if (fn == "listen") return "__nexa_tcp_listen(" + arg(0) + ")";
+                if (fn == "accept") return "__nexa_tcp_accept(" + arg(0) + ")";
+                if (fn == "send") return "__nexa_tcp_send(" + arg(0) + ", " + arg(1) + ")";
+                // tcp.recv(h) with no cap: 64K, which is a whole TCP window and
+                // more than one read ever returns in practice.
+                if (fn == "recv") {
+                    return "__nexa_tcp_recv(" + arg(0) + ", " +
+                        (e.children.size() > 1 ? arg(1) : std::string("65536")) + ")";
+                }
+                if (fn == "port") return "__nexa_tcp_port(" + arg(0) + ")";
+                if (fn == "close") return "__nexa_tcp_close(" + arg(0) + ")";
+                throw std::runtime_error("Internal: unknown tcp method '" + fn + "'");
             }
             case AstNode::Type::ResultMake: {
                 if (e.value == "err") {

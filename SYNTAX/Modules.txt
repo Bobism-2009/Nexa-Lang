@@ -264,6 +264,58 @@ Nexa Standard Modules
   std/thread runs the loop beside the rest of a program:
        let t = thread.spawn(serve(srv));
 
+#include <std/tcp>
+  Raw TCP, both ends, on the OS's own sockets. std/http is a protocol; this is
+  the wire under it -- reach for std/tcp to speak your own game protocol, a
+  line-based control channel, or someone else's binary format.
+  Windows: Winsock    macOS/Linux: POSIX sockets
+  Everything here is an int handle: the socket as the OS numbers it, with 0
+  kept back to mean "no socket". There is no struct and no Result -- a handle
+  is all a raw socket is, and 0-on-failure is the shape os.spawn already uses.
+  tcp.connect(host, port)  - Dial out; returns a handle, 0 on failure
+  tcp.listen(port)         - Listen on every interface; returns a handle, 0 on failure
+  tcp.accept(listener)     - Wait for one connection; returns its handle, 0 on failure
+  tcp.send(handle, data)   - Write all of data; returns the bytes written
+  tcp.recv(handle)         - Read what has arrived, up to 64K; returns a string
+  tcp.recv(handle, max)    - Same, capped at max bytes
+  tcp.port(handle)         - The port this end is on (0 on failure)
+  tcp.close(handle)        - Close it; returns 1
+  Use: let c = tcp.connect("example.com", 7);
+       if (c) {
+           tcp.send(c, "ping\n");
+           io.println(tcp.recv(c));
+           tcp.close(c);
+       }
+  Use: let l = tcp.listen(5000);
+       while (true) {
+           let peer = tcp.accept(l);
+           tcp.send(peer, "welcome\n");
+           tcp.close(peer);
+       }
+
+  tcp.listen binds every interface (0.0.0.0), unlike http.localhost, which is
+  loopback-only: a game server is meant to be reached. tcp.listen(0) asks the
+  OS for a free port, and tcp.port(listener) says which one it picked -- so a
+  program never has to guess.
+  tcp.recv is one read, not a full one. TCP is a stream, and a send does not
+  arrive as a send: what comes back is whatever had turned up, so a program
+  that needs a whole message reads until it has one. The bytes are binary-safe
+  the way os.load is -- a \0 in the middle is data, not an end. An empty
+  string means the peer hung up (or the read failed); there is no third
+  answer, so a read loop ends on "".
+  tcp.send writes all of data, so its count is the whole string on success. A
+  short count is a broken connection.
+  A handle is a handle, not a value: close it once, and a closed one is spent
+  the way any use-after-close is. Both ends of tcp.connect/tcp.accept are
+  blocking.
+  A program carries only the half it calls: tcp.connect and tcp.listen/accept
+  are emitted independently, so a program that only serves carries no name
+  resolution.
+  Not available on wasm: a page has no socket to open, so every call there
+  returns 0 (or "") rather than pretending to have reached the network.
+  std/thread runs an accept loop beside the rest of a program, the same way it
+  does for http.localhost.
+
 #include <std/json>
   Nested JSON objects and arrays (not a flat string map).
   Type: Json  (also accepted as json)
