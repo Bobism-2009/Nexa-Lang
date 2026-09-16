@@ -123,6 +123,25 @@ fn main() {
     "__nexa_gfx_line(1, 2, 3, 4, 10, 11, 12)" \
     "__nexa_gfx_line_thick(1, 2, 3, 4, 10, 11, 12, 7)"
 
+# The arcs and the rounded rectangles (BOB-40). The two angles are the only
+# non-integer arguments any shape takes, so a fractional one has to survive the
+# trip into the generated C++ rather than being truncated on the way.
+expect_emit "dispatch: arcs and rounded rectangles" \
+'#include <std/gfx>
+fn main() {
+    gfx.arc(1, 2, 3, 0, 90, 10, 11, 12);
+    gfx.pie(1, 2, 3, 45, 315, 10, 11, 12);
+    gfx.arc(1, 2, 3, 22.5, 67.5, 10, 11, 12);
+    gfx.round_rect(1, 2, 30, 40, 5, 10, 11, 12);
+    gfx.fill_round_rect(1, 2, 30, 40, 5, 10, 11, 12);
+}
+' \
+    "__nexa_gfx_arc(1, 2, 3, 0, 90, 10, 11, 12)" \
+    "__nexa_gfx_pie(1, 2, 3, 45, 315, 10, 11, 12)" \
+    "__nexa_gfx_arc(1, 2, 3, 22.5, 67.5, 10, 11, 12)" \
+    "__nexa_gfx_round_rect(1, 2, 30, 40, 5, 10, 11, 12)" \
+    "__nexa_gfx_fill_round_rect(1, 2, 30, 40, 5, 10, 11, 12)"
+
 # gfx.poly / gfx.fill_poly report whether they drew, so they have to be usable
 # as a value, not only as a statement.
 expect_emit "dispatch: poly is an int expression" \
@@ -155,6 +174,22 @@ fn main() {
 }
 ' \
     "gfx.circle(cx, cy, rad, r, g, b)"
+
+expect_reject "reject: gfx.arc without its second angle" \
+'#include <std/gfx>
+fn main() {
+    gfx.arc(1, 2, 3, 90, 10, 11, 12);
+}
+' \
+    "gfx.arc(cx, cy, rad, a0, a1, r, g, b)"
+
+expect_reject "reject: gfx.fill_round_rect without a radius" \
+'#include <std/gfx>
+fn main() {
+    gfx.fill_round_rect(1, 2, 30, 40, 10, 11, 12);
+}
+' \
+    "gfx.fill_round_rect(x, y, w, h, rad, r, g, b)"
 
 expect_reject "reject: gfx.line with two thicknesses" \
 '#include <std/gfx>
@@ -352,6 +387,118 @@ int main() {
     __nexa_gfx_ellipse(6, 3, 5, 2, WHITE, WHITE, WHITE);
     art("ellipse");
 
+    // --- arcs and pies ------------------------------------------------------
+    // 0 is straight up and the sweep runs clockwise, so 0..90 is the quarter
+    // from twelve o'clock round to three.
+    fb_open(13, 13);
+    __nexa_gfx_arc(6, 6, 5, 0, 90, WHITE, WHITE, WHITE);
+    art("arc_quarter");
+
+    // An arc of a whole turn is the circle, pixel for pixel: the sweep only
+    // ever removes pixels from the one gfx.circle draws.
+    fb_open(13, 13);
+    __nexa_gfx_arc(6, 6, 5, 0, 360, WHITE, WHITE, WHITE);
+    std::vector<unsigned char> whole_arc = snapshot();
+    __nexa_gfx_clear(0, 0, 0);
+    __nexa_gfx_circle(6, 6, 5, WHITE, WHITE, WHITE);
+    same("arc_full_turn_is_circle", whole_arc, snapshot());
+    // More than a whole turn is the same circle, not a second lap.
+    __nexa_gfx_clear(0, 0, 0);
+    __nexa_gfx_arc(6, 6, 5, -180, 900, WHITE, WHITE, WHITE);
+    same("arc_over_a_turn_is_circle", whole_arc, snapshot());
+
+    // A sweep that runs past 360 keeps going round: 270..450 is the quarter
+    // before twelve and the quarter after it, in one piece.
+    fb_open(13, 13);
+    __nexa_gfx_arc(6, 6, 5, 270, 450, WHITE, WHITE, WHITE);
+    art("arc_across_zero");
+
+    // A sweep that does not advance is nothing at all -- including the one an
+    // unsorted pair of angles gives.
+    fb_open(13, 13);
+    __nexa_gfx_arc(6, 6, 5, 90, 90, WHITE, WHITE, WHITE);
+    __nexa_gfx_arc(6, 6, 5, 180, 90, WHITE, WHITE, WHITE);
+    __nexa_gfx_pie(6, 6, 5, 90, 90, WHITE, WHITE, WHITE);
+    __nexa_gfx_pie(6, 6, 5, 180, 90, WHITE, WHITE, WHITE);
+    std::printf("empty_sweep=%d,%d\n", __nexa_gfx_get(6, 1), __nexa_gfx_get(6, 6));
+
+    fb_open(13, 13);
+    __nexa_gfx_pie(6, 6, 5, 0, 90, WHITE, WHITE, WHITE);
+    art("pie_quarter");
+
+    // Wider than half a turn, which the sweep test answers by asking about the
+    // piece it leaves out instead.
+    fb_open(13, 13);
+    __nexa_gfx_pie(6, 6, 5, 0, 270, WHITE, WHITE, WHITE);
+    art("pie_three_quarters");
+
+    fb_open(13, 13);
+    __nexa_gfx_pie(6, 6, 5, 0, 360, WHITE, WHITE, WHITE);
+    std::vector<unsigned char> whole_pie = snapshot();
+    __nexa_gfx_clear(0, 0, 0);
+    __nexa_gfx_fill_circle(6, 6, 5, WHITE, WHITE, WHITE);
+    same("pie_full_turn_is_fill_circle", whole_pie, snapshot());
+
+    // --- rounded rectangles -------------------------------------------------
+    fb_open(14, 10);
+    __nexa_gfx_fill_round_rect(1, 1, 12, 8, 3, WHITE, WHITE, WHITE);
+    art("fill_round_rect");
+
+    fb_open(14, 10);
+    __nexa_gfx_round_rect(1, 1, 12, 8, 3, WHITE, WHITE, WHITE);
+    art("round_rect");
+
+    // A radius of 0 is the square-cornered shape exactly -- not nearly.
+    fb_open(14, 10);
+    __nexa_gfx_round_rect(1, 1, 12, 8, 0, WHITE, WHITE, WHITE);
+    std::vector<unsigned char> square_outline = snapshot();
+    __nexa_gfx_clear(0, 0, 0);
+    __nexa_gfx_rect(1, 1, 12, 8, WHITE, WHITE, WHITE);
+    same("round_rect_rad0_is_rect", square_outline, snapshot());
+    __nexa_gfx_clear(0, 0, 0);
+    __nexa_gfx_fill_round_rect(1, 1, 12, 8, 0, WHITE, WHITE, WHITE);
+    std::vector<unsigned char> square_filled = snapshot();
+    __nexa_gfx_clear(0, 0, 0);
+    __nexa_gfx_fill(1, 1, 12, 8, WHITE, WHITE, WHITE);
+    same("fill_round_rect_rad0_is_fill", square_filled, snapshot());
+    // A negative radius is a square corner too, not a shape turned inside out.
+    __nexa_gfx_clear(0, 0, 0);
+    __nexa_gfx_fill_round_rect(1, 1, 12, 8, -4, WHITE, WHITE, WHITE);
+    same("fill_round_rect_negative_rad_is_fill", square_filled, snapshot());
+
+    // Negative w/h flip the way gfx.fill's do: the same box, measured from the
+    // far corner.
+    fb_open(14, 10);
+    __nexa_gfx_fill_round_rect(1, 1, 12, 8, 3, WHITE, WHITE, WHITE);
+    std::vector<unsigned char> round_positive = snapshot();
+    __nexa_gfx_clear(0, 0, 0);
+    __nexa_gfx_fill_round_rect(13, 9, -12, -8, 3, WHITE, WHITE, WHITE);
+    same("round_rect_negative_matches", round_positive, snapshot());
+
+    // The radius is clamped, so an absurd one is the roundest the box allows:
+    // on a square of odd side that is precisely the circle.
+    fb_open(11, 11);
+    __nexa_gfx_fill_round_rect(0, 0, 11, 11, 2000000000, WHITE, WHITE, WHITE);
+    std::vector<unsigned char> stadium = snapshot();
+    __nexa_gfx_clear(0, 0, 0);
+    __nexa_gfx_fill_circle(5, 5, 5, WHITE, WHITE, WHITE);
+    same("round_rect_max_rad_is_circle", stadium, snapshot());
+
+    // On an even side the corners would have to share a pixel, so the clamp
+    // stops one short of half and the shape still has a flat middle.
+    fb_open(8, 8);
+    __nexa_gfx_fill_round_rect(0, 0, 8, 8, 4, WHITE, WHITE, WHITE);
+    art("round_rect_even_max");
+
+    // A box too small to round at all.
+    fb_open(5, 5);
+    __nexa_gfx_fill_round_rect(1, 1, 1, 1, 4, WHITE, WHITE, WHITE);
+    std::printf("round_rect_1x1=%d,%d\n", __nexa_gfx_get(1, 1), __nexa_gfx_get(2, 1));
+    __nexa_gfx_clear(0, 0, 0);
+    __nexa_gfx_fill_round_rect(1, 1, 3, 0, 1, WHITE, WHITE, WHITE);
+    __nexa_gfx_round_rect(1, 1, 0, 3, 1, WHITE, WHITE, WHITE);
+    std::printf("round_rect_zero_side=%d\n", __nexa_gfx_get(1, 1));
+
     // --- triangles ----------------------------------------------------------
     fb_open(12, 8);
     __nexa_gfx_fill_tri(1, 1, 9, 1, 5, 6, WHITE, WHITE, WHITE);
@@ -467,6 +614,12 @@ int main() {
     __nexa_gfx_fill_tri(-2000000000, -2000000000, 2000000000, -2000000000, 0, 2000000000,
                         WHITE, WHITE, WHITE);
     __nexa_gfx_line_thick(-2000000000, 8, 2000000000, 8, WHITE, WHITE, WHITE, 100000);
+    __nexa_gfx_arc(8, 8, 2000000000, 0, 90, WHITE, WHITE, WHITE);
+    __nexa_gfx_pie(8, 8, 2000000000, 0, 359, WHITE, WHITE, WHITE);
+    __nexa_gfx_round_rect(-2000000000, -2000000000, 2000000000, 2000000000, 1000000,
+                          WHITE, WHITE, WHITE);
+    __nexa_gfx_fill_round_rect(-2000000000, -2000000000, 2000000000, 2000000000, 1000000,
+                               WHITE, WHITE, WHITE);
     std::printf("extremes=done\n");
 
     // --- with no framebuffer at all (window closed or never opened) ---------
@@ -479,6 +632,10 @@ int main() {
     __nexa_gfx_tri(0, 0, 1, 1, 2, 2, WHITE, WHITE, WHITE);
     __nexa_gfx_fill_tri(0, 0, 1, 1, 2, 2, WHITE, WHITE, WHITE);
     __nexa_gfx_line_thick(0, 0, 4, 4, WHITE, WHITE, WHITE, 3);
+    __nexa_gfx_arc(0, 0, 2, 0, 90, WHITE, WHITE, WHITE);
+    __nexa_gfx_pie(0, 0, 2, 0, 90, WHITE, WHITE, WHITE);
+    __nexa_gfx_round_rect(0, 0, 4, 4, 1, WHITE, WHITE, WHITE);
+    __nexa_gfx_fill_round_rect(0, 0, 4, 4, 1, WHITE, WHITE, WHITE);
     {
         std::vector<int> xs = {0, 4, 2};
         std::vector<int> ys = {0, 0, 4};
@@ -570,6 +727,104 @@ ellipse
 ..####.####..
 ......#......
 .............
+arc_quarter
+.............
+......#......
+.......###...
+..........#..
+..........#..
+..........#..
+...........#.
+.............
+.............
+.............
+.............
+.............
+.............
+arc_full_turn_is_circle=yes
+arc_over_a_turn_is_circle=yes
+arc_across_zero
+.............
+......#......
+...###.###...
+..#.......#..
+..#.......#..
+..#.......#..
+.#.........#.
+.............
+.............
+.............
+.............
+.............
+.............
+empty_sweep=0,0
+pie_quarter
+.............
+......#......
+......####...
+......#####..
+......#####..
+......#####..
+......######.
+.............
+.............
+.............
+.............
+.............
+.............
+pie_three_quarters
+.............
+......#......
+......####...
+......#####..
+......#####..
+......#####..
+.###########.
+..#########..
+..#########..
+..#########..
+...#######...
+......#......
+.............
+pie_full_turn_is_fill_circle=yes
+fill_round_rect
+..............
+....######....
+..##########..
+..##########..
+.############.
+.############.
+..##########..
+..##########..
+....######....
+..............
+round_rect
+..............
+....######....
+..##......##..
+..#........#..
+.#..........#.
+.#..........#.
+..#........#..
+..##......##..
+....######....
+..............
+round_rect_rad0_is_rect=yes
+fill_round_rect_rad0_is_fill=yes
+fill_round_rect_negative_rad_is_fill=yes
+round_rect_negative_matches=yes
+round_rect_max_rad_is_circle=yes
+round_rect_even_max
+...##...
+.######.
+.######.
+########
+########
+.######.
+.######.
+...##...
+round_rect_1x1=16777215,0
+round_rect_zero_side=0
 fill_tri
 ............
 .########...

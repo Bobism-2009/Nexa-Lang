@@ -2326,7 +2326,8 @@ private:
                     || e.value == "text_size" || e.value == "text" || e.value == "text_width"
                     || e.value == "text_height" || e.value == "get"
                     || e.value == "image" || e.value == "decode" || e.value == "image_w"
-                    || e.value == "image_h" || e.value == "blit"
+                    || e.value == "image_h" || e.value == "blit" || e.value == "blit_rot"
+                    || e.value == "icon" || e.value == "cursor"
                     || e.value == "alpha" || e.value == "save"
                     || e.value == "sound" || e.value == "play" || e.value == "loop"
                     || e.value == "stop" || e.value == "volume"
@@ -5976,6 +5977,13 @@ private:
                 if (fn == "ellipse" || fn == "fill_ellipse") {
                     return "__nexa_gfx_" + fn + "(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + a(4) + ", " + a(5) + ", " + a(6) + ")";
                 }
+                // The two angles are the only non-integer arguments any shape
+                // takes; the runtime reads them as double, so 45 and 45.5 both
+                // arrive as themselves.
+                if (fn == "arc" || fn == "pie" || fn == "round_rect" || fn == "fill_round_rect") {
+                    return "__nexa_gfx_" + fn + "(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " +
+                        a(4) + ", " + a(5) + ", " + a(6) + ", " + a(7) + ")";
+                }
                 if (fn == "tri" || fn == "fill_tri") {
                     return "__nexa_gfx_" + fn + "(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + a(4) + ", " +
                         a(5) + ", " + a(6) + ", " + a(7) + ", " + a(8) + ")";
@@ -6067,6 +6075,31 @@ private:
                         return "__nexa_gfx_blit_path(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + dw + ", " + dh + ", " + sx + ", " + sy + ", " + sw + ", " + sh + ")";
                     }
                     return "__nexa_gfx_blit(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + dw + ", " + dh + ", " + sx + ", " + sy + ", " + sw + ", " + sh + ")";
+                }
+                if (fn == "blit_rot") {
+                    // 0 for an omitted destination size is the same "native
+                    // size" sentinel gfx.blit uses.
+                    std::string dw = "0", dh = "0";
+                    if (e.children.size() >= 6) {
+                        dw = a(4);
+                        dh = a(5);
+                    }
+                    std::string base = "(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + dw + ", " + dh + ")";
+                    if (inferExprNexaType(e.children[2]) == "string") {
+                        return "__nexa_gfx_blit_rot_path" + base;
+                    }
+                    return "__nexa_gfx_blit_rot" + base;
+                }
+                if (fn == "icon") {
+                    if (inferExprNexaType(e.children[0]) == "string") {
+                        return "__nexa_gfx_icon_path(" + a(0) + ")";
+                    }
+                    return "__nexa_gfx_icon(" + a(0) + ")";
+                }
+                if (fn == "cursor") {
+                    // -1 means "report the state", the way gfx.fullscreen's does.
+                    std::string v = e.children.empty() ? "-1" : a(0);
+                    return "__nexa_gfx_cursor(" + v + ")";
                 }
                 throw std::runtime_error("Internal: unknown gfx method '" + fn + "'");
             }
@@ -6596,6 +6629,14 @@ private:
             cppUsage.gfxShapesFill = true;
         } else if (fn == "circle" || fn == "ellipse" || fn == "tri" || fn == "poly") {
             cppUsage.gfxShapesOutline = true;
+        } else if (fn == "arc") {
+            cppUsage.gfxArc = true;
+        } else if (fn == "pie") {
+            cppUsage.gfxPie = true;
+        } else if (fn == "round_rect") {
+            cppUsage.gfxRoundRect = true;
+        } else if (fn == "fill_round_rect") {
+            cppUsage.gfxFillRoundRect = true;
         } else if (fn == "line") {
             // An eighth argument is the thickness, which is a different rasterizer.
             if (n.children.size() >= 8) cppUsage.gfxLineThick = true;
@@ -6620,6 +6661,16 @@ private:
             // get its handle from gfx.image or gfx.decode, which set the flag anyway.
             cppUsage.gfxImage = true;
             cppUsage.gfxBlit = true;
+        } else if (fn == "blit_rot") {
+            // Same reasoning as gfx.blit: the path overload loads the file
+            // itself, and which overload this is resolves too late to tell.
+            cppUsage.gfxImage = true;
+            cppUsage.gfxBlitRot = true;
+        } else if (fn == "icon") {
+            cppUsage.gfxImage = true;
+            cppUsage.gfxIcon = true;
+        } else if (fn == "cursor") {
+            cppUsage.gfxCursor = true;
         } else if (fn == "image_w" || fn == "image_h") {
             cppUsage.gfxImageStore = true;
         } else if (fn == "save") {

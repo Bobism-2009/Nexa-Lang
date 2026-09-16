@@ -157,7 +157,7 @@ fn main() {
     gfx.opacity(128);
 }
 ' \
-    "blit, alpha, save"
+    "blit, blit_rot, alpha, save"
 
 # The display-level test and the demo cannot run here -- linking std/gfx pulls
 # in the window backend -- but they can still be held to compiling, so neither
@@ -193,11 +193,11 @@ if [ -z "$CXX" ]; then
     exit 1
 fi
 
-awk '/\[nexa:(rasterizers|imgstore|blit|screenshot)-begin\]/ { taking = 1; next }
-     /\[nexa:(rasterizers|imgstore|blit|screenshot)-end\]/   { taking = 0 }
+awk '/\[nexa:(rasterizers|imgstore|blit|blitrot|screenshot)-begin\]/ { taking = 1; next }
+     /\[nexa:(rasterizers|imgstore|blit|blitrot|screenshot)-end\]/   { taking = 0 }
      taking' "$HEADER" > "$WORK/lifted.inc"
 
-for want in __nexa_gfx_alpha_set __nexa_gfx_put_a __nexa_gfx_blit __nexa_gfx_save; do
+for want in __nexa_gfx_alpha_set __nexa_gfx_put_a __nexa_gfx_blit __nexa_gfx_blit_rot __nexa_gfx_save; do
     if ! grep -q "$want" "$WORK/lifted.inc"; then
         echo "FAIL pixels: could not lift $want out of include/GfxRuntime.hpp"
         echo "     (the [nexa:...-begin] / [nexa:...-end] markers moved)"
@@ -269,6 +269,27 @@ static void row(const char* label, int y) {
         std::printf(" %d", c < 0 ? -1 : (c & 0xFF));
     }
     std::putchar('\n');
+}
+
+// Rows of a shape as "first drawn column, last drawn column, how many drawn":
+// enough to say whether a rotated sprite is solid without pinning every pixel
+// of it, which for an angle that is not a quarter turn depends on the last bit
+// of the platform's std::sin.
+static void runs(const char* label) {
+    int gaps = 0;
+    int drawn = 0;
+    for (int y = 0; y < __nexa_g.h; y++) {
+        int first = -1, last = -1, n = 0;
+        for (int x = 0; x < __nexa_g.w; x++) {
+            if (__nexa_gfx_get(x, y) == 0) continue;
+            if (first < 0) first = x;
+            last = x;
+            n++;
+        }
+        if (n > 0 && last - first + 1 != n) gaps++;
+        drawn += n;
+    }
+    std::printf("%s: drawn=%s gaps=%d\n", label, drawn > 0 ? "some" : "none", gaps);
 }
 
 static void col(const char* label, int x) {
@@ -509,6 +530,116 @@ int main(int argc, char** argv) {
     __nexa_gfx_blit(-2, 0, hramp, -4, 0, 0, 0, 0, 0);
     row("blit_flip_clipped", 0);
 
+    // --- rotated blits -------------------------------------------------------
+    // No turn at all has to be gfx.blit to the byte, for every form of it:
+    // native size, scaled, and mirrored. That is what makes gfx.blit_rot a
+    // generalisation of gfx.blit rather than a second, subtly different
+    // sampler that happens to agree in the middle.
+    fb_open(8, 4);
+    __nexa_gfx_blit(1, 1, q, 0, 0, 0, 0, 0, 0);
+    std::vector<unsigned char> plain = snapshot();
+    fb_open(8, 4);
+    std::printf("blit_rot_drew=%d\n", __nexa_gfx_blit_rot(1, 1, q, 0, 0, 0));
+    same("blit_rot0_is_blit", plain, snapshot());
+
+    fb_open(8, 4);
+    __nexa_gfx_blit(1, 1, q, 4, 3, 0, 0, 0, 0);
+    std::vector<unsigned char> scaled = snapshot();
+    fb_open(8, 4);
+    __nexa_gfx_blit_rot(1, 1, q, 0, 4, 3);
+    same("blit_rot0_scaled_is_blit", scaled, snapshot());
+
+    fb_open(8, 4);
+    __nexa_gfx_blit(1, 1, q, -4, -3, 0, 0, 0, 0);
+    std::vector<unsigned char> mirrored = snapshot();
+    fb_open(8, 4);
+    __nexa_gfx_blit_rot(1, 1, q, 0, -4, -3);
+    same("blit_rot0_mirrored_is_blit", mirrored, snapshot());
+
+    // A whole turn, and a turn the other way, are the same picture: the angle
+    // is reduced before anything is drawn.
+    fb_open(8, 4);
+    __nexa_gfx_blit_rot(1, 1, q, 360, 0, 0);
+    same("blit_rot360_is_rot0", plain, snapshot());
+    fb_open(8, 4);
+    __nexa_gfx_blit_rot(1, 1, q, -720, 0, 0);
+    same("blit_rot_minus720_is_rot0", plain, snapshot());
+
+    // The quarter turns, which are exact: the 2x2 above reads 1 2 / 3 4, so a
+    // quarter turn clockwise has to read 3 1 / 4 2 and never anything between.
+    fb_open(2, 2);
+    __nexa_gfx_blit_rot(0, 0, q, 90, 0, 0);
+    row("blit_rot90_top", 0);
+    row("blit_rot90_bottom", 1);
+    fb_open(2, 2);
+    __nexa_gfx_blit_rot(0, 0, q, 180, 0, 0);
+    row("blit_rot180_top", 0);
+    row("blit_rot180_bottom", 1);
+    fb_open(2, 2);
+    __nexa_gfx_blit_rot(0, 0, q, 270, 0, 0);
+    row("blit_rot270_top", 0);
+    row("blit_rot270_bottom", 1);
+    // -90 is 270, and 450 is 90.
+    fb_open(2, 2);
+    __nexa_gfx_blit_rot(0, 0, q, -90, 0, 0);
+    std::vector<unsigned char> at270 = snapshot();
+    fb_open(2, 2);
+    __nexa_gfx_blit_rot(0, 0, q, 270, 0, 0);
+    same("blit_rot_minus90_is_270", at270, snapshot());
+    fb_open(2, 2);
+    __nexa_gfx_blit_rot(0, 0, q, 450, 0, 0);
+    std::vector<unsigned char> at450 = snapshot();
+    fb_open(2, 2);
+    __nexa_gfx_blit_rot(0, 0, q, 90, 0, 0);
+    same("blit_rot450_is_90", at450, snapshot());
+
+    // The whole point of inverse mapping: whatever the angle, the sprite lands
+    // solid. A forward mapping scatters source pixels and leaves gaps between
+    // them, which would show up here as a row drawn in two pieces.
+    {
+        unsigned char solid9[9 * 9 * 4];
+        for (size_t i = 0; i < sizeof(solid9); i += 4) {
+            solid9[i + 0] = 200;
+            solid9[i + 1] = 210;
+            solid9[i + 2] = 220;
+            solid9[i + 3] = 255;
+        }
+        int sq = make_img(9, 9, solid9);
+        const double angles[6] = {17.0, 33.5, 45.0, 60.0, 123.75, 301.0};
+        for (int i = 0; i < 6; i++) {
+            fb_open(21, 21);
+            __nexa_gfx_blit_rot(6, 6, sq, angles[i], 0, 0);
+            char label[64];
+            std::snprintf(label, sizeof(label), "blit_rot_solid_%d", i);
+            runs(label);
+        }
+        // Scaled up as well as turned -- the case a naive sampler tears worst.
+        fb_open(41, 41);
+        __nexa_gfx_blit_rot(4, 4, sq, 21.0, 32, 32);
+        runs("blit_rot_solid_scaled");
+        // At 45 degrees the corners of the bounding box are outside the sprite,
+        // so a turn really happened rather than a straight copy.
+        fb_open(21, 21);
+        __nexa_gfx_blit_rot(6, 6, sq, 45.0, 0, 0);
+        std::printf("blit_rot45_corners=%d,%d\n", __nexa_gfx_get(6, 6), __nexa_gfx_get(14, 14));
+        std::printf("blit_rot45_centre=%06X\n", (unsigned)__nexa_gfx_get(10, 10));
+    }
+
+    // Alpha works the way it does for a straight blit: the image's own channel
+    // first, then gfx.alpha(). A quarter turn stands the 4x1 strip on end, so
+    // the numbers are the same four read downwards -- and, since the box turns
+    // about its own centre, a strip laid across (2,4) ends up in column 4.
+    fb_open(8, 8);
+    __nexa_gfx_alpha_set(255);
+    __nexa_gfx_blit_rot(2, 4, img, 90, 0, 0);
+    col("blit_rot_alpha", 4);
+    fb_open(4, 1);
+    __nexa_gfx_alpha_set(0);
+    std::vector<unsigned char> before_rot = snapshot();
+    __nexa_gfx_blit_rot(0, 0, img, 45, 0, 0);
+    same("blit_rot_alpha0_draws_nothing", before_rot, snapshot());
+    __nexa_gfx_alpha_set(255);
+
     // --- blits that must not run away ---------------------------------------
     // Destinations the size of the coordinate space, and INT_MIN, which is the
     // one value that cannot simply be negated.
@@ -519,6 +650,16 @@ int main(int argc, char** argv) {
     std::printf("blit_far_away=%d\n", __nexa_gfx_blit(2000000000, 2000000000, hramp, 0, 0, 0, 0, 0, 0));
     std::printf("blit_far_negative=%d\n", __nexa_gfx_blit(-2000000000, -2000000000, hramp, 0, 0, 0, 0, 0, 0));
     std::printf("blit_bad_handle=%d\n", __nexa_gfx_blit(0, 0, 9999, 0, 0, 0, 0, 0, 0));
+    // Same for the rotated one, at an angle that gives the bounding box its
+    // largest spread, plus the angles that are not numbers at all.
+    std::printf("blit_rot_huge=%d\n", __nexa_gfx_blit_rot(0, 0, hramp, 45.0, 2000000000, 2000000000));
+    std::printf("blit_rot_huge_flipped=%d\n", __nexa_gfx_blit_rot(0, 0, hramp, 45.0, -2000000000, -2000000000));
+    std::printf("blit_rot_int_min=%d\n", __nexa_gfx_blit_rot(0, 0, hramp, 45.0, (-2147483647 - 1), (-2147483647 - 1)));
+    std::printf("blit_rot_far_away=%d\n", __nexa_gfx_blit_rot(2000000000, 2000000000, hramp, 45.0, 0, 0));
+    std::printf("blit_rot_far_negative=%d\n", __nexa_gfx_blit_rot(-2000000000, -2000000000, hramp, 45.0, 0, 0));
+    std::printf("blit_rot_bad_handle=%d\n", __nexa_gfx_blit_rot(0, 0, 9999, 45.0, 0, 0));
+    std::printf("blit_rot_huge_angle=%d\n", __nexa_gfx_blit_rot(0, 0, hramp, 1e300, 0, 0));
+    std::printf("blit_rot_nan_angle=%d\n", __nexa_gfx_blit_rot(0, 0, hramp, std::nan(""), 0, 0));
     std::printf("extremes=done\n");
 
     // --- gfx.save ------------------------------------------------------------
@@ -578,6 +719,7 @@ int main(int argc, char** argv) {
     __nexa_gfx_plot(0, 0, 255, 255, 255);
     __nexa_gfx_fill(0, 0, 4, 4, 255, 255, 255);
     std::printf("closed_blit=%d\n", __nexa_gfx_blit(0, 0, img, 0, 0, 0, 0, 0, 0));
+    std::printf("closed_blit_rot=%d\n", __nexa_gfx_blit_rot(0, 0, img, 45, 0, 0));
     std::printf("closed_save=%d\n", __nexa_gfx_save(dir + "/closed.bmp"));
     std::printf("closed=no-op\n");
     return 0;
@@ -627,12 +769,45 @@ blit_box_plain: 0 0 10 20 30 40 0 0
 blit_box_flipped: 0 0 40 30 20 10 0 0
 blit_flip_scaled_subrect: 30 30 20 20
 blit_flip_clipped: 20 10 0 0
+blit_rot_drew=1
+blit_rot0_is_blit=yes
+blit_rot0_scaled_is_blit=yes
+blit_rot0_mirrored_is_blit=yes
+blit_rot360_is_rot0=yes
+blit_rot_minus720_is_rot0=yes
+blit_rot90_top: 3 1
+blit_rot90_bottom: 4 2
+blit_rot180_top: 4 3
+blit_rot180_bottom: 2 1
+blit_rot270_top: 2 4
+blit_rot270_bottom: 1 3
+blit_rot_minus90_is_270=yes
+blit_rot450_is_90=yes
+blit_rot_solid_0: drawn=some gaps=0
+blit_rot_solid_1: drawn=some gaps=0
+blit_rot_solid_2: drawn=some gaps=0
+blit_rot_solid_3: drawn=some gaps=0
+blit_rot_solid_4: drawn=some gaps=0
+blit_rot_solid_5: drawn=some gaps=0
+blit_rot_solid_scaled: drawn=some gaps=0
+blit_rot45_corners=0,0
+blit_rot45_centre=C8D2DC
+blit_rot_alpha: 0 0 255 128 0 255 0 0
+blit_rot_alpha0_draws_nothing=yes
 blit_huge=1
 blit_huge_flipped=1
 blit_int_min=1
 blit_far_away=0
 blit_far_negative=0
 blit_bad_handle=0
+blit_rot_huge=0
+blit_rot_huge_flipped=0
+blit_rot_int_min=0
+blit_rot_far_away=0
+blit_rot_far_negative=0
+blit_rot_bad_handle=0
+blit_rot_huge_angle=1
+blit_rot_nan_angle=1
 extremes=done
 save=1
 save_size=78
@@ -651,6 +826,7 @@ save_empty_path=0
 save_bad_dir=0
 closed_alpha=128
 closed_blit=0
+closed_blit_rot=0
 closed_save=0
 closed=no-op
 WANT

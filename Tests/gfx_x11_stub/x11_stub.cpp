@@ -127,6 +127,21 @@ int XChangeProperty(Display* d, Window w, Atom pr, Atom t, int f, int m,
                     const unsigned char* data, int n) {
     (void)d; (void)w; (void)pr; (void)t; (void)f; (void)m; (void)data; (void)n; return 0;
 }
+/* The invisible cursor gfx.cursor(0) makes. Handing back a fixed non-zero id
+   is enough for the runtime to believe it has one and to free it again. */
+Pixmap XCreateBitmapFromData(Display* d, Drawable dr, const char* data,
+                             unsigned int w, unsigned int h) {
+    (void)d; (void)dr; (void)data; (void)w; (void)h; return (Pixmap)0x2201;
+}
+Cursor XCreatePixmapCursor(Display* d, Pixmap source, Pixmap mask,
+                           XColor* fg, XColor* bg, unsigned int x, unsigned int y) {
+    (void)d; (void)source; (void)mask; (void)fg; (void)bg; (void)x; (void)y;
+    return (Cursor)0x2202;
+}
+int XDefineCursor(Display* d, Window w, Cursor c) { (void)d; (void)w; (void)c; return 0; }
+int XUndefineCursor(Display* d, Window w) { (void)d; (void)w; return 0; }
+int XFreeCursor(Display* d, Cursor c) { (void)d; (void)c; return 0; }
+int XFreePixmap(Display* d, Pixmap p) { (void)d; (void)p; return 0; }
 Status XGetWindowAttributes(Display* d, Window w, XWindowAttributes* a) {
     (void)d; (void)w; if (a) memset(a, 0, sizeof(*a)); return 0;
 }

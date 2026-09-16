@@ -101,6 +101,10 @@ public:
         bool gfxGet = false;
         bool gfxShapesFill = false;
         bool gfxShapesOutline = false;
+        bool gfxArc = false;
+        bool gfxPie = false;
+        bool gfxRoundRect = false;
+        bool gfxFillRoundRect = false;
         bool gfxLine = false;
         bool gfxLineThick = false;
         bool gfxText = false;
@@ -110,10 +114,13 @@ public:
         bool gfxWheel = false;
         bool gfxImageStore = false;
         bool gfxBlit = false;
+        bool gfxBlitRot = false;
+        bool gfxIcon = false;
         bool gfxSave = false;
         bool gfxDialogs = false;
         bool gfxAudio = false;
         bool gfxSound = false;
+        bool gfxCursor = false;
         bool gfxWindow = false;
         bool json = false;
         bool result = false;
@@ -1447,6 +1454,10 @@ public:
             need.get = usage.gfxGet;
             need.shapesFill = usage.gfxShapesFill;
             need.shapesOutline = usage.gfxShapesOutline;
+            need.arc = usage.gfxArc;
+            need.pie = usage.gfxPie;
+            need.roundRect = usage.gfxRoundRect;
+            need.fillRoundRect = usage.gfxFillRoundRect;
             need.line = usage.gfxLine;
             need.lineThick = usage.gfxLineThick;
             need.text = usage.gfxText;
@@ -1457,17 +1468,20 @@ public:
             need.imageStore = usage.gfxImageStore;
             need.imageLoad = usage.gfxImage;
             need.blit = usage.gfxBlit;
+            need.blitRot = usage.gfxBlitRot;
+            need.icon = usage.gfxIcon;
             need.save = usage.gfxSave;
             need.dialogs = usage.gfxDialogs;
             need.audio = usage.gfxAudio;
             need.sound = usage.gfxSound;
+            need.cursor = usage.gfxCursor;
             need.window = usage.gfxWindow;
             // Cross-group dependency, the same way hmac pulls in sha256: a blit
             // needs the table it blits out of, and loading an image needs
             // somewhere to put what it loaded. (A blit already implies the load:
             // the usage scan counts every gfx.blit as one, because a path blit
             // decodes the file itself.)
-            if (need.blit || need.imageLoad) need.imageStore = true;
+            if (need.blit || need.blitRot || need.icon || need.imageLoad) need.imageStore = true;
             // The mixer's output goes out through gfx.sample's enqueue path and
             // it opens the stream itself, so a program that only says gfx.play
             // still carries the platform audio block underneath it.

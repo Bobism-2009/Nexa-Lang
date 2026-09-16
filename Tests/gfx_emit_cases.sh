@@ -155,6 +155,22 @@ expect_decoder "path_blit_has_the_decoder" \
 expect_decoder "handle_blit_has_the_decoder" \
     '    let i: int = gfx.image("a.png");
     gfx.blit(0, 0, i);'
+# gfx.blit_rot and gfx.icon take a path exactly the way gfx.blit does, so they
+# have to count as a load for exactly the same reason.
+expect_decoder "path_blit_rot_has_the_decoder" \
+    '    gfx.blit_rot(0, 0, "a.png", 45);'
+expect_decoder "path_icon_has_the_decoder" \
+    '    let ok: int = gfx.icon("a.png");'
+
+# The window polish that touches no image at all still must not drag the
+# decoder in behind it.
+expect_no_decoder "cursor_alone_has_no_decoder" \
+    '    let c: int = gfx.cursor(0);'
+expect_no_decoder "arcs_and_round_rects_have_no_decoder" \
+    '    gfx.arc(1, 1, 3, 0, 90, 1, 2, 3);
+    gfx.pie(1, 1, 3, 0, 90, 1, 2, 3);
+    gfx.round_rect(0, 0, 4, 4, 1, 1, 2, 3);
+    gfx.fill_round_rect(0, 0, 4, 4, 1, 1, 2, 3);'
 
 # Both targets that append the blob have to slice it the same way.
 expect_no_decoder "wasm_draw_only_has_no_decoder" "$DRAW_ONLY" --wasm
@@ -206,6 +222,14 @@ run_groups() {
         '    gfx.fill_tri(0, 0, 1, 0, 0, 1, 1, 2, 3);' "$@"
     group "shapes_outline$suffix" '^static void __nexa_gfx_poly_pts' \
         '    gfx.tri(0, 0, 1, 0, 0, 1, 1, 2, 3);' "$@"
+    group "arc$suffix" '^static void __nexa_gfx_arc' \
+        '    gfx.arc(1, 1, 3, 0, 90, 1, 2, 3);' "$@"
+    group "pie$suffix" '^static void __nexa_gfx_pie' \
+        '    gfx.pie(1, 1, 3, 0, 90, 1, 2, 3);' "$@"
+    group "round_rect$suffix" '^static void __nexa_gfx_round_rect' \
+        '    gfx.round_rect(0, 0, 4, 4, 1, 1, 2, 3);' "$@"
+    group "fill_round_rect$suffix" '^static void __nexa_gfx_fill_round_rect' \
+        '    gfx.fill_round_rect(0, 0, 4, 4, 1, 1, 2, 3);' "$@"
     group "line$suffix" '^static void __nexa_gfx_line\(' \
         '    gfx.line(0, 0, 1, 1, 1, 2, 3);' "$@"
     group "line_thick$suffix" '^static void __nexa_gfx_line_thick' \
@@ -224,6 +248,12 @@ run_groups() {
         '    let n: int = gfx.image_w(1);' "$@"
     group "blit$suffix" '^static int __nexa_gfx_blit\(' \
         '    gfx.blit(0, 0, 1);' "$@"
+    group "blit_rot$suffix" '^static int __nexa_gfx_blit_rot\(' \
+        '    gfx.blit_rot(0, 0, 1, 45);' "$@"
+    group "icon$suffix" '^static int __nexa_gfx_icon\(' \
+        '    let ok: int = gfx.icon(1);' "$@"
+    group "cursor$suffix" '^static int __nexa_gfx_cursor\(' \
+        '    let c: int = gfx.cursor();' "$@"
     group "save$suffix" '^static int __nexa_gfx_save' \
         '    let ok: int = gfx.save("o.bmp");' "$@"
     group "dialogs$suffix" '^static std::string __nexa_gfx_opendialog' \
@@ -301,6 +331,17 @@ elif grep -q '__nexa_gfx_read_file' "$WORK/draw_only.cpp"; then
 else
     echo "ok read_file_shared"
 fi
+
+# Tearing a window down is core and hands the cursor and the icon back, so
+# slicing those out has to leave the same kind of no-op behind.
+for stub in __nexa_gfx_cursor_reset __nexa_gfx_icon_reset; do
+    if ! grep -q "static void $stub() {}" "$WORK/draw_only.cpp"; then
+        echo "FAIL ${stub}_stub: a draw loop lost the no-op window-polish teardown"
+        fails=$((fails + 1))
+    else
+        echo "ok ${stub}_stub"
+    fi
+done
 
 # --- size: the point of all of it -------------------------------------------
 
@@ -433,6 +474,10 @@ else
     link_case "fill_circle" '    gfx.fill_circle(1, 2, 3, 4, 5, 6);'
     link_case "ellipse" '    gfx.ellipse(1, 2, 3, 4, 5, 6, 7);'
     link_case "fill_ellipse" '    gfx.fill_ellipse(1, 2, 3, 4, 5, 6, 7);'
+    link_case "arc" '    gfx.arc(1, 2, 3, 0, 90, 5, 6, 7);'
+    link_case "pie" '    gfx.pie(1, 2, 3, 0, 90, 5, 6, 7);'
+    link_case "round_rect" '    gfx.round_rect(1, 2, 8, 6, 2, 5, 6, 7);'
+    link_case "fill_round_rect" '    gfx.fill_round_rect(1, 2, 8, 6, 2, 5, 6, 7);'
     link_case "tri" '    gfx.tri(0, 0, 4, 0, 0, 4, 1, 2, 3);'
     link_case "fill_tri" '    gfx.fill_tri(0, 0, 4, 0, 0, 4, 1, 2, 3);'
     link_case "poly" '    let xs: []int = [0, 4, 0];
@@ -471,6 +516,12 @@ else
     link_case "image_h" '    let n: int = gfx.image_h(1);'
     link_case "blit_handle" '    let n: int = gfx.blit(0, 0, 1);'
     link_case "blit_path" '    let n: int = gfx.blit(0, 0, "nope.png");'
+    link_case "blit_rot_handle" '    let n: int = gfx.blit_rot(0, 0, 1, 45);'
+    link_case "blit_rot_path" '    let n: int = gfx.blit_rot(0, 0, "nope.png", 45, 8, 8);'
+    link_case "icon_handle" '    let ok: int = gfx.icon(1);'
+    link_case "icon_path" '    let ok: int = gfx.icon("nope.png");'
+    link_case "cursor_get" '    let c: int = gfx.cursor();'
+    link_case "cursor_set" '    let c: int = gfx.cursor(0);'
     link_case "audio" '    let ok: int = gfx.audio();'
     link_case "sample" '    let n: int = gfx.sample(1);'
     link_case "audio_queued" '    let n: int = gfx.audio_queued();'

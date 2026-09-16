@@ -29,6 +29,10 @@ struct GfxNeed {
     bool get = false;            // gfx.get
     bool shapesFill = false;     // fill, rect, fill_circle/ellipse/tri/poly
     bool shapesOutline = false;  // circle, ellipse, tri, poly
+    bool arc = false;            // gfx.arc
+    bool pie = false;            // gfx.pie
+    bool roundRect = false;      // gfx.round_rect
+    bool fillRoundRect = false;  // gfx.fill_round_rect
     bool line = false;           // gfx.line, 7 arguments
     bool lineThick = false;      // gfx.line, 8 arguments
     bool text = false;           // text, text_size, text_width, text_height
@@ -39,10 +43,13 @@ struct GfxNeed {
     bool imageStore = false;     // the loaded-image table: image_w, image_h, blit
     bool imageLoad = false;      // image, decode -- the decoder and the file read
     bool blit = false;           // blit
+    bool blitRot = false;        // blit_rot
+    bool icon = false;           // gfx.icon
     bool save = false;           // gfx.save
     bool dialogs = false;        // opendialog, drop
     bool audio = false;          // audio, sample, audio_queued, audio_flush
     bool sound = false;          // sound, play, loop, stop, volume -- the mixer
+    bool cursor = false;         // gfx.cursor
     bool window = false;         // resize, width, height, scale, title
 };
 
@@ -300,17 +307,30 @@ inline std::string gfxRuntimeCpp(const GfxNeed& need) {
     // Internal dependency closure: each of these is "some helper we are about
     // to emit calls it", worked out once here instead of at every use.
     const bool wantLine = need.line || need.lineThick || need.shapesOutline;
-    const bool wantSpan = need.shapesFill || need.shapesOutline || need.lineThick;
-    const bool wantEllipse = need.shapesFill || need.shapesOutline;
+    // Rounded rectangles are stacks of spans like every other filled shape;
+    // arcs and pies go through the span writer that filters by angle, but they
+    // still need the row range it is paired with.
+    const bool wantRound = need.roundRect || need.fillRoundRect;
+    const bool wantSector = need.arc || need.pie;
+    // Turning an angle in degrees into a direction: a sweep needs it for its
+    // two rays, a rotated blit for the turn itself.
+    const bool wantCosSin = wantSector || need.blitRot;
+    const bool wantSpan = need.shapesFill || need.shapesOutline || need.lineThick ||
+                          wantRound || wantSector;
+    const bool wantEllipse = need.shapesFill || need.shapesOutline || wantRound || wantSector;
+    // The per-row runs of an ellipse outline: gfx.circle/gfx.ellipse draw all
+    // of them, gfx.arc the ones the sweep keeps.
+    const bool wantEllipseRuns = need.shapesOutline || need.arc;
     const bool wantPolyTake = need.shapesFill || need.shapesOutline;
     const bool wantU8 = need.shapesFill || need.shapesOutline || need.line ||
-                        need.lineThick || need.text;
+                        need.lineThick || need.text || wantRound || wantSector;
     const bool wantGet = need.get || need.save;
     // Both the image decoder and the WAV loader start by slurping a file.
     const bool wantReadFile = need.imageLoad || need.sound;
     const bool wantDraw = need.plot || need.shapesFill || need.shapesOutline ||
-                          need.line || need.lineThick || need.text;
-    const bool wantPutA = wantDraw || need.blit;
+                          need.line || need.lineThick || need.text || wantRound ||
+                          wantSector;
+    const bool wantPutA = wantDraw || need.blit || need.blitRot;
 
     std::string out;
     out += R"NEXA_GFX(
@@ -359,6 +379,11 @@ struct __nexa_Gfx {
     int mrb;
     int text_scale;
     int fullscreen;
+    // 1 while the OS cursor is visible over the window, which is how a window
+    // starts. Kept here rather than asked of the OS: X11 has no "is my cursor
+    // hidden" query, and NSCursor's hide/unhide is a counter that only stays
+    // balanced if the program remembers what it last asked for.
+    int cursor;
     unsigned char* fb;
     std::string title;
     std::string drop_path;
@@ -381,6 +406,10 @@ struct __nexa_Gfx {
     BITMAPINFO bmi;
     WINDOWPLACEMENT wnd_place;
     LONG wnd_style;
+    // Icons are owned by whoever created them: WM_SETICON does not take them
+    // over, so the two we made are ours to destroy when they are replaced.
+    HICON icon_big;
+    HICON icon_small;
 #endif
 #if defined(__linux__) && !defined(__EMSCRIPTEN__)
     Display* dpy;
@@ -392,6 +421,10 @@ struct __nexa_Gfx {
     int xbw;
     int xbh;
     int wm_delete;
+    // The 1x1 fully-transparent cursor gfx.cursor(0) points the window at, and
+    // the pixmap it is cut from. Made once, on the first hide.
+    Cursor blank_cursor;
+    Pixmap blank_pixmap;
 #endif
 #ifdef __EMSCRIPTEN__
     int keys[512];
@@ -620,8 +653,20 @@ static __NexaGfxDelegate* __nexa_gfx_delegate = nil;
 #ifdef _WIN32
 static void __nexa_gfx_bb_free();
 #endif
-
+)NEXA_GFX";
+    // Tearing a window down is core -- gfx.open does it to the window before
+    // it, gfx.close to the last one -- but what it has to hand back belongs to
+    // the polish features. Both reach them through a declaration that becomes
+    // an empty inline body when the feature is sliced out, the same way the
+    // audio shutdown further down does.
+    out += need.cursor ? "static void __nexa_gfx_cursor_reset();\n"
+                       : "static void __nexa_gfx_cursor_reset() {}\n";
+    out += need.icon ? "static void __nexa_gfx_icon_reset();\n"
+                     : "static void __nexa_gfx_icon_reset() {}\n";
+    out += R"NEXA_GFX(
 static void __nexa_gfx_free() {
+    __nexa_gfx_cursor_reset();
+    __nexa_gfx_icon_reset();
     delete[] __nexa_g.fb;
     __nexa_g.fb = nullptr;
 #if defined(__linux__) && !defined(__EMSCRIPTEN__)
@@ -994,6 +1039,9 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
     __nexa_g.scale = scale;
     __nexa_g.closed = 0;
     __nexa_g.fullscreen = 0;
+    // A new window starts with the cursor showing, the same way it starts
+    // opaque and windowed.
+    __nexa_g.cursor = 1;
     __nexa_g.mx = 0;
     __nexa_g.my = 0;
     __nexa_g.min = 0;
@@ -1315,6 +1363,100 @@ static int __nexa_gfx_title_set(const std::string& s) {
 #endif
 }
 )NEXA_GFX";
+    if (need.cursor) out += R"NEXA_GFX(
+// gfx.cursor: whether the OS draws a pointer over the window. on < 0 reports,
+// anything else sets and reports back what it set. The answer is kept in
+// __nexa_g.cursor rather than asked of the platform, because two of the four
+// backends cannot be asked.
+static int __nexa_gfx_cursor(int on) {
+    if (!__nexa_g.ready) return 0;
+    if (on < 0) return __nexa_g.cursor;
+    int want = on ? 1 : 0;
+#ifdef __EMSCRIPTEN__
+    EM_ASM(({
+        var c = Module['canvas'] || document.getElementById('canvas');
+        if (c) c.style.cursor = $0 ? "" : "none";
+    }), want);
+    __nexa_g.cursor = want;
+    return __nexa_g.cursor;
+#elif defined(_WIN32)
+    if (!__nexa_g.hwnd) return 0;
+    // The class cursor, not ShowCursor: ShowCursor is a per-thread counter
+    // that goes wrong the moment it is unbalanced, while the class cursor is
+    // simply what Windows draws over this window and nothing else. SetCursor
+    // makes it take effect now rather than at the next mouse move.
+    HCURSOR c = want ? LoadCursorA(nullptr, IDC_ARROW) : nullptr;
+    SetClassLongPtrA(__nexa_g.hwnd, GCLP_HCURSOR, (LONG_PTR)c);
+    SetCursor(c);
+    __nexa_g.cursor = want;
+    return __nexa_g.cursor;
+#elif defined(__APPLE__)
+    if (!__nexa_gfx_nswin) return 0;
+    // NSCursor's hide/unhide is a counter, so it is moved only when the state
+    // really changes -- two gfx.cursor(0) calls must not take two unhides to
+    // undo.
+    if (want != __nexa_g.cursor) {
+        if (want) [NSCursor unhide];
+        else [NSCursor hide];
+        __nexa_g.cursor = want;
+    }
+    return __nexa_g.cursor;
+#elif defined(__linux__)
+    if (!__nexa_g.dpy || !__nexa_g.win) return 0;
+    if (want) {
+        XUndefineCursor(__nexa_g.dpy, __nexa_g.win);
+    } else {
+        if (!__nexa_g.blank_cursor) {
+            // A 1x1 all-zero bitmap used as both the shape and its mask is a
+            // cursor with nothing in it, which is how X11 spells "hidden".
+            char none[1] = {0};
+            __nexa_g.blank_pixmap = XCreateBitmapFromData(__nexa_g.dpy, __nexa_g.win, none, 1, 1);
+            XColor black;
+            std::memset(&black, 0, sizeof(black));
+            __nexa_g.blank_cursor = XCreatePixmapCursor(__nexa_g.dpy,
+                __nexa_g.blank_pixmap, __nexa_g.blank_pixmap, &black, &black, 0, 0);
+        }
+        if (!__nexa_g.blank_cursor) return __nexa_g.cursor;
+        XDefineCursor(__nexa_g.dpy, __nexa_g.win, __nexa_g.blank_cursor);
+    }
+    XFlush(__nexa_g.dpy);
+    __nexa_g.cursor = want;
+    return __nexa_g.cursor;
+#else
+    (void)want;
+    return 0;
+#endif
+}
+
+// Hands the cursor back when the window goes away: a program that hid it must
+// not leave the user's pointer missing, and the X11 cursor is ours to free.
+static void __nexa_gfx_cursor_reset() {
+#ifdef __EMSCRIPTEN__
+    if (!__nexa_g.cursor) {
+        EM_ASM({
+            var c = Module['canvas'] || document.getElementById('canvas');
+            if (c) c.style.cursor = "";
+        });
+    }
+#elif defined(_WIN32)
+    if (!__nexa_g.cursor && __nexa_g.hwnd) {
+        HCURSOR c = LoadCursorA(nullptr, IDC_ARROW);
+        SetClassLongPtrA(__nexa_g.hwnd, GCLP_HCURSOR, (LONG_PTR)c);
+        SetCursor(c);
+    }
+#elif defined(__APPLE__)
+    if (!__nexa_g.cursor) [NSCursor unhide];
+#elif defined(__linux__)
+    if (__nexa_g.dpy) {
+        if (__nexa_g.blank_cursor) XFreeCursor(__nexa_g.dpy, __nexa_g.blank_cursor);
+        if (__nexa_g.blank_pixmap) XFreePixmap(__nexa_g.dpy, __nexa_g.blank_pixmap);
+    }
+    __nexa_g.blank_cursor = 0;
+    __nexa_g.blank_pixmap = 0;
+#endif
+    __nexa_g.cursor = 1;
+}
+)NEXA_GFX";
     out += need.audio ? "\nstatic void __nexa_gfx_audio_close();\n"
                       : "\nstatic void __nexa_gfx_audio_close() {}\n";
     // gfx.close() and gfx.poll() are core, so they are emitted whether or not
@@ -1569,7 +1711,7 @@ static void __nexa_gfx_put(int i, unsigned char R, unsigned char G, unsigned cha
 // in __nexa_gfx_put_a and writes exactly the bytes it always has.
 static int __nexa_gfx_alpha_v = 255;
 )NEXA_GFX";  // [nexa:rasterizers-end]
-    if (need.alpha || need.blit) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
+    if (need.alpha || need.blit || need.blitRot) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 static int __nexa_gfx_alpha_get() {
     return __nexa_gfx_alpha_v;
 }
@@ -1852,11 +1994,34 @@ static void __nexa_gfx_fill_ellipse(int cx, int cy, int rx, int ry, int r, int g
     }
 }
 )NEXA_GFX";  // [nexa:rasterizers-end]
+    if (wantEllipseRuns) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
+// The ellipse outline on one row, as the one or two runs it covers there.
+// Outline means the pixels of the filled ellipse that the two neighbouring
+// rows do not both cover: where the curve is flat (top and bottom) that is a
+// single long run, where it is steep it is the two end pixels, which is what
+// keeps the ring connected without a second rasterization pass. Returns how
+// many of xa[]/xb[] were filled in: 0 when the row misses the ellipse.
+static int __nexa_gfx_ellipse_runs(long long dy, long long RX, long long RY, long long cx,
+                                   long long* xa, long long* xb) {
+    long long hw = __nexa_gfx_ellipse_halfwidth(dy, RX, RY);
+    if (hw < 0) return 0;
+    long long up = __nexa_gfx_ellipse_halfwidth(dy - 1, RX, RY);
+    long long down = __nexa_gfx_ellipse_halfwidth(dy + 1, RX, RY);
+    long long inner = up < down ? up : down;
+    if (inner > hw - 1) inner = hw - 1;
+    if (inner < 0) {
+        xa[0] = cx - hw;
+        xb[0] = cx + hw;
+        return 1;
+    }
+    xa[0] = cx - hw;
+    xb[0] = cx - inner - 1;
+    xa[1] = cx + inner + 1;
+    xb[1] = cx + hw;
+    return 2;
+}
+)NEXA_GFX";  // [nexa:rasterizers-end]
     if (need.shapesOutline) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
-// Outline: the pixels of the filled ellipse that the two neighbouring rows do
-// not both cover. Where the curve is flat (top and bottom) that is a long run,
-// where it is steep it is the two end pixels, which is what keeps the ring
-// connected without a second rasterization pass.
 static void __nexa_gfx_ellipse(int cx, int cy, int rx, int ry, int r, int g, int b) {
     if (!__nexa_g.fb) return;
     long long RX = __nexa_gfx_radius(rx);
@@ -1868,19 +2033,9 @@ static void __nexa_gfx_ellipse(int cx, int cy, int rx, int ry, int r, int g, int
     long long first, last;
     __nexa_gfx_row_range((long long)cy - RY, (long long)cy + RY, &first, &last);
     for (long long y = first; y <= last; y++) {
-        long long dy = y - (long long)cy;
-        long long hw = __nexa_gfx_ellipse_halfwidth(dy, RX, RY);
-        if (hw < 0) continue;
-        long long up = __nexa_gfx_ellipse_halfwidth(dy - 1, RX, RY);
-        long long down = __nexa_gfx_ellipse_halfwidth(dy + 1, RX, RY);
-        long long inner = up < down ? up : down;
-        if (inner > hw - 1) inner = hw - 1;
-        if (inner < 0) {
-            __nexa_gfx_span(y, (long long)cx - hw, (long long)cx + hw, R, G, B);
-        } else {
-            __nexa_gfx_span(y, (long long)cx - hw, (long long)cx - inner - 1, R, G, B);
-            __nexa_gfx_span(y, (long long)cx + inner + 1, (long long)cx + hw, R, G, B);
-        }
+        long long xa[2], xb[2];
+        int n = __nexa_gfx_ellipse_runs(y - (long long)cy, RX, RY, (long long)cx, xa, xb);
+        for (int i = 0; i < n; i++) __nexa_gfx_span(y, xa[i], xb[i], R, G, B);
     }
 }
 
@@ -1891,6 +2046,259 @@ static void __nexa_gfx_circle(int cx, int cy, int rad, int r, int g, int b) {
     if (need.shapesFill) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 static void __nexa_gfx_fill_circle(int cx, int cy, int rad, int r, int g, int b) {
     __nexa_gfx_fill_ellipse(cx, cy, rad, rad, r, g, b);
+}
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (wantCosSin) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
+// cos and sin of an angle in degrees, exact on the quarter turns. std::cos
+// does not return a zero for a right angle, and the error is not harmless
+// here: a sweep ending at 90 degrees would miss the pixel that sits at exactly
+// 90 degrees, and a sprite turned a quarter of a turn would land near the
+// pixel grid rather than on it.
+static void __nexa_gfx_cos_sin(double deg, double* c, double* s) {
+    double a = deg - std::floor(deg / 360.0) * 360.0;
+    // Written as a positive test so a NaN angle -- or one so large that the
+    // subtraction above lost every digit of it -- comes out as no turn at all.
+    if (!(a >= 0.0 && a < 360.0)) a = 0.0;
+    long long q = (long long)(a / 90.0);
+    if (a == (double)(q * 90)) {
+        static const double QC[4] = {1.0, 0.0, -1.0, 0.0};
+        static const double QS[4] = {0.0, 1.0, 0.0, -1.0};
+        *c = QC[q & 3];
+        *s = QS[q & 3];
+        return;
+    }
+    double rd = a * (3.14159265358979323846 / 180.0);
+    *c = std::cos(rd);
+    *s = std::sin(rd);
+}
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (wantSector) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
+// A sweep of angles, in degrees, 0 straight up and increasing clockwise -- the
+// way a clock hand turns, which on a y-down framebuffer is also the direction
+// the standard rotation matrix turns. The sweep runs from a0 to a1; a full
+// turn or more is the whole circle, and a sweep that does not advance is
+// nothing at all.
+struct __nexa_GfxSector {
+    int mode;      // 0 nothing, 1 the whole circle, 2 up to half a turn, 3 more
+    double ax;     // the a0 ray
+    double ay;
+    double bx;     // the a1 ray
+    double by;
+};
+
+static __nexa_GfxSector __nexa_gfx_sector(double a0, double a1) {
+    __nexa_GfxSector s;
+    s.mode = 0;
+    s.ax = 0.0;
+    s.ay = 0.0;
+    s.bx = 0.0;
+    s.by = 0.0;
+    double span = a1 - a0;
+    // Written as a positive test so that a NaN angle is the empty sweep rather
+    // than a shape nobody can predict.
+    if (!(span > 0.0)) return s;
+    if (span >= 360.0) {
+        s.mode = 1;
+        return s;
+    }
+    // Up is (0, -1) on a y-down framebuffer, so the ray at a0 degrees
+    // clockwise of up is (sin a0, -cos a0).
+    double c, n;
+    __nexa_gfx_cos_sin(a0, &c, &n);
+    s.ax = n;
+    s.ay = -c;
+    __nexa_gfx_cos_sin(a1, &c, &n);
+    s.bx = n;
+    s.by = -c;
+    s.mode = span <= 180.0 ? 2 : 3;
+    return s;
+}
+
+// Does the direction (dx, dy) out of the centre lie in the sweep? Two cross
+// products rather than an atan2 per pixel: cross(u, v) is positive exactly
+// when v is clockwise of u by less than half a turn, so a sweep of up to half
+// a turn is "clockwise of a0 and not past a1". A wider sweep is tested as the
+// one it leaves out, which is narrower than half a turn by the same amount.
+// The centre itself belongs to every sweep, which is what makes a pie a solid
+// wedge rather than one with a pinhole at its point.
+static int __nexa_gfx_in_sector(const __nexa_GfxSector& s, long long dx, long long dy) {
+    if (s.mode == 1) return 1;
+    if (s.mode == 0) return 0;
+    double px = (double)dx;
+    double py = (double)dy;
+    double fa = s.ax * py - s.ay * px;   // >= 0: at or clockwise of the a0 ray
+    double fb = px * s.by - py * s.bx;   // >= 0: at or anticlockwise of the a1 ray
+    if (s.mode == 2) return (fa >= 0.0 && fb >= 0.0) ? 1 : 0;
+    return (fa < 0.0 && fb < 0.0) ? 0 : 1;
+}
+
+// One horizontal run, both ends inclusive and clipped exactly as
+// __nexa_gfx_span clips it, keeping only the pixels whose direction out of
+// (cx, cy) lies in the sweep.
+static void __nexa_gfx_span_sector(long long y, long long xa, long long xb,
+                                   long long cx, long long cy, const __nexa_GfxSector& s,
+                                   unsigned char R, unsigned char G, unsigned char B) {
+    if (!__nexa_g.fb) return;
+    if (y < 0 || y >= (long long)__nexa_g.h) return;
+    if (xa < 0) xa = 0;
+    if (xb > (long long)__nexa_g.w - 1) xb = (long long)__nexa_g.w - 1;
+    if (xa > xb) return;
+    long long row = y * (long long)__nexa_g.w;
+    for (long long x = xa; x <= xb; x++) {
+        if (!__nexa_gfx_in_sector(s, x - cx, y - cy)) continue;
+        __nexa_gfx_draw((int)((row + x) * 4), R, G, B);
+    }
+}
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (need.arc) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
+// An arc is the circle outline gfx.circle draws with everything outside the
+// sweep left off, so an arc and a circle of the same radius agree pixel for
+// pixel wherever they overlap, and a sweep of a full turn is the circle.
+static void __nexa_gfx_arc(int cx, int cy, int rad, double a0, double a1, int r, int g, int b) {
+    if (!__nexa_g.fb) return;
+    __nexa_GfxSector s = __nexa_gfx_sector(a0, a1);
+    if (!s.mode) return;
+    long long RD = __nexa_gfx_radius(rad);
+    if (RD < 0) return;
+    unsigned char R = __nexa_gfx_u8(r);
+    unsigned char G = __nexa_gfx_u8(g);
+    unsigned char B = __nexa_gfx_u8(b);
+    long long first, last;
+    __nexa_gfx_row_range((long long)cy - RD, (long long)cy + RD, &first, &last);
+    for (long long y = first; y <= last; y++) {
+        long long xa[2], xb[2];
+        int n = __nexa_gfx_ellipse_runs(y - (long long)cy, RD, RD, (long long)cx, xa, xb);
+        for (int i = 0; i < n; i++) {
+            __nexa_gfx_span_sector(y, xa[i], xb[i], (long long)cx, (long long)cy, s, R, G, B);
+        }
+    }
+}
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (need.pie) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
+// And a pie is the filled circle with the same cut: the wedge from the centre
+// out to the arc, every pixel of it one gfx.fill_circle would have drawn.
+static void __nexa_gfx_pie(int cx, int cy, int rad, double a0, double a1, int r, int g, int b) {
+    if (!__nexa_g.fb) return;
+    __nexa_GfxSector s = __nexa_gfx_sector(a0, a1);
+    if (!s.mode) return;
+    long long RD = __nexa_gfx_radius(rad);
+    if (RD < 0) return;
+    unsigned char R = __nexa_gfx_u8(r);
+    unsigned char G = __nexa_gfx_u8(g);
+    unsigned char B = __nexa_gfx_u8(b);
+    long long first, last;
+    __nexa_gfx_row_range((long long)cy - RD, (long long)cy + RD, &first, &last);
+    for (long long y = first; y <= last; y++) {
+        long long hw = __nexa_gfx_ellipse_halfwidth(y - (long long)cy, RD, RD);
+        if (hw < 0) continue;
+        __nexa_gfx_span_sector(y, (long long)cx - hw, (long long)cx + hw,
+                               (long long)cx, (long long)cy, s, R, G, B);
+    }
+}
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (wantRound) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
+// The pixel box of a rounded rectangle, with the corner radius clamped.
+// Negative w/h flip exactly as gfx.fill's do. The radius is clamped to
+// (shorter side - 1) / 2: a corner of radius rad eats rad pixels off the edge
+// row, so two of them meeting across a side would leave that row with nothing
+// at all, and half of an even side is one pixel past where they meet. On a
+// square of odd side at the largest radius the shape is precisely the circle
+// gfx.fill_circle draws.
+static int __nexa_gfx_round_box(int x, int y, int w, int h, int rad,
+                                long long* x0, long long* y0,
+                                long long* x1, long long* y1, long long* rr) {
+    long long X = x, Y = y, W = w, H = h;
+    if (W < 0) { X += W; W = -W; }
+    if (H < 0) { Y += H; H = -H; }
+    if (W < 1 || H < 1) return 0;
+    long long R = rad < 0 ? 0 : (long long)rad;
+    long long half = ((W < H ? W : H) - 1) / 2;
+    if (R > half) R = half;
+    *x0 = X;
+    *y0 = Y;
+    *x1 = X + W - 1;
+    *y1 = Y + H - 1;
+    *rr = R;
+    return 1;
+}
+
+// The run [xa, xb] the rounded rectangle covers on row y, or 0 when the row
+// misses it. Away from the corners that is the whole width; within rad of the
+// top or bottom it is the width less what the corner circle of that radius
+// cuts off, which is the same halfwidth gfx.fill_circle uses -- so a corner
+// and a circle of equal radius curve identically. A radius of 0 never leaves
+// the first branch, which is why gfx.round_rect at rad 0 is gfx.rect exactly.
+static int __nexa_gfx_round_row(long long y, long long x0, long long y0,
+                                long long x1, long long y1, long long rad,
+                                long long* xa, long long* xb) {
+    if (y < y0 || y > y1) return 0;
+    long long dy;
+    if (y < y0 + rad) {
+        dy = y - (y0 + rad);
+    } else if (y > y1 - rad) {
+        dy = y - (y1 - rad);
+    } else {
+        *xa = x0;
+        *xb = x1;
+        return 1;
+    }
+    long long hw = __nexa_gfx_ellipse_halfwidth(dy, rad, rad);
+    if (hw < 0) return 0;
+    *xa = x0 + rad - hw;
+    *xb = x1 - rad + hw;
+    return 1;
+}
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (need.fillRoundRect) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
+static void __nexa_gfx_fill_round_rect(int x, int y, int w, int h, int rad, int r, int g, int b) {
+    if (!__nexa_g.fb) return;
+    long long x0, y0, x1, y1, rr;
+    if (!__nexa_gfx_round_box(x, y, w, h, rad, &x0, &y0, &x1, &y1, &rr)) return;
+    unsigned char R = __nexa_gfx_u8(r);
+    unsigned char G = __nexa_gfx_u8(g);
+    unsigned char B = __nexa_gfx_u8(b);
+    long long first, last;
+    __nexa_gfx_row_range(y0, y1, &first, &last);
+    for (long long yy = first; yy <= last; yy++) {
+        long long xa, xb;
+        if (!__nexa_gfx_round_row(yy, x0, y0, x1, y1, rr, &xa, &xb)) continue;
+        __nexa_gfx_span(yy, xa, xb, R, G, B);
+    }
+}
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (need.roundRect) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
+// Outline: the border of the pixels gfx.fill_round_rect would have filled, the
+// same relationship gfx.rect has to gfx.fill. A pixel is on the border when a
+// neighbour is not inside, which on a row-by-row rasterizer is its two ends
+// plus whatever the row above or the row below leaves uncovered. A row the
+// shape does not reach at all leaves everything uncovered, which is how the
+// top and bottom rows come out solid.
+static void __nexa_gfx_round_rect(int x, int y, int w, int h, int rad, int r, int g, int b) {
+    if (!__nexa_g.fb) return;
+    long long x0, y0, x1, y1, rr;
+    if (!__nexa_gfx_round_box(x, y, w, h, rad, &x0, &y0, &x1, &y1, &rr)) return;
+    unsigned char R = __nexa_gfx_u8(r);
+    unsigned char G = __nexa_gfx_u8(g);
+    unsigned char B = __nexa_gfx_u8(b);
+    long long first, last;
+    __nexa_gfx_row_range(y0, y1, &first, &last);
+    for (long long yy = first; yy <= last; yy++) {
+        long long xa, xb;
+        if (!__nexa_gfx_round_row(yy, x0, y0, x1, y1, rr, &xa, &xb)) continue;
+        long long ua, ub, da, db;
+        if (!__nexa_gfx_round_row(yy - 1, x0, y0, x1, y1, rr, &ua, &ub)) {
+            ua = xb + 1;
+            ub = xa - 1;
+        }
+        if (!__nexa_gfx_round_row(yy + 1, x0, y0, x1, y1, rr, &da, &db)) {
+            da = xb + 1;
+            db = xa - 1;
+        }
+        __nexa_gfx_span(yy, xa, xa, R, G, B);
+        __nexa_gfx_span(yy, xb, xb, R, G, B);
+        __nexa_gfx_span(yy, xa, (ua > da ? ua : da) - 1, R, G, B);
+        __nexa_gfx_span(yy, (ub < db ? ub : db) + 1, xb, R, G, B);
+    }
 }
 )NEXA_GFX";  // [nexa:rasterizers-end]
     if (need.shapesFill) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
@@ -2841,6 +3249,272 @@ static int __nexa_gfx_blit(int x, int y, int id, int dw, int dh, int sx, int sy,
 static int __nexa_gfx_blit_path(int x, int y, const std::string& path, int dw, int dh, int sx, int sy, int sw, int sh) {
     return __nexa_gfx_blit(x, y, __nexa_gfx_image(path), dw, dh, sx, sy, sw, sh);
 }
+)NEXA_GFX";
+    if (need.blitRot) out += R"NEXA_GFX(
+// [nexa:blitrot-begin]
+// A rotated blit, by inverse mapping: rather than turning each source pixel
+// into the framebuffer -- which scatters them and leaves holes between --
+// every pixel of the rotated box's bounding box is turned *back* into the
+// destination box and asks which source pixel it landed on. Nothing is drawn
+// twice and nothing is missed.
+static int __nexa_gfx_blit_rot(int x, int y, int id, double angle, int dw, int dh) {
+    if (!__nexa_g.fb || !__nexa_g.ready) return 0;
+    if (id < 1 || id >= (int)__nexa_imgs.size()) return 0;
+    const __nexa_GfxImg& im = __nexa_imgs[(size_t)id];
+    if (!im.px || im.w < 1 || im.h < 1) return 0;
+    // The destination box is read exactly as gfx.blit reads it: |dw| by |dh|
+    // at x,y, a negative size mirroring that axis without moving the box, and
+    // an omitted one (0) meaning the image's own size.
+    long long DW = dw;
+    long long DH = dh;
+    int flipx = DW < 0;
+    int flipy = DH < 0;
+    if (flipx) DW = -DW;
+    if (flipy) DH = -DH;
+    if (DW < 1) DW = im.w;
+    if (DH < 1) DH = im.h;
+    double cs, sn;
+    __nexa_gfx_cos_sin(angle, &cs, &sn);
+    double halfw = (double)DW * 0.5;
+    double halfh = (double)DH * 0.5;
+    double ox = (double)x + halfw;   // the centre the box turns about
+    double oy = (double)y + halfh;
+    // The turned box's bounding box, clipped to the framebuffer before the
+    // loop rather than inside it: a sprite scaled to two billion pixels wide
+    // must cost the twelve of them that are on screen, not the two billion.
+    double ex = std::fabs(halfw * cs) + std::fabs(halfh * sn);
+    double ey = std::fabs(halfw * sn) + std::fabs(halfh * cs);
+    long long px0 = (long long)std::floor(ox - ex);
+    long long px1 = (long long)std::ceil(ox + ex);
+    long long py0 = (long long)std::floor(oy - ey);
+    long long py1 = (long long)std::ceil(oy + ey);
+    if (px0 < 0) px0 = 0;
+    if (py0 < 0) py0 = 0;
+    if (px1 > (long long)__nexa_g.w - 1) px1 = (long long)__nexa_g.w - 1;
+    if (py1 > (long long)__nexa_g.h - 1) py1 = (long long)__nexa_g.h - 1;
+    if (px0 > px1 || py0 > py1) return 0;
+    int ga = __nexa_gfx_alpha_get();
+    int drew = 0;
+    for (long long py = py0; py <= py1; py++) {
+        double dy = (double)py + 0.5 - oy;
+        for (long long px = px0; px <= px1; px++) {
+            double dx = (double)px + 0.5 - ox;
+            // Turn the pixel's centre back the other way. Landing outside the
+            // box is what makes the corners of the bounding box transparent.
+            double u = dx * cs + dy * sn + halfw;
+            double v = dy * cs - dx * sn + halfh;
+            if (u < 0.0 || v < 0.0 || u >= (double)DW || v >= (double)DH) continue;
+            if (flipx) u = (double)DW - u;
+            if (flipy) v = (double)DH - v;
+            long long tx = (long long)u;
+            long long ty = (long long)v;
+            if (tx > DW - 1) tx = DW - 1;   // mirroring sends an exact 0 to DW
+            if (ty > DH - 1) ty = DH - 1;
+            int srcx = (int)(tx * (long long)im.w / DW);
+            int srcy = (int)(ty * (long long)im.h / DH);
+            const unsigned char* s = im.px + ((size_t)srcy * (size_t)im.w + (size_t)srcx) * 4;
+            int A = s[3];
+            if (ga != 255) A = (A * ga + 127) / 255;
+            __nexa_gfx_put_a((int)((py * (long long)__nexa_g.w + px) * 4), s[0], s[1], s[2],
+                             (unsigned char)A);
+            drew = 1;
+        }
+    }
+    return drew;
+}
+// [nexa:blitrot-end]
+
+static int __nexa_gfx_blit_rot_path(int x, int y, const std::string& path, double angle, int dw, int dh) {
+    return __nexa_gfx_blit_rot(x, y, __nexa_gfx_image(path), angle, dw, dh);
+}
+)NEXA_GFX";
+    if (need.icon) out += R"NEXA_GFX(
+// [nexa:icon-begin]
+#if defined(_WIN32) || (defined(__linux__) && !defined(__EMSCRIPTEN__))
+// Nearest-neighbour scale of a loaded image into a w by h RGBA buffer, for the
+// two backends that need a size of their own: Win32 wants square icons, and
+// X11 will not thank you for a window property holding a four-megapixel
+// photograph. macOS and the browser take the artwork at its own size and scale
+// it themselves, so neither reaches this.
+static void __nexa_gfx_icon_pixels(const __nexa_GfxImg& im, int w, int h, unsigned char* out) {
+    for (int y = 0; y < h; y++) {
+        int sy = (int)((long long)y * (long long)im.h / (long long)h);
+        if (sy > im.h - 1) sy = im.h - 1;
+        for (int x = 0; x < w; x++) {
+            int sx = (int)((long long)x * (long long)im.w / (long long)w);
+            if (sx > im.w - 1) sx = im.w - 1;
+            const unsigned char* s = im.px + ((size_t)sy * (size_t)im.w + (size_t)sx) * 4;
+            unsigned char* d = out + ((size_t)y * (size_t)w + (size_t)x) * 4;
+            d[0] = s[0];
+            d[1] = s[1];
+            d[2] = s[2];
+            d[3] = s[3];
+        }
+    }
+}
+#endif
+)NEXA_GFX";
+    if (need.icon) out += R"NEXA_GFX(
+#ifdef _WIN32
+// One HICON at one square size. The colour bitmap carries the alpha channel,
+// so the mask is all zeroes -- "no pixel is transparent by the mask" -- and
+// the per-pixel alpha decides what shows, which is what a modern icon wants.
+static HICON __nexa_gfx_win_icon(const __nexa_GfxImg& im, int size) {
+    BITMAPINFO bi;
+    std::memset(&bi, 0, sizeof(bi));
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = size;
+    bi.bmiHeader.biHeight = -size;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HDC dc = GetDC(nullptr);
+    HBITMAP colour = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    ReleaseDC(nullptr, dc);
+    if (!colour || !bits) {
+        if (colour) DeleteObject(colour);
+        return nullptr;
+    }
+    std::vector<unsigned char> rgba((size_t)size * (size_t)size * 4);
+    __nexa_gfx_icon_pixels(im, size, size, rgba.data());
+    unsigned char* d = (unsigned char*)bits;
+    for (size_t i = 0; i < rgba.size(); i += 4) {
+        d[i + 0] = rgba[i + 2];
+        d[i + 1] = rgba[i + 1];
+        d[i + 2] = rgba[i + 0];
+        d[i + 3] = rgba[i + 3];
+    }
+    // Monochrome scanlines are WORD aligned; zeroed, so the mask hides nothing.
+    std::vector<unsigned char> mbits((size_t)(((size + 15) / 16) * 2) * (size_t)size, 0);
+    HBITMAP mask = CreateBitmap(size, size, 1, 1, mbits.data());
+    HICON ic = nullptr;
+    if (mask) {
+        ICONINFO ii;
+        std::memset(&ii, 0, sizeof(ii));
+        ii.fIcon = TRUE;
+        ii.hbmMask = mask;
+        ii.hbmColor = colour;
+        ic = CreateIconIndirect(&ii);
+        DeleteObject(mask);
+    }
+    DeleteObject(colour);
+    return ic;
+}
+#endif
+
+// gfx.icon: hand the window an image to wear. 1 when the platform took it.
+static int __nexa_gfx_icon(int id) {
+    if (!__nexa_g.ready) return 0;
+    if (id < 1 || id >= (int)__nexa_imgs.size()) return 0;
+    const __nexa_GfxImg& im = __nexa_imgs[(size_t)id];
+    if (!im.px || im.w < 1 || im.h < 1) return 0;
+#ifdef __EMSCRIPTEN__
+    // The page's favicon is the nearest thing a canvas has to a window icon,
+    // and a canvas plus toDataURL is the whole encoder, so it is worth doing.
+    EM_ASM(({
+        var w = $1, h = $2;
+        var cv = document.createElement('canvas');
+        cv.width = w;
+        cv.height = h;
+        var cx = cv.getContext('2d');
+        var id = cx.createImageData(w, h);
+        id.data.set(HEAPU8.subarray($0, $0 + w * h * 4));
+        cx.putImageData(id, 0, 0);
+        var link = document.querySelector("link[rel~='icon']");
+        if (!link) {
+            link = document.createElement('link');
+            link.rel = 'icon';
+            document.head.appendChild(link);
+        }
+        link.href = cv.toDataURL('image/png');
+    }), im.px, im.w, im.h);
+    return 1;
+#elif defined(_WIN32)
+    if (!__nexa_g.hwnd) return 0;
+    HICON big = __nexa_gfx_win_icon(im, 32);
+    HICON small_ = __nexa_gfx_win_icon(im, 16);
+    if (!big && !small_) return 0;
+    if (big) SendMessageA(__nexa_g.hwnd, WM_SETICON, ICON_BIG, (LPARAM)big);
+    if (small_) SendMessageA(__nexa_g.hwnd, WM_SETICON, ICON_SMALL, (LPARAM)small_);
+    // Only now: the window was still drawing the old ones a moment ago.
+    if (__nexa_g.icon_big) DestroyIcon(__nexa_g.icon_big);
+    if (__nexa_g.icon_small) DestroyIcon(__nexa_g.icon_small);
+    __nexa_g.icon_big = big;
+    __nexa_g.icon_small = small_;
+    return 1;
+#elif defined(__APPLE__)
+    if (!__nexa_gfx_nswin) return 0;
+    @autoreleasepool {
+        NSBitmapImageRep* rep = [[NSBitmapImageRep alloc]
+            initWithBitmapDataPlanes:NULL
+                          pixelsWide:im.w
+                          pixelsHigh:im.h
+                       bitsPerSample:8
+                     samplesPerPixel:4
+                            hasAlpha:YES
+                            isPlanar:NO
+                      colorSpaceName:NSDeviceRGBColorSpace
+                        bitmapFormat:NSBitmapFormatAlphaNonpremultiplied
+                         bytesPerRow:im.w * 4
+                        bitsPerPixel:32];
+        if (!rep) return 0;
+        std::memcpy([rep bitmapData], im.px, (size_t)im.w * (size_t)im.h * 4);
+        NSImage* img = [[NSImage alloc] initWithSize:NSMakeSize(im.w, im.h)];
+        [img addRepresentation:rep];
+        [NSApp setApplicationIconImage:img];
+        return 1;
+    }
+#elif defined(__linux__)
+    if (!__nexa_g.dpy || !__nexa_g.win) return 0;
+    // _NET_WM_ICON is width, height, then one 32-bit ARGB pixel per cell, in a
+    // property whose 32-bit format means `long` on this side of the wire. Big
+    // artwork is scaled down first: this is a title-bar icon, and a property
+    // holding a four-megapixel photograph helps nobody.
+    int tw = im.w;
+    int th = im.h;
+    if (tw > 128 || th > 128) {
+        double f = 128.0 / (double)(tw > th ? tw : th);
+        tw = (int)((double)tw * f);
+        th = (int)((double)th * f);
+        if (tw < 1) tw = 1;
+        if (th < 1) th = 1;
+    }
+    std::vector<unsigned char> rgba((size_t)tw * (size_t)th * 4);
+    __nexa_gfx_icon_pixels(im, tw, th, rgba.data());
+    std::vector<long> prop((size_t)tw * (size_t)th + 2);
+    prop[0] = tw;
+    prop[1] = th;
+    for (size_t i = 0; i < (size_t)tw * (size_t)th; i++) {
+        const unsigned char* s = &rgba[i * 4];
+        prop[i + 2] = ((long)s[3] << 24) | ((long)s[0] << 16) | ((long)s[1] << 8) | (long)s[2];
+    }
+    Atom net_icon = XInternAtom(__nexa_g.dpy, "_NET_WM_ICON", False);
+    Atom cardinal = XInternAtom(__nexa_g.dpy, "CARDINAL", False);
+    XChangeProperty(__nexa_g.dpy, __nexa_g.win, net_icon, cardinal, 32, PropModeReplace,
+                    (const unsigned char*)prop.data(), (int)prop.size());
+    XFlush(__nexa_g.dpy);
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+static int __nexa_gfx_icon_path(const std::string& path) {
+    return __nexa_gfx_icon(__nexa_gfx_image(path));
+}
+
+// WM_SETICON borrows an icon, it does not adopt it, so the two we made are
+// ours to destroy when the window they were drawn on goes away.
+static void __nexa_gfx_icon_reset() {
+#ifdef _WIN32
+    if (__nexa_g.icon_big) DestroyIcon(__nexa_g.icon_big);
+    if (__nexa_g.icon_small) DestroyIcon(__nexa_g.icon_small);
+    __nexa_g.icon_big = nullptr;
+    __nexa_g.icon_small = nullptr;
+#endif
+}
+// [nexa:icon-end]
 )NEXA_GFX";
     if (need.save) out += R"NEXA_GFX(
 // [nexa:screenshot-begin]

@@ -110,6 +110,18 @@ fn main() {
     // A decoded image is still not something to draw without a window.
     io.println("blit_no_window=", gfx.blit(0, 0, img));
     io.println("blit_path_no_window=", gfx.blit(0, 0, pngPath));
+    io.println("blit_rot_no_window=", gfx.blit_rot(0, 0, img, 45));
+    io.println("blit_rot_path_no_window=", gfx.blit_rot(0, 0, pngPath, 90, 8, 8));
+
+    // --- the window polish, with no window to polish ----------------------
+    // An icon needs a window to hang on and a cursor needs one to sit over, so
+    // both answer 0 -- including gfx.cursor() the reader, which has no window
+    // state to read.
+    io.println("icon_no_window=", gfx.icon(img));
+    io.println("icon_path_no_window=", gfx.icon(pngPath));
+    io.println("cursor_no_window=", gfx.cursor());
+    io.println("cursor_hide_no_window=", gfx.cursor(0));
+    io.println("cursor_show_no_window=", gfx.cursor(1));
 
     // --- shapes with no framebuffer -------------------------------------
     // Every shape rasterizer is a no-op without a window, and the two that
@@ -122,6 +134,10 @@ fn main() {
     gfx.tri(0, 0, 4, 0, 2, 4, 1, 2, 3);
     gfx.fill_tri(0, 0, 4, 0, 2, 4, 1, 2, 3);
     gfx.line(0, 0, 4, 4, 1, 2, 3, 5);
+    gfx.arc(2, 2, 2, 0, 90, 1, 2, 3);
+    gfx.pie(2, 2, 2, 0, 90, 1, 2, 3);
+    gfx.round_rect(0, 0, 8, 6, 2, 1, 2, 3);
+    gfx.fill_round_rect(0, 0, 8, 6, 2, 1, 2, 3);
     io.println("shapes_no_window=ok");
 
     // poly and fill_poly return 1 when they drew and 0 otherwise, so with no

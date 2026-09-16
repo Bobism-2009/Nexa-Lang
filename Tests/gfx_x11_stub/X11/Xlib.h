@@ -22,6 +22,8 @@ typedef struct _XDisplay Display;
 typedef unsigned long XID;
 typedef XID Window;
 typedef XID Drawable;
+typedef XID Pixmap;
+typedef XID Cursor;
 typedef XID Colormap;
 typedef unsigned long Atom;
 typedef unsigned long VisualID;
@@ -167,6 +169,13 @@ typedef union _XEvent {
 } XEvent;
 
 typedef struct {
+    unsigned long pixel;
+    unsigned short red, green, blue;
+    char flags;
+    char pad;
+} XColor;
+
+typedef struct {
     int x, y;
     int width, height;
     int border_width;
@@ -213,6 +222,14 @@ extern Atom XInternAtom(Display* d, const char* name, Bool only_if_exists);
 extern Status XSetWMProtocols(Display* d, Window w, Atom* protocols, int count);
 extern int XChangeProperty(Display* d, Window w, Atom prop, Atom type, int format,
                            int mode, const unsigned char* data, int nelements);
+extern Pixmap XCreateBitmapFromData(Display* d, Drawable dr, const char* data,
+                                    unsigned int w, unsigned int h);
+extern Cursor XCreatePixmapCursor(Display* d, Pixmap source, Pixmap mask,
+                                  XColor* fg, XColor* bg, unsigned int x, unsigned int y);
+extern int XDefineCursor(Display* d, Window w, Cursor c);
+extern int XUndefineCursor(Display* d, Window w);
+extern int XFreeCursor(Display* d, Cursor c);
+extern int XFreePixmap(Display* d, Pixmap p);
 extern Status XGetWindowAttributes(Display* d, Window w, XWindowAttributes* a);
 extern Bool XQueryPointer(Display* d, Window w, Window* root, Window* child,
                           int* rx, int* ry, int* wx, int* wy, unsigned int* mask);

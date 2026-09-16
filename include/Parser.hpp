@@ -4160,6 +4160,8 @@ private:
         else if (method == "line") { argc = 7; argcMax = 8; }
         else if (method == "circle" || method == "fill_circle") argc = 6;
         else if (method == "ellipse" || method == "fill_ellipse") argc = 7;
+        else if (method == "arc" || method == "pie") argc = 8;
+        else if (method == "round_rect" || method == "fill_round_rect") argc = 8;
         else if (method == "tri" || method == "fill_tri") argc = 9;
         else if (method == "poly" || method == "fill_poly") argc = 5;
         else if (method == "text") { argc = 6; argcMax = 7; }
@@ -4173,12 +4175,15 @@ private:
         else if (method == "play" || method == "loop") { argc = 1; argcMax = 2; }
         else if (method == "stop" || method == "volume") { argc = 0; argcMax = 1; }
         else if (method == "blit") { argc = 3; argcMax = 9; }
+        else if (method == "blit_rot") { argc = 4; argcMax = 6; }
+        else if (method == "icon") argc = 1;
+        else if (method == "cursor") { argc = 0; argcMax = 1; }
         else if (method == "alpha") { argc = 0; argcMax = 1; }
         else if (method == "save") argc = 1;
         else {
             throw std::runtime_error("Unknown gfx method 'gfx." + method +
                 "' at line " + std::to_string(methodTok.line) +
-                " (use open, close, resize, width, height, scale, title, poll, closed, clear, plot, fill, rect, line, circle, fill_circle, ellipse, fill_ellipse, tri, fill_tri, poly, fill_poly, text, text_size, text_width, text_height, get, present, image, decode, image_w, image_h, blit, alpha, save, key, pressed, released, wheel, wheel_x, typed, mouse_x, mouse_y, mouse, audio, sample, audio_queued, audio_flush, sound, play, loop, stop, volume, fullscreen)");
+                " (use open, close, resize, width, height, scale, title, icon, cursor, poll, closed, clear, plot, fill, rect, round_rect, fill_round_rect, line, circle, fill_circle, ellipse, fill_ellipse, arc, pie, tri, fill_tri, poly, fill_poly, text, text_size, text_width, text_height, get, present, image, decode, image_w, image_h, blit, blit_rot, alpha, save, key, pressed, released, wheel, wheel_x, typed, mouse_x, mouse_y, mouse, audio, sample, audio_queued, audio_flush, sound, play, loop, stop, volume, fullscreen)");
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after gfx." + method + " at line " + std::to_string(peek().line));
@@ -4202,6 +4207,11 @@ private:
             if (m == "fill_circle") return std::string("gfx.fill_circle(cx, cy, rad, r, g, b)");
             if (m == "ellipse") return std::string("gfx.ellipse(cx, cy, rx, ry, r, g, b)");
             if (m == "fill_ellipse") return std::string("gfx.fill_ellipse(cx, cy, rx, ry, r, g, b)");
+            if (m == "arc") return std::string("gfx.arc(cx, cy, rad, a0, a1, r, g, b)");
+            if (m == "pie") return std::string("gfx.pie(cx, cy, rad, a0, a1, r, g, b)");
+            if (m == "round_rect") return std::string("gfx.round_rect(x, y, w, h, rad, r, g, b)");
+            if (m == "fill_round_rect") return std::string("gfx.fill_round_rect(x, y, w, h, rad, r, g, b)");
+            if (m == "icon") return std::string("gfx.icon(src)");
             if (m == "tri") return std::string("gfx.tri(x1, y1, x2, y2, x3, y3, r, g, b)");
             if (m == "fill_tri") return std::string("gfx.fill_tri(x1, y1, x2, y2, x3, y3, r, g, b)");
             if (m == "poly") return std::string("gfx.poly(xs, ys, r, g, b)");
@@ -4216,6 +4226,11 @@ private:
             }
             if (method == "blit" && got != 3 && got != 5 && got != 7 && got != 9) {
                 throw std::runtime_error("gfx.blit(x, y, src[, w, h]) or gfx.blit(x, y, src, sx, sy, sw, sh[, dw, dh]) at line " + std::to_string(line));
+            }
+            // A rotated blit has no source-rect form, so 5 is a half-written
+            // destination size rather than something to guess at.
+            if (method == "blit_rot" && got != 4 && got != 6) {
+                throw std::runtime_error("gfx.blit_rot(x, y, src, angle[, w, h]) at line " + std::to_string(line));
             }
             if (got < argc || got > argcMax) {
                 if (method == "resize") {
@@ -4256,6 +4271,9 @@ private:
                 }
                 if (method == "fullscreen") {
                     throw std::runtime_error("gfx.fullscreen() or gfx.fullscreen(on) at line " + std::to_string(line));
+                }
+                if (method == "cursor") {
+                    throw std::runtime_error("gfx.cursor() or gfx.cursor(on) at line " + std::to_string(line));
                 }
                 throw std::runtime_error("gfx.open(title, w, h[, scale]) at line " + std::to_string(line));
             }

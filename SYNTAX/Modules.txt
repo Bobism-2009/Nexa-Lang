@@ -338,6 +338,21 @@ Nexa Standard Modules
                                    and the same negative w/h flip (the corner they
                                    are measured from is the one past the box:
                                    rect(8, 5, -6, -4) is rect(2, 1, 6, 4)).
+  gfx.round_rect(x, y, w, h, rad, r, g, b)      - rectangle outline, rounded corners
+  gfx.fill_round_rect(x, y, w, h, rad, r, g, b) - the same box, filled
+                                   The same box, the same clipping and the same
+                                   negative w/h flip as gfx.rect / gfx.fill, with a
+                                   quarter of the circle gfx.fill_circle draws cut
+                                   from each corner -- so a corner and a circle of
+                                   equal radius curve identically. rad 0 is gfx.rect /
+                                   gfx.fill exactly, to the pixel, and so is a
+                                   negative rad.
+                                   rad is clamped to (min(|w|, |h|) - 1) / 2: a corner
+                                   of radius rad eats rad pixels off the edge row, so
+                                   two of them meeting across a side would leave that
+                                   row with nothing in it. At the clamp a square of
+                                   odd side is precisely the circle gfx.fill_circle
+                                   draws.
   gfx.line(x1, y1, x2, y2, r, g, b[, t])
                                  - clipped line (0..255). Optional thickness t in
                                    pixels: t <= 1 is the plain one-pixel line, and
@@ -357,6 +372,22 @@ Nexa Standard Modules
                                    bottom, the end pixels down the steep sides.
                                    Radii are clamped to 1048576 (the framebuffer
                                    itself tops out at 4096).
+  gfx.arc(cx, cy, rad, a0, a1, r, g, b) - part of a circle outline
+  gfx.pie(cx, cy, rad, a0, a1, r, g, b) - the filled wedge, centre out to the arc
+                                   Angles are DEGREES, 0 straight up (12 o'clock) and
+                                   increasing CLOCKWISE, and may be fractional: 90 is
+                                   3 o'clock, 180 is 6, 270 is 9. The sweep runs from
+                                   a0 to a1. a1 - a0 of 360 or more is the whole
+                                   circle, and a sweep that does not advance (a1 <= a0)
+                                   draws nothing -- angles are not sorted for you.
+                                   An arc is exactly the pixels gfx.circle would draw
+                                   whose direction from cx,cy lies in the sweep, and a
+                                   pie exactly those of gfx.fill_circle, so a sweep of
+                                   a full turn is that circle pixel for pixel and a
+                                   narrower one is a subset of it. Both count the
+                                   centre pixel as inside every sweep, so a pie is a
+                                   solid wedge. The quarter turns are exact: an arc
+                                   ending at 90 includes the pixel that sits at 90.
   gfx.tri(x1, y1, x2, y2, x3, y3, r, g, b)      - triangle outline (three lines)
   gfx.fill_tri(x1, y1, x2, y2, x3, y3, r, g, b) - filled triangle
   gfx.poly(xs, ys, r, g, b)      - closed polygon outline; xs and ys are []int of
@@ -493,6 +524,46 @@ Nexa Standard Modules
                                    sizes may be negative to flip both ways. This is the
                                    9-argument form's dw/dh and the 5-argument form's
                                    w/h alike; 0 still means "native / 1:1".
+  gfx.blit_rot(x, y, src, angle[, w, h])
+                                 - the same draw, turned. src is a handle or a path and
+                                   the destination box is read exactly as gfx.blit reads
+                                   it: |w| by |h| at x,y, omitted (or 0) for native size,
+                                   negative to mirror that axis first. The box is then
+                                   turned by angle DEGREES CLOCKWISE about its own
+                                   CENTRE -- the same angle convention gfx.arc uses, and
+                                   fractional angles are fine.
+                                   Sampled nearest-neighbor by inverse mapping: every
+                                   destination pixel asks which source pixel it came
+                                   from, so a turned sprite is solid at every angle
+                                   rather than scattered with holes. Per-pixel alpha
+                                   then gfx.alpha() apply as they do for gfx.blit,
+                                   the result is clipped to the framebuffer, and the
+                                   return is the same 1 if a pixel landed, else 0.
+                                   An angle of 0 is gfx.blit to the byte, for every
+                                   form of it. The quarter turns are exact -- 90, 180
+                                   and 270 land on the pixel grid, not near it -- and
+                                   the angle is reduced first, so -90 is 270 and 450
+                                   is 90.
+  gfx.icon(src)                  - set the window icon from an image; src is a handle or
+                                   a path, any size, nearest-scaled to whatever size the
+                                   platform wants. 1 if it was set, 0 with no window
+                                   open or with an image that will not load.
+                                   Windows: a 32x32 and a 16x16 HICON, alpha and all.
+                                   Linux: _NET_WM_ICON, scaled down past 128x128 (aspect
+                                   kept) so the property stays a sane size.
+                                   macOS: the application icon, which is what the dock
+                                   shows. wasm: the page's favicon.
+  gfx.cursor()                   - 1 if the OS cursor is visible over the window, else 0
+  gfx.cursor(on)                 - show (1) or hide (0) it; returns the new state.
+                                   Both are 0 when no window is open. A window starts
+                                   with the cursor showing, and gets it back when the
+                                   window closes -- a program cannot leave the user
+                                   without a pointer.
+                                   Windows: the window class cursor. Linux: an empty
+                                   cursor via XDefineCursor. wasm: the canvas's CSS
+                                   cursor. macOS: NSCursor hide/unhide, which is
+                                   app-wide -- a Nexa program has one window, so that
+                                   is the window's.
   gfx.key(name)                  - 1 if that key is down ("w", "1", "escape", "space", "up",
                                    "shift", "ctrl", "alt", "tab", "backspace", "delete",
                                    "f11", ...)
@@ -542,9 +613,10 @@ Nexa Standard Modules
   PNG, JPEG (including progressive), BMP, and GIF.
   With no window open -- before the first gfx.open(), after gfx.close(), or when
   gfx.open() failed -- no gfx call is an error. Drawing (clear, plot, fill, rect,
-  line, circle, fill_circle, ellipse, fill_ellipse, tri, fill_tri, poly,
-  fill_poly, text, blit, present, poll) does nothing; width, height, scale,
-  resize, fullscreen, blit, text, poly, fill_poly, save, wheel, wheel_x,
+  round_rect, fill_round_rect, line, circle, fill_circle, ellipse, fill_ellipse,
+  arc, pie, tri, fill_tri, poly, fill_poly, text, blit, blit_rot, present, poll)
+  does nothing; width, height, scale, resize, fullscreen, blit, blit_rot, icon,
+  cursor, text, poly, fill_poly, save, wheel, wheel_x,
   mouse_x, mouse_y, mouse, key, pressed and released return 0; get returns -1;
   typed returns ""; title and drop return what they last held. The calls with no
   window in them still work: text_width, text_height, text_size, alpha, image,

@@ -171,6 +171,37 @@ expect_emit "blit takes a path with a source rect" \
     '__nexa_gfx_blit_path\(1, 2, "a\.png", 0, 0, 3, 4, 5, 6\)' \
     '    gfx.blit(1, 2, "a.png", 3, 4, 5, 6);'
 
+# gfx.blit_rot reads its destination size the same way, with the same 0 for
+# "native size", and picks the handle/path overload the same way; the angle is
+# threaded through between them. It is also the only gfx argument that is not
+# an integer, so a fractional one has to reach the generated C++ intact.
+expect_emit "blit_rot at native size" \
+    '__nexa_gfx_blit_rot\(1, 2, 7, 45, 0, 0\)' '    gfx.blit_rot(1, 2, 7, 45);'
+expect_emit "blit_rot scaled fills w,h" \
+    '__nexa_gfx_blit_rot\(1, 2, 7, 45, 8, 9\)' '    gfx.blit_rot(1, 2, 7, 45, 8, 9);'
+expect_emit "blit_rot keeps a fractional angle" \
+    '__nexa_gfx_blit_rot\(1, 2, 7, 22\.5, 0, 0\)' '    gfx.blit_rot(1, 2, 7, 22.5);'
+expect_emit "blit_rot takes a path literal" \
+    '__nexa_gfx_blit_rot_path\(1, 2, "a\.png", 45, 0, 0\)' \
+    '    gfx.blit_rot(1, 2, "a.png", 45);'
+expect_emit "blit_rot takes a path in a variable" \
+    '__nexa_gfx_blit_rot_path\(1, 2, __nexa_var_[0-9]+, 45, 0, 0\)' \
+    '    let p: string = "a.png";
+    gfx.blit_rot(1, 2, p, 45);'
+
+# gfx.icon splits on the same inferred type.
+expect_emit "icon takes a handle" \
+    '__nexa_gfx_icon\(7\)' '    let ok: int = gfx.icon(7);'
+expect_emit "icon takes a path" \
+    '__nexa_gfx_icon_path\("a\.png"\)' '    let ok: int = gfx.icon("a.png");'
+
+# gfx.cursor splits on argument count, and -1 is the "report the state"
+# sentinel gfx.fullscreen uses -- not a request to hide.
+expect_emit "cursor with no argument queries" \
+    '__nexa_gfx_cursor\(-1\)' '    let c: int = gfx.cursor();'
+expect_emit "cursor with an argument sets" \
+    '__nexa_gfx_cursor\(0\)' '    gfx.cursor(0);'
+
 # The fixed-arity calls: one each, so that renaming a runtime entry point
 # without updating the transpiler fails here rather than at link time.
 expect_emit "close" '__nexa_gfx_close\(\)' '    gfx.close();'
