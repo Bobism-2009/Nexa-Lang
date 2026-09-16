@@ -535,6 +535,152 @@ else
     link_case "volume_set" '    let n: int = gfx.volume(128);'
 fi
 
+# --- headers: what slicing must not take away -------------------------------
+# Two passes act on the generated file in order: duplicate `#include <...>`
+# lines are dropped, then the inactive platform branches are deleted. Together
+# they can lose a header outright -- the dedup keeps the copy inside a platform
+# branch, slicing then deletes that branch, and the target that needed the
+# header is left with none. That is not a gfx bug in itself; it bites whenever
+# two modules happen to want the same header and one of them is guarded, which
+# is why the gfx audio backends (`<thread>` for the macOS AudioQueue wait,
+# `<dlfcn.h>` for the ALSA dlopen) collide with std/thread and std/dll.
+#
+# So this layer is written as the general rule rather than the two known pairs:
+# if the emitted C++ names the symbol, the header has to be in the same file,
+# on every target. A third module pairing that trips the same wire fails here
+# without anyone remembering to add a case for it.
+
+# needs <file> <symbol-pattern> <header>
+# Reports a failure when the file uses the symbol and does not include the
+# header. Silent when the symbol is not there: that target sliced it away.
+needs() {
+    if ! grep -qE "$2" "$1"; then
+        return 0
+    fi
+    if grep -qF "#include <$3>" "$1"; then
+        return 0
+    fi
+    echo "  uses $2 with no #include <$3>"
+    return 1
+}
+
+# header_case <label> <nxa-source> [NexaC flags...]
+header_case() {
+    label="hdr_$1"
+    src=$2
+    shift 2
+    printf '%s' "$src" > "$WORK/$label.nxa"
+    if ! "$NEXAC" "$WORK/$label.nxa" "$@" --source "$WORK/$label.cpp" \
+            > "$WORK/$label.log" 2>&1; then
+        echo "FAIL $label: NexaC could not transpile"
+        sed 's/^/  /' "$WORK/$label.log"
+        fails=$((fails + 1))
+        return
+    fi
+    bad=0
+    needs "$WORK/$label.cpp" 'std::thread|std::this_thread' 'thread' || bad=1
+    needs "$WORK/$label.cpp" 'dlopen|dlsym|dlclose' 'dlfcn.h' || bad=1
+    needs "$WORK/$label.cpp" 'std::atomic' 'atomic' || bad=1
+    needs "$WORK/$label.cpp" 'std::chrono' 'chrono' || bad=1
+    if [ $bad -ne 0 ]; then
+        echo "FAIL $label: slicing left the generated C++ without a header it uses"
+        fails=$((fails + 1))
+        return
+    fi
+    echo "ok $label"
+}
+
+echo "-- headers: a header slicing must not have taken away"
+
+# gfx.play pulls the whole audio backend ladder in, whose macOS branch includes
+# <thread>; std/thread's unguarded copy came later and was dropped as a
+# duplicate, so every non-macOS build lost it.
+AUDIO_THREAD='#include <std/gfx>
+#include <std/thread>
+
+fn worker() {
+    let x: int = 1;
+}
+
+fn main() {
+    let s: int = gfx.sound("beep.wav");
+    gfx.play(s, 200);
+    let t: int = thread.spawn(worker);
+    thread.join(t);
+}
+'
+
+# The same collision one module over: the ALSA branch dlopens libasound, and
+# std/dll dlopens what it was asked to.
+AUDIO_DLL='#include <std/gfx>
+#include <std/dll>
+
+fn main() {
+    gfx.audio(44100);
+    gfx.sample(0);
+    let h: int = dll.load("./lib.so");
+    dll.call(h, "func_name");
+}
+'
+
+# And both at once, which is where a fix that only moves one of the two
+# includes around shows up.
+AUDIO_BOTH='#include <std/gfx>
+#include <std/thread>
+#include <std/dll>
+
+fn worker() {
+    let x: int = 1;
+}
+
+fn main() {
+    let s: int = gfx.sound("beep.wav");
+    gfx.play(s, 200);
+    gfx.audio_flush();
+    let t: int = thread.spawn(worker);
+    thread.join(t);
+    let h: int = dll.load("./lib.so");
+    dll.call(h, "func_name");
+}
+'
+
+# Every target this machine can emit for. macOS is the one that cannot be
+# cross-emitted from here, and it is the branch that keeps its own copy of both
+# headers, so it is the case least able to regress.
+header_case "audio_thread_native" "$AUDIO_THREAD"
+header_case "audio_thread_win" "$AUDIO_THREAD" --win
+header_case "audio_thread_wasm" "$AUDIO_THREAD" --wasm
+header_case "audio_dll_native" "$AUDIO_DLL"
+header_case "audio_dll_win" "$AUDIO_DLL" --win
+header_case "audio_dll_wasm" "$AUDIO_DLL" --wasm
+header_case "audio_both_native" "$AUDIO_BOTH"
+header_case "audio_both_win" "$AUDIO_BOTH" --win
+header_case "audio_both_wasm" "$AUDIO_BOTH" --wasm
+
+# A source-level rule is only worth what the compiler says about it, so the
+# native combination is built for real as well -- same fake X11 as the link
+# layer above, since none of these programs opens a window.
+if [ -z "$CXX" ] || [ "$link_ok" -ne 1 ]; then
+    echo "SKIP hdr_build: no usable C++ compiler on this machine"
+    skips=$((skips + 1))
+else
+    printf '%s' "$AUDIO_BOTH" > "$WORK/hdr_build.nxa"
+    if ! "$NEXAC" "$WORK/hdr_build.nxa" --source "$WORK/hdr_build.cpp" \
+            > "$WORK/hdr_build.log" 2>&1; then
+        echo "FAIL hdr_build: NexaC could not transpile"
+        sed 's/^/  /' "$WORK/hdr_build.log"
+        fails=$((fails + 1))
+    elif ! "$CXX" -std=c++17 -O0 -I "$SUITE/gfx_x11_stub" -c \
+            "$WORK/hdr_build.cpp" -o "$WORK/hdr_build.o" \
+            > "$WORK/hdr_build.cc" 2>&1; then
+        echo "FAIL hdr_build: gfx.play + thread.spawn + dll.load does not compile"
+        grep -E 'error:' "$WORK/hdr_build.cc" | head -n 5 | sed 's/^/  /'
+        fails=$((fails + 1))
+    else
+        echo "ok hdr_build"
+    fi
+fi
+
 # --- report -----------------------------------------------------------------
 
 if [ $fails -eq 0 ]; then

@@ -3304,12 +3304,17 @@ static int __nexa_gfx_blit_rot(int x, int y, int id, double angle, int dw, int d
             double u = dx * cs + dy * sn + halfw;
             double v = dy * cs - dx * sn + halfh;
             if (u < 0.0 || v < 0.0 || u >= (double)DW || v >= (double)DH) continue;
-            if (flipx) u = (double)DW - u;
-            if (flipy) v = (double)DH - v;
             long long tx = (long long)u;
             long long ty = (long long)v;
-            if (tx > DW - 1) tx = DW - 1;   // mirroring sends an exact 0 to DW
+            if (tx > DW - 1) tx = DW - 1;   // u < DW already; rounding insurance
             if (ty > DH - 1) ty = DH - 1;
+            // Mirror the texel index, not the continuous coordinate, exactly
+            // as gfx.blit does. At a quarter turn the back-mapped u lands on a
+            // whole number whenever the box's width and height disagree in
+            // parity, and flipping before the truncation would slide the whole
+            // sprite one texel -- dropping an edge row and doubling the other.
+            if (flipx) tx = DW - 1 - tx;
+            if (flipy) ty = DH - 1 - ty;
             int srcx = (int)(tx * (long long)im.w / DW);
             int srcy = (int)(ty * (long long)im.h / DH);
             const unsigned char* s = im.px + ((size_t)srcy * (size_t)im.w + (size_t)srcx) * 4;
@@ -3690,15 +3695,13 @@ static std::string __nexa_gfx_opendialog(const std::string& spec) {
     // checked here rather than merely compiled. Keep the markers on their own
     // comment lines and keep everything a backend needs between them.
     //
-    // One trap when adding to a branch below. The transpiler drops duplicate
-    // `#include <...>` lines before it strips the inactive platform guards
-    // (Transpiler.hpp), so of two identical includes in two branches of this
-    // ladder only the first survives the dedup -- and then slicing deletes the
-    // branch it survived in, leaving the other branch without its header. An
-    // include here must therefore either be unique across the whole generated
-    // file or be one that every target has unguarded. That is why the macOS
-    // branch waits with <thread> rather than usleep, and why the ALSA branch
-    // waits with snd_pcm_wait and so needs no header for it at all.
+    // An `#include` inside a branch below is safe to repeat: the dedup pass
+    // (dedupUnconditionalIncludes in PlatformEmit.hpp) only drops a duplicate
+    // when an unguarded copy is already in the file, so it can never leave a
+    // branch without a header that slicing then needs. It did once -- <thread>
+    // in the AudioQueue branch swallowed std/thread's copy and broke every
+    // non-Apple build that mixed gfx.play with thread.spawn -- which is what
+    // that pass now exists to prevent.
     if (need.audio) out += R"NEXA_GFX(
 // [nexa:audio-backend-begin]
 #ifdef _WIN32

@@ -1136,19 +1136,7 @@ public:
             }
         }
 
-        std::set<std::string> seenIncludeLines;
-        std::ostringstream filtered;
-        std::istringstream in(out.str());
-        std::string line;
-        while (std::getline(in, line)) {
-            std::string key = line;
-            while (!key.empty() && key.back() == '\r') key.pop_back();
-            if (key.rfind("#include <", 0) == 0) {
-                if (!seenIncludeLines.insert(key).second) continue;
-            }
-            filtered << key << "\n";
-        }
-        std::string src = stripInactivePlatformGuards(filtered.str(), target_);
+        std::string src = stripInactivePlatformGuards(dedupUnconditionalIncludes(out.str()), target_);
         if (cppUsage_.gfx && cppUsage_.gfxImage &&
             (target_ == CppTarget::Linux || target_ == CppTarget::Wasm)) {
             // ~8,000 lines of stb, so only a program that can reach the decoder gets it.

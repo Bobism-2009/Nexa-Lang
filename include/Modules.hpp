@@ -8,6 +8,7 @@
 #include "HttpRuntime.hpp"
 #include "GfxRuntime.hpp"
 #include "JsonRuntime.hpp"
+#include "PlatformEmit.hpp"
 #include "ResultRuntime.hpp"
 
 namespace nexa {
@@ -1618,19 +1619,7 @@ public:
             out += "#endif\n";
             out += "static std::vector<void*> __nexa_dll_handles;\n";
         }
-        std::set<std::string> seenIncludeLines;
-        std::ostringstream filtered;
-        std::istringstream in(out);
-        std::string line;
-        while (std::getline(in, line)) {
-            std::string key = line;
-            while (!key.empty() && key.back() == '\r') key.pop_back();
-            if (key.rfind("#include <", 0) == 0) {
-                if (!seenIncludeLines.insert(key).second) continue;
-            }
-            filtered << key << "\n";
-        }
-        return filtered.str();
+        return dedupUnconditionalIncludes(out);
     }
 
     std::string getCppIncludes() const {

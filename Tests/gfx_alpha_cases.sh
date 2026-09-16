@@ -593,6 +593,67 @@ int main(int argc, char** argv) {
     __nexa_gfx_blit_rot(0, 0, q, 90, 0, 0);
     same("blit_rot450_is_90", at450, snapshot());
 
+    // A mirrored quarter turn of a box whose sides disagree in parity. The
+    // square above can never catch this: at 90 degrees the back-mapped
+    // coordinate lands exactly on a whole number, and mirroring the coordinate
+    // instead of the texel it truncates to slides the whole sprite one texel --
+    // dropping one edge of the source and drawing the other twice. A 3x2 box
+    // ties on every pixel, so it either reads right or it is obviously wrong.
+    //
+    // The sprite is 11 12 13 / 21 22 23, so a quarter turn clockwise reads
+    // 21 11 / 22 12 / 23 13 down the two columns it lands in, and mirroring
+    // first turns that into 23 13 / 22 12 / 21 11.
+    {
+        const unsigned char tri_px[3 * 2 * 4] = {
+            11, 11, 11, 255,  12, 12, 12, 255,  13, 13, 13, 255,
+            21, 21, 21, 255,  22, 22, 22, 255,  23, 23, 23, 255,
+        };
+        int tri = make_img(3, 2, tri_px);
+        // Placed at 1,1 in a 6x6 so the turned box is nowhere near an edge:
+        // this is about which texel is sampled, not about clipping.
+        fb_open(6, 6);
+        __nexa_gfx_blit_rot(1, 1, tri, 90, 3, 2);
+        col("blit_rot90_3x2_left", 2);
+        col("blit_rot90_3x2_right", 3);
+        fb_open(6, 6);
+        __nexa_gfx_blit_rot(1, 1, tri, 90, -3, 2);
+        col("blit_rot90_3x2_flipx_left", 2);
+        col("blit_rot90_3x2_flipx_right", 3);
+        fb_open(6, 6);
+        __nexa_gfx_blit_rot(1, 1, tri, 90, 3, -2);
+        col("blit_rot90_3x2_flipy_left", 2);
+        col("blit_rot90_3x2_flipy_right", 3);
+        // The other quarter turn ties the same way, in the other direction.
+        fb_open(6, 6);
+        __nexa_gfx_blit_rot(1, 1, tri, 270, -3, 2);
+        col("blit_rot270_3x2_flipx_left", 1);
+        col("blit_rot270_3x2_flipx_right", 2);
+        // Every source texel used exactly once is what the shift breaks: a
+        // mirrored quarter turn has to be a permutation of the sprite, so the
+        // six values come back as the six that went in.
+        fb_open(6, 6);
+        __nexa_gfx_blit_rot(1, 1, tri, 90, -3, -2);
+        {
+            int seen[24];
+            int n = 0;
+            for (int yy = 0; yy < 6; yy++) {
+                for (int xx = 0; xx < 6; xx++) {
+                    int c = __nexa_gfx_get(xx, yy) & 0xFF;
+                    if (c != 0) seen[n++] = c;
+                }
+            }
+            std::printf("blit_rot90_3x2_flipboth_count=%d\n", n);
+            for (int i = 1; i < n; i++) {
+                int v = seen[i], j = i - 1;
+                for (; j >= 0 && seen[j] > v; j--) seen[j + 1] = seen[j];
+                seen[j + 1] = v;
+            }
+            std::printf("blit_rot90_3x2_flipboth_sorted:");
+            for (int i = 0; i < n; i++) std::printf(" %d", seen[i]);
+            std::putchar('\n');
+        }
+    }
+
     // The whole point of inverse mapping: whatever the angle, the sprite lands
     // solid. A forward mapping scatters source pixels and leaves gaps between
     // them, which would show up here as a row drawn in two pieces.
@@ -783,6 +844,16 @@ blit_rot270_top: 2 4
 blit_rot270_bottom: 1 3
 blit_rot_minus90_is_270=yes
 blit_rot450_is_90=yes
+blit_rot90_3x2_left: 21 22 23 0 0 0
+blit_rot90_3x2_right: 11 12 13 0 0 0
+blit_rot90_3x2_flipx_left: 23 22 21 0 0 0
+blit_rot90_3x2_flipx_right: 13 12 11 0 0 0
+blit_rot90_3x2_flipy_left: 11 12 13 0 0 0
+blit_rot90_3x2_flipy_right: 21 22 23 0 0 0
+blit_rot270_3x2_flipx_left: 0 11 12 13 0 0
+blit_rot270_3x2_flipx_right: 0 21 22 23 0 0
+blit_rot90_3x2_flipboth_count=6
+blit_rot90_3x2_flipboth_sorted: 11 12 13 21 22 23
 blit_rot_solid_0: drawn=some gaps=0
 blit_rot_solid_1: drawn=some gaps=0
 blit_rot_solid_2: drawn=some gaps=0

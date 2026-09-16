@@ -2,6 +2,7 @@
 
 #include <cctype>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -382,6 +383,44 @@ inline std::string stripInactivePlatformGuards(const std::string& src, CppTarget
         lines.push_back(std::move(line));
     }
     return stripInactivePlatformGuardsRange(lines, 0, static_cast<int>(lines.size()), macrosFor(target));
+}
+
+// Drop repeated `#include <...>` lines, but only where an earlier copy is
+// unconditional -- outside every `#if`. A copy that lives inside a platform
+// ladder is kept every time it appears.
+//
+// The reason is the order of the two passes. Dedup runs before
+// stripInactivePlatformGuards, so "keep the first, drop the rest" can keep only
+// the copy that sits in the branch slicing is about to delete, and the file
+// ends up with no copy at all: that is how `#include <thread>` in the gfx
+// AudioQueue branch used to swallow std/thread's unguarded copy and break every
+// non-Apple build of a program using gfx.play with thread.spawn. Repeating an
+// include costs nothing -- standard headers are idempotent -- while losing one
+// is a build break, so the tie goes to repetition.
+inline std::string dedupUnconditionalIncludes(const std::string& src) {
+    std::set<std::string> seenUnconditional;
+    std::ostringstream filtered;
+    std::istringstream in(src);
+    std::string line;
+    int depth = 0;
+    while (std::getline(in, line)) {
+        std::string key = line;
+        while (!key.empty() && key.back() == '\r') key.pop_back();
+        size_t ws = key.find_first_not_of(" \t");
+        std::string directive = ws == std::string::npos ? std::string() : key.substr(ws);
+        if (directive.rfind("#endif", 0) == 0 && depth > 0) depth--;
+        if (directive.rfind("#include <", 0) == 0) {
+            if (depth == 0) {
+                if (!seenUnconditional.insert(directive).second) continue;
+            } else if (seenUnconditional.count(directive)) {
+                continue;
+            }
+        }
+        // `#else`/`#elif` stay at the same depth; only a fresh `#if` opens one.
+        if (directive.rfind("#if", 0) == 0) depth++;
+        filtered << key << "\n";
+    }
+    return filtered.str();
 }
 
 } // namespace nexa
