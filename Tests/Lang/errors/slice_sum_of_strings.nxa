@@ -1,0 +1,12 @@
+// sum() is offered on []int and []float only. On a []string it would be the one
+// slice algorithm that silently *works*: `std::string += std::string` compiles,
+// so the emitted accumulator would concatenate and sum would quietly mean join.
+// A wrong answer that compiles is worse than one that does not, so this is
+// refused by name.
+// Reference: SYNTAX/Core.txt ("SLICE ALGORITHMS")
+#include <std/io>
+
+fn main() {
+    let words: []string = ["a", "b"];
+    io.println(words.sum());
+}

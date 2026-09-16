@@ -1,0 +1,11 @@
+// The mutating algorithms take no arguments. xs.sort(1) reads like a sort key
+// or a starting index, so it is a plausible slip rather than a typo, and the
+// count is checked by name the way every other builtin method's is.
+// Reference: SYNTAX/Core.txt ("SLICE ALGORITHMS")
+#include <std/io>
+
+fn main() {
+    let xs: []int = [3, 1, 2];
+    xs.sort(1);
+    io.println(xs[0]);
+}

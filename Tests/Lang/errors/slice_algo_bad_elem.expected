@@ -1,0 +1,3 @@
+.sort() expects []int, []float or []string
+pts is '[]Point'
+at line 19

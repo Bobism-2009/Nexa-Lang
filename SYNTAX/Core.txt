@@ -360,6 +360,7 @@ SLICES ([]T)
     xs.push(3);            // append
     let n: int = xs.pop(); // remove and return last
     xs.insert(1, 9);       // insert at index (clamped to [0, len])
+    xs.remove(1);          // remove at index (NOT clamped — see below)
     xs.clear();
     io.println(len(xs));
     xs[0] = 9;
@@ -371,6 +372,77 @@ SLICES ([]T)
 
   xs.pop() on an empty slice is undefined behaviour, the same as indexing out of range.
   There is no bounds check; check len(xs) first if the slice may be empty.
+
+  xs.insert(i, v) and xs.remove(i) differ on purpose. insert clamps, because an
+  append is a sensible reading of "insert past the end". remove has no such
+  reading: an index outside [0, len) names no element, so it is the pop rule —
+  undefined behaviour, not a no-op. Check len(xs) yourself.
+
+  SLICE ALGORITHMS
+    In place, returning nothing:
+
+      xs.sort();           // ascending
+      xs.sort_desc();      // descending
+      xs.reverse();
+      xs.remove(i);        // shown above with the other index methods
+
+    Reading, returning a value:
+
+      let lo = xs.min();   // smallest element
+      let hi = xs.max();   // largest
+      let t  = xs.sum();   // total
+      let s  = parts.join(", ");   // []string -> string
+
+    sort / sort_desc / reverse / min / max work on []int, []float and []string,
+    and on any other element `<` compares: the other integer widths (short,
+    long, unsigned long, size_t, unsigned char), char and bool. sum works on
+    the numeric types only -- []int, []float and the other integer widths. It
+    has no meaning for []string, where `+` would be concatenation, so it is not
+    offered there. join is []string only.
+
+    A slice of structs, of slices, or of maps has none of these: sorting needs
+    `<` and summing needs `+=`, and NexaC says so by line rather than letting
+    clang complain about the code it generated.
+
+    Strings sort and compare by byte value, so "Z" sorts before "a" and no
+    locale or case folding is applied. The sort is not stable, which cannot be
+    observed on a slice of numbers or strings — there is no payload beside the
+    element to be reordered.
+
+    min() and max() on an empty slice are undefined behaviour, exactly like
+    pop(): there is no smallest element of nothing and no value to invent. As
+    everywhere else in Nexa there is no guard; check len(xs) first.
+
+    sum() of an empty slice is 0, which is not a special case — it is what
+    adding up no elements comes to. It accumulates in the element type, not a
+    wider one, so a []short of large values wraps exactly where `a + b` on two
+    shorts would. Declare the slice wider if the total needs the room.
+
+    join on an empty slice is "", and on one element it is that element: the
+    separator goes between elements, never at an end.
+
+    The reading four — min, max, sum, join — work on any expression that
+    yields a slice, including a temporary one:
+
+      io.println(xs[1:4].sum());              // total of a sub-range
+      io.println(line.split(",").join(";"));  // re-punctuate a line
+
+    The in-place four — sort, sort_desc, reverse, remove — need a slice you can
+    name, because they hand back nothing and their whole effect is on the
+    receiver:
+
+      xs.sort();          // a variable
+      b.items.sort();     // a field
+      grid[0].sort();     // an element
+      scores["ada"].sort();
+
+    A temporary is refused rather than emitted. `xs[1:4].sort()` reads like
+    "sort that range of xs" and cannot be made to mean it — xs[1:4] is already
+    a copy by the time sort sees it, so the sort would reorder something
+    nothing else can reach. Take the copy, sort it, and use it:
+
+      let mid = xs[1:4];
+      mid.sort();
 
   Element type can be anything parseTypeName accepts: []string, []Point, [][]int, []*int.
   `fn f(xs: []int)` and struct fields work the same way.
@@ -464,4 +536,5 @@ COMPILE-TIME CHECKS
 
   Still undefined behaviour by design, not diagnosed: division by zero,
   out-of-bounds indexing on a fixed array, reading an uninitialized local,
-  and popping an empty slice.
+  popping an empty slice, xs.remove(i) with i outside [0, len), and
+  xs.min() / xs.max() on an empty slice.

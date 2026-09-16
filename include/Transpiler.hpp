@@ -566,6 +566,18 @@ public:
                     n.value == "insert" || n.value == "keys" || n.value == "values")) {
                 needsVector = true;
             }
+            // The slice algorithms, gated on `.` because unlike push/pop these share
+            // their names with plausible user functions -- a program with its own
+            // fn min(a, b) has no slice in it and should not gain <vector>.
+            if (n.type == AstNode::Type::FnCall && n.initValue == "." &&
+                    (n.value == "sort" || n.value == "sort_desc" || n.value == "reverse" ||
+                     n.value == "join" || n.value == "min" || n.value == "max" || n.value == "sum")) {
+                needsVector = true;
+                // join builds a std::string out of a []string; every other one hands
+                // back an element or nothing, so it is the only one of these that can
+                // introduce a string to a program that had none.
+                if (n.value == "join") needsString = true;
+            }
             if (n.type == AstNode::Type::ExprSlice) needsVector = true;
             // checkNeedsVector above only walks statement positions, so container uses
             // nested inside an expression (io.println(s.split(v)[0])) land here instead.
@@ -1352,7 +1364,37 @@ private:
     static bool isReadOnlyBuiltinMethod(const std::string& m) {
         return m == "len" || m == "size" || m == "has" || m == "contains" || m == "index_of" ||
                m == "get" || m == "get_at" || m == "keys" || m == "values" || m == "count" ||
-               m == "empty" || m == "ok" || m == "value" || m == "error" || m == "stringify";
+               m == "empty" || m == "ok" || m == "value" || m == "error" || m == "stringify" ||
+               m == "join" || m == "min" || m == "max" || m == "sum";
+    }
+
+    // xs.sort() / xs.sort_desc(), as an in-place heapsort over the emitted receiver.
+    //
+    // Heapsort rather than std::sort because <algorithm> is not one of the headers a
+    // Nexa program pulls in, and a slice sort is not worth making it one -- the whole
+    // point of the emit is that a program includes only what it reaches. Heapsort is
+    // the one O(n log n) in-place sort that needs no recursion, no scratch buffer and
+    // no median-picking, so it fits in a call-site lambda; insertion sort would have
+    // fitted too, but a quadratic sort behind a one-word method call is a trap.
+    //
+    // The direction is the heap's comparison: a max-heap drains ascending, so `<`
+    // sorts up and `>` sorts down. Heapsort is unstable, which is unobservable here
+    // because a slice of int / float / string holds no payload beside the key.
+    static std::string emitSliceSort(const std::string& recv, bool descending) {
+        const std::string op = descending ? " > " : " < ";
+        return "([&](){ auto& __nexa_v = " + recv + "; size_t __nexa_n = __nexa_v.size();"
+               " auto __nexa_sift = [&](size_t __nexa_r, size_t __nexa_m){"
+               " while (true) {"
+               " size_t __nexa_c = __nexa_r * 2 + 1;"
+               " if (__nexa_c >= __nexa_m) break;"
+               " if (__nexa_c + 1 < __nexa_m && __nexa_v[__nexa_c]" + op + "__nexa_v[__nexa_c + 1]) __nexa_c++;"
+               " if (!(__nexa_v[__nexa_r]" + op + "__nexa_v[__nexa_c])) break;"
+               " auto __nexa_t = __nexa_v[__nexa_r]; __nexa_v[__nexa_r] = __nexa_v[__nexa_c]; __nexa_v[__nexa_c] = __nexa_t;"
+               " __nexa_r = __nexa_c; } };"
+               " for (size_t __nexa_i = __nexa_n / 2; __nexa_i-- > 0; ) __nexa_sift(__nexa_i, __nexa_n);"
+               " for (size_t __nexa_i = __nexa_n; __nexa_i-- > 1; ) {"
+               " auto __nexa_t = __nexa_v[0]; __nexa_v[0] = __nexa_v[__nexa_i]; __nexa_v[__nexa_i] = __nexa_t;"
+               " __nexa_sift(0, __nexa_i); } })()";
     }
 
     // Type of an lvalue chain (xs, p.a.b, xs[i], *p) rooted at `rootName`, given that
@@ -2156,9 +2198,17 @@ private:
                             if (e.value == "set" || e.value == "push" || e.value == "remove") return "void";
                         }
                         if (nexaIsSliceType(recvT)) {
-                            if (e.value == "pop") return nexaSliceElem(recvT);
+                            if (e.value == "pop" || e.value == "min" || e.value == "max" ||
+                                e.value == "sum") {
+                                return nexaSliceElem(recvT);
+                            }
                             if (e.value == "has") return "bool";
-                            if (e.value == "push" || e.value == "clear" || e.value == "insert") return "void";
+                            if (e.value == "join") return "string";
+                            if (e.value == "push" || e.value == "clear" || e.value == "insert" ||
+                                e.value == "sort" || e.value == "sort_desc" || e.value == "reverse" ||
+                                e.value == "remove") {
+                                return "void";
+                            }
                         }
                         if (nexaIsMapType(recvT)) {
                             if (e.value == "has") return "bool";
@@ -2534,6 +2584,46 @@ private:
                     std::string val = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                     return "([&](){ const auto& __nexa_v = " + recv + "; const auto& __nexa_x = " + val +
                         "; for (const auto& __nexa_e : __nexa_v) { if (__nexa_e == __nexa_x) return true; } return false; })()";
+                }
+                if (e.value == "remove") {
+                    if (e.children.size() != 2) throw std::runtime_error("remove expects one argument");
+                    // Unlike insert, which clamps, this is the pop rule: an index outside
+                    // [0, len) is undefined behaviour, not a silent no-op.
+                    std::string idx = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    return "([&](){ auto& __nexa_v = " + recv + "; int __nexa_i = " + idx +
+                        "; __nexa_v.erase(__nexa_v.begin() + __nexa_i); })()";
+                }
+                if (e.value == "reverse") {
+                    if (e.children.size() != 1) throw std::runtime_error("reverse expects no arguments");
+                    return "([&](){ auto& __nexa_v = " + recv +
+                        "; size_t __nexa_n = __nexa_v.size(); for (size_t __nexa_i = 0; __nexa_i + __nexa_i + 1 < __nexa_n; __nexa_i++) { auto __nexa_t = __nexa_v[__nexa_i]; __nexa_v[__nexa_i] = __nexa_v[__nexa_n - 1 - __nexa_i]; __nexa_v[__nexa_n - 1 - __nexa_i] = __nexa_t; } })()";
+                }
+                if (e.value == "sort" || e.value == "sort_desc") {
+                    if (e.children.size() != 1) throw std::runtime_error(e.value + " expects no arguments");
+                    return emitSliceSort(recv, e.value == "sort_desc");
+                }
+                if (e.value == "join") {
+                    if (e.children.size() != 2) throw std::runtime_error("join expects one argument");
+                    std::string sep = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    return "([&](){ const auto& __nexa_v = " + recv + "; std::string __nexa_s = " + sep +
+                        "; std::string __nexa_o; for (size_t __nexa_i = 0; __nexa_i < __nexa_v.size(); __nexa_i++) { if (__nexa_i) __nexa_o += __nexa_s; __nexa_o += __nexa_v[__nexa_i]; } return __nexa_o; })()";
+                }
+                if (e.value == "min" || e.value == "max") {
+                    if (e.children.size() != 1) throw std::runtime_error(e.value + " expects no arguments");
+                    // Seeding from [0] is the pop rule again: an empty slice has no
+                    // minimum, so asking for one is undefined behaviour.
+                    std::string op = e.value == "min" ? " < " : " > ";
+                    return "([&](){ const auto& __nexa_v = " + recv +
+                        "; auto __nexa_m = __nexa_v[0]; for (size_t __nexa_i = 1; __nexa_i < __nexa_v.size(); __nexa_i++) { if (__nexa_v[__nexa_i]" + op +
+                        "__nexa_m) __nexa_m = __nexa_v[__nexa_i]; } return __nexa_m; })()";
+                }
+                if (e.value == "sum") {
+                    if (e.children.size() != 1) throw std::runtime_error("sum expects no arguments");
+                    // The accumulator is the element type, not auto, so summing []i8
+                    // wraps at 8 bits exactly as `a + b` on two i8 values would.
+                    std::string et = nexaTypeToCpp(nexaSliceElem(recvBare));
+                    return "([&](){ const auto& __nexa_v = " + recv + "; " + et +
+                        " __nexa_s = 0; for (const auto& __nexa_e : __nexa_v) __nexa_s += __nexa_e; return __nexa_s; })()";
                 }
             }
             if (nexaIsMapType(recvBare)) {
@@ -2975,6 +3065,8 @@ private:
                 return elem;
             }
             if (argIdx == 2 && method == "insert") return elem;
+            if (argIdx == 1 && method == "join") return "string";
+            if (argIdx == 1 && method == "remove") return "int";
             return std::string();
         }
         if (nexaIsMapType(recv)) {
@@ -3251,6 +3343,11 @@ private:
                 semCheckGfxPoly(e);
                 semCheckGfxSave(e);
                 break;
+            case AstNode::Type::FnCall:
+            case AstNode::Type::ExprCall:
+                for (const AstNode& c : e.children) semExpr(c);
+                semCheckSliceAlgo(e);
+                break;
             default:
                 for (const AstNode& c : e.children) semExpr(c);
                 break;
@@ -3279,6 +3376,109 @@ private:
             semError(e, "gfx." + e.value + "(xs, ys, r, g, b) expects []int point lists, but " +
                 std::string(i == 0 ? "xs" : "ys") + " is '" + (t.empty() ? std::string("unknown") : t) + "'");
         }
+    }
+
+    // Element types the slice algorithms are documented to work on
+    // (SYNTAX/Core.txt, SLICE ALGORITHMS). Ordering needs `<`, summing needs
+    // `+=` and a zero; a struct, a map, a nested slice or a Result has none of
+    // those, and is caught here rather than inside the emitted lambda.
+    //
+    // Some rejected types would in fact compile -- a scoped enum compares, and
+    // std::vector compares lexicographically, so []Color and [][]int would both
+    // build. They are still refused: the set the compiler accepts and the set
+    // SYNTAX/ promises are the same set, and widening it later is additive.
+    static bool sliceElemIsOrderable(const std::string& elem) {
+        return nexaIsNumericIntType(elem) || elem == "float" || elem == "string" ||
+               elem == "char" || elem == "bool";
+    }
+
+    static bool sliceElemIsSummable(const std::string& elem) {
+        return nexaIsNumericIntType(elem) || elem == "float";
+    }
+
+    // Can the receiver of an in-place method be written back to? A variable, a
+    // field, an element and a pointee all name storage that outlives the call;
+    // a slice copy (xs[1:4]), a split, or a function's return value is a
+    // temporary, and sorting one sorts something nothing else can see.
+    //
+    // This is what makes xs[1:4].sort() worth refusing rather than emitting: it
+    // reads like "sort that range of xs", and there is no way to make it mean
+    // that -- xs[1:4] is a copy by the time any method sees it.
+    static bool exprIsStorableReceiver(const AstNode& e) {
+        switch (e.type) {
+            case AstNode::Type::ExprVarRef:
+            case AstNode::Type::ExprDeref:
+                return true;
+            case AstNode::Type::ExprMember:
+            case AstNode::Type::ExprArrayIndex:
+                return !e.children.empty() && exprIsStorableReceiver(e.children[0]);
+            default:
+                return false;
+        }
+    }
+
+    // A Nexa type as the user wrote it. The tables carry a struct as
+    // 'struct:Point' and an enum as 'enum:Color' to keep them apart from a
+    // plain name, but a diagnostic quoting '[]struct:Point' is quoting a
+    // spelling that appears nowhere in the program.
+    static std::string nexaTypeForMessage(const std::string& t) {
+        std::string s = t;
+        for (const char* tag : {"struct:", "enum:"}) {
+            const size_t n = std::string(tag).size();
+            size_t p;
+            while ((p = s.find(tag)) != std::string::npos) s.erase(p, n);
+        }
+        return s;
+    }
+
+    // sort / sort_desc / reverse / remove / join / min / max / sum on a slice
+    // whose elements cannot take the operation. Without this the user's reward
+    // for pts.sort() on a []Point is a page of clang errors pointing into
+    // generated code they never wrote -- the same reasoning as semCheckGfxPoly.
+    void semCheckSliceAlgo(const AstNode& e) const {
+        if (e.initValue != "." || e.children.empty()) return;
+        const std::string& m = e.value;
+        // The in-place ones added with the algorithms. push/pop/insert/clear
+        // are deliberately not here: pop and insert on a temporary already
+        // fail, and push and clear already compile to a discarded no-op, so
+        // either way that is established behaviour and not this check's to
+        // change.
+        const bool inPlace = (m == "sort" || m == "sort_desc" || m == "reverse" ||
+                              m == "remove");
+        if (!inPlace && m != "min" && m != "max" && m != "sum" && m != "join") {
+            return;
+        }
+        std::string recvT = inferExprNexaType(e.children[0]);
+        if (isPointerType(recvT)) recvT = pointerPointeeType(recvT);
+        // Only a known slice reaches the slice emit at all; anything else is a
+        // user's own method that happens to share the name, or a receiver whose
+        // type inference did not reach, and neither is ours to complain about.
+        if (!nexaIsSliceType(recvT)) return;
+        const std::string elem = nexaSliceElem(recvT);
+        const std::string who = exprRootVarName(e.children[0]);
+        const std::string subject = who.empty() ? std::string("the receiver") : who;
+        const std::string shown = nexaTypeForMessage(recvT);
+        if (inPlace && !exprIsStorableReceiver(e.children[0])) {
+            semError(e, "." + m + "() changes the slice in place, so it needs a slice "
+                "you can name -- a variable, a field or an element. A slice copy like "
+                "xs[1:4], a split, or a function's return value is a temporary, and "
+                "reordering one changes nothing");
+        }
+        // reverse and remove move elements without looking at them, so any
+        // element type will do; the rest need `<` or `+=`.
+        if (m == "reverse" || m == "remove") return;
+        if (m == "join") {
+            if (elem == "string") return;
+            semError(e, ".join(sep) expects []string, but " + subject + " is '" + shown + "'");
+        }
+        if (m == "sum") {
+            if (sliceElemIsSummable(elem)) return;
+            semError(e, ".sum() expects []int or []float, but " + subject +
+                " is '" + shown + "'");
+        }
+        if (sliceElemIsOrderable(elem)) return;
+        semError(e, "." + m + "() expects []int, []float or []string, but " + subject +
+            " is '" + shown + "'");
     }
 
     // gfx.save takes a filesystem path. Passing it a number is a plausible slip

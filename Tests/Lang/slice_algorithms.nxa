@@ -1,0 +1,317 @@
+// Pins the slice algorithms: sort / sort_desc / reverse / remove / join /
+// min / max / sum.
+//
+// Sort is where a wrong answer hides best -- a heapsort that sifts one index
+// short still looks sorted on three elements -- so the cases below run sizes
+// either side of the heap's shape changes (0, 1, 2, 3, then 8 and 11, which
+// are a full level and a ragged one), and include duplicates and already-
+// sorted and reversed input.
+//
+// Nothing here touches the documented undefined behaviour: no min/max on an
+// empty slice, no remove outside [0, len).
+//
+// The invariant checks near the end print a bool, which renders 1/0 -- that is
+// the convention the rest of this suite already pins (Tests/Lang/comparisons),
+// not something SYNTAX/ states.
+// Reference: SYNTAX/Core.txt ("SLICES", "SLICE ALGORITHMS")
+#include <std/io>
+
+struct Board {
+    items: []int;
+}
+
+fn show(xs: []int): string {
+    let out: string = "";
+    for (x in xs) {
+        if (len(out) > 0) { out = out + ","; }
+        out = out + x;
+    }
+    return out;
+}
+
+// A parameter is a copy (SYNTAX/Core.txt, "A parameter is a copy"), and the
+// copy-avoidance pass is allowed to pass a heavy one by reference only when the
+// body leaves it alone. sort / reverse / remove do not, so these three must
+// keep their by-value copy -- if the pass ever counts them as read-only, the
+// caller's slice starts moving under it and only a test like this notices.
+fn sort_param(xs: []int): string {
+    xs.sort();
+    return show(xs);
+}
+
+fn reverse_param(xs: []int): string {
+    xs.reverse();
+    return show(xs);
+}
+
+fn remove_param(xs: []int): int {
+    xs.remove(0);
+    return len(xs);
+}
+
+// min / max / sum / join do leave the receiver alone, so these may be passed by
+// reference; they have to keep working when they are.
+fn total_param(xs: []int): int { return xs.sum(); }
+fn glue_param(ps: []string): string { return ps.join("+"); }
+
+fn main() {
+    // --- sort: ascending, in place, nothing returned -----------------------
+    let a: []int = [5, 3, 9, 1, 7, 3, 8, 2];
+    a.sort();
+    io.println("sort8=" + show(a));
+
+    // A ragged last heap level: 11 elements is not a power of two minus one.
+    let b: []int = [30, 11, 4, 25, 8, 19, 2, 27, 15, 6, 22];
+    b.sort();
+    io.println("sort11=" + show(b));
+
+    // Degenerate sizes. Sorting nothing, or one element, must not touch memory
+    // it does not own; the length is the observable part.
+    let e0: []int = [];
+    e0.sort();
+    io.println("sort0_len=", len(e0));
+    let e1: []int = [42];
+    e1.sort();
+    io.println("sort1=" + show(e1));
+    let e2: []int = [2, 1];
+    e2.sort();
+    io.println("sort2=" + show(e2));
+    let e3: []int = [3, 1, 2];
+    e3.sort();
+    io.println("sort3=" + show(e3));
+
+    // Already sorted, and exactly reversed: the two inputs a broken sift
+    // handles asymmetrically.
+    let up: []int = [1, 2, 3, 4, 5, 6];
+    up.sort();
+    io.println("sorted_stays=" + show(up));
+    let down: []int = [6, 5, 4, 3, 2, 1];
+    down.sort();
+    io.println("reversed_sorts=" + show(down));
+
+    // All elements equal: every comparison is false, so a sift that mistakes
+    // "not less" for "greater" spins or swaps forever.
+    let same: []int = [7, 7, 7, 7, 7];
+    same.sort();
+    io.println("all_equal=" + show(same));
+
+    // --- sort_desc ---------------------------------------------------------
+    let d: []int = [5, 3, 9, 1, 7, 3, 8, 2];
+    d.sort_desc();
+    io.println("desc8=" + show(d));
+    let d0: []int = [];
+    d0.sort_desc();
+    io.println("desc0_len=", len(d0));
+    let d2: []int = [1, 2];
+    d2.sort_desc();
+    io.println("desc2=" + show(d2));
+
+    // Negative values sort by value, not by magnitude.
+    let neg: []int = [3, -7, 0, -1, 5, -9];
+    neg.sort();
+    io.println("neg_asc=" + show(neg));
+    neg.sort_desc();
+    io.println("neg_desc=" + show(neg));
+
+    // --- sort on []float ---------------------------------------------------
+    let f: []float = [2.5, -1.5, 10.25, 0.0, 3.75];
+    f.sort();
+    io.println("float_min=", f[0]);
+    io.println("float_max=", f[4]);
+    io.println("float_mid=", f[2]);
+
+    // --- sort on []string: byte order, so "Z" precedes "a" -----------------
+    let s: []string = ["pear", "Apple", "apple", "Zebra", "banana"];
+    s.sort();
+    io.println("str_sorted=" + s.join("|"));
+    s.sort_desc();
+    io.println("str_desc=" + s.join("|"));
+
+    // A prefix sorts before the longer string that extends it.
+    let pre: []string = ["ab", "a", "abc", ""];
+    pre.sort();
+    io.println("str_prefix=" + pre.join("|"));
+
+    // --- reverse -----------------------------------------------------------
+    // Even and odd lengths take different paths through the swap loop: the odd
+    // one leaves a middle element alone.
+    let r4: []int = [1, 2, 3, 4];
+    r4.reverse();
+    io.println("rev4=" + show(r4));
+    let r5: []int = [1, 2, 3, 4, 5];
+    r5.reverse();
+    io.println("rev5=" + show(r5));
+    let r0: []int = [];
+    r0.reverse();
+    io.println("rev0_len=", len(r0));
+    let r1: []int = [9];
+    r1.reverse();
+    io.println("rev1=" + show(r1));
+    let r2: []int = [1, 2];
+    r2.reverse();
+    io.println("rev2=" + show(r2));
+    // Twice is the identity.
+    r5.reverse();
+    io.println("rev_twice=" + show(r5));
+
+    let rs: []string = ["a", "b", "c"];
+    rs.reverse();
+    io.println("rev_str=" + rs.join(""));
+
+    // --- remove ------------------------------------------------------------
+    let m: []int = [10, 20, 30, 40, 50];
+    m.remove(2);
+    io.println("rm_mid=" + show(m));
+    io.println("rm_mid_len=", len(m));
+    m.remove(0);
+    io.println("rm_first=" + show(m));
+    // len-1 is the last valid index, so this is in range, not the UB case.
+    m.remove(len(m) - 1);
+    io.println("rm_last=" + show(m));
+    let m1: []int = [7];
+    m1.remove(0);
+    io.println("rm_only_len=", len(m1));
+
+    let ms: []string = ["x", "y", "z"];
+    ms.remove(1);
+    io.println("rm_str=" + ms.join(","));
+
+    // --- join --------------------------------------------------------------
+    let parts: []string = ["a", "b", "c"];
+    io.println("join=" + parts.join(", "));
+    // The separator goes between elements only.
+    let one: []string = ["solo"];
+    io.println("join_one=" + one.join(", "));
+    let none: []string = [];
+    io.println("join_none=[" + none.join(", ") + "]");
+    // An empty separator concatenates; a multi-character one repeats whole.
+    io.println("join_empty_sep=" + parts.join(""));
+    io.println("join_long_sep=" + parts.join(" -> "));
+    // Empty elements are elements: the separators still appear.
+    let holes: []string = ["", "b", ""];
+    io.println("join_holes=[" + holes.join(",") + "]");
+
+    // join undoes split, over the same separator.
+    let line: string = "one,two,three";
+    io.println("split_join=" + line.split(",").join(";"));
+
+    // --- min / max ---------------------------------------------------------
+    let v: []int = [4, -2, 17, 0, 9];
+    io.println("min=", v.min());
+    io.println("max=", v.max());
+    // A single element is both.
+    let solo: []int = [5];
+    io.println("min1=", solo.min());
+    io.println("max1=", solo.max());
+    // The extreme at the front and at the back: a loop that skips an end
+    // misses one of these.
+    let front: []int = [1, 5, 9];
+    io.println("min_front=", front.min());
+    let back: []int = [9, 5, 1];
+    io.println("min_back=", back.min());
+    io.println("max_front=", front.max());
+    io.println("max_back=", back.max());
+
+    let fv: []float = [2.5, -1.5, 10.25];
+    io.println("fmin=", fv.min());
+    io.println("fmax=", fv.max());
+
+    // min/max on []string is the same byte comparison the sort uses.
+    let sv: []string = ["pear", "Apple", "banana"];
+    io.println("smin=" + sv.min());
+    io.println("smax=" + sv.max());
+
+    // --- sum ---------------------------------------------------------------
+    io.println("sum=", v.sum());
+    // Adding up no elements comes to 0. This is defined, unlike min/max.
+    let z: []int = [];
+    io.println("sum_empty=", z.sum());
+    io.println("sum1=", solo.sum());
+    // Deliberately not a whole number: how a float that happens to be integral
+    // renders is a separate rule, and not one this test is about.
+    let fs: []float = [1.5, 2.25, -0.5];
+    io.println("fsum=", fs.sum());
+
+    // --- the receiver can be anything that yields a slice ------------------
+    // A slice copy is its own slice: summing it must not touch the original.
+    let base: []int = [1, 2, 3, 4, 5];
+    io.println("slice_sum=", base[1:4].sum());
+    io.println("base_intact=" + show(base));
+    // Sorting a copy leaves the original alone.
+    let copy = base[:];
+    copy.sort_desc();
+    io.println("copy_desc=" + show(copy));
+    io.println("base_still=" + show(base));
+
+    // A struct field.
+    let bd: Board;
+    bd.items = [3, 1, 2];
+    bd.items.sort();
+    io.println("field_sorted=" + show(bd.items));
+    io.println("field_sum=", bd.items.sum());
+
+    // --- they compose ------------------------------------------------------
+    // Sort, then drop the extremes, then total what is left.
+    let scores: []int = [50, 10, 30, 90, 20];
+    scores.sort();
+    scores.remove(len(scores) - 1);
+    scores.remove(0);
+    io.println("trimmed=" + show(scores));
+    io.println("trimmed_sum=", scores.sum());
+    io.println("trimmed_min=", scores.min());
+    io.println("trimmed_max=", scores.max());
+
+    // Sorting does not change what the slice contains: the total and the
+    // extremes survive it.
+    let t: []int = [8, 2, 6, 4];
+    let before: int = t.sum();
+    t.sort();
+    io.println("sum_invariant=", before == t.sum());
+    io.println("min_is_first=", t.min() == t[0]);
+    io.println("max_is_last=", t.max() == t[len(t) - 1]);
+    // And a descending sort is an ascending one reversed.
+    let p: []int = [8, 2, 6, 4];
+    let q: []int = [8, 2, 6, 4];
+    p.sort();
+    p.reverse();
+    q.sort_desc();
+    io.println("desc_is_rev_asc=", show(p) == show(q));
+
+    // The mutating three return nothing, so they stand alone as statements;
+    // that is already exercised above. Read-only ones nest in an expression.
+    io.println("nested=", v.min() + v.max() + v.sum());
+    io.println("nested_join_len=", len(parts.join("--")));
+
+    // --- a parameter is a copy, even for the in-place algorithms -----------
+    let arg: []int = [3, 1, 2];
+    io.println("param_sorted=" + sort_param(arg));
+    io.println("caller_unsorted=" + show(arg));
+    io.println("param_reversed=" + reverse_param(arg));
+    io.println("caller_unreversed=" + show(arg));
+    io.println("param_removed_len=", remove_param(arg));
+    io.println("caller_len=", len(arg));
+    io.println("param_total=", total_param(arg));
+    io.println("param_glue=" + glue_param(parts));
+
+    // --- min / max / sum reach the whole width of the element type ---------
+    // The accumulator is the element type, so a []long total must not be
+    // truncated to 32 bits on the way out.
+    let wide: []long = [4000000000, 4000000000];
+    io.println("long_sum=", wide.sum());
+    io.println("long_max=", wide.max());
+
+    // char and bool compare, so they order.
+    let cs: []char = ['c', 'a', 'b'];
+    cs.sort();
+    io.println("char_min=", cs[0]);
+    io.println("char_max=", cs[2]);
+    let bs: []bool = [true, false, true];
+    bs.sort();
+    io.println("bool_first=", bs[0]);
+    io.println("bool_last=", bs[2]);
+
+    // A read-only algorithm on a temporary slice: nothing is written back, so
+    // unlike sort these are allowed on a copy (SYNTAX/Core.txt).
+    io.println("tmp_sum=", base[1:4].sum());
+    io.println("tmp_min=", base[1:4].min());
+}

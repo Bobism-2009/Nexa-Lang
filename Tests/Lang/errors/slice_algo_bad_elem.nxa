@@ -1,0 +1,21 @@
+// sort / min / max / sum / join are the only slice methods whose *element* type
+// can be wrong rather than the argument count: push takes whatever the slice
+// holds, but sorting needs `<` and summing needs `+=`, and a struct has
+// neither. Without a check in Nexa the user's reward for sorting a []Point is a
+// page of clang errors inside a lambda they never wrote.
+//
+// This case is a struct; the sibling cases cover the other refusals.
+// Reference: SYNTAX/Core.txt ("SLICE ALGORITHMS")
+#include <std/io>
+
+struct Point {
+    x: int;
+    y: int;
+}
+
+fn main() {
+    let pts: []Point;
+    pts.push(Point { x: 1, y: 2 });
+    pts.sort();
+    io.println(len(pts));
+}

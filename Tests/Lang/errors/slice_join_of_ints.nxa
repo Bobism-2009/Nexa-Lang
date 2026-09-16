@@ -1,0 +1,11 @@
+// join is []string only. On a []int the emitted `accumulator += element` also
+// compiles -- std::string += int appends one *character* with that code point --
+// so an unchecked join of [72, 105] would print "Hi" rather than "72,105".
+// Silently plausible output is exactly what a check has to catch.
+// Reference: SYNTAX/Core.txt ("SLICE ALGORITHMS")
+#include <std/io>
+
+fn main() {
+    let ns: []int = [72, 105];
+    io.println(ns.join(","));
+}

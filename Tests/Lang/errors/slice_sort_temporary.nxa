@@ -1,0 +1,13 @@
+// The in-place algorithms hand back nothing, so their whole effect is on the
+// receiver. xs[1:4] is a *copy* of a range of xs, so xs[1:4].sort() would sort
+// something nothing else can reach -- while reading exactly like "sort that
+// range of xs". Emitting it would be a silent no-op dressed as a useful call,
+// so it is refused and the user is pointed at the two-line version that works.
+// Reference: SYNTAX/Core.txt ("SLICE ALGORITHMS")
+#include <std/io>
+
+fn main() {
+    let xs: []int = [3, 1, 2, 5];
+    xs[1:4].sort();
+    io.println(xs[1]);
+}
