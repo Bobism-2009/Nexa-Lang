@@ -582,17 +582,23 @@ private:
         for (const std::string& f : n.paramNames) fields.insert(f);
     }
 
-    // Struct types a module brings with it. HttpResponse is std/http's, and is
-    // named here so `let r: HttpResponse` and `r.value().status` type the same
-    // way a user struct does; Transpiler.hpp maps it onto the runtime's
-    // __nexa_http_response and so never emits a definition for it.
+    // Struct types a module brings with it. HttpResponse, HttpServer and
+    // HttpRequest are std/http's, and are named here so `let r: HttpResponse`
+    // and `r.value().status` type the same way a user struct does;
+    // Transpiler.hpp maps them onto the runtime's structs and so never emits a
+    // definition for any of them.
     void noteModuleTypes() {
-        if (!modules_.hasHttp() || structNames_.count("HttpResponse")) return;
-        structNames_.insert("HttpResponse");
-        std::set<std::string>& fields = structFieldNames_["HttpResponse"];
-        fields.insert("status");
-        fields.insert("body");
-        fields.insert("headers");
+        if (!modules_.hasHttp()) return;
+        noteModuleStruct("HttpResponse", { "status", "body", "headers" });
+        noteModuleStruct("HttpServer", { "port", "socket" });
+        noteModuleStruct("HttpRequest", { "method", "path", "body", "headers", "socket" });
+    }
+
+    void noteModuleStruct(const std::string& name, const std::vector<std::string>& fieldNames) {
+        if (structNames_.count(name)) return;
+        structNames_.insert(name);
+        std::set<std::string>& fields = structFieldNames_[name];
+        for (const std::string& f : fieldNames) fields.insert(f);
     }
 
     void noteTypeDefs(const std::vector<AstNode>& nodes) {
@@ -3943,36 +3949,48 @@ private:
         else if (methodTok.type == TokenType::Delete) method = "delete";
         else throw std::runtime_error("Expected http method at line " + std::to_string(methodTok.line));
         advance();
-        // Arguments before the optional trailing []string of raw header lines.
+        // The required arguments, then whether one more is allowed after them:
+        // the []string of raw header lines for the verbs that send headers,
+        // the port for http.localhost.
         int fixed;
-        std::string shape;
-        if (method == "get" || method == "delete") { fixed = 1; shape = "url"; }
-        else if (method == "post" || method == "put" || method == "patch") { fixed = 2; shape = "url, body"; }
-        else if (method == "request") { fixed = 3; shape = "method, url, body"; }
+        bool optTail;
+        std::string shape, tail;
+        if (method == "get" || method == "delete") { fixed = 1; optTail = true; shape = "url"; tail = "[, headers]"; }
+        else if (method == "post" || method == "put" || method == "patch") { fixed = 2; optTail = true; shape = "url, body"; tail = "[, headers]"; }
+        else if (method == "request") { fixed = 3; optTail = true; shape = "method, url, body"; tail = "[, headers]"; }
+        else if (method == "localhost") { fixed = 0; optTail = true; shape = ""; tail = "[port]"; }
+        else if (method == "accept" || method == "close") { fixed = 1; optTail = false; shape = "server"; }
+        else if (method == "reply") { fixed = 3; optTail = true; shape = "request, status, body"; tail = "[, headers]"; }
+        else if (method == "raw") { fixed = 2; optTail = false; shape = "request, text"; }
         else {
             throw std::runtime_error("Unknown http function 'http." + method +
                 "' at line " + std::to_string(methodTok.line) +
-                " (use get, post, put, patch, delete, request)");
+                " (use get, post, put, patch, delete, request, localhost, accept, reply, raw, close)");
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after http." + method + " at line " + std::to_string(peek().line));
         }
         AstNode node{AstNode::Type::HttpCall, method, {}};
-        node.children.push_back(parseExpression());
-        for (int i = 1; i < fixed; i++) {
-            if (!match(TokenType::Comma)) {
+        for (int i = 0; i < fixed; i++) {
+            if (i > 0 && !match(TokenType::Comma)) {
                 throw std::runtime_error("Expected ',' in http." + method + "(" + shape + ") at line " +
                     std::to_string(peek().line));
             }
             node.children.push_back(parseExpression());
         }
-        if (peek().type == TokenType::Comma) {
-            advance();
-            node.children.push_back(parseExpression());
+        // With no required arguments the optional one stands alone, so there is
+        // no comma in front of it: http.localhost() and http.localhost(8080).
+        if (optTail) {
+            bool present = fixed == 0 ? peek().type != TokenType::RParen
+                                      : peek().type == TokenType::Comma;
+            if (present) {
+                if (fixed > 0) advance();
+                node.children.push_back(parseExpression());
+            }
         }
         if (!match(TokenType::RParen)) {
-            throw std::runtime_error("Expected ')' after http." + method + "(" + shape +
-                "[, headers]) at line " + std::to_string(peek().line));
+            throw std::runtime_error("Expected ')' after http." + method + "(" + shape + tail +
+                ") at line " + std::to_string(peek().line));
         }
         return node;
     }

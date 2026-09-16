@@ -1,0 +1,8 @@
+bind 1
+port 1
+echo 1 [POST|/echo|payload|t1]
+nope 404 [gone]
+raw 1 [rawy]
+served 1 [GET|/echo||-]
+close 1
+dead 0 [could not connect]

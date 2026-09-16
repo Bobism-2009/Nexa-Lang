@@ -162,9 +162,10 @@ Nexa Standard Modules
   Use: let t = crypto.hmac_sha256("key", "message");
 
 #include <std/http>
-  OS APIs only (no curl/OpenSSL bundled).
-  Windows: WinHTTP (HTTP + HTTPS via Schannel)
-  macOS:   CFNetwork (HTTP + HTTPS)
+  OS APIs only (no curl/OpenSSL bundled). Two halves: the client verbs call
+  out, http.localhost() and the calls around it listen.
+  Windows: WinHTTP to call out (HTTP + HTTPS via Schannel), Winsock to listen
+  macOS:   CFNetwork (HTTP + HTTPS), POSIX sockets to listen
   Linux:   POSIX sockets + HTTPS via system libssl.so (dlopen; needs
            libssl1.1/libssl3 at runtime, usual on desktop/server Linux)
   http.get(url)            - GET;    returns Result[string]
@@ -211,8 +212,57 @@ Nexa Standard Modules
   303 and keeps its method on 307/308, matching WinHTTP and CFNetwork.
   Chunked transfer-encoding is the transport's business and never reaches the
   body you are handed.
-  A program carries only the half it calls: the five simple verbs and
-  http.request are emitted independently.
+  A program carries only the half it calls: the five simple verbs,
+  http.request and the server below are emitted independently, and a program
+  that only serves carries no client transport at all.
+
+  THE SERVER HALF
+  http.localhost()          - Listen on 127.0.0.1, port picked by the OS
+  http.localhost(port)      - Listen on 127.0.0.1 at that port
+  Returns Result[HttpServer]. The port the OS picked is on the value, so a
+  caller never has to guess a free one.
+    struct HttpServer {
+        port:   int;          // 39114
+        socket: int;          // the listening socket, as the OS numbers it
+    }
+
+  http.accept(server)       - Wait for one request and read all of it
+  Returns Result[HttpRequest]. Blocks until a client connects.
+    struct HttpRequest {
+        method:  string;      // "POST"
+        path:    string;      // "/echo?q=1"
+        body:    string;
+        headers: []string;    // raw lines, "X-Token: t1"
+        socket:  int;         // the accepted connection
+    }
+
+  http.reply(request, status, body)           - Answer it and close
+  http.reply(request, status, body, headers)
+  http.raw(request, text)   - Answer with exactly these bytes, then close
+  http.close(server)        - Stop listening
+  reply, raw and close hand back 1 on success and 0 on failure. reply writes
+  the status line, your header lines, Content-Length and Connection: close --
+  a Content-Length or Connection you pass is dropped, because those belong to
+  the transport. raw writes what you give it and adds nothing, which is how a
+  program frames a response itself (chunked, say).
+
+  One request per connection: reply and raw both answer and close, so the
+  request is spent afterwards. Use it again and the program is wrong the way
+  any use-after-close is.
+  HttpServer and HttpRequest are std/http's own types, like HttpResponse -- a
+  program that includes the module cannot declare another one by those names.
+  Not available on wasm: a page cannot listen, so the server calls there fail
+  with "HTTP server is not available on wasm" rather than pretending to bind.
+  Use: let s = http.localhost();
+       let srv = s.value();
+       io.println("listening on " + srv.port);
+       while (true) {
+           let r = http.accept(srv);
+           let req = r.value();
+           http.reply(req, 200, "hello " + req.path, ["X-By: nexa"]);
+       }
+  std/thread runs the loop beside the rest of a program:
+       let t = thread.spawn(serve(srv));
 
 #include <std/json>
   Nested JSON objects and arrays (not a flat string map).

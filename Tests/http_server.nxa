@@ -1,0 +1,76 @@
+// Loopback server for the http_cases.sh loopback layer, written in Nexa (BOB-36).
+//
+// This used to be Tests/http_server.py. It is the same handful of responses a
+// client has to get right -- chunked framing, a two-hop redirect with a
+// relative Location, a body longer than its own Content-Length, a 404, and an
+// echo of the method, body and a couple of request headers -- but now the
+// server under the client's test is std/http's own, on the same OS sockets.
+//
+// http.localhost() binds 127.0.0.1 on a free port; argv[1] is where the port
+// is written so the caller does not have to guess one. One request per
+// connection: accept reads it, reply or raw answers it and closes.
+#include <std/file>
+#include <std/http>
+#include <std/io>
+
+// The value of a request header, or "-" when the client did not send it.
+// Header names are case-insensitive, so both sides are lowered to compare.
+fn header(req: HttpRequest, name: string): string {
+    let want: string = name.lower() + ":";
+    for (i, len(req.headers)) {
+        let line: string = req.headers[i];
+        if (line.lower().starts_with(want)) {
+            return line.substring(len(want), -1).trim();
+        }
+    }
+    return "-";
+}
+
+fn main(args: []string) {
+    let s = http.localhost();
+    if (!s.ok()) {
+        io.println("bind failed: " + s.error());
+        return 1;
+    }
+    let srv = s.value();
+    let port: string = "" + srv.port;
+    file.write(args[1], port);
+
+    while (true) {
+        let r = http.accept(srv);
+        if (!r.ok()) {
+            break;
+        }
+        let req = r.value();
+        let path: string = req.path;
+
+        if (path == "/chunked") {
+            // Three chunks, the middle one carrying a chunk extension. The
+            // framing is the point, so this response is written byte for byte.
+            http.raw(req, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nhello\r\n2;x=y\r\n, \r\n5\r\nworld\r\n0\r\n\r\n");
+        } else if (path == "/redir") {
+            http.reply(req, 302, "", ["Location: /deep/one"]);
+        } else if (path == "/deep/one") {
+            http.reply(req, 302, "", ["Location: two"]);   // relative, against /deep/
+        } else if (path == "/deep/two") {
+            http.reply(req, 200, req.method + "|" + req.body);
+        } else if (path == "/loop") {
+            http.reply(req, 302, "", ["Location: /loop"]);
+        } else if (path == "/echo") {
+            http.reply(req, 200,
+                req.method + "|" + req.body + "|" + header(req, "X-Token") + "|" + header(req, "Content-Type"),
+                ["X-Echo: 1"]);
+        } else if (path == "/404") {
+            http.reply(req, 404, "missing");
+        } else if (path == "/extra") {
+            // More bytes on the wire than Content-Length claims -- http.reply
+            // would frame this correctly, which is exactly what must not happen.
+            http.raw(req, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nokTRAILING-GARBAGE");
+        } else {
+            http.reply(req, 200, "hi");
+        }
+    }
+
+    http.close(srv);
+    return 0;
+}

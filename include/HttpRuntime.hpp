@@ -4,10 +4,11 @@
 
 namespace nexa {
 
-// OS-API HTTP client (no third-party libs bundled).
-// Windows: WinHTTP (HTTP + HTTPS via Schannel)
-// macOS:   CFNetwork (HTTP + HTTPS)
-// Linux:   POSIX sockets; HTTPS via system libssl.so (dlopen, not linked)
+// OS-API HTTP, both ends (no third-party libs bundled).
+//
+// Client. Windows: WinHTTP (HTTP + HTTPS via Schannel)
+//         macOS:   CFNetwork (HTTP + HTTPS)
+//         Linux:   POSIX sockets; HTTPS via system libssl.so (dlopen, not linked)
 //
 // Every backend funnels through one primitive:
 //
@@ -19,10 +20,21 @@ namespace nexa {
 // status into "HTTP <status>" (get/post/put/patch/delete), __nexa_http_request
 // hands back status, body and raw header lines untouched.
 //
-// `needSimple` and `needResponse` gate the two halves above that primitive, so
-// a program carries only the one its calls can reach -- same needs-driven
-// emission as std/gfx and std/crypto.
-inline std::string httpRuntimeCpp(bool needSimple = true, bool needResponse = true) {
+// Server. http.localhost() and the calls around it, on the OS's own sockets:
+// Winsock on Windows, POSIX sockets everywhere else. There is no third stack
+// here because there is no reason for one -- listen/accept/recv/send is the
+// same call sequence on both, so the split is a handful of typedefs rather
+// than a second implementation.
+//
+// `needSimple`, `needResponse` and `needServer` gate the halves above the
+// transports, and the client transport itself is emitted only when something
+// above it calls -- so a program carries only what its calls can reach, the
+// same needs-driven emission as std/gfx and std/crypto.
+inline std::string httpRuntimeCpp(bool needSimple = true, bool needResponse = true,
+                                  bool needServer = false) {
+    // The simple verbs and http.request are the only callers of the client
+    // transport; a server-only program leaves all of it, libssl included, out.
+    const bool needClient = needSimple || needResponse;
     std::string out = R"NEXA_HTTP(
 #include <string>
 #include <vector>
@@ -102,6 +114,9 @@ inline std::string httpRuntimeCpp(bool needSimple = true, bool needResponse = tr
   }
   return outv;
 }
+)NEXA_HTTP";
+    if (needClient) {
+        out += R"NEXA_HTTP_CLIENT(
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -624,7 +639,8 @@ static std::string __nexa_http_perform(const std::string& method, const std::str
   return "too many redirects";
 }
 #endif
-)NEXA_HTTP";
+)NEXA_HTTP_CLIENT";
+    }
     if (needSimple) {
         out += R"NEXA_HTTP_SIMPLE(
 // get/post/put/patch/delete: the body on success, "HTTP <status>" on any
@@ -668,6 +684,257 @@ static __nexa_result<__nexa_http_response> __nexa_http_request(const std::string
   return __nexa_result<__nexa_http_response>::make_ok(r);
 }
 )NEXA_HTTP_RESP";
+    }
+    if (needServer) {
+        out += R"NEXA_HTTP_SERVER(
+// http.localhost(): the other end of the same wire. A listening socket bound
+// to 127.0.0.1 and nothing else -- the loopback address is not a default the
+// program can talk out of, it is the whole of what this server binds.
+//
+// One request per connection: accept reads a whole request, reply or raw
+// answers it and closes. That is the entire lifetime, so there is no keep-alive
+// state to get wrong and no connection a program has to remember to close.
+struct __nexa_http_server {
+    int port;
+    int socket;
+    bool operator==(const __nexa_http_server& __o) const {
+        return port == __o.port && socket == __o.socket;
+    }
+    bool operator!=(const __nexa_http_server& __o) const { return !(*this == __o); }
+};
+// The request a server took off the wire. Named "incoming" rather than
+// "request" because http.request -- the client call -- already owns that name
+// in the emitted C++, and a function name hides a struct of the same name.
+struct __nexa_http_incoming {
+    std::string method;
+    std::string path;
+    std::string body;
+    std::vector<std::string> headers;
+    int socket;
+    bool operator==(const __nexa_http_incoming& __o) const {
+        return method == __o.method && path == __o.path && body == __o.body &&
+               headers == __o.headers && socket == __o.socket;
+    }
+    bool operator!=(const __nexa_http_incoming& __o) const { return !(*this == __o); }
+};
+// Reason phrases are informational -- no client routes on them -- so this is
+// the set worth naming and everything else says "Status".
+[[maybe_unused]] static const char* __nexa_http_reason(int status) {
+  switch (status) {
+    case 200: return "OK";
+    case 201: return "Created";
+    case 202: return "Accepted";
+    case 204: return "No Content";
+    case 301: return "Moved Permanently";
+    case 302: return "Found";
+    case 303: return "See Other";
+    case 304: return "Not Modified";
+    case 307: return "Temporary Redirect";
+    case 308: return "Permanent Redirect";
+    case 400: return "Bad Request";
+    case 401: return "Unauthorized";
+    case 403: return "Forbidden";
+    case 404: return "Not Found";
+    case 405: return "Method Not Allowed";
+    case 409: return "Conflict";
+    case 413: return "Payload Too Large";
+    case 415: return "Unsupported Media Type";
+    case 500: return "Internal Server Error";
+    case 501: return "Not Implemented";
+    case 503: return "Service Unavailable";
+    default: break;
+  }
+  return "Status";
+}
+#if defined(__EMSCRIPTEN__)
+// A page cannot listen. The calls exist so a program still builds for wasm;
+// they say so rather than pretending to bind.
+[[maybe_unused]] static __nexa_result<__nexa_http_server> __nexa_http_localhost(int port) {
+  (void)port;
+  return __nexa_result<__nexa_http_server>::make_err("HTTP server is not available on wasm");
+}
+[[maybe_unused]] static __nexa_result<__nexa_http_incoming> __nexa_http_accept(const __nexa_http_server& srv) {
+  (void)srv;
+  return __nexa_result<__nexa_http_incoming>::make_err("HTTP server is not available on wasm");
+}
+[[maybe_unused]] static int __nexa_http_reply(const __nexa_http_incoming& req, int status, const std::string& body,
+                             const std::vector<std::string>& headers) {
+  (void)req; (void)status; (void)body; (void)headers;
+  return 0;
+}
+[[maybe_unused]] static int __nexa_http_raw(const __nexa_http_incoming& req, const std::string& bytes) {
+  (void)req; (void)bytes;
+  return 0;
+}
+[[maybe_unused]] static int __nexa_http_close(const __nexa_http_server& srv) {
+  (void)srv;
+  return 0;
+}
+#else
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+typedef SOCKET __nexa_sock_t;
+#define __NEXA_SOCK_BAD INVALID_SOCKET
+#define __NEXA_SEND_FLAGS 0
+static void __nexa_sock_close(__nexa_sock_t s) { closesocket(s); }
+// Winsock wants to be woken before its first call; every other platform does
+// not have an equivalent, so this is the one thing the split is really for.
+static int __nexa_sock_start() {
+  static int started = 0;
+  if (started) return 1;
+  WSADATA w;
+  if (WSAStartup(MAKEWORD(2, 2), &w) != 0) return 0;
+  started = 1;
+  return 1;
+}
+#else
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
+typedef int __nexa_sock_t;
+#define __NEXA_SOCK_BAD (-1)
+// A client that hangs up mid-answer must not take the server's process with
+// it: Linux says so per-send, macOS per-socket (SO_NOSIGPIPE, below).
+#ifdef MSG_NOSIGNAL
+#define __NEXA_SEND_FLAGS MSG_NOSIGNAL
+#else
+#define __NEXA_SEND_FLAGS 0
+#endif
+static void __nexa_sock_close(__nexa_sock_t s) { close(s); }
+static int __nexa_sock_start() { return 1; }
+#endif
+static int __nexa_http_send_all(__nexa_sock_t s, const char* p, size_t n) {
+  while (n > 0) {
+    int chunk = n > 0x7fffffff ? 0x7fffffff : (int)n;
+    int k = (int)send(s, p, chunk, __NEXA_SEND_FLAGS);
+    if (k <= 0) return 0;
+    p += k;
+    n -= (size_t)k;
+  }
+  return 1;
+}
+[[maybe_unused]] static __nexa_result<__nexa_http_server> __nexa_http_localhost(int port) {
+  __nexa_http_server srv;
+  srv.port = 0;
+  srv.socket = -1;
+  if (!__nexa_sock_start()) return __nexa_result<__nexa_http_server>::make_err("sockets unavailable");
+  __nexa_sock_t fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd == __NEXA_SOCK_BAD) return __nexa_result<__nexa_http_server>::make_err("could not open socket");
+  int one = 1;
+  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&one, (socklen_t)sizeof(one));
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons((unsigned short)port);
+  addr.sin_addr.s_addr = htonl(0x7f000001u);          // 127.0.0.1, always
+  if (bind(fd, (struct sockaddr*)&addr, (socklen_t)sizeof(addr)) != 0) {
+    __nexa_sock_close(fd);
+    return __nexa_result<__nexa_http_server>::make_err("could not bind 127.0.0.1");
+  }
+  if (listen(fd, 16) != 0) {
+    __nexa_sock_close(fd);
+    return __nexa_result<__nexa_http_server>::make_err("could not listen");
+  }
+  // Port 0 asked the OS to pick; read back which one it picked, so a caller
+  // never has to guess a free port.
+  struct sockaddr_in bound;
+  memset(&bound, 0, sizeof(bound));
+  socklen_t blen = (socklen_t)sizeof(bound);
+  if (getsockname(fd, (struct sockaddr*)&bound, &blen) != 0) {
+    __nexa_sock_close(fd);
+    return __nexa_result<__nexa_http_server>::make_err("could not read the bound port");
+  }
+  srv.port = (int)ntohs(bound.sin_port);
+  srv.socket = (int)fd;
+  return __nexa_result<__nexa_http_server>::make_ok(srv);
+}
+[[maybe_unused]] static __nexa_result<__nexa_http_incoming> __nexa_http_accept(const __nexa_http_server& srv) {
+  __nexa_http_incoming req;
+  req.socket = -1;
+  __nexa_sock_t fd = accept((__nexa_sock_t)srv.socket, nullptr, nullptr);
+  if (fd == __NEXA_SOCK_BAD) return __nexa_result<__nexa_http_incoming>::make_err("accept failed");
+#ifdef SO_NOSIGPIPE
+  int one = 1;
+  setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, (const char*)&one, (socklen_t)sizeof(one));
+#endif
+  std::string data;
+  char buf[4096];
+  size_t hdrEnd = std::string::npos;
+  for (;;) {
+    hdrEnd = data.find("\r\n\r\n");
+    if (hdrEnd != std::string::npos) break;
+    int n = (int)recv(fd, buf, (int)sizeof(buf), 0);
+    if (n <= 0) break;
+    data.append(buf, (size_t)n);
+  }
+  if (hdrEnd == std::string::npos) {
+    __nexa_sock_close(fd);
+    return __nexa_result<__nexa_http_incoming>::make_err("malformed request");
+  }
+  // "GET /path HTTP/1.1" is not a header line, so it is split off before the
+  // rest goes through the same header parser the client's responses use.
+  std::string head = data.substr(0, hdrEnd + 2);
+  size_t eol = head.find("\r\n");
+  std::string line = head.substr(0, eol);
+  req.headers = __nexa_http_split_headers(head.substr(eol + 2));
+  size_t sp1 = line.find(' ');
+  if (sp1 != std::string::npos) {
+    req.method = line.substr(0, sp1);
+    size_t sp2 = line.find(' ', sp1 + 1);
+    req.path = (sp2 == std::string::npos) ? line.substr(sp1 + 1)
+                                          : line.substr(sp1 + 1, sp2 - sp1 - 1);
+  }
+  std::string body = data.substr(hdrEnd + 4);
+  std::string cl = __nexa_http_header_value(req.headers, "Content-Length");
+  size_t want = cl.empty() ? (size_t)0 : (size_t)std::strtoul(cl.c_str(), nullptr, 10);
+  while (body.size() < want) {
+    int n = (int)recv(fd, buf, (int)sizeof(buf), 0);
+    if (n <= 0) break;
+    body.append(buf, (size_t)n);
+  }
+  if (body.size() > want) body.resize(want);
+  req.body = body;
+  req.socket = (int)fd;
+  return __nexa_result<__nexa_http_incoming>::make_ok(req);
+}
+// Content-Length and Connection are this transport's to write, the same way
+// they are on the client side, so a caller's copy of either is dropped. A
+// program that wants to frame a response itself reaches for http.raw.
+[[maybe_unused]] static int __nexa_http_reply(const __nexa_http_incoming& req, int status, const std::string& body,
+                             const std::vector<std::string>& headers) {
+  std::string out = "HTTP/1.1 " + std::to_string(status) + " " + __nexa_http_reason(status) + "\r\n";
+  for (size_t i = 0; i < headers.size(); i++) {
+    if (headers[i].empty()) continue;
+    if (__nexa_http_header_named(headers[i], "Content-Length")) continue;
+    if (__nexa_http_header_named(headers[i], "Connection")) continue;
+    out += headers[i];
+    out += "\r\n";
+  }
+  out += "Content-Length: " + std::to_string(body.size()) + "\r\n";
+  out += "Connection: close\r\n\r\n";
+  out += body;
+  __nexa_sock_t fd = (__nexa_sock_t)req.socket;
+  int ok = __nexa_http_send_all(fd, out.data(), out.size());
+  __nexa_sock_close(fd);
+  return ok;
+}
+[[maybe_unused]] static int __nexa_http_raw(const __nexa_http_incoming& req, const std::string& bytes) {
+  __nexa_sock_t fd = (__nexa_sock_t)req.socket;
+  int ok = __nexa_http_send_all(fd, bytes.data(), bytes.size());
+  __nexa_sock_close(fd);
+  return ok;
+}
+[[maybe_unused]] static int __nexa_http_close(const __nexa_http_server& srv) {
+  __nexa_sock_close((__nexa_sock_t)srv.socket);
+  return 1;
+}
+#endif
+)NEXA_HTTP_SERVER";
     }
     return out;
 }

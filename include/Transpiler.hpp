@@ -269,7 +269,8 @@ public:
                 case AstNode::Type::HttpCall:
                     cppUsage.http = true;
                     cppUsage.result = true;
-                    if (n.value == "request") cppUsage.httpResponse = true;
+                    if (httpVerbIsServer(n.value)) cppUsage.httpServer = true;
+                    else if (n.value == "request") cppUsage.httpResponse = true;
                     else cppUsage.httpSimple = true;
                     break;
                 case AstNode::Type::GfxCall:
@@ -349,9 +350,9 @@ public:
         int structId = 0;
         int enumId = 0;
         if (modules_.hasHttp()) {
-            // std/http's HttpResponse: known like any struct, but defined by
-            // the runtime, so it is seeded here and never emitted below. The
-            // name belongs to the module -- a program that redefines it lands
+            // std/http's own structs: known like any struct, but defined by the
+            // runtime, so they are seeded here and never emitted below. The
+            // names belong to the module -- a program that redefines one lands
             // in the duplicate-type-name check with everything else.
             structFields_["HttpResponse"]["status"] = "int";
             structFields_["HttpResponse"]["body"] = "string";
@@ -359,6 +360,22 @@ public:
             structFieldOrder_["HttpResponse"] = { "status", "body", "headers" };
             structCppNames_["HttpResponse"] = "__nexa_http_response";
             typeNames.insert("HttpResponse");
+            structFields_["HttpServer"]["port"] = "int";
+            structFields_["HttpServer"]["socket"] = "int";
+            structFieldOrder_["HttpServer"] = { "port", "socket" };
+            structCppNames_["HttpServer"] = "__nexa_http_server";
+            typeNames.insert("HttpServer");
+            structFields_["HttpRequest"]["method"] = "string";
+            structFields_["HttpRequest"]["path"] = "string";
+            structFields_["HttpRequest"]["body"] = "string";
+            structFields_["HttpRequest"]["headers"] = "[]string";
+            structFields_["HttpRequest"]["socket"] = "int";
+            structFieldOrder_["HttpRequest"] = { "method", "path", "body", "headers", "socket" };
+            // __nexa_http_request is already the client call http.request, so
+            // the struct a server accepts is __nexa_http_incoming: in C++ a
+            // function of that name would hide a struct of that name.
+            structCppNames_["HttpRequest"] = "__nexa_http_incoming";
+            typeNames.insert("HttpRequest");
         }
         for (const AstNode& node : ast_) {
             if (node.type == AstNode::Type::StructDef) {
@@ -2286,6 +2303,9 @@ private:
                 return "string";
             case AstNode::Type::HttpCall:
                 if (e.value == "request") return nexaMakeResultType("struct:HttpResponse");
+                if (e.value == "localhost") return nexaMakeResultType("struct:HttpServer");
+                if (e.value == "accept") return nexaMakeResultType("struct:HttpRequest");
+                if (httpVerbReturnsInt(e.value)) return "int";
                 return nexaMakeResultType("string");
             case AstNode::Type::ResultMake:
                 if (e.value == "err") return nexaMakeResultType("void");
@@ -3756,6 +3776,16 @@ private:
         return fit->second;
     }
 
+    // The half of std/http that listens rather than calls out. These are the
+    // verbs whose runtime lives in the server block, and the ones that hand
+    // back a plain int rather than a Result.
+    static bool httpVerbIsServer(const std::string& m) {
+        return m == "localhost" || m == "accept" || m == "reply" || m == "raw" || m == "close";
+    }
+    static bool httpVerbReturnsInt(const std::string& m) {
+        return m == "reply" || m == "raw" || m == "close";
+    }
+
     // Core string-method return-type classification (value.method(...)).
     static bool strMethodReturnsString(const std::string& m) {
         return m == "upper" || m == "lower" || m == "trim" || m == "replace" ||
@@ -3771,7 +3801,10 @@ private:
             return m == "shell" || m == "newline" || m == "path_sep" || m == "lang"
                 || m == "config_dir" || m == "cache_dir" || m == "desktop" || m == "endian";
         }
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsExecutable || e.type == AstNode::Type::OsTempDir || e.type == AstNode::Type::OsArch || e.type == AstNode::Type::OsWhich || e.type == AstNode::Type::OsCwd || e.type == AstNode::Type::OsHostname || e.type == AstNode::Type::OsUsername || e.type == AstNode::Type::OsHome || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::OsLoad || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall || e.type == AstNode::Type::HttpCall) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsExecutable || e.type == AstNode::Type::OsTempDir || e.type == AstNode::Type::OsArch || e.type == AstNode::Type::OsWhich || e.type == AstNode::Type::OsCwd || e.type == AstNode::Type::OsHostname || e.type == AstNode::Type::OsUsername || e.type == AstNode::Type::OsHome || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::OsLoad || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall) return true;
+        // http.reply/raw/close hand back a 1/0 int, so they concatenate as a
+        // number; every other http.* call yields a Result.
+        if (e.type == AstNode::Type::HttpCall) return !httpVerbReturnsInt(e.value);
         if (e.type == AstNode::Type::JsonCall && e.value == "stringify") return true;
         if (e.type == AstNode::Type::ExprCast && e.value == "string") return true;
         if (e.type == AstNode::Type::FileCall) {
@@ -3842,7 +3875,10 @@ private:
             return m == "shell" || m == "newline" || m == "path_sep" || m == "lang"
                 || m == "config_dir" || m == "cache_dir" || m == "desktop" || m == "endian";
         }
-        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsExecutable || e.type == AstNode::Type::OsTempDir || e.type == AstNode::Type::OsArch || e.type == AstNode::Type::OsWhich || e.type == AstNode::Type::OsCwd || e.type == AstNode::Type::OsHostname || e.type == AstNode::Type::OsUsername || e.type == AstNode::Type::OsHome || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::OsLoad || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall || e.type == AstNode::Type::HttpCall) return true;
+        if (e.type == AstNode::Type::OsGetenv || e.type == AstNode::Type::OsExec || e.type == AstNode::Type::OsPlatform || e.type == AstNode::Type::OsExeDir || e.type == AstNode::Type::OsExecutable || e.type == AstNode::Type::OsTempDir || e.type == AstNode::Type::OsArch || e.type == AstNode::Type::OsWhich || e.type == AstNode::Type::OsCwd || e.type == AstNode::Type::OsHostname || e.type == AstNode::Type::OsUsername || e.type == AstNode::Type::OsHome || e.type == AstNode::Type::OsGrepKeys || e.type == AstNode::Type::OsClipGet || e.type == AstNode::Type::OsLoad || e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::FileRead || e.type == AstNode::Type::IoReadln || e.type == AstNode::Type::IoGetline || e.type == AstNode::Type::ExprTrim || e.type == AstNode::Type::CryptoCall) return true;
+        // http.reply/raw/close hand back a 1/0 int, so they concatenate as a
+        // number; every other http.* call yields a Result.
+        if (e.type == AstNode::Type::HttpCall) return !httpVerbReturnsInt(e.value);
         if (e.type == AstNode::Type::JsonCall && e.value == "stringify") return true;
         if (e.type == AstNode::Type::FileCall) {
             const std::string& m = e.value;
@@ -4404,6 +4440,11 @@ private:
                 out << indent << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::JsonCall) {
                 out << indent << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
+            } else if (child.type == AstNode::Type::HttpCall) {
+                // An http call whose answer nobody keeps still has to happen:
+                // http.reply(...) and http.close(...) are written for what they
+                // do, not for the 1/0 they hand back.
+                out << indent << "(void)(" << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ");\n";
             } else if (child.type == AstNode::Type::RandomSeed) {
                 std::string seedExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 out << indent << "__nexa_random_seed(" << seedExpr << ");\n";
@@ -5720,6 +5761,18 @@ private:
                 };
                 if (fn == "request") {
                     return "__nexa_http_request(" + arg(0) + ", " + arg(1) + ", " + arg(2) + ", " +
+                        headers(3) + ")";
+                }
+                // The server half. http.localhost() with no port asks the OS
+                // for a free one, which is port 0 on the wire.
+                if (fn == "localhost") {
+                    return "__nexa_http_localhost(" + (e.children.empty() ? std::string("0") : arg(0)) + ")";
+                }
+                if (fn == "accept") return "__nexa_http_accept(" + arg(0) + ")";
+                if (fn == "close") return "__nexa_http_close(" + arg(0) + ")";
+                if (fn == "raw") return "__nexa_http_raw(" + arg(0) + ", " + arg(1) + ")";
+                if (fn == "reply") {
+                    return "__nexa_http_reply(" + arg(0) + ", " + arg(1) + ", " + arg(2) + ", " +
                         headers(3) + ")";
                 }
                 std::string verb;

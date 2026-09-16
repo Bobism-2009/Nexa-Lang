@@ -1,0 +1,7 @@
+// reply needs a request, a status and a body before the optional headers.
+#include <std/http>
+fn main() {
+    let s = http.localhost();
+    let r = http.accept(s.value());
+    http.reply(r.value(), 200);
+}

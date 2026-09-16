@@ -21,12 +21,21 @@
 #             and the wasm half skipped without those headers.
 #
 #   loopback  Build Tests/http_loopback_test.nxa and run it against
-#             Tests/http_server.py on 127.0.0.1, diffing the output against
+#             Tests/http_server.nxa on 127.0.0.1, diffing the output against
 #             http_loopback_test.expected. This is the only layer that
-#             exercises the transport itself: chunked framing, redirect
+#             exercises the client transport itself: chunked framing, redirect
 #             following and its bound, request headers, Content-Length, the
-#             non-2xx split between the simple verbs and http.request. Needs
-#             python3 and a loopback socket; skipped without either.
+#             non-2xx split between the simple verbs and http.request. Both
+#             ends are Nexa -- the server used to be a Python script, and is
+#             now http.localhost() answering with http.reply and http.raw.
+#             Needs a C++ compiler and a loopback socket.
+#
+#   server    Build Tests/http_server_test.nxa and run it: one program that
+#             binds a loopback port, answers four requests from a worker
+#             thread, and asks them with the client verbs. This is the layer
+#             that covers the server half -- the bound port, the request the
+#             server sees, reply's framing, raw's bytes, and close actually
+#             closing. Needs a C++ compiler and a loopback socket.
 #
 # Unknown-verb and arity diagnostics live in Tests/Lang/errors/http_*.nxa,
 # where the run_tests.sh error phase already checks that NexaC does the
@@ -145,13 +154,69 @@ emits "response_fields_keep_their_types" \
     io.println("b " + r.value().body + " s " + r.value().status);' \
     'std::string("b ") + __nexa_var_0.value().body'
 
+echo "-- codegen: the call each http server verb emits"
+
+emits "localhost" \
+    '    let s = http.localhost();' \
+    '__nexa_http_localhost(0)'
+emits "localhost_port" \
+    '    let s = http.localhost(8080);' \
+    '__nexa_http_localhost(8080)'
+emits "accept" \
+    '    let s = http.localhost();
+    let r = http.accept(s.value());' \
+    '__nexa_http_accept(__nexa_var_0.value())'
+emits "reply" \
+    '    let s = http.localhost();
+    let r = http.accept(s.value());
+    http.reply(r.value(), 200, "b");' \
+    '__nexa_http_reply(__nexa_var_1.value(), 200, "b", std::vector<std::string>())'
+emits "reply_headers" \
+    '    let s = http.localhost();
+    let r = http.accept(s.value());
+    http.reply(r.value(), 200, "b", ["A: 1"]);' \
+    '__nexa_http_reply(__nexa_var_1.value(), 200, "b", std::vector<std::string>{"A: 1"})'
+emits "raw" \
+    '    let s = http.localhost();
+    let r = http.accept(s.value());
+    http.raw(r.value(), "HTTP/1.1 200 OK\r\n\r\n");' \
+    '__nexa_http_raw(__nexa_var_1.value(), "HTTP/1.1 200 OK'
+emits "close" \
+    '    let s = http.localhost();
+    http.close(s.value());' \
+    '__nexa_http_close(__nexa_var_0.value())'
+
+# A server call written for what it does, with nobody keeping the 1/0 it hands
+# back, still has to reach the emitted C++.
+emits "reply_as_a_statement_is_not_dropped" \
+    '    let s = http.localhost();
+    let r = http.accept(s.value());
+    http.reply(r.value(), 204, "");' \
+    '(void)(__nexa_http_reply('
+
+# HttpServer and HttpRequest are the runtime's structs, the same way
+# HttpResponse is.
+emits "server_structs_are_the_runtime_structs" \
+    '    let s = http.localhost();
+    let srv = s.value();
+    let r = http.accept(srv);
+    let req = r.value();
+    io.println(srv.port);
+    io.println(req.method + req.path + req.body);
+    io.println(len(req.headers));' \
+    '__nexa_http_incoming __nexa_var_'
+
 echo "-- codegen: a program carries only the half it calls"
 
-# carries <label> <body> <yes|no for simple> <yes|no for the response struct>
+# carries <label> <body> <yes|no simple> <yes|no response> <yes|no server>
+# The client transport under the first two is checked too: a program that only
+# serves carries no __nexa_http_perform, and so none of the TLS machinery.
 carries() {
     label=$1
     transpile "$label" "$2" || return
-    for pair in "__nexa_http_simple:$3" "__nexa_http_response:$4"; do
+    case "$3$4" in *yes*) client=yes ;; *) client=no ;; esac
+    for pair in "__nexa_http_simple:$3" "__nexa_http_response:$4" \
+                "__nexa_http_localhost:$5" "__nexa_http_perform:$client"; do
         sym=${pair%:*}
         want=${pair#*:}
         if grep -q "$sym" "$WORK/$label.cpp"; then have=yes; else have=no; fi
@@ -166,15 +231,22 @@ carries() {
 
 carries "simple_only_has_no_response_struct" \
     '    let r = http.get("http://h/p");
-    io.println(r.ok());' yes no
+    io.println(r.ok());' yes no no
 carries "request_only_has_no_simple_verb" \
     '    let r = http.request("GET", "http://h/p", "");
-    io.println(r.value().status);' no yes
+    io.println(r.value().status);' no yes no
 carries "both_carries_both" \
     '    let a = http.get("http://h/p");
     let b = http.request("GET", "http://h/p", "");
     io.println(a.ok());
-    io.println(b.value().status);' yes yes
+    io.println(b.value().status);' yes yes no
+carries "server_only_carries_no_client" \
+    '    let s = http.localhost();
+    let r = http.accept(s.value());
+    http.reply(r.value(), 200, "hi");' no no yes
+carries "client_only_carries_no_server" \
+    '    let r = http.get("http://h/p");
+    io.println(r.ok());' yes no no
 
 # The wasm target emits the same calls; only the backend under them differs.
 echo "-- codegen: --wasm emits the same surface over the FETCH backend"
@@ -185,13 +257,19 @@ ALL_VERBS='    let a = http.get("http://h/p", ["A: 1"]);
     let d = http.patch("http://h/p", "b");
     let e = http.delete("http://h/p");
     let f = http.request("GET", "http://h/p", "");
+    let s = http.localhost();
+    let q = http.accept(s.value());
+    http.reply(q.value(), 200, "b", ["A: 1"]);
+    http.raw(q.value(), "x");
+    http.close(s.value());
     io.println(a.ok() + b.ok() + c.ok() + d.ok() + e.ok() + f.value().status);'
 
 if transpile "wasm_surface" "$ALL_VERBS" --wasm; then
     missing=""
     for sym in emscripten_fetch_attr_t requestHeaders \
                emscripten_fetch_get_response_headers __nexa_http_simple \
-               __nexa_http_request __nexa_http_response; do
+               __nexa_http_request __nexa_http_response __nexa_http_localhost \
+               __nexa_http_incoming; do
         grep -q "$sym" "$WORK/wasm_surface.cpp" || missing="$missing $sym"
     done
     if [ -n "$missing" ]; then
@@ -246,18 +324,21 @@ else
     fi
 fi
 
-# --- loopback: the transport itself -----------------------------------------
+# --- loopback: the client transport, against a Nexa server ------------------
 
-echo "-- loopback: the transport, against a local server"
+echo "-- loopback: the client transport, against a server written in Nexa"
 
 if [ -z "$CXX" ]; then
     echo "skip loopback: no C++ compiler on this machine"
     skips=$((skips + 1))
-elif ! command -v python3 >/dev/null 2>&1; then
-    echo "skip loopback: no python3 to run Tests/http_server.py"
-    skips=$((skips + 1))
+elif ! "$NEXAC" "$SUITE/http_server.nxa" -o "$WORK/server" > "$WORK/server.log" 2>&1; then
+    echo "FAIL loopback: could not build http_server.nxa"
+    sed 's/^/  /' "$WORK/server.log" | head -n 20
+    fails=$((fails + 1))
 else
-    python3 "$SUITE/http_server.py" "$WORK/port" > "$WORK/server.log" 2>&1 &
+    # The server writes the port it was given to argv[1], so no layer of this
+    # suite ever picks a port and hopes it was free.
+    "$WORK/server" "$WORK/port" > "$WORK/server.run.log" 2>&1 &
     SRV_PID=$!
     tries=0
     while [ ! -s "$WORK/port" ] && [ $tries -lt 50 ]; do
@@ -266,7 +347,7 @@ else
     done
     if [ ! -s "$WORK/port" ]; then
         echo "skip loopback: could not bind a loopback port"
-        sed 's/^/  /' "$WORK/server.log"
+        sed 's/^/  /' "$WORK/server.run.log"
         skips=$((skips + 1))
     elif ! "$NEXAC" "$SUITE/http_loopback_test.nxa" -o "$WORK/loopback" \
             > "$WORK/loopback.log" 2>&1; then
@@ -283,6 +364,30 @@ else
             sed 's/^/  /' "$WORK/loopback.diff" | head -n 30
             fails=$((fails + 1))
         fi
+    fi
+fi
+
+# --- server: the listening half, both ends in one program -------------------
+
+echo "-- server: http.localhost() answering this program's own client calls"
+
+if [ -z "$CXX" ]; then
+    echo "skip server: no C++ compiler on this machine"
+    skips=$((skips + 1))
+elif ! "$NEXAC" "$SUITE/http_server_test.nxa" -o "$WORK/server_test" \
+        > "$WORK/server_test.log" 2>&1; then
+    echo "FAIL server: could not build http_server_test.nxa"
+    sed 's/^/  /' "$WORK/server_test.log" | head -n 20
+    fails=$((fails + 1))
+else
+    "$WORK/server_test" > "$WORK/server_test.out" 2>&1
+    if diff -u "$SUITE/http_server_test.expected" "$WORK/server_test.out" \
+            > "$WORK/server_test.diff" 2>&1; then
+        echo "ok server"
+    else
+        echo "FAIL server: output moved"
+        sed 's/^/  /' "$WORK/server_test.diff" | head -n 30
+        fails=$((fails + 1))
     fi
 fi
 

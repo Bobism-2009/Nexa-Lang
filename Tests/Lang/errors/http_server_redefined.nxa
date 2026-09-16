@@ -1,0 +1,12 @@
+// HttpServer is std/http's type; a program cannot also define one.
+#include <std/http>
+#include <std/io>
+
+struct HttpServer {
+    port: int;
+}
+
+fn main() {
+    let s = http.localhost();
+    io.println(s.ok());
+}

@@ -1339,8 +1339,10 @@ static std::string nexaBuildCompileCmd(
         cmd += " -lwinmm";
     }
     if (linkHttp) {
-        // std/http uses WinHTTP (OS API; HTTPS via Schannel).
+        // std/http uses WinHTTP to call out (OS API; HTTPS via Schannel) and
+        // Winsock to listen (http.localhost).
         cmd += " -lwinhttp";
+        cmd += " -lws2_32";
     }
 #elif defined(__APPLE__)
     if (linkHttp) {

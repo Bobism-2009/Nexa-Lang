@@ -55,6 +55,8 @@ export const NEXA_TYPES = [
   "Json",
   "Result",
   "HttpResponse",
+  "HttpServer",
+  "HttpRequest",
 ];
 
 export const STD_INCLUDES = [
@@ -181,6 +183,11 @@ export const MODULE_MEMBERS: Record<string, { name: string; detail: string }[]> 
     { name: "patch", detail: "http.patch(url, body[, headers]) — Result[string]" },
     { name: "delete", detail: "http.delete(url[, headers]) — Result[string]" },
     { name: "request", detail: "http.request(method, url, body[, headers]) — Result[HttpResponse]" },
+    { name: "localhost", detail: "http.localhost([port]) — Result[HttpServer]; binds 127.0.0.1, port picked by the OS when omitted" },
+    { name: "accept", detail: "http.accept(server) — Result[HttpRequest]; waits for one request and reads all of it" },
+    { name: "reply", detail: "http.reply(request, status, body[, headers]) — answer it and close; 1 on success" },
+    { name: "raw", detail: "http.raw(request, text) — answer with exactly these bytes and close; 1 on success" },
+    { name: "close", detail: "http.close(server) — stop listening; 1 on success" },
   ],
   json: [
     { name: "parse", detail: "json.parse(s) — nested JSON; .ok() is false on error" },
@@ -296,6 +303,11 @@ export const HOVER_DOCS: Record<string, string> = {
   "http.patch": "PATCH a URL. Returns Result[string]: .ok() / .value() for the body. A non-2xx status is a failure with .error() = HTTP <status>. Takes an optional trailing []string of raw request header lines.",
   "http.delete": "DELETE a URL. Returns Result[string]: .ok() / .value() for the body. A non-2xx status is a failure with .error() = HTTP <status>. Takes an optional trailing []string of raw request header lines.",
   "http.request": "Any method, with the full response. Returns Result[HttpResponse] — .status, .body, .headers. Only a transport failure is an error; any status the server answered with is a success.",
+  "http.localhost": "Listen on 127.0.0.1. Returns Result[HttpServer] — .port is the port the OS picked (pass one to choose it yourself), .socket is the listening socket. Raw OS sockets: Winsock on Windows, POSIX everywhere else. Not available on wasm.",
+  "http.accept": "Wait for one request on a server and read all of it. Returns Result[HttpRequest] — .method, .path, .body, .headers, .socket. Blocks until a client connects.",
+  "http.reply": "Answer a request with a status and a body, then close the connection. Writes the status line, your header lines, Content-Length and Connection: close; a Content-Length or Connection you pass is dropped. Returns 1 on success, 0 on failure.",
+  "http.raw": "Answer a request with exactly these bytes — status line, headers and body as written, nothing added — then close. This is how a program frames a response itself. Returns 1 on success, 0 on failure.",
+  "http.close": "Stop listening: closes the server's listening socket. Returns 1.",
   "json.parse": "Parse JSON text into a Json value. On failure .ok() is false and .as_string() is the error.",
   "json.stringify": "Serialize Json (or a native value via json.of) to text. Optional indent pretty-prints.",
   "json.of": "Convert int, float, bool, string, Json, []T, or map[string]T to Json.",

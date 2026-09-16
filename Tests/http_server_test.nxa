@@ -1,0 +1,91 @@
+// std/http's server half against std/http's client half, in one program (BOB-36).
+//
+// Both ends are Nexa here: http.localhost() binds a loopback port, a worker
+// thread answers four requests on it, and the client verbs from BOB-35 are what
+// ask the questions. Nothing outside the process is involved -- no interpreter,
+// no helper, no second binary -- which is the whole claim this test exists to
+// check. Driven by the server layer of Tests/http_cases.sh.
+#include <std/http>
+#include <std/io>
+#include <std/thread>
+
+// The value of a request header, or "-" when the client did not send it.
+fn header(req: HttpRequest, name: string): string {
+    let want: string = name.lower() + ":";
+    for (i, len(req.headers)) {
+        let line: string = req.headers[i];
+        if (line.lower().starts_with(want)) {
+            return line.substring(len(want), -1).trim();
+        }
+    }
+    return "-";
+}
+
+// One request per connection, n of them, then the thread is done.
+fn serve(srv: HttpServer, n: int) {
+    for (i, n) {
+        let r = http.accept(srv);
+        if (!r.ok()) {
+            return;
+        }
+        let req = r.value();
+        if (req.path == "/raw") {
+            // A response framed by hand: the status line, the headers and the
+            // body are exactly these bytes and nothing is added to them.
+            http.raw(req, "HTTP/1.1 201 Created\r\nContent-Length: 4\r\nConnection: close\r\n\r\nrawy");
+        } else if (req.path == "/nope") {
+            http.reply(req, 404, "gone");
+        } else {
+            http.reply(req, 200,
+                req.method + "|" + req.path + "|" + req.body + "|" + header(req, "X-Token"),
+                ["X-Served: nexa"]);
+        }
+    }
+}
+
+fn main() {
+    let s = http.localhost();
+    io.println("bind " + s.ok());
+    let srv = s.value();
+
+    // The OS picked the port; a test never has to guess one.
+    let bound: int = 0;
+    if (srv.port > 0) {
+        bound = 1;
+    }
+    io.println("port " + bound);
+
+    let base: string = "http://127.0.0.1:" + srv.port;
+    let t = thread.spawn(serve(srv, 4));
+
+    // The request line, the body and a request header all arrive.
+    let echo = http.post(base + "/echo", "payload", ["X-Token: t1"]);
+    io.println("echo " + echo.ok() + " [" + echo.value() + "]");
+
+    // A status the server chose, seen as a status rather than a failure.
+    let missing = http.request("GET", base + "/nope", "");
+    io.println("nope " + missing.value().status + " [" + missing.value().body + "]");
+
+    // http.raw's bytes reach the client as written: 201 is a success, so the
+    // simple verb hands back the body.
+    let raw = http.get(base + "/raw");
+    io.println("raw " + raw.ok() + " [" + raw.value() + "]");
+
+    // Response headers the server added come back as raw lines.
+    let full = http.request("GET", base + "/echo", "");
+    let seen: int = 0;
+    for (i, len(full.value().headers)) {
+        if (full.value().headers[i].starts_with("X-Served:")) {
+            seen = 1;
+        }
+    }
+    io.println("served " + seen + " [" + full.value().body + "]");
+
+    thread.join(t);
+
+    // Closing the listening socket really closes it: nothing answers after.
+    io.println("close " + http.close(srv));
+    let dead = http.get(base + "/echo");
+    io.println("dead " + dead.ok() + " [" + dead.error() + "]");
+    return 0;
+}

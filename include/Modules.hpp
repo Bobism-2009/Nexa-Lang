@@ -72,11 +72,14 @@ public:
         bool cryptoHmac = false;
         bool cryptoRandom = false;
         bool http = false;
-        // The two halves of std/http above the transport: httpSimple is
+        // The three halves of std/http above the transports: httpSimple is
         // get/post/put/patch/delete, httpResponse is http.request and the
-        // response struct it hands back. A program carries what it calls.
+        // response struct it hands back, httpServer is http.localhost and the
+        // calls around it. A program carries what it calls -- and a program
+        // that only serves carries no client transport at all.
         bool httpSimple = false;
         bool httpResponse = false;
+        bool httpServer = false;
         bool str = false;
         bool time = false;
         bool timeSleep = false;
@@ -1434,7 +1437,7 @@ public:
             out += resultRuntimeCpp();
         }
         if (hasHttp() && usage.http) {
-            out += httpRuntimeCpp(usage.httpSimple, usage.httpResponse);
+            out += httpRuntimeCpp(usage.httpSimple, usage.httpResponse, usage.httpServer);
         }
         if (hasGfx() && usage.gfx) {
             GfxNeed need;
@@ -1515,7 +1518,9 @@ public:
             out += "#include <vector>\n";
             out += "#include <functional>\n";
             out += "static std::vector<std::thread> __nexa_threads;\n";
-            out += "static int __nexa_thread_spawn(void (*fn)()) {\n";
+            // A program that only ever spawns a call -- thread.spawn(f(x)) --
+            // reaches the lambda form below and never this one.
+            out += "[[maybe_unused]] static int __nexa_thread_spawn(void (*fn)()) {\n";
             out += "  __nexa_threads.emplace_back(fn);\n";
             out += "  return static_cast<int>(__nexa_threads.size()) - 1;\n";
             out += "}\n";
