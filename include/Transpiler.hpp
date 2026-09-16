@@ -5493,6 +5493,82 @@ private:
         return nexaTypeToCpp(ty) + "([&](" + sig + ") -> " + nexaTypeToCpp(ret) + " {\n" + body.str() + "})";
     }
 
+    // C++ precedence tier of a Nexa binary node, higher binds tighter.
+    // -1 means "not a plain binary operator", so nothing flattens through it.
+    static int cppBinaryPrec(AstNode::Type t) {
+        switch (t) {
+            case AstNode::Type::ExprMul:
+            case AstNode::Type::ExprDiv:
+            case AstNode::Type::ExprMod:    return 5;
+            case AstNode::Type::ExprAdd:
+            case AstNode::Type::ExprSub:    return 4;
+            case AstNode::Type::ExprShl:
+            case AstNode::Type::ExprShr:    return 3;
+            case AstNode::Type::ExprBitAnd: return 2;
+            case AstNode::Type::ExprBitXor: return 1;
+            case AstNode::Type::ExprBitOr:  return 0;
+            default:                        return -1;
+        }
+    }
+
+    static const char* cppBinaryOp(AstNode::Type t) {
+        switch (t) {
+            case AstNode::Type::ExprMul:    return " * ";
+            case AstNode::Type::ExprDiv:    return " / ";
+            case AstNode::Type::ExprMod:    return " % ";
+            case AstNode::Type::ExprAdd:    return " + ";
+            case AstNode::Type::ExprSub:    return " - ";
+            case AstNode::Type::ExprShl:    return " << ";
+            case AstNode::Type::ExprShr:    return " >> ";
+            case AstNode::Type::ExprBitAnd: return " & ";
+            case AstNode::Type::ExprBitXor: return " ^ ";
+            case AstNode::Type::ExprBitOr:  return " | ";
+            default:                        return " ? ";
+        }
+    }
+
+    // Emit a binary node as a bare `lhs op rhs`, with no parens of its own.
+    //
+    // Every one of these operators is left-associative in C++, so a left child
+    // in the same precedence tier parses identically with or without its
+    // parens: `a - b + c` is `(a - b) + c`. Emitting the parens anyway costs
+    // one bracket-nesting level per term, and clang stops at 256 — a flat,
+    // perfectly valid 300-term sum used to fail to build.
+    //
+    // Only a *same-tier* left child flattens. That is deliberately narrower
+    // than "C++ would parse it the same": it keeps every paren that guards a
+    // grouping C++ reads differently from Nexa (comparison and equality bind
+    // looser here than `&`), and it stays clear of the mixed-operator shapes
+    // compilers warn about — `a & b | c` (-Wparentheses), `a + b << c`
+    // (-Wshift-op-parentheses). The right child keeps its parens, which is
+    // what makes `a - (b - c)` survive.
+    std::string emitBinaryChain(const AstNode& e, const std::map<std::string, std::string>& varMap,
+        const std::map<std::string, bool>* varIsString,
+        const std::map<std::string, bool>* varIsFloat,
+        const std::map<std::string, bool>* varIsChar,
+        const std::map<std::string, bool>* varIsBool) {
+        static const std::map<std::string, bool> kEmptyTypeMap;
+        const std::map<std::string, bool>& vIsStr = varIsString ? *varIsString : kEmptyTypeMap;
+        const AstNode& l = e.children[0];
+        std::string out = emitsPlainBinaryOp(l, vIsStr) && cppBinaryPrec(l.type) == cppBinaryPrec(e.type)
+            ? emitBinaryChain(l, varMap, varIsString, varIsFloat, varIsChar, varIsBool)
+            : emitExpr(l, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+        out += cppBinaryOp(e.type);
+        out += emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+        return out;
+    }
+
+    // True when this node's C++ is literally `lhs op rhs`, which is the only
+    // shape emitBinaryChain may flatten. Two binary nodes are not: `+` over
+    // strings folds into a concat, and `^` with a string on the left becomes a
+    // per-character lambda.
+    bool emitsPlainBinaryOp(const AstNode& e, const std::map<std::string, bool>& varIsString) const {
+        if (cppBinaryPrec(e.type) < 0 || e.children.size() < 2) return false;
+        if (e.type == AstNode::Type::ExprAdd) return !exprIsString(e, varIsString);
+        if (e.type == AstNode::Type::ExprBitXor) return !exprIsString(e.children[0], varIsString);
+        return true;
+    }
+
     std::string emitExpr(const AstNode& e, const std::map<std::string, std::string>& varMap,
         const std::map<std::string, bool>* varIsString = nullptr,
         const std::map<std::string, bool>* varIsFloat = nullptr,
@@ -6145,36 +6221,26 @@ private:
                     // Delegate so literal chains fold to one "..." and never become const char* + const char*.
                     return emitConcatOperand(e, varMap, vIsStr, vFl, vCh, vBo);
                 }
-                return "(" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " + "
-                    + emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
+                [[fallthrough]];
             case AstNode::Type::ExprSub:
-                return "(" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " - " + emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::ExprMul:
-                return "(" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " * " + emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::ExprDiv:
-                return "(" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " / " + emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::ExprMod:
-                return "(" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " % " + emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::ExprBitAnd:
-                return "(" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " & " + emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::ExprBitOr:
-                return "(" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " | " + emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
+            case AstNode::Type::ExprShl:
+            case AstNode::Type::ExprShr:
+                return "(" + emitBinaryChain(e, varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::ExprBitXor: {
-                bool lhsStr = exprIsString(e.children[0], vIsStr);
-                bool rhsStr = exprIsString(e.children[1], vIsStr);
-                std::string lhs = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
-                std::string rhs = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
-                if (lhsStr && !rhsStr) {
+                if (exprIsString(e.children[0], vIsStr) && !exprIsString(e.children[1], vIsStr)) {
+                    std::string lhs = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    std::string rhs = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                     return "([&]{ std::string __nexa_s = " + lhs + "; int __nexa_k = " + rhs
                         + "; for (size_t __nexa_i = 0; __nexa_i < __nexa_s.size(); __nexa_i++) "
                         "__nexa_s[__nexa_i] = (char)((unsigned char)__nexa_s[__nexa_i] ^ (__nexa_k & 0xFF)); return __nexa_s; }())";
                 }
-                return "(" + lhs + " ^ " + rhs + ")";
+                return "(" + emitBinaryChain(e, varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             }
-            case AstNode::Type::ExprShl:
-                return "(" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " << " + emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
-            case AstNode::Type::ExprShr:
-                return "(" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + " >> " + emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::ExprBitNot:
                 return "(~" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::ExprAddrOf:
@@ -6626,6 +6692,29 @@ private:
         return std::nullopt;
     }
 
+    // A string concat chain, emitted bare: `a + b + c`, not `((a + b) + c)`.
+    // std::string's operator+ is left-associative too, so the nesting was pure
+    // bracket depth — see emitBinaryChain. The std::string promotion only has
+    // to happen once, at the head of the chain: everything after it is a
+    // std::string + something, which is already a valid overload.
+    std::string emitConcatChain(const AstNode& e,
+                                const std::map<std::string, std::string>& varMap,
+                                const std::map<std::string, bool>& varIsString,
+                                const std::map<std::string, bool>& varIsFloat,
+                                const std::map<std::string, bool>& varIsChar,
+                                const std::map<std::string, bool>& varIsBool) {
+        const AstNode& l = e.children[0];
+        bool flatten = l.type == AstNode::Type::ExprAdd && l.children.size() >= 2
+            && exprIsString(l, varIsString)
+            && !tryFoldStringLiteralChain(l, varIsString).has_value();
+        std::string out = flatten
+            ? emitConcatChain(l, varMap, varIsString, varIsFloat, varIsChar, varIsBool)
+            : asCppStdString(emitConcatOperand(l, varMap, varIsString, varIsFloat, varIsChar, varIsBool));
+        out += " + ";
+        out += emitConcatOperand(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+        return out;
+    }
+
     std::string emitConcatOperand(const AstNode& child,
                                   const std::map<std::string, std::string>& varMap,
                                   const std::map<std::string, bool>& varIsString,
@@ -6640,9 +6729,7 @@ private:
             if (auto folded = tryFoldStringLiteralChain(child, varIsString)) {
                 return emitCppStringValue(*folded);
             }
-            // Promote the left side: at least one operand of + must be a std::string.
-            return "(" + asCppStdString(emitConcatOperand(child.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool)) + " + "
-                + emitConcatOperand(child.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
+            return "(" + emitConcatChain(child, varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
         }
         if (child.type == AstNode::Type::ExprAdd) {
             if (exprIsFloat(child, varIsFloat)) {
