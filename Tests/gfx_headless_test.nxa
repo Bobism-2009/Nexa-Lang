@@ -156,6 +156,38 @@ fn main() {
     io.println("save_no_window=", gfx.save("nexa_headless_should_not_exist.bmp"));
     io.println("save_wrote_nothing=", file.exists("nexa_headless_should_not_exist.bmp"));
 
+    // --- sound is not part of the window either ---------------------------
+    // Loading a WAV needs no stream and no window, so gfx.sound answers
+    // properly here. Playing one does need a stream, and on macOS/Linux there
+    // is no device yet -- so gfx.play is 0 on the machine this suite runs on,
+    // and with nothing playing there is nothing to stop. (The mixing itself is
+    // covered in Tests/gfx_sound_cases.sh, which stands a fake device in.)
+    let wavPath: string = "Tests/gfx_beep.wav";
+    if (os.load(wavPath) == "") {
+        wavPath = "gfx_beep.wav";
+    }
+    let snd: int = gfx.sound(wavPath);
+    io.println("sound_ok=", snd != 0);
+    io.println("sound_cached=", gfx.sound(wavPath) == snd);
+    io.println("sound_missing=", gfx.sound("nexa_missing_sound_xyz.wav"));
+    io.println("sound_empty_path=", gfx.sound(""));
+    // A perfectly good file that is not a WAV is refused rather than guessed at.
+    io.println("sound_not_a_wav=", gfx.sound(pngPath));
+
+    // The master volume is mixer state rather than something the stream owns,
+    // so like gfx.alpha it answers with nothing open.
+    io.println("volume_default=", gfx.volume());
+    io.println("volume_set=", gfx.volume(128));
+    io.println("volume_get=", gfx.volume());
+    io.println("volume_clamp_high=", gfx.volume(300));
+    io.println("volume_clamp_low=", gfx.volume(-5));
+    io.println("volume_reset=", gfx.volume(255));
+
+    io.println("stop_nothing=", gfx.stop());
+    io.println("stop_unknown_voice=", gfx.stop(1));
+    io.println("play_bad_handle=", gfx.play(0));
+    io.println("loop_bad_handle=", gfx.loop(0));
+
     // --- the input added in BOB-21 ----------------------------------------
     // Scrolling and typing are read only while a window is focused, so with no
     // window there is nothing to report: 0 notches and no text.

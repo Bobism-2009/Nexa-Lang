@@ -113,6 +113,7 @@ public:
         bool gfxSave = false;
         bool gfxDialogs = false;
         bool gfxAudio = false;
+        bool gfxSound = false;
         bool gfxWindow = false;
         bool json = false;
         bool result = false;
@@ -1459,6 +1460,7 @@ public:
             need.save = usage.gfxSave;
             need.dialogs = usage.gfxDialogs;
             need.audio = usage.gfxAudio;
+            need.sound = usage.gfxSound;
             need.window = usage.gfxWindow;
             // Cross-group dependency, the same way hmac pulls in sha256: a blit
             // needs the table it blits out of, and loading an image needs
@@ -1466,6 +1468,10 @@ public:
             // the usage scan counts every gfx.blit as one, because a path blit
             // decodes the file itself.)
             if (need.blit || need.imageLoad) need.imageStore = true;
+            // The mixer's output goes out through gfx.sample's enqueue path and
+            // it opens the stream itself, so a program that only says gfx.play
+            // still carries the platform audio block underneath it.
+            if (need.sound) need.audio = true;
             out += gfxRuntimeCpp(need);
         }
         if (hasJson() && usage.json) {

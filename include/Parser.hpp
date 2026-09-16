@@ -4168,15 +4168,17 @@ private:
         else if (method == "title") { argc = 0; argcMax = 1; }
         else if (method == "opendialog" || method == "openfile") { argc = 0; argcMax = 1; if (method == "openfile") method = "opendialog"; }
         else if (method == "image" || method == "decode" || method == "image_w" || method == "image_h"
-                 || method == "sample") argc = 1;
+                 || method == "sample" || method == "sound") argc = 1;
         else if (method == "audio") { argc = 0; argcMax = 1; }
+        else if (method == "play" || method == "loop") { argc = 1; argcMax = 2; }
+        else if (method == "stop" || method == "volume") { argc = 0; argcMax = 1; }
         else if (method == "blit") { argc = 3; argcMax = 9; }
         else if (method == "alpha") { argc = 0; argcMax = 1; }
         else if (method == "save") argc = 1;
         else {
             throw std::runtime_error("Unknown gfx method 'gfx." + method +
                 "' at line " + std::to_string(methodTok.line) +
-                " (use open, close, resize, width, height, scale, title, poll, closed, clear, plot, fill, rect, line, circle, fill_circle, ellipse, fill_ellipse, tri, fill_tri, poly, fill_poly, text, text_size, text_width, text_height, get, present, image, decode, image_w, image_h, blit, alpha, save, key, pressed, released, wheel, wheel_x, typed, mouse_x, mouse_y, mouse, audio, sample, audio_queued, audio_flush, fullscreen)");
+                " (use open, close, resize, width, height, scale, title, poll, closed, clear, plot, fill, rect, line, circle, fill_circle, ellipse, fill_ellipse, tri, fill_tri, poly, fill_poly, text, text_size, text_width, text_height, get, present, image, decode, image_w, image_h, blit, alpha, save, key, pressed, released, wheel, wheel_x, typed, mouse_x, mouse_y, mouse, audio, sample, audio_queued, audio_flush, sound, play, loop, stop, volume, fullscreen)");
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after gfx." + method + " at line " + std::to_string(peek().line));
@@ -4240,6 +4242,15 @@ private:
                 if (method == "audio") {
                     throw std::runtime_error("gfx.audio([rate]) at line " + std::to_string(line));
                 }
+                if (method == "play" || method == "loop") {
+                    throw std::runtime_error("gfx." + method + "(sound[, volume]) at line " + std::to_string(line));
+                }
+                if (method == "stop") {
+                    throw std::runtime_error("gfx.stop() or gfx.stop(voice) at line " + std::to_string(line));
+                }
+                if (method == "volume") {
+                    throw std::runtime_error("gfx.volume() or gfx.volume(v) at line " + std::to_string(line));
+                }
                 if (method == "alpha") {
                     throw std::runtime_error("gfx.alpha() or gfx.alpha(a) at line " + std::to_string(line));
                 }
@@ -4251,6 +4262,9 @@ private:
         } else if (got != argc) {
             if (method == "save") {
                 throw std::runtime_error("gfx.save(path) at line " + std::to_string(line));
+            }
+            if (method == "sound") {
+                throw std::runtime_error("gfx.sound(path) at line " + std::to_string(line));
             }
             std::string sig = shapeSignature(method);
             if (!sig.empty()) {

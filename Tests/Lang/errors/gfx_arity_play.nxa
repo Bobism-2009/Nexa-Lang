@@ -1,0 +1,7 @@
+// gfx.play takes a sound and, if you want one, a volume. A bare gfx.play() has
+// no sound to play, and NexaC has to say so by name: the transpiler indexes the
+// argument list positionally, so an unchecked one reads past the end of it.
+#include <std/gfx>
+fn main() {
+    let v: int = gfx.play();
+}

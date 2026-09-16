@@ -2328,6 +2328,8 @@ private:
                     || e.value == "image" || e.value == "decode" || e.value == "image_w"
                     || e.value == "image_h" || e.value == "blit"
                     || e.value == "alpha" || e.value == "save"
+                    || e.value == "sound" || e.value == "play" || e.value == "loop"
+                    || e.value == "stop" || e.value == "volume"
                     || e.value == "poly" || e.value == "fill_poly") return "int";
                 return "void";
             case AstNode::Type::StrMethod:
@@ -6014,7 +6016,22 @@ private:
                 }
                 if (fn == "sample") return "__nexa_gfx_sample(" + a(0) + ")";
                 if (fn == "audio_queued") return "__nexa_gfx_audio_queued()";
-                if (fn == "audio_flush") return "(__nexa_gfx_audio_flush(), 0)";
+                // Flushing is "start playing what I have queued", so the mixer
+                // gets its turn first. __nexa_gfx_mix_pump is an empty body in
+                // a program that never plays a sound.
+                if (fn == "audio_flush") return "(__nexa_gfx_mix_pump(), __nexa_gfx_audio_flush(), 0)";
+                if (fn == "sound") return "__nexa_gfx_sound(" + a(0) + ")";
+                if (fn == "play" || fn == "loop") {
+                    std::string v = e.children.size() >= 2 ? a(1) : "255";
+                    return "__nexa_gfx_voice_start(" + a(0) + ", " + v + ", " +
+                        (fn == "loop" ? "1" : "0") + ")";
+                }
+                // gfx.stop() is every voice, which the runtime spells as voice 0.
+                if (fn == "stop") return "__nexa_gfx_stop(" + (e.children.empty() ? "0" : a(0)) + ")";
+                if (fn == "volume") {
+                    if (e.children.empty()) return "__nexa_gfx_volume_get()";
+                    return "__nexa_gfx_volume_set(" + a(0) + ")";
+                }
                 if (fn == "opendialog" || fn == "openfile") {
                     std::string f = e.children.empty() ? "std::string()" : a(0);
                     return "__nexa_gfx_opendialog(" + f + ")";
@@ -6612,6 +6629,12 @@ private:
         } else if (fn == "audio" || fn == "sample" || fn == "audio_queued" ||
                    fn == "audio_flush") {
             cppUsage.gfxAudio = true;
+        } else if (fn == "sound" || fn == "play" || fn == "loop" ||
+                   fn == "stop" || fn == "volume") {
+            // The master volume is part of the mixer rather than draw state, so
+            // unlike gfx.alpha both forms of gfx.volume pull the mixer in: a
+            // volume with nothing to scale would be a reader of nothing.
+            cppUsage.gfxSound = true;
         } else if (fn == "resize" || fn == "width" || fn == "height" ||
                    fn == "scale" || fn == "title") {
             cppUsage.gfxWindow = true;

@@ -1,0 +1,96 @@
+// Loading a WAV and playing it (BOB-39).
+//
+// Build and run:  ./NexaC Examples/sound_demo.nxa -o sound_demo && ./sound_demo
+//
+//   space      play the sound once -- hold it down and the voices pile up
+//   l          start it looping / stop the loop
+//   s          stop every voice
+//   up / down  master volume
+//   escape     quit
+//
+// The point of the demo is what is *not* here: no gfx.sample, no synthesis, no
+// buffer bookkeeping. gfx.sound loads the file, gfx.play plays it, and the
+// mixer is topped up by the gfx.poll() this loop was already calling.
+//
+// Audio is open on Windows and in the browser (--wasm); on macOS and Linux
+// gfx.audio has no device yet, so gfx.play returns 0 and the demo says so
+// rather than pretending.
+#include <std/gfx>
+#include <std/io>
+
+fn main() {
+    if (gfx.open("nexa sound", 200, 90, 4) != 1) {
+        io.println("no window");
+        return 1;
+    }
+
+    // Tests/gfx_beep.wav is a 0.05 s sine; any PCM WAV works.
+    let beep: int = gfx.sound("Tests/gfx_beep.wav");
+    if (beep == 0) {
+        beep = gfx.sound("gfx_beep.wav");
+    }
+
+    let loop_voice: int = 0;
+    let played: int = 0;
+
+    while (gfx.closed() == 0) {
+        gfx.poll();
+        if (gfx.pressed("escape") == 1) {
+            gfx.close();
+            return 0;
+        }
+
+        if (gfx.pressed("space") == 1) {
+            if (gfx.play(beep) != 0) {
+                played = played + 1;
+            }
+        }
+        if (gfx.pressed("l") == 1) {
+            if (loop_voice == 0) {
+                loop_voice = gfx.loop(beep, 160);
+            } else {
+                gfx.stop(loop_voice);
+                loop_voice = 0;
+            }
+        }
+        if (gfx.pressed("s") == 1) {
+            gfx.stop();
+            loop_voice = 0;
+        }
+        if (gfx.pressed("up") == 1) {
+            gfx.volume(gfx.volume() + 32);
+        }
+        if (gfx.pressed("down") == 1) {
+            gfx.volume(gfx.volume() - 32);
+        }
+
+        gfx.clear(14, 14, 22);
+        if (beep == 0) {
+            gfx.text(8, 8, "no Tests/gfx_beep.wav", 240, 120, 120, 1);
+        } else {
+            gfx.text(8, 8, "space play   l loop   s stop", 220, 220, 230, 1);
+            gfx.text(8, 20, "up/down volume", 220, 220, 230, 1);
+        }
+
+        // A volume bar, so the master volume is visible and not just audible.
+        let v: int = gfx.volume();
+        gfx.rect(8, 40, 184, 10, 70, 70, 90);
+        gfx.fill(9, 41, v * 182 / 255, 8, 90, 200, 140);
+
+        if (loop_voice != 0) {
+            gfx.text(8, 58, "looping", 120, 220, 160, 1);
+        }
+        if (played == 0) {
+            // gfx.play answering 0 every time is the no-device platforms, not
+            // a broken program.
+            gfx.text(8, 72, "nothing played yet", 150, 150, 165, 1);
+        } else {
+            gfx.text(8, 72, "played", 150, 150, 165, 1);
+        }
+
+        gfx.present();
+    }
+
+    gfx.close();
+    return 0;
+}

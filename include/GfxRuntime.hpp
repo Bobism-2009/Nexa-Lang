@@ -42,8 +42,259 @@ struct GfxNeed {
     bool save = false;           // gfx.save
     bool dialogs = false;        // opendialog, drop
     bool audio = false;          // audio, sample, audio_queued, audio_flush
+    bool sound = false;          // sound, play, loop, stop, volume -- the mixer
     bool window = false;         // resize, width, height, scale, title
 };
+
+// gfx.sound / play / loop / stop / volume: a WAV loader and a polyphonic
+// mixer, sitting entirely on top of the platform audio block above
+// (__nexa_gfx_audio, __nexa_gfx_sample, __nexa_gfx_audio_queued). Nothing in
+// here is per-platform, which is why the whole thing is one string rather than
+// a third copy inside the #ifdef ladder: wherever the stream opens, sound
+// plays, and where it does not the mixer finds a rate of 0 and does nothing.
+inline std::string soundRuntimeCpp() {
+    return R"NEXA_GFX(
+#include <utility>
+
+#define NEXA_VOICES 16
+
+// A loaded sound is mono signed-16 at whatever rate the file was, kept as it
+// came off disk rather than resampled on load: the stream rate is not
+// necessarily known yet when gfx.sound runs, and a voice resamples as it mixes
+// anyway.
+struct __nexa_Snd {
+    std::vector<short> pcm;
+    int rate;
+};
+
+// Slot 0 is the reserved "no sound" entry, so handles start at 1 and 0 is
+// never valid -- the same shape as the image table.
+static std::vector<__nexa_Snd> __nexa_snds;
+static std::vector<std::string> __nexa_snd_paths;
+
+// pos and step are 16.16 fixed point in source samples: step is how far a
+// voice walks through its sound per output sample, which is what turns any
+// file rate into the stream rate. id is 0 when the slot is free, and otherwise
+// the voice id handed back by gfx.play -- monotonic, so the smallest live id
+// is also the oldest voice, which is the one gfx.play steals when all sixteen
+// are busy.
+struct __nexa_Voice {
+    int id;
+    int snd;
+    int vol;
+    int loop;
+    long long pos;
+    long long step;
+};
+
+static __nexa_Voice __nexa_voices[NEXA_VOICES];
+static int __nexa_voice_next = 0;
+static int __nexa_master_vol = 255;
+
+static unsigned int __nexa_wav_u16(const unsigned char* p) {
+    return (unsigned int)p[0] | ((unsigned int)p[1] << 8);
+}
+
+static unsigned int __nexa_wav_u32(const unsigned char* p) {
+    return (unsigned int)p[0] | ((unsigned int)p[1] << 8) |
+           ((unsigned int)p[2] << 16) | ((unsigned int)p[3] << 24);
+}
+
+static int __nexa_wav_s16(const unsigned char* p) {
+    int v = (int)__nexa_wav_u16(p);
+    return v >= 32768 ? v - 65536 : v;
+}
+
+// RIFF: a twelve byte header and then a flat list of chunks, each an id, a
+// little-endian length and a body padded to an even length. Only fmt and data
+// mean anything here; LIST, fact, cue and whatever else a tool wrote are
+// walked over. Anything that is not 8- or 16-bit mono/stereo PCM is refused
+// rather than guessed at.
+static int __nexa_gfx_wav_decode(const std::string& bytes, __nexa_Snd* out) {
+    const unsigned char* p = (const unsigned char*)bytes.data();
+    size_t n = bytes.size();
+    if (n < 12) return 0;
+    if (std::memcmp(p, "RIFF", 4) != 0 || std::memcmp(p + 8, "WAVE", 4) != 0) return 0;
+    int chans = 0, rate = 0, bits = 0, pcm = 0;
+    const unsigned char* data = NULL;
+    size_t dlen = 0;
+    size_t off = 12;
+    while (off + 8 <= n) {
+        const unsigned char* id = p + off;
+        size_t len = (size_t)__nexa_wav_u32(p + off + 4);
+        off += 8;
+        if (len > n - off) len = n - off;   // truncated file: take what is there
+        if (std::memcmp(id, "fmt ", 4) == 0 && len >= 16) {
+            unsigned int tag = __nexa_wav_u16(p + off);
+            chans = (int)__nexa_wav_u16(p + off + 2);
+            rate = (int)__nexa_wav_u32(p + off + 4);
+            bits = (int)__nexa_wav_u16(p + off + 14);
+            // WAVE_FORMAT_EXTENSIBLE keeps the real tag in the first two bytes
+            // of its subformat GUID; plenty of tools write plain PCM that way.
+            if (tag == 0xFFFE && len >= 40) tag = __nexa_wav_u16(p + off + 24);
+            pcm = (tag == 1) ? 1 : 0;
+        } else if (std::memcmp(id, "data", 4) == 0) {
+            data = p + off;
+            dlen = len;
+        }
+        off += len + (len & 1);
+    }
+    if (!pcm || !data) return 0;
+    if (rate < 1 || rate > 4000000) return 0;
+    if (chans != 1 && chans != 2) return 0;
+    if (bits != 8 && bits != 16) return 0;
+    size_t frame = (size_t)chans * (size_t)(bits / 8);
+    size_t frames = dlen / frame;
+    if (frames < 1) return 0;
+    out->rate = rate;
+    out->pcm.resize(frames);
+    for (size_t i = 0; i < frames; i++) {
+        const unsigned char* f = data + i * frame;
+        int l, r;
+        if (bits == 8) {
+            // 8-bit WAV is unsigned with 128 as silence.
+            l = ((int)f[0] - 128) * 256;
+            r = (chans == 2) ? ((int)f[1] - 128) * 256 : l;
+        } else {
+            l = __nexa_wav_s16(f);
+            r = (chans == 2) ? __nexa_wav_s16(f + 2) : l;
+        }
+        // The stream is mono, so stereo folds down rather than picking a side.
+        out->pcm[i] = (short)((chans == 2) ? (l + r) / 2 : l);
+    }
+    return 1;
+}
+
+static int __nexa_gfx_sound(const std::string& path) {
+    if (path.empty()) return 0;
+    if (__nexa_snds.empty()) {
+        __nexa_Snd z;
+        z.rate = 0;
+        __nexa_snds.push_back(z);
+        __nexa_snd_paths.push_back("");
+    }
+    for (size_t i = 1; i < __nexa_snd_paths.size(); i++) {
+        if (__nexa_snd_paths[i] == path) return (int)i;
+    }
+    std::string bytes = __nexa_gfx_read_file(path);
+    if (bytes.empty()) return 0;
+    __nexa_Snd s;
+    s.rate = 0;
+    if (!__nexa_gfx_wav_decode(bytes, &s)) return 0;
+    __nexa_snds.push_back(std::move(s));
+    __nexa_snd_paths.push_back(path);
+    return (int)__nexa_snds.size() - 1;
+}
+
+// gfx.play and gfx.loop are the same act with one bit different.
+static int __nexa_gfx_voice_start(int snd, int vol, int loop) {
+    if (snd < 1 || snd >= (int)__nexa_snds.size()) return 0;
+    // Playing a sound is enough to want a stream: open one at the usual rate
+    // if the program never did. A stream already open at another rate is left
+    // alone -- the voice resamples to whatever it finds.
+    if (__nexa_audio_rate < 1 && !__nexa_gfx_audio(44100)) return 0;
+    if (__nexa_audio_rate < 1) return 0;
+    if (vol < 0) vol = 0;
+    if (vol > 255) vol = 255;
+    int slot = -1;
+    for (int i = 0; i < NEXA_VOICES; i++) {
+        if (__nexa_voices[i].id == 0) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) {
+        slot = 0;
+        for (int i = 1; i < NEXA_VOICES; i++) {
+            if (__nexa_voices[i].id < __nexa_voices[slot].id) slot = i;
+        }
+    }
+    __nexa_voice_next++;
+    if (__nexa_voice_next < 1) __nexa_voice_next = 1;
+    __nexa_Voice& v = __nexa_voices[slot];
+    v.id = __nexa_voice_next;
+    v.snd = snd;
+    v.vol = vol;
+    v.loop = loop;
+    v.pos = 0;
+    v.step = ((long long)__nexa_snds[(size_t)snd].rate << 16) / (long long)__nexa_audio_rate;
+    if (v.step < 1) v.step = 1;
+    return v.id;
+}
+
+// gfx.stop() passes 0, which means every voice.
+static int __nexa_gfx_stop(int voice) {
+    int hit = 0;
+    for (int i = 0; i < NEXA_VOICES; i++) {
+        if (__nexa_voices[i].id == 0) continue;
+        if (voice != 0 && __nexa_voices[i].id != voice) continue;
+        __nexa_voices[i].id = 0;
+        hit = 1;
+    }
+    return hit;
+}
+
+// gfx.close() closes the stream, so the voices that were feeding it go too.
+static void __nexa_gfx_sound_reset() {
+    for (int i = 0; i < NEXA_VOICES; i++) __nexa_voices[i].id = 0;
+}
+
+static int __nexa_gfx_volume_get() {
+    return __nexa_master_vol;
+}
+
+static int __nexa_gfx_volume_set(int v) {
+    if (v < 0) v = 0;
+    if (v > 255) v = 255;
+    __nexa_master_vol = v;
+    return v;
+}
+
+// Called from gfx.poll() and gfx.audio_flush(): keeps the stream about a tenth
+// of a second ahead of the speaker, so a normal poll/present loop plays sound
+// without the program ever calling gfx.sample.
+//
+// It returns at once when no voice is live, which is what lets it share the
+// stream with a program that synthesises its own samples: silence is never
+// pumped, so gfx.sample keeps writing into an otherwise untouched queue.
+static void __nexa_gfx_mix_pump() {
+    if (__nexa_audio_rate < 1) return;
+    int live = 0;
+    for (int i = 0; i < NEXA_VOICES; i++) {
+        if (__nexa_voices[i].id != 0) live = 1;
+    }
+    if (!live) return;
+    int ahead = __nexa_audio_rate / 10;
+    int want = ahead - __nexa_gfx_audio_queued();
+    if (want < 1) return;
+    if (want > ahead) want = ahead;
+    for (int k = 0; k < want; k++) {
+        int acc = 0;
+        for (int i = 0; i < NEXA_VOICES; i++) {
+            __nexa_Voice& v = __nexa_voices[i];
+            if (v.id == 0) continue;
+            const __nexa_Snd& s = __nexa_snds[(size_t)v.snd];
+            long long len = (long long)s.pcm.size();
+            if ((v.pos >> 16) >= len) {
+                if (!v.loop) {
+                    v.id = 0;
+                    continue;
+                }
+                v.pos %= (len << 16);
+            }
+            // Two 0..255 gains rather than one 0..65025 multiply, so the
+            // product stays comfortably inside an int on every voice.
+            int g = v.vol * __nexa_master_vol / 255;
+            acc += (int)s.pcm[(size_t)(v.pos >> 16)] * g / 255;
+            v.pos += v.step;
+        }
+        if (acc > 32767) acc = 32767;
+        if (acc < -32768) acc = -32768;
+        if (!__nexa_gfx_sample(acc)) break;
+    }
+}
+)NEXA_GFX";
+}
 
 inline std::string gfxRuntimeCpp(const GfxNeed& need) {
     // Internal dependency closure: each of these is "some helper we are about
@@ -55,6 +306,8 @@ inline std::string gfxRuntimeCpp(const GfxNeed& need) {
     const bool wantU8 = need.shapesFill || need.shapesOutline || need.line ||
                         need.lineThick || need.text;
     const bool wantGet = need.get || need.save;
+    // Both the image decoder and the WAV loader start by slurping a file.
+    const bool wantReadFile = need.imageLoad || need.sound;
     const bool wantDraw = need.plot || need.shapesFill || need.shapesOutline ||
                           need.line || need.lineThick || need.text;
     const bool wantPutA = wantDraw || need.blit;
@@ -1064,8 +1317,15 @@ static int __nexa_gfx_title_set(const std::string& s) {
 )NEXA_GFX";
     out += need.audio ? "\nstatic void __nexa_gfx_audio_close();\n"
                       : "\nstatic void __nexa_gfx_audio_close() {}\n";
+    // gfx.close() and gfx.poll() are core, so they are emitted whether or not
+    // the program plays a sound. Both reach the mixer through a declaration
+    // that becomes an empty inline body when it is sliced out, the same way
+    // the audio shutdown above does.
+    out += need.sound ? "\nstatic void __nexa_gfx_mix_pump();\nstatic void __nexa_gfx_sound_reset();\n"
+                      : "\nstatic void __nexa_gfx_mix_pump() {}\nstatic void __nexa_gfx_sound_reset() {}\n";
     out += R"NEXA_GFX(
 static void __nexa_gfx_close() {
+    __nexa_gfx_sound_reset();
     __nexa_gfx_audio_close();
     __nexa_g.closed = 1;
     __nexa_gfx_free();
@@ -1099,6 +1359,10 @@ static void __nexa_gfx_input_publish() {
 }
 
 static void __nexa_gfx_poll() {
+    // Ahead of the window check on purpose: the audio stream is not owned by
+    // the window, so a program that plays a sound without opening one still
+    // gets its mixer topped up by the poll loop.
+    __nexa_gfx_mix_pump();
     if (!__nexa_g.ready) return;
 #ifdef _WIN32
     MSG msg;
@@ -2429,6 +2693,8 @@ static int __nexa_gfx_decode_rgba(const unsigned char* data, int n, int* ow, int
 #endif
 }
 
+)NEXA_GFX";
+    if (wantReadFile) out += R"NEXA_GFX(
 static std::string __nexa_gfx_read_file(const std::string& path) {
     if (path.empty()) return std::string();
     FILE* f = std::fopen(path.c_str(), "rb");
@@ -2446,7 +2712,8 @@ static std::string __nexa_gfx_read_file(const std::string& path) {
     std::fclose(f);
     return out;
 }
-
+)NEXA_GFX";
+    if (need.imageLoad) out += R"NEXA_GFX(
 static int __nexa_gfx_store_img(int w, int h, unsigned char* px, const std::string& key) {
     if (__nexa_imgs.empty()) {
         __nexa_GfxImg z;
@@ -2924,6 +3191,9 @@ static int __nexa_gfx_audio_queued() {
 
 static void __nexa_gfx_audio_flush() {}
 #else
+// No device on macOS/Linux yet: the stream never opens, so the rate stays 0
+// and everything built on top of it -- gfx.play included -- says so.
+[[maybe_unused]] static int __nexa_audio_rate = 0;
 static void __nexa_gfx_audio_close() {}
 static int __nexa_gfx_audio(int rate) { (void)rate; return 0; }
 static int __nexa_gfx_sample(int s) { (void)s; return 0; }
@@ -2931,6 +3201,7 @@ static int __nexa_gfx_audio_queued() { return 0; }
 static void __nexa_gfx_audio_flush() {}
 #endif
 )NEXA_GFX";
+    if (need.sound) out += soundRuntimeCpp();
 
     return out;
 }

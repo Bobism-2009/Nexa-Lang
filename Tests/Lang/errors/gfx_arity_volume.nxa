@@ -1,0 +1,7 @@
+// gfx.volume is a getter and a setter in one name, the way gfx.alpha is, so a
+// second argument is neither -- and is far more likely a gfx.play written by
+// hand with the arguments the wrong way round.
+#include <std/gfx>
+fn main() {
+    let v: int = gfx.volume(1, 128);
+}

@@ -230,6 +230,8 @@ run_groups() {
         '    let p: string = gfx.opendialog();' "$@"
     group "audio$suffix" '^static int __nexa_gfx_sample' \
         '    let n: int = gfx.sample(1);' "$@"
+    group "sound$suffix" '^static int __nexa_gfx_wav_decode' \
+        '    let n: int = gfx.sound("b.wav");' "$@"
     group "window$suffix" '^static int __nexa_gfx_resize' \
         '    gfx.resize(4, 4);' "$@"
 }
@@ -256,6 +258,48 @@ if ! grep -q 'static void __nexa_gfx_audio_close() {}' "$WORK/draw_only.cpp"; th
     fails=$((fails + 1))
 else
     echo "ok audio_close_stub"
+fi
+
+# The same again for the mixer (BOB-39): gfx.poll() tops it up and gfx.close()
+# stops its voices, and both of those are core.
+if ! grep -q 'static void __nexa_gfx_mix_pump() {}' "$WORK/draw_only.cpp" ||
+   ! grep -q 'static void __nexa_gfx_sound_reset() {}' "$WORK/draw_only.cpp"; then
+    echo "FAIL sound_stub: a draw loop lost the no-op mixer hooks"
+    fails=$((fails + 1))
+else
+    echo "ok sound_stub"
+fi
+
+# The mixer's output goes out through gfx.sample's enqueue path, so gfx.play
+# has to bring the platform audio block with it even with no gfx.audio in
+# sight -- and the traffic is one way: gfx.sample alone must not carry a mixer.
+transpile "sound_only" '    let v: int = gfx.play(1);' || true
+if [ -f "$WORK/sound_only.cpp" ]; then
+    if ! grep -q '^static int __nexa_gfx_sample' "$WORK/sound_only.cpp"; then
+        echo "FAIL sound_pulls_audio: gfx.play did not carry the audio block it mixes into"
+        fails=$((fails + 1))
+    else
+        echo "ok sound_pulls_audio"
+    fi
+fi
+if grep -q '^static int __nexa_gfx_wav_decode' "$WORK/group_audio.cpp"; then
+    echo "FAIL audio_carries_no_mixer: gfx.sample dragged the mixer in with it"
+    fails=$((fails + 1))
+else
+    echo "ok audio_carries_no_mixer"
+fi
+
+# The file slurp is shared by the image decoder and the WAV loader, so it has
+# to follow either one and neither more. A draw loop reads no files at all.
+if ! grep -q '^static std::string __nexa_gfx_read_file' "$WORK/group_sound.cpp" ||
+   ! grep -q '^static std::string __nexa_gfx_read_file' "$WORK/image_has_the_decoder.cpp"; then
+    echo "FAIL read_file_shared: a program that loads from a path lost the file read"
+    fails=$((fails + 1))
+elif grep -q '__nexa_gfx_read_file' "$WORK/draw_only.cpp"; then
+    echo "FAIL read_file_shared: a draw loop carried a file read it cannot reach"
+    fails=$((fails + 1))
+else
+    echo "ok read_file_shared"
 fi
 
 # --- size: the point of all of it -------------------------------------------
@@ -431,6 +475,13 @@ else
     link_case "sample" '    let n: int = gfx.sample(1);'
     link_case "audio_queued" '    let n: int = gfx.audio_queued();'
     link_case "audio_flush" '    let n: int = gfx.audio_flush();'
+    link_case "sound" '    let n: int = gfx.sound("nope.wav");'
+    link_case "play" '    let v: int = gfx.play(1);'
+    link_case "loop" '    let v: int = gfx.loop(1, 128);'
+    link_case "stop_all" '    let n: int = gfx.stop();'
+    link_case "stop_voice" '    let n: int = gfx.stop(1);'
+    link_case "volume_get" '    let n: int = gfx.volume();'
+    link_case "volume_set" '    let n: int = gfx.volume(128);'
 fi
 
 # --- report -----------------------------------------------------------------

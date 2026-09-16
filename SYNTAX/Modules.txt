@@ -434,6 +434,34 @@ Nexa Standard Modules
   gfx.sample(s)                  - queue one signed 16-bit sample (-32768..32767); 1/0
   gfx.audio_queued()             - samples still waiting to play
   gfx.audio_flush()              - submit a partial buffer so playback starts sooner
+                                   also mixes, so a flush plays what gfx.play started
+  gfx.sound(path)                - load a WAV file; handle, or 0
+                                   PCM 8- or 16-bit, mono or stereo, any sample rate.
+                                   Stereo folds to mono as (L+R)/2 because the stream is
+                                   mono, and the rate is matched when it plays, so a file
+                                   at any rate works. Anything else -- IEEE float, ADPCM,
+                                   more than two channels, not a RIFF file at all -- is 0
+                                   the result is cached: the same path gives the same handle
+  gfx.play(id[, volume])         - play a sound once; voice id, or 0
+                                   volume is 0..255 and defaults to 255. Fire and forget:
+                                   it mixes over whatever is already playing, up to 16
+                                   voices, and the 17th steals the oldest. Opens the
+                                   stream itself (44100 Hz) if the program never did,
+                                   which is what makes it 0 on macOS/Linux today
+  gfx.loop(id[, volume])         - the same, but repeating until stopped; voice id, or 0
+  gfx.stop()                     - stop every voice; 1 if any were playing, else 0
+  gfx.stop(voice)                - stop one voice; 1 if it was playing, else 0
+                                   a voice that already ended is 0, not an error
+  gfx.volume()                   - master volume, 0..255 (255 to start with)
+  gfx.volume(v)                  - set it; returns what was set, clamped to 0..255
+                                   a voice is scaled by voice volume then by this one
+                                   Mixing is integer: the voices are summed and saturated
+                                   to -32768..32767 rather than wrapping. The mixer runs
+                                   from gfx.poll(), keeping about a tenth of a second
+                                   queued, so an ordinary poll/present loop plays sound
+                                   without ever calling gfx.sample. It pumps only while
+                                   something is playing, so a program that synthesises
+                                   its own samples with gfx.sample can still use gfx.play
   gfx.image(path)                - load PNG/JPEG/BMP/GIF (and OS formats); handle, or 0
                                    the result is cached: the same path gives the same handle
   gfx.decode(bytes)              - same decode from a string (os.load / http.get(...).value())
