@@ -2,17 +2,18 @@
 // gfx.loop, gfx.stop, gfx.volume.
 //
 // None of this can be tested by a gfx program on this machine. The mixer only
-// runs once the audio stream is open, and the only backends that open one are
-// winmm and Web Audio -- on macOS and Linux gfx.audio() returns 0, so gfx.play
-// returns 0 and not one sample is ever mixed. A test that only ran the public
-// API here would therefore assert nothing about the mixing at all.
+// runs once the audio stream is open, and opening one needs a sound device --
+// which the machines this suite runs on generally do not have, and this one
+// certainly does not. A test that only ran the public API here would therefore
+// assert nothing about the mixing at all.
 //
 // So this driver does what Tests/gfx_input_semantics.cpp does for input: it
 // includes the C++ that NexaC generates and drives the runtime underneath the
-// language. Tests/gfx_sound_cases.sh first swaps the three-line macOS/Linux
-// audio stub in that generated file for one that opens a fake stream and keeps
-// every sample it is handed, which turns the mixer from something the suite
-// merely compiles into something it executes and checks sample by sample.
+// language. Tests/gfx_sound_cases.sh first cuts the platform audio block out of
+// that generated file -- whichever of the four backends it holds -- and drops in
+// a stream that opens and a speaker that keeps every sample it is handed, which
+// turns the mixer from something the suite merely compiles into something it
+// executes and checks sample by sample.
 //
 // Everything below is backend-independent. The WAV reader, the voice table and
 // the mixing arithmetic are one copy of the code shared by all four backends;

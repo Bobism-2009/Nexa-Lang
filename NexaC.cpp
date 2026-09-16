@@ -1349,11 +1349,16 @@ static std::string nexaBuildCompileCmd(
         cmd += " -framework CoreFoundation -framework CFNetwork";
     }
     if (linkGfx) {
+        // AudioToolbox is gfx.audio (AudioQueue); the rest is the window, the
+        // dialogs and the image codecs.
         cmd += " -framework Cocoa -framework ApplicationServices -framework ImageIO";
+        cmd += " -framework AudioToolbox";
     }
 #else
-    if (linkHttp) {
-        // std/http HTTPS dlopens system libssl; dlopen lives in libdl.
+    // std/http HTTPS dlopens system libssl and std/gfx audio dlopens libasound;
+    // dlopen lives in libdl (a stub in glibc 2.34 and later, still needed by
+    // older ones and by musl).
+    if (linkHttp || linkGfx) {
         cmd += " -ldl";
     }
     if (linkGfx) {

@@ -460,7 +460,11 @@ Nexa Standard Modules
                                    fullscreen and does not close the page
   gfx.audio([rate])              - open 16-bit mono PCM output (default 44100 Hz); 1/0
                                    Windows: winmm waveOut (-lwinmm). wasm: Web Audio
-                                   macOS/Linux: compiles, returns 0 (no device yet)
+                                   macOS: AudioQueue (-framework AudioToolbox)
+                                   Linux: ALSA, dlopened at this call -- no libasound-dev
+                                   to build and no libasound to run; without one, or with
+                                   no device to open, this returns 0 and the rest of the
+                                   audio API stays quiet rather than failing
                                    gfx.close() also closes the stream
   gfx.sample(s)                  - queue one signed 16-bit sample (-32768..32767); 1/0
   gfx.audio_queued()             - samples still waiting to play

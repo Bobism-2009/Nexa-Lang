@@ -17,14 +17,21 @@
 #             when there is no C++ compiler.
 #
 # The semantics half has one piece of scaffolding in it. The mixer only runs
-# with the audio stream open, and today only winmm and Web Audio open one -- on
-# macOS and Linux gfx.audio() returns 0 and not a sample is ever mixed, so a
-# test that went through the public API on this machine would asserts nothing
-# about the mixing. The three-line macOS/Linux audio stub in the generated file
-# is therefore swapped below for one that opens a fake stream and keeps every
-# sample handed to it. Everything above that seam -- the RIFF reader, the voice
-# table, the gain arithmetic, the saturation -- is the same code all four
-# backends run, so checking it here checks it everywhere.
+# with the audio stream open, and no machine has all four devices -- this one
+# has none of them, so a test that went through the public API here would assert
+# nothing about the mixing at all. The generated file therefore has its whole
+# platform audio block, which GfxRuntime.hpp brackets with [nexa:audio-*]
+# markers for exactly this purpose, cut out and replaced by a speaker that
+# simply remembers every sample it is handed. Everything above that seam -- the
+# RIFF reader, the voice table, the gain arithmetic, the saturation -- is the
+# same code all four backends run, so checking it here checks it everywhere.
+#
+# Replacing the marked range rather than the backend's own lines is what keeps
+# this half running on any machine: which of waveOut, AudioQueue, ALSA or Web
+# Audio was emitted below the marker makes no difference to it.
+#
+# The ALSA backend itself, which is the one this machine could run, has its own
+# cover in Tests/gfx_alsa_cases.sh.
 #
 # Emit slicing (a program that never plays a sound carries none of this) is
 # covered in Tests/gfx_emit_cases.sh, and the arity diagnostics in
@@ -165,20 +172,40 @@ fn main() {
         sed 's/^/  /' "$WORK/gen.log"
         fails=$((fails + 1))
     else
-        # The seam described at the top of this file: give macOS/Linux a stream
-        # that opens and a speaker that remembers, so the mixer above it runs.
-        sed \
-            -e 's|^static int __nexa_gfx_audio(int rate) { (void)rate; return 0; }$|static int __nexa_gfx_audio(int rate) { __nexa_audio_rate = rate; return 1; }|' \
-            -e 's|^static int __nexa_gfx_sample(int s) { (void)s; return 0; }$|static std::vector<int> __nexa_cap;\nstatic int __nexa_gfx_sample(int s) { __nexa_cap.push_back(s); return 1; }|' \
-            -e 's|^static int __nexa_gfx_audio_queued() { return 0; }$|static int __nexa_gfx_audio_queued() { return (int)__nexa_cap.size(); }|' \
-            "$WORK/gen.cpp" > "$WORK/patched.cpp"
+        # The seam described at the top of this file: whichever backend was
+        # emitted, replace it with a stream that opens and a speaker that
+        # remembers, so the mixer above it runs. Deliberately no clamp in the
+        # fake gfx.sample -- the saturation cases check that the mixer never
+        # hands out a sample outside the 16-bit range, which a clamping sink
+        # would quietly make unfalsifiable.
+        cat > "$WORK/fake_audio.cpp" <<'FAKE_AUDIO'
+static int __nexa_audio_rate = 0;
+static std::vector<int> __nexa_cap;
+static void __nexa_gfx_audio_close() {}
+static int __nexa_gfx_audio(int rate) { __nexa_audio_rate = rate; return 1; }
+static int __nexa_gfx_sample(int s) { __nexa_cap.push_back(s); return 1; }
+static int __nexa_gfx_audio_queued() { return (int)__nexa_cap.size(); }
+static void __nexa_gfx_audio_flush() {}
+FAKE_AUDIO
+
+        awk -v stub="$WORK/fake_audio.cpp" '
+            /\[nexa:audio-backend-begin\]/ {
+                cut = 1
+                while ((getline l < stub) > 0) print l
+                next
+            }
+            /\[nexa:audio-backend-end\]/ { cut = 0; next }
+            !cut { print }
+        ' "$WORK/gen.cpp" > "$WORK/patched.cpp"
 
         # If the swap stopped matching, say so rather than testing nothing: the
-        # likeliest reason is that macOS or Linux grew a real audio backend, and
-        # then this is the file that has to decide what to do about it.
-        if ! grep -q '__nexa_cap' "$WORK/patched.cpp"; then
-            echo "FAIL semantics: the macOS/Linux audio stub no longer matches"
-            echo "  (the sed above expects the three one-line stubs in GfxRuntime.hpp)"
+        # markers are in GfxRuntime.hpp's audio block and are emitted on purpose,
+        # so losing them means someone rewrote that block without reading the
+        # comment above it.
+        if ! grep -q '__nexa_cap' "$WORK/patched.cpp" ||
+                grep -q 'nexa:audio-backend' "$WORK/patched.cpp"; then
+            echo "FAIL semantics: the [nexa:audio-*] markers no longer bracket the audio block"
+            echo "  (see the comment above the audio block in include/GfxRuntime.hpp)"
             fails=$((fails + 1))
         elif ! "$CXX" -std=c++17 -O1 -I "$HERE/gfx_x11_stub" \
                 -DNEXA_GEN="\"$WORK/patched.cpp\"" \

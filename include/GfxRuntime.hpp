@@ -3675,7 +3675,32 @@ static std::string __nexa_gfx_opendialog(const std::string& spec) {
 #endif
 }
 )NEXA_GFX";
+    // gfx.audio / sample / audio_queued / audio_flush: one 16-bit mono PCM
+    // stream, four backends. Every one of them is the same shape -- a staging
+    // buffer of NEXA_PCM_LEN samples that gfx.sample fills and a submit that
+    // hands it to the device when it is full -- so the only thing that differs
+    // below the ladder is how a block of samples reaches a speaker.
+    //
+    // The whole block is bracketed by [nexa:audio-*] markers that are emitted
+    // into the generated program on purpose (unlike the [nexa:rasterizers-*]
+    // pairs above, which are lifted out of this header). No machine has all
+    // four devices, and this one has none of them, so Tests/gfx_sound_cases.sh
+    // cuts the marked range out of a generated file and drops in a speaker that
+    // simply remembers -- which is how the mixer above gets executed and
+    // checked here rather than merely compiled. Keep the markers on their own
+    // comment lines and keep everything a backend needs between them.
+    //
+    // One trap when adding to a branch below. The transpiler drops duplicate
+    // `#include <...>` lines before it strips the inactive platform guards
+    // (Transpiler.hpp), so of two identical includes in two branches of this
+    // ladder only the first survives the dedup -- and then slicing deletes the
+    // branch it survived in, leaving the other branch without its header. An
+    // include here must therefore either be unique across the whole generated
+    // file or be one that every target has unguarded. That is why the macOS
+    // branch waits with <thread> rather than usleep, and why the ALSA branch
+    // waits with snd_pcm_wait and so needs no header for it at all.
     if (need.audio) out += R"NEXA_GFX(
+// [nexa:audio-backend-begin]
 #ifdef _WIN32
 #define NEXA_PCM_BUFS 4
 #define NEXA_PCM_LEN 2048
@@ -3864,9 +3889,334 @@ static int __nexa_gfx_audio_queued() {
 }
 
 static void __nexa_gfx_audio_flush() {}
+#elif defined(__APPLE__)
+// AudioQueue: the same four-buffer ring as waveOut. AudioToolbox is a system
+// framework, auto-linked next to Cocoa, so this costs the build nothing.
+#include <AudioToolbox/AudioToolbox.h>
+#include <atomic>
+#include <chrono>
+#include <thread>
+
+#define NEXA_PCM_BUFS 4
+#define NEXA_PCM_LEN 2048
+
+static AudioQueueRef __nexa_aq = NULL;
+static AudioQueueBufferRef __nexa_aqb[NEXA_PCM_BUFS];
+// AudioQueue hands a buffer back on its own thread, so ownership of each buffer
+// is the one thing here that crosses threads: the callback stores 0, the
+// program stores 1 just before enqueueing, and nothing else is shared. The
+// frame count next to it is written and read by the program only, and only
+// consulted while busy is 1 -- which the program itself set, after writing it.
+static std::atomic<int> __nexa_aq_busy[NEXA_PCM_BUFS];
+static int __nexa_aq_frames[NEXA_PCM_BUFS];
+static short __nexa_ab[NEXA_PCM_LEN];
+static int __nexa_wn = 0;
+static int __nexa_audio_rate = 0;
+
+static void __nexa_aq_done(void* ud, AudioQueueRef q, AudioQueueBufferRef b) {
+    (void)ud;
+    (void)q;
+    int i = 0;
+    while (i < NEXA_PCM_BUFS) {
+        // A buffer from a queue that has already been disposed matches nothing,
+        // which is exactly the right answer.
+        if (__nexa_aqb[i] == b) {
+            __nexa_aq_busy[i].store(0, std::memory_order_release);
+            return;
+        }
+        i++;
+    }
+}
+
+static void __nexa_gfx_audio_close() {
+    if (__nexa_aq) {
+        // Synchronous, the way waveOutReset is: closing the stream drops
+        // whatever had not been heard yet rather than blocking the program
+        // until a tenth of a second of tail has played.
+        AudioQueueStop(__nexa_aq, true);
+        AudioQueueDispose(__nexa_aq, true);
+        __nexa_aq = NULL;
+    }
+    int i = 0;
+    while (i < NEXA_PCM_BUFS) {
+        __nexa_aqb[i] = NULL;
+        __nexa_aq_busy[i].store(0, std::memory_order_relaxed);
+        __nexa_aq_frames[i] = 0;
+        i++;
+    }
+    __nexa_wn = 0;
+    __nexa_audio_rate = 0;
+}
+
+static int __nexa_audio_free_buf() {
+    for (int n = 0; n < 80; n++) {
+        int i = 0;
+        while (i < NEXA_PCM_BUFS) {
+            if (__nexa_aq_busy[i].load(std::memory_order_acquire) == 0) return i;
+            i++;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return -1;
+}
+
+static void __nexa_audio_submit() {
+    if (!__nexa_aq || __nexa_wn < 1) return;
+    int i = __nexa_audio_free_buf();
+    if (i < 0) {
+        __nexa_wn = 0;
+        return;
+    }
+    std::memcpy(__nexa_aqb[i]->mAudioData, __nexa_ab, (size_t)__nexa_wn * sizeof(short));
+    __nexa_aqb[i]->mAudioDataByteSize = (UInt32)(__nexa_wn * (int)sizeof(short));
+    __nexa_aq_frames[i] = __nexa_wn;
+    __nexa_aq_busy[i].store(1, std::memory_order_release);
+    if (AudioQueueEnqueueBuffer(__nexa_aq, __nexa_aqb[i], 0, NULL) != noErr) {
+        __nexa_aq_busy[i].store(0, std::memory_order_release);
+    }
+    __nexa_wn = 0;
+}
+
+static int __nexa_gfx_audio(int rate) {
+    if (rate < 8000 || rate > 96000) rate = 44100;
+    if (__nexa_aq && __nexa_audio_rate == rate) return 1;
+    __nexa_gfx_audio_close();
+    AudioStreamBasicDescription d;
+    std::memset(&d, 0, sizeof(d));
+    d.mSampleRate = (Float64)rate;
+    d.mFormatID = kAudioFormatLinearPCM;
+    d.mFormatFlags = kLinearPCMFormatFlagIsSignedInteger | kLinearPCMFormatFlagIsPacked;
+    d.mFramesPerPacket = 1;
+    d.mChannelsPerFrame = 1;
+    d.mBitsPerChannel = 16;
+    d.mBytesPerFrame = 2;
+    d.mBytesPerPacket = 2;
+    // A NULL run loop means the callback runs on a thread AudioToolbox owns,
+    // which is what lets a game that never returns to the main loop keep
+    // playing.
+    if (AudioQueueNewOutput(&d, __nexa_aq_done, NULL, NULL, NULL, 0, &__nexa_aq) != noErr) {
+        __nexa_aq = NULL;
+        return 0;
+    }
+    int i = 0;
+    while (i < NEXA_PCM_BUFS) {
+        if (AudioQueueAllocateBuffer(__nexa_aq, (UInt32)(NEXA_PCM_LEN * (int)sizeof(short)),
+                                     &__nexa_aqb[i]) != noErr) {
+            AudioQueueDispose(__nexa_aq, true);
+            __nexa_aq = NULL;
+            return 0;
+        }
+        __nexa_aq_busy[i].store(0, std::memory_order_relaxed);
+        __nexa_aq_frames[i] = 0;
+        i++;
+    }
+    if (AudioQueueStart(__nexa_aq, NULL) != noErr) {
+        AudioQueueDispose(__nexa_aq, true);
+        __nexa_aq = NULL;
+        return 0;
+    }
+    __nexa_wn = 0;
+    __nexa_audio_rate = rate;
+    return 1;
+}
+
+static int __nexa_gfx_sample(int s) {
+    if (!__nexa_aq) return 0;
+    if (s < -32768) s = -32768;
+    if (s > 32767) s = 32767;
+    if (__nexa_wn >= NEXA_PCM_LEN) __nexa_audio_submit();
+    if (__nexa_wn >= NEXA_PCM_LEN) return 0;
+    __nexa_ab[__nexa_wn] = (short)s;
+    __nexa_wn++;
+    if (__nexa_wn >= NEXA_PCM_LEN) __nexa_audio_submit();
+    return 1;
+}
+
+static int __nexa_gfx_audio_queued() {
+    if (!__nexa_aq) return 0;
+    int n = __nexa_wn;
+    int i = 0;
+    while (i < NEXA_PCM_BUFS) {
+        if (__nexa_aq_busy[i].load(std::memory_order_acquire)) n += __nexa_aq_frames[i];
+        i++;
+    }
+    return n;
+}
+
+static void __nexa_gfx_audio_flush() {
+    if (__nexa_wn > 0) __nexa_audio_submit();
+}
+#elif defined(__linux__)
+// ALSA, reached through dlopen rather than -lasound, for the same reason the
+// X11 backend is statically embedded: building a Nexa program must not need
+// libasound-dev, and running one must not need libasound at all. When the
+// library is missing, or is there but will not open a device, gfx.audio()
+// returns 0 -- which is exactly what this platform did before it had a
+// backend, and what everything above it is already written to cope with.
+#include <dlfcn.h>
+#include <cerrno>
+
+#define NEXA_PCM_LEN 2048
+
+// Hand-declared, because libasound's headers are not assumed to be installed.
+// Nothing crossing this boundary needs them: snd_pcm_t is opaque so it is a
+// void*, snd_pcm_uframes_t/snd_pcm_sframes_t are unsigned long/long, and the
+// stream, format and access arguments are enums, which C passes as int.
+#define NEXA_SND_PCM_STREAM_PLAYBACK 0
+#define NEXA_SND_PCM_NONBLOCK 1
+#define NEXA_SND_PCM_FORMAT_S16_LE 2
+#define NEXA_SND_PCM_ACCESS_RW_INTERLEAVED 3
+// A tenth of a second, the same depth the mixer aims to keep queued and the
+// same order as the four 2048-sample waveOut buffers.
+#define NEXA_ALSA_LATENCY_US 100000
+
+struct __nexa_Alsa {
+    void* lib;
+    int (*open)(void**, const char*, int, int);
+    int (*set_params)(void*, int, int, unsigned int, unsigned int, int, unsigned int);
+    long (*writei)(void*, const void*, unsigned long);
+    int (*wait)(void*, int);
+    int (*delay)(void*, long*);
+    int (*recover)(void*, int, int);
+    int (*drain)(void*);
+    int (*close)(void*);
+};
+
+static __nexa_Alsa __nexa_alsa;
+static void* __nexa_pcm = NULL;
+static short __nexa_ab[NEXA_PCM_LEN];
+static int __nexa_wn = 0;
+static int __nexa_audio_rate = 0;
+
+static int __nexa_alsa_sym(void** out, const char* name) {
+    *out = dlsym(__nexa_alsa.lib, name);
+    return *out != NULL;
+}
+
+// Loaded once and left loaded: a program that closes the stream and opens it
+// again should not pay for the dlopen twice, and there is nothing here that
+// process exit will not release.
+static int __nexa_alsa_load() {
+    if (__nexa_alsa.lib) return 1;
+    void* lib = dlopen("libasound.so.2", RTLD_LAZY);
+    if (!lib) lib = dlopen("libasound.so", RTLD_LAZY);
+    if (!lib) return 0;
+    __nexa_alsa.lib = lib;
+    void* p = NULL;
+    int ok = 1;
+    if (ok && __nexa_alsa_sym(&p, "snd_pcm_open")) __nexa_alsa.open = (int (*)(void**, const char*, int, int))p; else ok = 0;
+    if (ok && __nexa_alsa_sym(&p, "snd_pcm_set_params")) __nexa_alsa.set_params = (int (*)(void*, int, int, unsigned int, unsigned int, int, unsigned int))p; else ok = 0;
+    if (ok && __nexa_alsa_sym(&p, "snd_pcm_writei")) __nexa_alsa.writei = (long (*)(void*, const void*, unsigned long))p; else ok = 0;
+    if (ok && __nexa_alsa_sym(&p, "snd_pcm_wait")) __nexa_alsa.wait = (int (*)(void*, int))p; else ok = 0;
+    if (ok && __nexa_alsa_sym(&p, "snd_pcm_delay")) __nexa_alsa.delay = (int (*)(void*, long*))p; else ok = 0;
+    if (ok && __nexa_alsa_sym(&p, "snd_pcm_recover")) __nexa_alsa.recover = (int (*)(void*, int, int))p; else ok = 0;
+    if (ok && __nexa_alsa_sym(&p, "snd_pcm_drain")) __nexa_alsa.drain = (int (*)(void*))p; else ok = 0;
+    if (ok && __nexa_alsa_sym(&p, "snd_pcm_close")) __nexa_alsa.close = (int (*)(void*))p; else ok = 0;
+    if (!ok) {
+        // Something calling itself libasound that is not: refuse it whole
+        // rather than call half of it.
+        dlclose(lib);
+        std::memset(&__nexa_alsa, 0, sizeof(__nexa_alsa));
+        return 0;
+    }
+    return 1;
+}
+
+static void __nexa_gfx_audio_close() {
+    if (__nexa_pcm) {
+        // The handle is non-blocking, so this starts the drain and returns
+        // rather than holding the program until the tail has played.
+        __nexa_alsa.drain(__nexa_pcm);
+        __nexa_alsa.close(__nexa_pcm);
+        __nexa_pcm = NULL;
+    }
+    __nexa_wn = 0;
+    __nexa_audio_rate = 0;
+}
+
+// Hands the staged samples to the device. A stream that has fallen behind is
+// recovered in place -- snd_pcm_recover covers both underrun and resume from
+// suspend -- and a stream that is merely full is waited on for a bounded time
+// and then the rest is dropped, which is what the waveOut path does when all
+// four of its headers are in flight. A game that stops calling gfx.sample for a
+// second must not find the next call blocked on a second of backlog.
+static void __nexa_audio_submit() {
+    if (!__nexa_pcm || __nexa_wn < 1) return;
+    int done = 0;
+    int tries = 0;
+    while (done < __nexa_wn && tries < 40) {
+        tries++;
+        long n = __nexa_alsa.writei(__nexa_pcm, __nexa_ab + done, (unsigned long)(__nexa_wn - done));
+        if (n > 0) {
+            done += (int)n;
+            continue;
+        }
+        if (n == 0 || n == -EAGAIN) {
+            // Full. Wait on the device rather than spinning -- but the forty
+            // two-millisecond turns this loop gets are a ceiling, not a
+            // promise, so a stream nobody is draining costs the caller the
+            // same eighty milliseconds the waveOut path spends before it
+            // gives up on its four headers.
+            int w = __nexa_alsa.wait(__nexa_pcm, 2);
+            if (w < 0 && __nexa_alsa.recover(__nexa_pcm, w, 1) < 0) break;
+            continue;
+        }
+        if (__nexa_alsa.recover(__nexa_pcm, (int)n, 1) < 0) break;
+    }
+    __nexa_wn = 0;
+}
+
+static int __nexa_gfx_audio(int rate) {
+    if (rate < 8000 || rate > 96000) rate = 44100;
+    if (__nexa_pcm && __nexa_audio_rate == rate) return 1;
+    __nexa_gfx_audio_close();
+    if (!__nexa_alsa_load()) return 0;
+    void* pcm = NULL;
+    if (__nexa_alsa.open(&pcm, "default", NEXA_SND_PCM_STREAM_PLAYBACK, NEXA_SND_PCM_NONBLOCK) < 0 || !pcm) {
+        return 0;
+    }
+    // Soft resampling on, so a device that cannot do the asked-for rate still
+    // plays rather than refusing -- the mixer has already resampled every voice
+    // to this rate and has nothing better to offer.
+    if (__nexa_alsa.set_params(pcm, NEXA_SND_PCM_FORMAT_S16_LE, NEXA_SND_PCM_ACCESS_RW_INTERLEAVED,
+                               1, (unsigned int)rate, 1, NEXA_ALSA_LATENCY_US) < 0) {
+        __nexa_alsa.close(pcm);
+        return 0;
+    }
+    __nexa_pcm = pcm;
+    __nexa_wn = 0;
+    __nexa_audio_rate = rate;
+    return 1;
+}
+
+static int __nexa_gfx_sample(int s) {
+    if (!__nexa_pcm) return 0;
+    if (s < -32768) s = -32768;
+    if (s > 32767) s = 32767;
+    if (__nexa_wn >= NEXA_PCM_LEN) __nexa_audio_submit();
+    if (__nexa_wn >= NEXA_PCM_LEN) return 0;
+    __nexa_ab[__nexa_wn] = (short)s;
+    __nexa_wn++;
+    if (__nexa_wn >= NEXA_PCM_LEN) __nexa_audio_submit();
+    return 1;
+}
+
+static int __nexa_gfx_audio_queued() {
+    if (!__nexa_pcm) return 0;
+    // snd_pcm_delay is how far ahead of the speaker the next written sample
+    // would be, which is the count this asks for; the staged samples have not
+    // been written yet, so they are added on top.
+    long d = 0;
+    if (__nexa_alsa.delay(__nexa_pcm, &d) < 0 || d < 0) d = 0;
+    return __nexa_wn + (int)d;
+}
+
+static void __nexa_gfx_audio_flush() {
+    if (__nexa_wn > 0) __nexa_audio_submit();
+}
 #else
-// No device on macOS/Linux yet: the stream never opens, so the rate stays 0
-// and everything built on top of it -- gfx.play included -- says so.
+// Some other Unix: the stream never opens, so the rate stays 0 and everything
+// built on top of it -- gfx.play included -- says so.
 [[maybe_unused]] static int __nexa_audio_rate = 0;
 static void __nexa_gfx_audio_close() {}
 static int __nexa_gfx_audio(int rate) { (void)rate; return 0; }
@@ -3874,6 +4224,7 @@ static int __nexa_gfx_sample(int s) { (void)s; return 0; }
 static int __nexa_gfx_audio_queued() { return 0; }
 static void __nexa_gfx_audio_flush() {}
 #endif
+// [nexa:audio-backend-end]
 )NEXA_GFX";
     if (need.sound) out += soundRuntimeCpp();
 
