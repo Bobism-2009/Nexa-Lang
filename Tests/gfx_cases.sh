@@ -23,12 +23,13 @@
 #             Tests/gfx_x11_stub instead, which is sound because this program
 #             never opens a window. Skipped only when neither route builds.
 #
-#   semantics Build Tests/gfx_borderless_semantics.cpp against the same fake
-#             X11 and drive the runtime directly. gfx.borderless is the one
-#             gfx call whose result is drawn outside the window, by the window
-#             manager, so nothing can read it back -- what is checked is the
-#             request the runtime makes, which the stub records. Needs no
-#             display.
+#   semantics Build Tests/gfx_borderless_semantics.cpp and
+#             Tests/gfx_ontop_semantics.cpp against the same fake X11 and drive
+#             the runtime directly. Both are calls whose result belongs to the
+#             window manager -- the frame it draws around a window, the pile it
+#             stacks the window in -- so nothing can read either back. What is
+#             checked is the request the runtime makes, which the stub records.
+#             Needs no display.
 #
 #   window    Build and run Tests/gfx_open_close_test.nxa, which opens a real
 #             window and reads pixels back. Needs a display; skipped without
@@ -146,6 +147,10 @@ expect_emit "borderless with no argument queries" \
     '__nexa_gfx_borderless\(-1\)' '    let b: int = gfx.borderless();'
 expect_emit "borderless with an argument sets" \
     '__nexa_gfx_borderless\(1\)' '    gfx.borderless(1);'
+expect_emit "ontop with no argument queries" \
+    '__nexa_gfx_ontop\(-1\)' '    let t: int = gfx.ontop();'
+expect_emit "ontop with an argument sets" \
+    '__nexa_gfx_ontop\(1\)' '    gfx.ontop(1);'
 expect_emit "audio defaults to 44100 Hz" \
     '__nexa_gfx_audio\(44100\)' '    gfx.audio();'
 expect_emit "audio passes an explicit rate" \
@@ -367,44 +372,53 @@ expect_program "gfx_headless_test" \
 gfx_builds=1
 [ "$build_mode" = native ] || gfx_builds=0
 
-echo "-- semantics: what gfx.borderless asks the X server for"
-# gfx.borderless takes the frame off, and a frame is drawn outside the window
-# by the window manager: no gfx call and no X call can read it back, so a
-# behavioural test cannot see it. What can be seen is the request, and
-# Tests/gfx_x11_stub records it. See Tests/gfx_borderless_semantics.cpp.
+echo "-- semantics: what the window-manager calls ask the X server for"
+# gfx.borderless takes the frame off and gfx.ontop moves the window to the top
+# of the pile, and both of those are drawn or decided outside the window by the
+# window manager: no gfx call and no X call can read either back, so a
+# behavioural test cannot see them. What can be seen is the request, and
+# Tests/gfx_x11_stub records it.
+
+# semantics_case <name> <nexa-call>
+# Transpiles a one-call program -- the runtime is sliced to the builtins a
+# program uses (BOB-25), so the driver has to be built from one that reaches
+# the call it drives -- then builds Tests/gfx_<name>_semantics.cpp against it
+# and the fake X11, and runs it.
+semantics_case() {
+    name=$1
+    call=$2
+    printf '#include <std/gfx>\nfn main() {\n%s\n}\n' "$call" > "$WORK/$name.nxa"
+    if ! "$NEXAC" "$WORK/$name.nxa" --source "$WORK/$name.cpp" \
+            > "$WORK/$name.log" 2>&1; then
+        echo "FAIL gfx_${name}_semantics: NexaC could not transpile the driver program"
+        sed 's/^/  /' "$WORK/$name.log"
+        fails=$((fails + 1))
+        return
+    fi
+    if ! "$CXX" -std=c++17 -O1 -I "$SUITE/gfx_x11_stub" \
+            -DNEXA_GEN="\"$WORK/$name.cpp\"" \
+            "$SUITE/gfx_${name}_semantics.cpp" "$SUITE/gfx_x11_stub/x11_stub.cpp" \
+            -o "$WORK/${name}_bin" > "$WORK/$name.build" 2>&1; then
+        echo "SKIP gfx_${name}_semantics: could not build the driver"
+        sed 's/^/       /' "$WORK/$name.build" | head -n 5
+        skips=$((skips + 1))
+        return
+    fi
+    out=$("$WORK/${name}_bin" 2>&1)
+    status=$?
+    printf '%s\n' "$out" | grep '^ok ' | sed "s/^ok /ok $name: /"
+    if [ $status -ne 0 ]; then
+        printf '%s\n' "$out" | grep -v '^ok ' | sed 's/^/  /'
+        fails=$((fails + 1))
+    fi
+}
+
 if [ -z "$CXX" ]; then
-    echo "SKIP gfx_borderless_semantics: no C++ compiler (set NEXA_CXX to force one)"
+    echo "SKIP semantics: no C++ compiler (set NEXA_CXX to force one)"
     skips=$((skips + 1))
 else
-    # The driver calls the runtime directly, but the runtime is sliced to the
-    # builtins a program uses (BOB-25), so the program it is built from has to
-    # be one that reaches gfx.borderless.
-    printf '%s' '#include <std/gfx>
-fn main() {
-    gfx.borderless(1);
-}
-' > "$WORK/borderless.nxa"
-    if ! "$NEXAC" "$WORK/borderless.nxa" --source "$WORK/borderless.cpp" \
-            > "$WORK/borderless.log" 2>&1; then
-        echo "FAIL gfx_borderless_semantics: NexaC could not transpile the driver program"
-        sed 's/^/  /' "$WORK/borderless.log"
-        fails=$((fails + 1))
-    elif ! "$CXX" -std=c++17 -O1 -I "$SUITE/gfx_x11_stub" \
-            -DNEXA_GEN="\"$WORK/borderless.cpp\"" \
-            "$SUITE/gfx_borderless_semantics.cpp" "$SUITE/gfx_x11_stub/x11_stub.cpp" \
-            -o "$WORK/borderless_bin" > "$WORK/borderless.build" 2>&1; then
-        echo "SKIP gfx_borderless_semantics: could not build the driver"
-        sed 's/^/       /' "$WORK/borderless.build" | head -n 5
-        skips=$((skips + 1))
-    else
-        out=$("$WORK/borderless_bin" 2>&1)
-        status=$?
-        printf '%s\n' "$out" | grep '^ok ' | sed 's/^ok /ok semantics: /'
-        if [ $status -ne 0 ]; then
-            printf '%s\n' "$out" | grep -v '^ok ' | sed 's/^/  /'
-            fails=$((fails + 1))
-        fi
-    fi
+    semantics_case "borderless" '    gfx.borderless(1);'
+    semantics_case "ontop" '    gfx.ontop(1);'
 fi
 
 echo "-- window: std/gfx against a real window"

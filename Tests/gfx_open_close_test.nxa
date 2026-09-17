@@ -310,6 +310,35 @@ fn main() {
         gfx.close();
         return 59;
     }
+    // Being above other programs is the window manager's decision to carry
+    // out, and one it may decline, so there is nothing to read back but the
+    // state the runtime holds -- including across a fullscreen round trip,
+    // which is the neighbour that could cancel it.
+    if (gfx.ontop() != 0) {
+        io.println("fail ontop starts off");
+        gfx.close();
+        return 61;
+    }
+    if (gfx.ontop(1) != 1 || gfx.ontop() != 1) {
+        io.println("fail ontop on");
+        gfx.close();
+        return 62;
+    }
+    if (gfx.fullscreen(1) != 1 || gfx.fullscreen(0) != 0 || gfx.ontop() != 1) {
+        io.println("fail ontop through fullscreen");
+        gfx.close();
+        return 63;
+    }
+    if (gfx.ontop(0) != 0 || gfx.ontop() != 0) {
+        io.println("fail ontop off");
+        gfx.close();
+        return 64;
+    }
+    if (gfx.width() != 8 || gfx.height() != 8 || gfx.scale() != 2) {
+        io.println("fail size after ontop");
+        gfx.close();
+        return 65;
+    }
     gfx.close();
     if (gfx.resize(10, 10) != 0 || gfx.width() != 0 || gfx.height() != 0 || gfx.scale() != 0) {
         io.println("fail size after close");
@@ -326,6 +355,10 @@ fn main() {
     if (gfx.borderless() != 0 || gfx.borderless(1) != 0) {
         io.println("fail borderless after close");
         return 60;
+    }
+    if (gfx.ontop() != 0 || gfx.ontop(1) != 0) {
+        io.println("fail ontop after close");
+        return 66;
     }
     if (gfx.image_w(img) != 2 || gfx.image_h(img) != 2) {
         io.println("fail image after close");

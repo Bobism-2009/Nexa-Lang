@@ -57,5 +57,9 @@ call `toggleFullScreen`. `gfx.borderless(1)` swaps the window's style mask for
 kept because a mask of `Borderless` alone answers NO to `canBecomeKeyWindow`,
 which would cost the program its keyboard — and puts the content rect back
 where it was, since `setStyleMask:` keeps the frame rather than the content.
+`gfx.ontop(1)` / `gfx.ontop(0)` set the window's `level` to
+`NSFloatingWindowLevel` / `NSNormalWindowLevel` — Floating is the level AppKit
+keeps palettes at, above every normal window including other applications' and
+below the ones the system reserves for menus and alerts.
 `gfx.audio` / `gfx.sample` compile but return 0 on
 macOS (PCM output is implemented on Windows and wasm).

@@ -6296,6 +6296,10 @@ private:
                     std::string v = e.children.empty() ? "-1" : a(0);
                     return "__nexa_gfx_borderless(" + v + ")";
                 }
+                if (fn == "ontop") {
+                    std::string v = e.children.empty() ? "-1" : a(0);
+                    return "__nexa_gfx_ontop(" + v + ")";
+                }
                 if (fn == "audio") {
                     std::string r = e.children.empty() ? "44100" : a(0);
                     return "__nexa_gfx_audio(" + r + ")";
@@ -6974,6 +6978,10 @@ private:
             // can answer, because nothing else in the runtime takes a frame
             // off and so there is no state to read without this call.
             cppUsage.gfxBorderless = true;
+        } else if (fn == "ontop") {
+            // Both forms again, and for the same reason: the field is always
+            // emitted, but the only thing that ever writes it is this call.
+            cppUsage.gfxOntop = true;
         }
     }
 

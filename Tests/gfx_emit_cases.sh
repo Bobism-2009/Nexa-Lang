@@ -273,6 +273,10 @@ run_groups() {
     # never says gfx.borderless cannot get there and must not carry it.
     group "borderless$suffix" '^static int __nexa_gfx_borderless' \
         '    gfx.borderless(1);' "$@"
+    # And the same for the other window-manager toggle: nothing but the call
+    # puts a window above other programs.
+    group "ontop$suffix" '^static int __nexa_gfx_ontop' \
+        '    gfx.ontop(1);' "$@"
 }
 
 run_groups ""
@@ -351,6 +355,43 @@ for stub in __nexa_gfx_cursor_reset __nexa_gfx_icon_reset; do
         echo "ok ${stub}_stub"
     fi
 done
+
+# gfx.fullscreen is core, and it reads two flags that belong to calls which are
+# not: `borderless` says whether a WS_POPUP window is fullscreen's own or one
+# the program unframed, and `ontop` picks the window the fullscreen exit
+# inserts itself after -- HWND_NOTOPMOST there would otherwise cancel a
+# gfx.ontop(1) the moment the program left fullscreen. So the *functions* slice
+# away and the *fields* must not, on every target, or a draw loop stops
+# compiling. Checked against the emission of a program that says neither.
+for target in "" _wasm; do
+    f="$WORK/draw_only$target.cpp"
+    [ -f "$f" ] || continue
+    if grep -q '__nexa_gfx_ontop' "$f"; then
+        echo "FAIL ontop_field$target: a draw loop carried gfx.ontop, which it cannot reach"
+        fails=$((fails + 1))
+    elif ! grep -q '^    int ontop;' "$f" || ! grep -q '^    int borderless;' "$f"; then
+        echo "FAIL ontop_field$target: a draw loop lost a flag its fullscreen reads"
+        fails=$((fails + 1))
+    else
+        echo "ok ontop_field$target"
+    fi
+done
+
+# Windows is where the field is actually read, and the Win32 branch is sliced
+# out of every other target -- so this is the case that would notice the
+# fullscreen exit going back to a bare HWND_NOTOPMOST.
+if transpile "win_draw_only" "$DRAW_ONLY" --win; then
+    if grep -q '__nexa_gfx_ontop' "$WORK/win_draw_only.cpp"; then
+        echo "FAIL ontop_field_win: a Windows draw loop carried gfx.ontop"
+        fails=$((fails + 1))
+    elif ! grep -q '__nexa_g.ontop ? HWND_TOPMOST' "$WORK/win_draw_only.cpp"; then
+        echo "FAIL ontop_field_win: the Win32 fullscreen path does not read __nexa_g.ontop"
+        grep -n 'HWND_' "$WORK/win_draw_only.cpp" | head -n 5 | sed 's/^/  /'
+        fails=$((fails + 1))
+    else
+        echo "ok ontop_field_win"
+    fi
+fi
 
 # --- size: the point of all of it -------------------------------------------
 
@@ -518,6 +559,8 @@ else
     link_case "fullscreen" '    let f: int = gfx.fullscreen();'
     link_case "borderless_get" '    let b: int = gfx.borderless();'
     link_case "borderless_set" '    let b: int = gfx.borderless(1);'
+    link_case "ontop_get" '    let t: int = gfx.ontop();'
+    link_case "ontop_set" '    let t: int = gfx.ontop(1);'
     link_case "drop" '    let s: string = gfx.drop();'
     link_case "opendialog" '    let p: string = gfx.opendialog();'
     link_case "save" '    let ok: int = gfx.save("/dev/null");'

@@ -309,6 +309,7 @@ exports.MODULE_MEMBERS = {
         { name: "maxfps", detail: "gfx.maxfps(n) — cap the loop at n frames a second; 0 removes the cap" },
         { name: "fullscreen", detail: "gfx.fullscreen() / gfx.fullscreen(on) — get or set fullscreen" },
         { name: "borderless", detail: "gfx.borderless() / gfx.borderless(on) — get or set the window frame off" },
+        { name: "ontop", detail: "gfx.ontop() / gfx.ontop(on) — get or set staying above other programs" },
         { name: "audio", detail: "gfx.audio([rate]) — open 16-bit mono PCM (default 44100)" },
         { name: "sample", detail: "gfx.sample(s) — queue one s16 sample" },
         { name: "audio_queued", detail: "gfx.audio_queued() — samples still buffered" },

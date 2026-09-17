@@ -296,18 +296,40 @@ extern void nexa_x11_stub_set_origin(int x, int y);
 
 /* What the runtime asked the server to do, for tests that assert on the
  * request rather than on a pixel. The property accessors describe the last
- * XChangeProperty; the call log records XMapWindow / XUnmapWindow /
- * XMoveWindow in the order they arrived. Both are cleared by
- * nexa_x11_stub_reset. */
+ * XChangeProperty; the message accessors the last XSendEvent; the call log
+ * records XMapWindow / XUnmapWindow / XMoveWindow / XSendEvent in the order
+ * they arrived. All are cleared by nexa_x11_stub_reset. */
 extern const char* nexa_x11_stub_property_name(void);
 extern int nexa_x11_stub_property_type_matches(void);
 extern int nexa_x11_stub_property_format(void);
 extern int nexa_x11_stub_property_count(void);
 extern long nexa_x11_stub_property_word(int i);
 
+/* The last XSendEvent. _NET_WM_STATE changes are asked for with a
+ * ClientMessage to the root window and nothing else -- no property, no reply
+ * -- so the message is the whole of the request.
+ *   _is_client    the event was a ClientMessage at all
+ *   _name         the name of the message_type atom
+ *   _word(i)      data.l[i]
+ *   _word_name(i) that word read back as an atom name, which is how the state
+ *                 in data.l[1] is told apart
+ *   _window       the window the message is about (not the one it was sent to)
+ *   _target       the window XSendEvent was pointed at -- the root
+ *   _mask, _propagate  the rest of the XSendEvent call */
+extern int nexa_x11_stub_message_is_client(void);
+extern const char* nexa_x11_stub_message_name(void);
+extern int nexa_x11_stub_message_format(void);
+extern long nexa_x11_stub_message_word(int i);
+extern const char* nexa_x11_stub_message_word_name(int i);
+extern unsigned long nexa_x11_stub_message_window(void);
+extern unsigned long nexa_x11_stub_message_target(void);
+extern long nexa_x11_stub_message_mask(void);
+extern int nexa_x11_stub_message_propagate(void);
+
 #define NEXA_STUB_CALL_MAP 1
 #define NEXA_STUB_CALL_UNMAP 2
 #define NEXA_STUB_CALL_MOVE 3
+#define NEXA_STUB_CALL_SEND 4
 extern void nexa_x11_stub_calls_clear(void);
 extern int nexa_x11_stub_call_count(void);
 extern int nexa_x11_stub_call(int i);

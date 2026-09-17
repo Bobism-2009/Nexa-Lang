@@ -1,0 +1,7 @@
+// gfx.ontop is a getter and a setter in one name, the way gfx.fullscreen and
+// gfx.borderless are: nothing takes two arguments, and there is no second
+// thing to be on top of.
+#include <std/gfx>
+fn main() {
+    let t: int = gfx.ontop(1, 2);
+}

@@ -33,6 +33,9 @@ fn main() {
     // does not make the answer 1.
     io.println("borderless=", gfx.borderless());
     io.println("borderless_set=", gfx.borderless(1));
+    // Nor can a window that is not there be above the windows that are.
+    io.println("ontop=", gfx.ontop());
+    io.println("ontop_set=", gfx.ontop(1));
     io.println("text=", gfx.text(0, 0, "hi", 255, 255, 255));
     io.println("drop=", gfx.drop());
 

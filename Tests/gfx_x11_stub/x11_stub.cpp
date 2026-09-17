@@ -27,12 +27,30 @@ enum { NEXA_STUB_ATOMS = 32, NEXA_STUB_ATOM_LEN = 48 };
 static char nexa_stub_atom_names[NEXA_STUB_ATOMS][NEXA_STUB_ATOM_LEN];
 static int nexa_stub_atom_count = 0;
 
-/* The last XChangeProperty, and the map/unmap/move log. */
+static const char* nexa_stub_atom_name(Atom a) {
+    if (a == 0 || (int)a > nexa_stub_atom_count) return "";
+    return nexa_stub_atom_names[a - 1];
+}
+
+/* The last XChangeProperty, and the map/unmap/move/send log. */
 static Atom nexa_stub_prop_atom = 0;
 static Atom nexa_stub_prop_type = 0;
 static int nexa_stub_prop_format = 0;
 static int nexa_stub_prop_count = 0;
 static long nexa_stub_prop_data[8];
+
+/* The last XSendEvent. A ClientMessage to the root window is how a program
+   asks the window manager for a _NET_WM_STATE change, and the message is the
+   whole of the request: nothing comes back and no property is set. */
+static int nexa_stub_msg_type = 0;
+static Atom nexa_stub_msg_message_type = 0;
+static int nexa_stub_msg_format = 0;
+static long nexa_stub_msg_data[5];
+static Window nexa_stub_msg_window = 0;
+static Window nexa_stub_msg_target = 0;
+static long nexa_stub_msg_mask = 0;
+static int nexa_stub_msg_propagate = 0;
+
 enum { NEXA_STUB_CALLS = 32 };
 static int nexa_stub_calls[NEXA_STUB_CALLS];
 static int nexa_stub_call_n = 0;
@@ -87,6 +105,14 @@ void nexa_x11_stub_reset(int display_works) {
     nexa_stub_prop_format = 0;
     nexa_stub_prop_count = 0;
     memset(nexa_stub_prop_data, 0, sizeof(nexa_stub_prop_data));
+    nexa_stub_msg_type = 0;
+    nexa_stub_msg_message_type = 0;
+    nexa_stub_msg_format = 0;
+    memset(nexa_stub_msg_data, 0, sizeof(nexa_stub_msg_data));
+    nexa_stub_msg_window = 0;
+    nexa_stub_msg_target = 0;
+    nexa_stub_msg_mask = 0;
+    nexa_stub_msg_propagate = 0;
     nexa_stub_call_n = 0;
     nexa_stub_moved_x = 0;
     nexa_stub_moved_y = 0;
@@ -100,8 +126,7 @@ void nexa_x11_stub_set_origin(int x, int y) {
 }
 
 const char* nexa_x11_stub_property_name(void) {
-    if (nexa_stub_prop_atom == 0 || (int)nexa_stub_prop_atom > nexa_stub_atom_count) return "";
-    return nexa_stub_atom_names[nexa_stub_prop_atom - 1];
+    return nexa_stub_atom_name(nexa_stub_prop_atom);
 }
 
 int nexa_x11_stub_property_type_matches(void) {
@@ -126,6 +151,28 @@ int nexa_x11_stub_call(int i) {
 
 int nexa_x11_stub_move_x(void) { return nexa_stub_moved_x; }
 int nexa_x11_stub_move_y(void) { return nexa_stub_moved_y; }
+
+int nexa_x11_stub_message_is_client(void) { return nexa_stub_msg_type == ClientMessage; }
+
+const char* nexa_x11_stub_message_name(void) {
+    return nexa_stub_atom_name(nexa_stub_msg_message_type);
+}
+
+int nexa_x11_stub_message_format(void) { return nexa_stub_msg_format; }
+
+long nexa_x11_stub_message_word(int i) {
+    if (i < 0 || i >= (int)(sizeof(nexa_stub_msg_data) / sizeof(nexa_stub_msg_data[0]))) return 0;
+    return nexa_stub_msg_data[i];
+}
+
+const char* nexa_x11_stub_message_word_name(int i) {
+    return nexa_stub_atom_name((Atom)nexa_x11_stub_message_word(i));
+}
+
+unsigned long nexa_x11_stub_message_window(void) { return (unsigned long)nexa_stub_msg_window; }
+unsigned long nexa_x11_stub_message_target(void) { return (unsigned long)nexa_stub_msg_target; }
+long nexa_x11_stub_message_mask(void) { return nexa_stub_msg_mask; }
+int nexa_x11_stub_message_propagate(void) { return nexa_stub_msg_propagate; }
 
 void nexa_x11_stub_set_focus(int focused) { nexa_stub_focused = focused ? 1 : 0; }
 
@@ -174,7 +221,23 @@ int XNextEvent(Display* d, XEvent* e) {
     return 0;
 }
 Status XSendEvent(Display* d, Window w, Bool p, long m, XEvent* e) {
-    (void)d; (void)w; (void)p; (void)m; (void)e; return 0;
+    (void)d;
+    nexa_stub_msg_target = w;
+    nexa_stub_msg_propagate = p ? 1 : 0;
+    nexa_stub_msg_mask = m;
+    nexa_stub_msg_type = e ? e->type : 0;
+    nexa_stub_msg_message_type = 0;
+    nexa_stub_msg_format = 0;
+    nexa_stub_msg_window = 0;
+    memset(nexa_stub_msg_data, 0, sizeof(nexa_stub_msg_data));
+    if (e && e->type == ClientMessage) {
+        nexa_stub_msg_message_type = e->xclient.message_type;
+        nexa_stub_msg_format = e->xclient.format;
+        nexa_stub_msg_window = e->xclient.window;
+        memcpy(nexa_stub_msg_data, e->xclient.data.l, sizeof(nexa_stub_msg_data));
+    }
+    nexa_stub_log_call(NEXA_STUB_CALL_SEND);
+    return 0;
 }
 int XSelectInput(Display* d, Window w, long m) { (void)d; (void)w; (void)m; return 0; }
 Window XCreateSimpleWindow(Display* d, Window parent, int x, int y,

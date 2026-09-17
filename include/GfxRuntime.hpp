@@ -31,6 +31,11 @@ namespace nexa {
 // `borderless` flag in __nexa_Gfx, because fullscreen reads it -- on Windows
 // both states are WS_POPUP, and telling them apart is what stops
 // gfx.fullscreen(0) growing back a frame the program asked to remove.
+//
+// gfx.ontop is the same shape again, field and all: the function is sliced,
+// the `ontop` flag is not, because the Win32 fullscreen path picks the window
+// it inserts itself after out of it and would otherwise drop a program out of
+// the topmost band on the way back from fullscreen.
 struct GfxNeed {
     bool alpha = false;          // gfx.alpha() -- the reader; the setter is core
     bool plot = false;           // gfx.plot
@@ -61,6 +66,7 @@ struct GfxNeed {
     bool window = false;         // resize, width, height, scale, title
     bool maxfps = false;         // gfx.maxfps -- the clock and the frame wait
     bool borderless = false;     // gfx.borderless -- the decoration toggle
+    bool ontop = false;          // gfx.ontop -- the stacking toggle
 };
 
 // gfx.sound / play / loop / stop / volume: a WAV loader and a polyphonic
@@ -406,6 +412,14 @@ struct __nexa_Gfx {
     // WS_POPUP style, so this is the only thing that says which of the two a
     // popup window is, and therefore what leaving fullscreen goes back to.
     int borderless;
+    // 1 while the program has asked to stay above other programs' windows.
+    // Always here for the same reason as `borderless`, and read by the same
+    // neighbour: the Win32 fullscreen path names the window it inserts itself
+    // after, and HWND_TOPMOST or HWND_NOTOPMOST is a question only this can
+    // answer. There is no "am I topmost" to ask X11 or AppKit either -- a
+    // window manager may refuse the request and never say so -- so what is
+    // reported is what the program asked for.
+    int ontop;
     // 1 while the OS cursor is visible over the window, which is how a window
     // starts. Kept here rather than asked of the OS: X11 has no "is my cursor
     // hidden" query, and NSCursor's hide/unhide is a counter that only stays
@@ -1079,6 +1093,8 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
     __nexa_g.fullscreen = 0;
     // A new window starts framed, the same way it starts windowed.
     __nexa_g.borderless = 0;
+    // And in the ordinary stacking order, where the window manager put it.
+    __nexa_g.ontop = 0;
     // A new window starts with the cursor showing, the same way it starts
     // opaque and windowed.
     __nexa_g.cursor = 1;
@@ -1326,7 +1342,12 @@ static int __nexa_gfx_fullscreen(int on) {
         if (!GetMonitorInfoA(mon, &mi)) return __nexa_g.fullscreen;
         SetWindowLongA(__nexa_g.hwnd, GWL_EXSTYLE, GetWindowLongA(__nexa_g.hwnd, GWL_EXSTYLE) | WS_EX_APPWINDOW);
         SetWindowLongA(__nexa_g.hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
-        SetWindowPos(__nexa_g.hwnd, HWND_TOP,
+        // HWND_TOP is the top of the window's own band, which for a program
+        // that asked to stay above others is the topmost band -- so naming
+        // HWND_TOPMOST here is saying out loud what the ex-style already
+        // says, rather than leaving a fullscreen window's stacking to depend
+        // on WS_EX_TOPMOST surviving a style change nobody promised it would.
+        SetWindowPos(__nexa_g.hwnd, __nexa_g.ontop ? HWND_TOPMOST : HWND_TOP,
             mi.rcMonitor.left, mi.rcMonitor.top,
             mi.rcMonitor.right - mi.rcMonitor.left,
             mi.rcMonitor.bottom - mi.rcMonitor.top,
@@ -1338,8 +1359,16 @@ static int __nexa_gfx_fullscreen(int on) {
         __nexa_g.wnd_place.length = sizeof(WINDOWPLACEMENT);
         __nexa_g.wnd_place.showCmd = SW_SHOWNORMAL;
         SetWindowPlacement(__nexa_g.hwnd, &__nexa_g.wnd_place);
-        SetWindowPos(__nexa_g.hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+        // Leaving fullscreen is where an on-top request would quietly die:
+        // HWND_NOTOPMOST is exactly the instruction to stop being above other
+        // programs. SWP_NOZORDER is what has been sparing it -- that flag
+        // makes Windows ignore the window named here altogether -- so the
+        // window named and the flag have to agree. For a program that never
+        // asked to be on top nothing moves, which is today's behaviour; for
+        // one that did, dropping SWP_NOZORDER is what puts it back up.
+        SetWindowPos(__nexa_g.hwnd, __nexa_g.ontop ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | (__nexa_g.ontop ? 0u : (UINT)SWP_NOZORDER) |
+            SWP_FRAMECHANGED | SWP_SHOWWINDOW);
         ShowWindow(__nexa_g.hwnd, SW_SHOWNORMAL);
         __nexa_g.fullscreen = 0;
     }
@@ -1495,6 +1524,84 @@ static int __nexa_gfx_borderless(int on) {
 #else
     __nexa_g.borderless = want;
     return __nexa_g.borderless;
+#endif
+}
+)NEXA_GFX";
+    if (need.ontop) out += R"NEXA_GFX(
+// gfx.ontop: the window stays above other programs' windows, in gfx.fullscreen
+// and gfx.borderless's argument shape -- 1 on, 0 back to ordinary stacking,
+// and a negative argument reports the state without touching the window.
+//
+// What is reported is what the program asked for, not what the desktop did
+// with it. None of the three platforms has an "am I above everything" to ask,
+// and on X11 a window manager is free to ignore the request; there is no
+// answer to hand back that would be more honest than the wish.
+static int __nexa_gfx_ontop(int on) {
+    if (!__nexa_g.ready) return 0;
+    if (on < 0) return __nexa_g.ontop;
+    int want = on ? 1 : 0;
+#ifdef __EMSCRIPTEN__
+    // A canvas has no other programs to be above -- the browser stacks the
+    // page, and the page is the whole program. The state is still remembered
+    // and handed back, the same way gfx.borderless does it, so a program that
+    // toggles it reads what it asked for on every target it builds for.
+    __nexa_g.ontop = want;
+    return __nexa_g.ontop;
+#elif defined(_WIN32)
+    if (!__nexa_g.hwnd) return 0;
+    if (want == __nexa_g.ontop) return __nexa_g.ontop;
+    __nexa_g.ontop = want;
+    // HWND_TOPMOST moves the window into the band that sits above every
+    // ordinary window and sets WS_EX_TOPMOST with it; HWND_NOTOPMOST is the
+    // way back down. Neither the position nor the size is this call's
+    // business, and SWP_NOACTIVATE keeps the stacking change from stealing
+    // the keyboard from whatever the user was typing into.
+    SetWindowPos(__nexa_g.hwnd, want ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    return __nexa_g.ontop;
+#elif defined(__APPLE__)
+    if (!__nexa_gfx_nswin) return 0;
+    if (want == __nexa_g.ontop) return __nexa_g.ontop;
+    __nexa_g.ontop = want;
+    // A window's level is which pile it is stacked in. Floating is the level
+    // AppKit keeps palettes and inspectors at: above every normal window,
+    // including other applications', and below the ones the system reserves
+    // for menus and alerts. Normal is where a window starts.
+    [__nexa_gfx_nswin setLevel:(want ? NSFloatingWindowLevel : NSNormalWindowLevel)];
+    return __nexa_g.ontop;
+#elif defined(__linux__)
+    if (!__nexa_g.dpy || !__nexa_g.win) return 0;
+    if (want == __nexa_g.ontop) return __nexa_g.ontop;
+    __nexa_g.ontop = want;
+    // The same _NET_WM_STATE ClientMessage gfx.fullscreen sends, with the
+    // ABOVE state in place of the FULLSCREEN one. Unlike _MOTIF_WM_HINTS,
+    // which gfx.borderless has to unmap and remap the window to get read,
+    // this is a live toggle: EWMH says a window manager acts on the message
+    // when it arrives, so there is nothing to make it look again.
+    Atom wm = XInternAtom(__nexa_g.dpy, "_NET_WM_STATE", False);
+    Atom above = XInternAtom(__nexa_g.dpy, "_NET_WM_STATE_ABOVE", False);
+    XEvent ev;
+    std::memset(&ev, 0, sizeof(ev));
+    ev.xclient.type = ClientMessage;
+    ev.xclient.window = __nexa_g.win;
+    ev.xclient.message_type = wm;
+    ev.xclient.format = 32;
+    // data.l[0] is _NET_WM_STATE_ADD (1) or _NET_WM_STATE_REMOVE (0), l[1] the
+    // state being changed, l[2] a second state for the two-at-once form and so
+    // unused here, and l[3] the source: 1 says a normal application asked.
+    ev.xclient.data.l[0] = want ? 1 : 0;
+    ev.xclient.data.l[1] = (long)above;
+    ev.xclient.data.l[2] = 0;
+    ev.xclient.data.l[3] = 1;
+    // Addressed to the root window, because it is the window manager that has
+    // to act on it, and the window manager is the root window's owner.
+    XSendEvent(__nexa_g.dpy, DefaultRootWindow(__nexa_g.dpy), False,
+        SubstructureRedirectMask | SubstructureNotifyMask, &ev);
+    XFlush(__nexa_g.dpy);
+    return __nexa_g.ontop;
+#else
+    __nexa_g.ontop = want;
+    return __nexa_g.ontop;
 #endif
 }
 )NEXA_GFX";

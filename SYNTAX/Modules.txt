@@ -616,6 +616,32 @@ Nexa Standard Modules
                                    so the window can still become key.
                                    wasm: a canvas has no frame, so nothing happens; the
                                    state is still remembered and returned
+  gfx.ontop()                    - 1 if the window was asked to stay above other
+                                   programs, else 0 (0 if closed)
+  gfx.ontop(on)                  - keep the window above every other program's
+                                   windows (1) or return it to the ordinary stacking
+                                   order (0); returns the new state. The window keeps
+                                   the size, the place and the frame it had. A window
+                                   opens in the ordinary order, and gfx.open() puts it
+                                   back there.
+                                   What is returned is what the program asked for, not
+                                   what the desktop did with it: there is no "am I
+                                   above everything" to ask any of the three window
+                                   systems, and a Linux window manager is free to
+                                   decline the request without saying so.
+                                   On top and fullscreen are independent, and so are
+                                   on top and borderless: a fullscreen round trip
+                                   leaves the window on top if that is how the program
+                                   last asked for it.
+                                   Windows: SetWindowPos with HWND_TOPMOST /
+                                   HWND_NOTOPMOST; the window is not activated by it.
+                                   Linux: _NET_WM_STATE_ABOVE, added or removed with
+                                   the same ClientMessage gfx.fullscreen uses -- a live
+                                   toggle, so the window is not remapped.
+                                   macOS: NSFloatingWindowLevel / NSNormalWindowLevel.
+                                   wasm: a canvas has no other programs to be above, so
+                                   nothing happens; the state is still remembered and
+                                   returned
   gfx.audio([rate])              - open 16-bit mono PCM output (default 44100 Hz); 1/0
                                    Windows: winmm waveOut (-lwinmm). wasm: Web Audio
                                    macOS: AudioQueue (-framework AudioToolbox)
@@ -785,8 +811,8 @@ Nexa Standard Modules
   gfx.open() failed -- no gfx call is an error. Drawing (clear, plot, fill, rect,
   round_rect, fill_round_rect, line, circle, fill_circle, ellipse, fill_ellipse,
   arc, pie, tri, fill_tri, poly, fill_poly, text, blit, blit_rot, present, poll)
-  does nothing; width, height, scale, resize, fullscreen, borderless, blit,
-  blit_rot, icon, cursor, text, poly, fill_poly, save, wheel, wheel_x,
+  does nothing; width, height, scale, resize, fullscreen, borderless, ontop,
+  blit, blit_rot, icon, cursor, text, poly, fill_poly, save, wheel, wheel_x,
   mouse_x, mouse_y, mouse, key, pressed and released return 0; get returns -1;
   typed returns ""; title and drop return what they last held. The calls with no
   window in them still work: text_width, text_height, text_size, alpha, image,
