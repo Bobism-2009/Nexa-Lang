@@ -577,10 +577,20 @@ Nexa Standard Modules
   gfx.audio([rate])              - open 16-bit mono PCM output (default 44100 Hz); 1/0
                                    Windows: winmm waveOut (-lwinmm). wasm: Web Audio
                                    macOS: AudioQueue (-framework AudioToolbox)
-                                   Linux: ALSA, dlopened at this call -- no libasound-dev
-                                   to build and no libasound to run; without one, or with
-                                   no device to open, this returns 0 and the rest of the
-                                   audio API stays quiet rather than failing
+                                   Linux: no library needed, to build or to run. ALSA is
+                                   dlopened at this call and used when it is there, so the
+                                   card stays shared with the desktop's sound server; with
+                                   no libasound on the machine the kernel PCM interface is
+                                   driven directly instead -- /dev/snd, compiled into the
+                                   binary, nothing installed. Set NEXA_PCM_DEVICE to a node
+                                   (/dev/snd/pcmC1D0p) to pick the card that path opens;
+                                   otherwise it takes the first that plays, display outputs
+                                   last. A card that will only take stereo or its own rate
+                                   gets both, and gfx.play is matched to whatever it took --
+                                   so on one, raw gfx.sample plays at the card's rate rather
+                                   than the rate asked for. With no card at all this returns
+                                   0 and the rest of the audio API stays quiet rather than
+                                   failing
                                    gfx.close() also closes the stream
   gfx.sample(s)                  - queue one signed 16-bit sample (-32768..32767); 1/0
   gfx.audio_queued()             - samples still waiting to play
@@ -598,7 +608,7 @@ Nexa Standard Modules
                                    it mixes over whatever is already playing, up to 16
                                    voices, and the 17th steals the oldest. Opens the
                                    stream itself (44100 Hz) if the program never did,
-                                   which is what makes it 0 on macOS/Linux today
+                                   so it is 0 only where gfx.audio() would be
   gfx.loop(id[, volume])         - the same, but repeating until stopped; voice id, or 0
   gfx.stop()                     - stop every voice; 1 if any were playing, else 0
   gfx.stop(voice)                - stop one voice; 1 if it was playing, else 0

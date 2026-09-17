@@ -246,12 +246,15 @@ echo "-- no device, and devices that refuse"
 # No fake libasound on the path. This is the case every machine without ALSA is
 # in, and the one gfx.audio() returned 0 for before this backend existed.
 #
-# The one case in this file that is not hermetic: dlopen falls back to the
-# system library path, so a machine with ALSA actually installed opens a real
-# device here instead of finding nothing. That is the backend working, not
-# failing, so say so and move on rather than asserting against the test
-# machine's sound card.
-if run_case "nolib" "$WORK/empty"; then
+# Two things can make it a 1 anyway, and both are the backend working rather
+# than failing. dlopen falls back to the system library path, so a machine with
+# ALSA actually installed opens a real device here instead of finding nothing;
+# and a machine with no libasound at all now falls through to the kernel PCM
+# path, which on one with a sound card opens it (BOB-46, and
+# Tests/gfx_pcm_cases.sh is where that is checked). NEXA_PCM_DEVICE points the
+# second of those at nothing so that only the first can happen, which leaves
+# this case asserting what it was written to assert.
+if run_case "nolib" "$WORK/empty" NEXA_PCM_DEVICE="$WORK/no-such-device"; then
     if grep -qx "audio=1" "$WORK/out"; then
         echo "SKIP nolib: this machine has a real libasound, so there is no"
         echo "     'no libasound' case to run here"
@@ -266,6 +269,14 @@ fi
 
 # A libasound missing one of the names the backend needs: refuse it whole rather
 # than call half of it.
+#
+# This is also where the kernel PCM fallback is held to its boundary. It turns
+# on when there is no libasound to open, not when the one here is unusable: a
+# machine that ships an ALSA userspace has a sound server on it too, and taking
+# its card exclusively because our dlsym came up short would be the wrong trade.
+# So this stays a 0 even on a machine with a perfectly good sound card sitting
+# behind /dev/snd -- which is the machine this suite is running on when the live
+# half of Tests/gfx_pcm_cases.sh has anything to do.
 if run_case "partial" "$WORK/partial"; then
     says "partial: a libasound missing a symbol is a 0" "audio=0"
     says "partial: and no sample is taken" "fed=0"

@@ -1,0 +1,53 @@
+// Drives the kernel /dev/snd fallback behind gfx.audio() (BOB-46).
+//
+// Run by Tests/gfx_pcm_cases.sh. Everything here goes through the public API --
+// there is no fake device under this one, because a kernel PCM cannot be faked
+// from outside the way libasound can be. What it prints is therefore either a
+// real sound card answering or a quiet 0, and the suite decides which of those
+// the machine it is on is allowed to give.
+//
+// The interesting value is elapsed_ms. A stream that opened but is not actually
+// running gives back every sample instantly and the drain below finishes in no
+// time; a real card can only hand back three thousand samples as fast as it
+// plays them. Silence is fed rather than a tone so that running the suite does
+// not make a noise.
+
+#include <std/gfx>
+#include <std/io>
+#include <std/time>
+
+fn main() {
+    let ok: int = gfx.audio(44100);
+    io.println("audio=" + ok);
+
+    let t0: int = time.now_ms();
+
+    let fed: int = 0;
+    let i: int = 0;
+    while (i < 3000) {
+        fed = fed + gfx.sample(0);
+        i = i + 1;
+    }
+    io.println("fed=" + fed);
+    gfx.audio_flush();
+
+    // What the card has taken and not yet played. On a stream that never
+    // started this is either zero or never moves; on a running one it counts
+    // down on its own.
+    let held: int = gfx.audio_queued();
+    io.println("held=" + held);
+
+    let turns: int = 0;
+    while (gfx.audio_queued() > 0 && turns < 300) {
+        time.sleep(5);
+        turns = turns + 1;
+    }
+    io.println("drained=" + gfx.audio_queued());
+    io.println("elapsed_ms=" + (time.now_ms() - t0));
+
+    gfx.close();
+    let after: int = gfx.sample(0);
+    io.println("after=" + after);
+    io.println("queued_after=" + gfx.audio_queued());
+    io.println("done");
+}
