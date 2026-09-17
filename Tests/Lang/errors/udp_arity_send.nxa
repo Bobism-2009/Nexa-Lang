@@ -1,0 +1,6 @@
+// udp.send carries a destination that tcp.send does not, so a tcp-shaped call
+// is caught here with the full shape spelled out.
+#include <std/network>
+fn main() {
+    udp.send(1, "hello");
+}

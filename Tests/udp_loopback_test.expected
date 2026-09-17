@@ -1,0 +1,13 @@
+open 1
+port 1
+ping 4
+pong [PONG]
+from [127.0.0.1]
+sender 1
+sent 40000
+acked [GOT 40000]
+blob 7
+acked [GOT 7]
+empty 0
+acked [GOT 0]
+close 1

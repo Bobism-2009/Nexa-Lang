@@ -1,5 +1,5 @@
 // An unknown http verb is named back to the user, with the ones that do exist.
-#include <std/http>
+#include <std/network>
 fn main() {
     http.fetch("http://example.com/");
 }

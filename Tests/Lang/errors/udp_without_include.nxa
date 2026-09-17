@@ -1,0 +1,7 @@
+// udp.* without the module is the include's fault, not the call's, and the
+// diagnostic says which line to put it above rather than failing in clang.
+#include <std/io>
+fn main() {
+    let s = udp.open(0);
+    io.println(s);
+}

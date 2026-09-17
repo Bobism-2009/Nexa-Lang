@@ -1,5 +1,5 @@
 // accept takes the server and nothing else.
-#include <std/http>
+#include <std/network>
 fn main() {
     let s = http.localhost();
     let r = http.accept(s.value(), 1);

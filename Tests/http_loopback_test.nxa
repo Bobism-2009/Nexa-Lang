@@ -1,9 +1,9 @@
-// std/http's client against Tests/http_server.nxa on loopback (BOB-35; the
+// http.*'s client against Tests/http_server.nxa on loopback (BOB-35; the
 // server was a Python script until BOB-36 gave the language its own).
 // argv[1] is the base URL. Driven by the loopback layer of
 // Tests/http_cases.sh, which starts the server and diffs this against
 // http_loopback_test.expected.
-#include <std/http>
+#include <std/network>
 #include <std/io>
 
 fn main(args: []string) {

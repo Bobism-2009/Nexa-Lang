@@ -1,0 +1,12 @@
+tcp 1
+udp 1
+ports 11
+clash 0
+dial 1
+sent 6
+back [tcp:hello]
+close 1
+sent 5
+back [udp:hello]
+close 1
+shut 11

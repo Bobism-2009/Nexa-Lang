@@ -1,11 +1,11 @@
-// std/http's server half against std/http's client half, in one program (BOB-36).
+// http.*'s server half against http.*'s client half, in one program (BOB-36).
 //
 // Both ends are Nexa here: http.localhost() binds a loopback port, a worker
 // thread answers four requests on it, and the client verbs from BOB-35 are what
 // ask the questions. Nothing outside the process is involved -- no interpreter,
 // no helper, no second binary -- which is the whole claim this test exists to
 // check. Driven by the server layer of Tests/http_cases.sh.
-#include <std/http>
+#include <std/network>
 #include <std/io>
 #include <std/thread>
 

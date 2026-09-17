@@ -1,0 +1,9 @@
+// std/http is retired: the three protocols share one include now. The
+// diagnostic names the module that replaced it, so an older program is one
+// line away from building again rather than a search away.
+#include <std/http>
+#include <std/io>
+fn main() {
+    let r = http.get("https://example.com/");
+    io.println(r.ok());
+}

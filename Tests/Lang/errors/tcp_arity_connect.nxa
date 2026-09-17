@@ -1,5 +1,5 @@
 // connect needs a port. The missing argument is NexaC's complaint, not clang's.
-#include <std/tcp>
+#include <std/network>
 fn main() {
     let c = tcp.connect("example.com");
 }

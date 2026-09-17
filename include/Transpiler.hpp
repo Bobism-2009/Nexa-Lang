@@ -278,6 +278,10 @@ public:
                     if (n.value == "connect") cppUsage.tcpConnect = true;
                     else if (n.value == "listen" || n.value == "accept") cppUsage.tcpListen = true;
                     break;
+                case AstNode::Type::UdpCall:
+                    cppUsage.udp = true;
+                    if (n.value == "sender" || n.value == "sender_port") cppUsage.udpSender = true;
+                    break;
                 case AstNode::Type::GfxCall:
                     cppUsage.gfx = true;
                     noteGfxUsage(n, cppUsage);
@@ -2354,6 +2358,10 @@ private:
                 // A handle, a byte count or a 1/0 -- all int; only the bytes
                 // tcp.recv read are a string.
                 return e.value == "recv" ? "string" : "int";
+            case AstNode::Type::UdpCall:
+                // The same, plus udp.sender: an address is text, the port
+                // beside it is not.
+                return (e.value == "recv" || e.value == "sender") ? "string" : "int";
             case AstNode::Type::ResultMake:
                 if (e.value == "err") return nexaMakeResultType("void");
                 if (e.children.empty()) return nexaMakeResultType("void");
@@ -4007,6 +4015,8 @@ private:
         if (e.type == AstNode::Type::HttpCall) return !httpVerbReturnsInt(e.value);
         // tcp.recv hands back the bytes it read; every other tcp.* call is an int.
         if (e.type == AstNode::Type::TcpCall) return e.value == "recv";
+        // udp.recv the same, and udp.sender is the address the bytes came from.
+        if (e.type == AstNode::Type::UdpCall) return e.value == "recv" || e.value == "sender";
         if (e.type == AstNode::Type::JsonCall && e.value == "stringify") return true;
         if (e.type == AstNode::Type::ExprCast && e.value == "string") return true;
         if (e.type == AstNode::Type::FileCall) {
@@ -4083,6 +4093,8 @@ private:
         if (e.type == AstNode::Type::HttpCall) return !httpVerbReturnsInt(e.value);
         // tcp.recv hands back the bytes it read; every other tcp.* call is an int.
         if (e.type == AstNode::Type::TcpCall) return e.value == "recv";
+        // udp.recv the same, and udp.sender is the address the bytes came from.
+        if (e.type == AstNode::Type::UdpCall) return e.value == "recv" || e.value == "sender";
         if (e.type == AstNode::Type::JsonCall && e.value == "stringify") return true;
         if (e.type == AstNode::Type::FileCall) {
             const std::string& m = e.value;
@@ -4649,8 +4661,8 @@ private:
                 // http.reply(...) and http.close(...) are written for what they
                 // do, not for the 1/0 they hand back.
                 out << indent << "(void)(" << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ");\n";
-            } else if (child.type == AstNode::Type::TcpCall) {
-                // Same as http: tcp.send(...) and tcp.close(...) are written for
+            } else if (child.type == AstNode::Type::TcpCall || child.type == AstNode::Type::UdpCall) {
+                // Same as http: tcp.send(...) and udp.close(...) are written for
                 // what they do, not for the count or the 1/0 they hand back.
                 out << indent << "(void)(" << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ");\n";
             } else if (child.type == AstNode::Type::RandomSeed) {
@@ -5612,6 +5624,14 @@ private:
                 std::string call = emitExpr(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 return c.value == "recv" ? "!(" + call + ").empty()" : call;
             }
+            // udp.* is the same int-or-bytes split: a handle or a count is true
+            // when it is not 0, and the two calls that hand back text are true
+            // when there is text.
+            case AstNode::Type::UdpCall: {
+                std::string call = emitExpr(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                return (c.value == "recv" || c.value == "sender")
+                    ? "!(" + call + ").empty()" : call;
+            }
             case AstNode::Type::HttpCall:
             case AstNode::Type::ResultMake:
                 throw std::runtime_error("Result is not a condition; use .ok()");
@@ -6095,6 +6115,27 @@ private:
                 if (fn == "port") return "__nexa_tcp_port(" + arg(0) + ")";
                 if (fn == "close") return "__nexa_tcp_close(" + arg(0) + ")";
                 throw std::runtime_error("Internal: unknown tcp method '" + fn + "'");
+            }
+            case AstNode::Type::UdpCall: {
+                const std::string& fn = e.value;
+                auto arg = [&](size_t i) {
+                    return emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                };
+                if (fn == "open") return "__nexa_udp_open(" + arg(0) + ")";
+                if (fn == "port") return "__nexa_udp_port(" + arg(0) + ")";
+                if (fn == "send") {
+                    return "__nexa_udp_send(" + arg(0) + ", " + arg(1) + ", " + arg(2) + ", " + arg(3) + ")";
+                }
+                // udp.recv(h) with no cap: 64K, which is past the largest
+                // datagram IPv4 can carry, so nothing arrives truncated.
+                if (fn == "recv") {
+                    return "__nexa_udp_recv(" + arg(0) + ", " +
+                        (e.children.size() > 1 ? arg(1) : std::string("65536")) + ")";
+                }
+                if (fn == "sender") return "__nexa_udp_sender(" + arg(0) + ")";
+                if (fn == "sender_port") return "__nexa_udp_sender_port(" + arg(0) + ")";
+                if (fn == "close") return "__nexa_udp_close(" + arg(0) + ")";
+                throw std::runtime_error("Internal: unknown udp method '" + fn + "'");
             }
             case AstNode::Type::ResultMake: {
                 if (e.value == "err") {

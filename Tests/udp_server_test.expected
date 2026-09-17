@@ -1,0 +1,12 @@
+open 1
+port 1
+client 1
+same 0
+sent 3
+back [echo:one]
+from [127.0.0.1]
+sender 1
+sent 3
+back [echo:two]
+shut 1
+close 1

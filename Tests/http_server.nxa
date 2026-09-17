@@ -4,13 +4,13 @@
 // client has to get right -- chunked framing, a two-hop redirect with a
 // relative Location, a body longer than its own Content-Length, a 404, and an
 // echo of the method, body and a couple of request headers -- but now the
-// server under the client's test is std/http's own, on the same OS sockets.
+// server under the client's test is http.*'s own, on the same OS sockets.
 //
 // http.localhost() binds 127.0.0.1 on a free port; argv[1] is where the port
 // is written so the caller does not have to guess one. One request per
 // connection: accept reads it, reply or raw answers it and closes.
 #include <std/file>
-#include <std/http>
+#include <std/network>
 #include <std/io>
 
 // The value of a request header, or "-" when the client did not send it.

@@ -1199,7 +1199,7 @@ static std::string nexaBuildCompileCmd(
     bool noConsole,
     bool linkUser32,
     bool linkHttp,
-    bool linkTcp,
+    bool linkSockets,
     bool linkGfx,
     bool noExceptions,
     bool noRtti,
@@ -1327,10 +1327,10 @@ static std::string nexaBuildCompileCmd(
 #ifndef _WIN32
     // Cross-built Windows targets (mingw). The import libraries the host-Windows
     // branch above spells out are not linked by default here either, and the
-    // Windows slice of std/http and std/tcp calls straight into them.
+    // Windows slice of std/network calls straight into them.
     if (buildWin) {
         if (linkHttp) cmd += " -lwinhttp";
-        if (linkHttp || linkTcp) cmd += " -lws2_32";
+        if (linkHttp || linkSockets) cmd += " -lws2_32";
     }
 #endif
 #ifdef _WIN32
@@ -1349,12 +1349,12 @@ static std::string nexaBuildCompileCmd(
         cmd += " -lwinmm";
     }
     if (linkHttp) {
-        // std/http uses WinHTTP to call out (OS API; HTTPS via Schannel) and
+        // http.* uses WinHTTP to call out (OS API; HTTPS via Schannel) and
         // Winsock to listen (http.localhost).
         cmd += " -lwinhttp";
     }
-    if (linkHttp || linkTcp) {
-        // Winsock: http.localhost's listening socket, and all of std/tcp.
+    if (linkHttp || linkSockets) {
+        // Winsock: http.localhost's listening socket, and all of tcp.* / udp.*.
         cmd += " -lws2_32";
     }
 #elif defined(__APPLE__)
@@ -1368,7 +1368,7 @@ static std::string nexaBuildCompileCmd(
         cmd += " -framework AudioToolbox";
     }
 #else
-    // std/http HTTPS dlopens system libssl and std/gfx audio dlopens libasound;
+    // http.* HTTPS dlopens system libssl and std/gfx audio dlopens libasound;
     // dlopen lives in libdl (a stub in glibc 2.34 and later, still needed by
     // older ones and by musl).
     if (linkHttp || linkGfx) {
@@ -2198,6 +2198,16 @@ int main(int argc, char* argv[]) {
         if (buildWasm && wasmTool.kind == WasmKind::Emscripten && nexaHasExt(exePath, ".wasm")) {
             wasmOut = std::filesystem::path(exePath).replace_extension(".js").string();
         }
+        // A page has no datagram socket -- there is no browser API that opens
+        // one, so unlike http.* there is nothing to route udp.* through. Say so
+        // here, where the program can still be changed, rather than handing
+        // back a .wasm whose every send silently returns 0.
+        if (buildWasm && modules.hasUdp() && usage.udp) {
+            std::remove(cppPath.c_str());
+            std::cerr << "[Nexa] Error: udp.* is not available on WASM (a page has no datagram socket).\n";
+            std::cerr << "[Nexa] Tip: http.* works on wasm through the browser's fetch; tcp.* and udp.* do not.\n";
+            return 1;
+        }
         if (buildWasm && wasmTool.kind == WasmKind::Wasi) {
             if (modules.hasHttp() && usage.http) {
                 std::remove(cppPath.c_str());
@@ -2322,8 +2332,13 @@ int main(int argc, char* argv[]) {
             std::cout.flush();
         }
         const bool linkUser32 = modules.hasOs() || modules.hasInlineCpp();
-        const bool linkHttp = modules.hasHttp();
-        const bool linkTcp = modules.hasTcp() && usage.tcp;
+        // std/network is one include for three protocols, so what a program
+        // links has to follow what it calls rather than what it included: a
+        // program that only speaks udp has no business pulling in WinHTTP or
+        // CFNetwork. The runtime for a protocol nobody calls is not emitted
+        // either, so there was never anything for those libraries to satisfy.
+        const bool linkHttp = modules.hasHttp() && usage.http;
+        const bool linkSockets = (modules.hasTcp() && usage.tcp) || (modules.hasUdp() && usage.udp);
         const bool linkGfx = modules.hasGfx() && usage.gfx;
 
         if (buildWasm) {
@@ -2405,7 +2420,7 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 
-        std::string cmd = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkTcp, linkGfx, noExceptions, noRtti, debugBuild, linkInputs);
+        std::string cmd = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, noExceptions, noRtti, debugBuild, linkInputs);
         int ret = std::system(cmd.c_str());
 
         if (ret != 0 && sanitizeThisBuild && sanitizer != NexaSanitizer::None) {
@@ -2417,7 +2432,7 @@ int main(int argc, char* argv[]) {
             std::cout.flush();
             sanitizer = NexaSanitizer::None;
             opt = "-g -O0";
-            std::string cmdNoSan = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkTcp, linkGfx, noExceptions, noRtti, debugBuild, linkInputs);
+            std::string cmdNoSan = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, noExceptions, noRtti, debugBuild, linkInputs);
             ret = std::system(cmdNoSan.c_str());
         }
 
@@ -2447,7 +2462,7 @@ int main(int argc, char* argv[]) {
                 cxx = fallback;
                 targetFlags = "";
                 std::cout.flush();
-                std::string cmd2 = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkTcp, linkGfx, noExceptions, noRtti, debugBuild, linkInputs);
+                std::string cmd2 = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, noExceptions, noRtti, debugBuild, linkInputs);
                 ret = std::system(cmd2.c_str());
             }
         }

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Non-Nexa peer for the loopback layer of Tests/tcp_cases.sh (BOB-44).
 
-Tests/tcp_server_test.nxa already puts std/tcp on both ends of a connection,
+Tests/tcp_server_test.nxa already puts tcp.* on both ends of a connection,
 which proves the two halves agree with each other. This script is here to
 prove they agree with someone else: it is plain Python sockets, so a Nexa
 program talking to it is talking real TCP and not to its own conventions.
@@ -27,7 +27,7 @@ The exchange, in order:
 Every answer is asked for, so nothing the peer writes can arrive alongside
 anything else it writes. That is not how a real protocol frames itself -- it is
 how this test stays race-free, with one send in flight at a time, so a failure
-here is std/tcp moving and never the scheduler.
+here is tcp.* moving and never the scheduler.
 """
 
 import socket

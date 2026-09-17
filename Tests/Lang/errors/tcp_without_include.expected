@@ -1,2 +1,2 @@
-tcp.* requires #include <std/tcp>
+tcp.* requires #include <std/network>
 at line 5

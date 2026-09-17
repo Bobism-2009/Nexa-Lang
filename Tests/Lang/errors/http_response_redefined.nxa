@@ -1,5 +1,5 @@
-// HttpResponse is std/http's type; a program cannot also define one.
-#include <std/http>
+// HttpResponse is http.*'s type; a program cannot also define one.
+#include <std/network>
 #include <std/io>
 
 struct HttpResponse {

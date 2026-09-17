@@ -1,0 +1,6 @@
+// std/tcp is retired the same way std/http is, and says so the same way.
+#include <std/tcp>
+#include <std/io>
+fn main() {
+    io.println(tcp.connect("example.com", 7));
+}

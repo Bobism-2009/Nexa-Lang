@@ -26,7 +26,7 @@ Current compiler version string: **0.1.13** (`NexaC --version`).
 
 The generated C++ uses the standard library (`std::string`, `std::vector`, threads, chrono, etc.) and platform APIs where modules need them (e.g. `std/os` on Windows).
 
-**`--wasm`** needs [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) (`em++` on `PATH`, or `EMSDK` set). If it is missing, NexaC asks to install Emscripten into `~/emsdk` and will also install missing Git/Python (and Node for `--run`). An existing `~/emsdk` or winget/LLVM/MinGW install is reused — NexaC does not upgrade tools that are already present. WASI-SDK (`WASI_SDK_PATH`) is a fallback for programs that do not use `std/http` or `std/thread`. Override the compiler with `NEXA_WASM_CXX`. Run with `NexaC file.nxa --wasm --run` (`node` for Emscripten, `wasmtime`/`wasmer` for WASI).
+**`--wasm`** needs [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) (`em++` on `PATH`, or `EMSDK` set). If it is missing, NexaC asks to install Emscripten into `~/emsdk` and will also install missing Git/Python (and Node for `--run`). An existing `~/emsdk` or winget/LLVM/MinGW install is reused — NexaC does not upgrade tools that are already present. WASI-SDK (`WASI_SDK_PATH`) is a fallback for programs that do not use `std/network`'s http.* or `std/thread`. (`udp.*` is not available on wasm at all.) Override the compiler with `NEXA_WASM_CXX`. Run with `NexaC file.nxa --wasm --run` (`node` for Emscripten, `wasmtime`/`wasmer` for WASI).
 
 ---
 

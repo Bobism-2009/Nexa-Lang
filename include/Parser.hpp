@@ -31,7 +31,7 @@ struct AstNode {
                       DllLoad, DllCall,
                       FileRead, FileWrite, FileAppend, FileExists, FileMkdir, FileCall,
                       RandomInt, RandomSeed,
-                      MathCall, CryptoCall, HttpCall, TcpCall, GfxCall, JsonCall,
+                      MathCall, CryptoCall, HttpCall, TcpCall, UdpCall, GfxCall, JsonCall,
                       ResultMake,
                       StrMethod,
                       TimeSleep, TimeSeconds, TimeMilliseconds, TimeNowMs,
@@ -371,6 +371,8 @@ private:
         // tcp.recv hands back the bytes it read; every other tcp.* call is an
         // int -- a handle, a byte count, or a 1/0.
         if (e.type == AstNode::Type::TcpCall) return e.value == "recv";
+        // udp.recv is the same, and udp.sender is the address it came from.
+        if (e.type == AstNode::Type::UdpCall) return e.value == "recv" || e.value == "sender";
         if (e.type == AstNode::Type::FileCall) {
             const std::string& m = e.value;
             return m == "cwd" || m == "abspath" || m == "join" || m == "dirname" || m == "basename" || m == "extension";
@@ -941,7 +943,7 @@ private:
     static const std::vector<std::string>& knownStdModules() {
         static const std::vector<std::string> mods = {
             "std/io", "std/os", "std/file", "std/dll", "std/random", "std/math",
-            "std/crypto", "std/http", "std/tcp", "std/json", "std/time", "std/thread",
+            "std/crypto", "std/network", "std/json", "std/time", "std/thread",
             "std/gfx", "std/inline",
         };
         return mods;
@@ -979,6 +981,14 @@ private:
                 }
                 if (path == "std/wait") {
                     throw std::runtime_error("std/wait has been removed; use #include <std/time>");
+                }
+                // The wire is one module now. http.*, tcp.* and udp.* all come
+                // from std/network and keep their prefixes, so the only thing
+                // an old program has to change is the include line -- and it is
+                // told so here rather than failing at the first http.get.
+                if (path == "std/http" || path == "std/tcp") {
+                    throw std::runtime_error(path + " moved into std/network; use #include <std/network>"
+                                             " at line " + std::to_string(t.line));
                 }
                 // A misspelled std module used to be accepted silently; the program then
                 // failed later with "json.* requires #include <std/json>" pointing at code
@@ -2749,6 +2759,10 @@ private:
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
             return applyIndexAndDotPostfix(parseTcpCall());
         }
+        if (peek().type == TokenType::Identifier && peek().value == "udp" && pos_ + 2 < tokens_.size() &&
+            tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
+            return applyIndexAndDotPostfix(parseUdpCall());
+        }
         if (peek().type == TokenType::Identifier && peek().value == "json" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
             return applyIndexAndDotPostfix(parseJsonCall());
@@ -3940,7 +3954,7 @@ private:
     AstNode parseHttpCall() {
         size_t line = peek().line;
         if (!modules_.hasHttp()) {
-            throw std::runtime_error("http.* requires #include <std/http> at line " + std::to_string(line));
+            throw std::runtime_error("http.* requires #include <std/network> at line " + std::to_string(line));
         }
         if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "http") {
             throw std::runtime_error("Expected 'http' at line " + std::to_string(line));
@@ -4005,7 +4019,7 @@ private:
     AstNode parseTcpCall() {
         size_t line = peek().line;
         if (!modules_.hasTcp()) {
-            throw std::runtime_error("tcp.* requires #include <std/tcp> at line " + std::to_string(line));
+            throw std::runtime_error("tcp.* requires #include <std/network> at line " + std::to_string(line));
         }
         if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "tcp") {
             throw std::runtime_error("Expected 'tcp' at line " + std::to_string(line));
@@ -4052,6 +4066,61 @@ private:
         }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' after tcp." + method + "(" + shape + tail +
+                ") at line " + std::to_string(peek().line));
+        }
+        return node;
+    }
+
+    AstNode parseUdpCall() {
+        size_t line = peek().line;
+        if (!modules_.hasUdp()) {
+            throw std::runtime_error("udp.* requires #include <std/network> at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "udp") {
+            throw std::runtime_error("Expected 'udp' at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        const Token& methodTok = peek();
+        if (methodTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected udp method at line " + std::to_string(methodTok.line));
+        }
+        std::string method = methodTok.value;
+        advance();
+        // The required arguments, then whether one more is allowed after them:
+        // the byte cap on udp.recv, which defaults when it is left off, exactly
+        // as it does on tcp.recv.
+        int fixed;
+        bool optTail = false;
+        std::string shape, tail;
+        if (method == "open") { fixed = 1; shape = "port"; }
+        else if (method == "send") { fixed = 4; shape = "handle, host, port, data"; }
+        else if (method == "recv") { fixed = 1; optTail = true; shape = "handle"; tail = "[, max]"; }
+        else if (method == "port" || method == "close" ||
+                 method == "sender" || method == "sender_port") { fixed = 1; shape = "handle"; }
+        else {
+            throw std::runtime_error("Unknown udp function 'udp." + method +
+                "' at line " + std::to_string(methodTok.line) +
+                " (use open, port, send, recv, sender, sender_port, close)");
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after udp." + method + " at line " + std::to_string(peek().line));
+        }
+        AstNode node{AstNode::Type::UdpCall, method, {}};
+        for (int i = 0; i < fixed; i++) {
+            if (i > 0 && !match(TokenType::Comma)) {
+                throw std::runtime_error("Expected ',' in udp." + method + "(" + shape + ") at line " +
+                    std::to_string(peek().line));
+            }
+            node.children.push_back(parseExpression());
+        }
+        if (optTail && peek().type == TokenType::Comma) {
+            advance();
+            node.children.push_back(parseExpression());
+        }
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' after udp." + method + "(" + shape + tail +
                 ") at line " + std::to_string(peek().line));
         }
         return node;

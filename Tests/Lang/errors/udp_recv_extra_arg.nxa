@@ -1,0 +1,6 @@
+// udp.recv takes a handle and at most a byte cap; a third argument is a
+// NexaC complaint, not a clang one.
+#include <std/network>
+fn main() {
+    let s = udp.recv(1, 8, 9);
+}

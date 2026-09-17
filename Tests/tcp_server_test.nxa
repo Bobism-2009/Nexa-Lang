@@ -1,4 +1,4 @@
-// std/tcp's listening half against std/tcp's dialling half, in one program
+// tcp.*'s listening half against tcp.*'s dialling half, in one program
 // (BOB-44).
 //
 // Both ends are Nexa here and nothing outside the process is involved: one
@@ -6,7 +6,7 @@
 // the client that makes them. Tests/tcp_loopback_test.nxa is the other side of
 // this coin -- the same module against a peer that is not Nexa. Driven by the
 // server layer of Tests/tcp_cases.sh.
-#include <std/tcp>
+#include <std/network>
 #include <std/io>
 #include <std/thread>
 

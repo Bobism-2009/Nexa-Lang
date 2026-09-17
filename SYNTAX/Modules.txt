@@ -161,7 +161,18 @@ Nexa Standard Modules
   Use: let h = crypto.sha256("hello");
   Use: let t = crypto.hmac_sha256("key", "message");
 
-#include <std/http>
+#include <std/network>
+  One include for the whole wire: http.*, tcp.* and udp.*. Nothing was renamed
+  to put them together -- the prefix on the call is what says which protocol a
+  line is speaking, so http.get, tcp.connect and udp.send read exactly as they
+  always did.
+  A program carries only the protocols it calls. Including std/network to send
+  a datagram emits no HTTP transport and no TCP, and links neither WinHTTP nor
+  CFNetwork: the include is the whole wire, the calls are what costs anything.
+  #include <std/http> and #include <std/tcp> are retired. NexaC says so by
+  name, so an older program is one line away from building again.
+
+  THE HTTP HALF
   OS APIs only (no curl/OpenSSL bundled). Two halves: the client verbs call
   out, http.localhost() and the calls around it listen.
   Windows: WinHTTP to call out (HTTP + HTTPS via Schannel), Winsock to listen
@@ -199,7 +210,7 @@ Nexa Standard Modules
         body:    string;
         headers: []string;    // raw lines, "Content-Type: text/html"
     }
-  HttpResponse is std/http's own type -- a program that includes the module
+  HttpResponse is http.*'s own type -- a program that includes std/network
   cannot declare another one by that name.
   Use: let r = http.request("DELETE", url, "", ["X-Token: " + t]);
        if (!r.ok()) { io.println(r.error()); return 1; }
@@ -249,8 +260,8 @@ Nexa Standard Modules
   One request per connection: reply and raw both answer and close, so the
   request is spent afterwards. Use it again and the program is wrong the way
   any use-after-close is.
-  HttpServer and HttpRequest are std/http's own types, like HttpResponse -- a
-  program that includes the module cannot declare another one by those names.
+  HttpServer and HttpRequest are http.*'s own types, like HttpResponse -- a
+  program that includes std/network cannot declare another by those names.
   Not available on wasm: a page cannot listen, so the server calls there fail
   with "HTTP server is not available on wasm" rather than pretending to bind.
   Use: let s = http.localhost();
@@ -264,9 +275,9 @@ Nexa Standard Modules
   std/thread runs the loop beside the rest of a program:
        let t = thread.spawn(serve(srv));
 
-#include <std/tcp>
-  Raw TCP, both ends, on the OS's own sockets. std/http is a protocol; this is
-  the wire under it -- reach for std/tcp to speak your own game protocol, a
+  THE TCP HALF
+  Raw TCP, both ends, on the OS's own sockets. http.* is a protocol; this is
+  the wire under it -- reach for tcp.* to speak your own game protocol, a
   line-based control channel, or someone else's binary format.
   Windows: Winsock    macOS/Linux: POSIX sockets
   Everything here is an int handle: the socket as the OS numbers it, with 0
@@ -315,6 +326,59 @@ Nexa Standard Modules
   returns 0 (or "") rather than pretending to have reached the network.
   std/thread runs an accept loop beside the rest of a program, the same way it
   does for http.localhost.
+
+  THE UDP HALF
+  Datagrams, on the same OS sockets tcp.* uses. There is no dial and no accept
+  here: a program opens a port, and then every send says where it is going and
+  every read says where it came from. Reach for udp.* when a lost packet is
+  cheaper than a late one -- game state, discovery on a LAN, telemetry.
+  Windows: Winsock    macOS/Linux: POSIX sockets    IPv4
+  Int handles, exactly as in tcp.*: 0 is "no socket", and there is no struct
+  and no Result.
+  udp.open(port)                  - Bind a port; returns a handle, 0 on failure
+  udp.open(0)                     - Same, with the OS picking a free port
+  udp.port(handle)                - The port this socket is on (0 on failure)
+  udp.send(handle, host, port, data)
+                                  - Send one datagram; returns the bytes sent
+  udp.recv(handle)                - Read one datagram, up to 64K; returns a string
+  udp.recv(handle, max)           - Same, capped at max bytes
+  udp.sender(handle)              - Address the last packet read came from
+  udp.sender_port(handle)         - Port it came from
+  udp.close(handle)               - Close it; returns 1
+  Use: let s = udp.open(9999);
+       while (true) {
+           let msg = udp.recv(s);
+           udp.send(s, udp.sender(s), udp.sender_port(s), "got " + msg);
+       }
+  Use: let c = udp.open(0);
+       udp.send(c, "127.0.0.1", 9999, "hello");
+       io.println(udp.recv(c));
+
+  udp.open binds every interface (0.0.0.0), like tcp.listen. There is nothing
+  to listen for and nothing to accept -- the one socket both sends and reads,
+  and udp.open(0) plus udp.port is how a program that only sends finds out
+  which port its replies will come back to.
+  udp.recv is one datagram, whole. UDP is not a stream: what was sent as one
+  packet arrives as one packet, so unlike tcp.recv there is no reading until a
+  message is complete. The bytes are binary-safe the way os.load is. "" is a
+  failed read or an empty datagram, which are the same thing to a program.
+  udp.send is all-or-nothing -- a datagram has no short write -- so its count
+  is the whole string or 0. It resolves the host on every call, which is what
+  lets a server answer a different peer each time round its loop. Sending ""
+  sends a real empty datagram and answers 0, which reads the same as a failed
+  send; a program that needs to tell them apart sends a byte.
+  udp.sender/udp.sender_port answer for the last packet THIS THREAD read on
+  that handle, and are "" and 0 before the first read. A std/thread program
+  with a reader per worker gets a separate answer per worker, which is the
+  useful one: the thread that read the packet is the thread that replies.
+  A program that never asks who sent a packet carries no bookkeeping for it.
+  Delivery is not promised. A datagram can be dropped, duplicated, or arrive
+  out of order, and nothing here will tell you -- that is UDP, and a program
+  that cannot live with it wants tcp.*.
+  Not available on wasm: a page has no datagram socket and no browser API
+  opens one, so NexaC refuses a --wasm build that calls udp.* rather than
+  handing back a program whose every send quietly fails. (http.* still works
+  there, through the browser's own fetch.)
 
 #include <std/json>
   Nested JSON objects and arrays (not a flat string map).

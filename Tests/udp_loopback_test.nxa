@@ -1,0 +1,70 @@
+// udp.* against a peer that is not Nexa (BOB-45).
+//
+// Tests/udp_peer.py is plain Python sockets on the other end, so what this
+// test checks is that a Nexa program speaks UDP rather than speaking to its
+// own conventions. Driven by the loopback layer of Tests/network_cases.sh,
+// which starts the peer and passes its port as argv[1].
+//
+// The things a datagram socket has to get right, in order: a packet out and a
+// packet back, a packet bigger than one MTU arriving whole, bytes that are
+// bytes, an empty packet that is still a packet, and -- the part that has no
+// counterpart in tcp.* -- knowing who a packet came from.
+#include <std/network>
+#include <std/io>
+
+// A handle is an int, and 0 is the one value that means "no socket" -- so
+// "did it work" is the handle itself, not a field on a struct.
+fn udp_ok(h: int): int {
+    if (h) {
+        return 1;
+    }
+    return 0;
+}
+
+fn main(args: []string) {
+    let port: int = io.to_int(args[1]);
+
+    // Port 0: the OS picks, and udp.port says which. There is no connect here
+    // and nothing to accept -- this one socket is both ends of everything
+    // below.
+    let s: int = udp.open(0);
+    io.println("open " + udp_ok(s));
+    let mine: int = udp.port(s);
+    io.println("port " + udp_ok(mine));
+
+    // 1. A packet out, a packet back.
+    io.println("ping " + udp.send(s, "127.0.0.1", port, "PING"));
+    io.println("pong [" + udp.recv(s) + "]");
+
+    // The reply came from the peer, and udp.sender says so -- an address and a
+    // port that were never written down anywhere in this program.
+    io.println("from [" + udp.sender(s) + "]");
+    let src: int = udp.sender_port(s);
+    let matched: int = 0;
+    if (src == port) {
+        matched = 1;
+    }
+    io.println("sender " + matched);
+
+    // 2. A payload past any MTU. UDP is not a stream, so this is one datagram
+    // and the peer's count is the proof it arrived as one -- a torn packet
+    // would come back as a smaller number, not as two packets.
+    let payload: string = "0123456789".repeat(4000);   // 40000 bytes
+    io.println("sent " + udp.send(s, "127.0.0.1", port, payload));
+    io.println("acked [" + udp.recv(s) + "]");
+
+    // 3. Seven bytes with a NUL at index 3. A program that treated the packet
+    // as C text would send three; the peer counting seven is the proof it did
+    // not, the way os.load is binary-safe.
+    io.println("blob " + udp.send(s, "127.0.0.1", port, "bin\0ary"));
+    io.println("acked [" + udp.recv(s) + "]");
+
+    // 4. An empty datagram is a datagram. Nothing on this side can tell it
+    // from a failed read -- both are "" -- so the peer is the one that says it
+    // arrived at all.
+    io.println("empty " + udp.send(s, "127.0.0.1", port, ""));
+    io.println("acked [" + udp.recv(s) + "]");
+
+    io.println("close " + udp.close(s));
+    return 0;
+}

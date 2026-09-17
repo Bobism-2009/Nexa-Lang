@@ -1,5 +1,5 @@
 #include <std/io>
-#include <std/http>
+#include <std/network>
 
 fn divide(a: int, b: int): Result[int] {
     if (b == 0) {

@@ -68,10 +68,10 @@
     "body": ["#include <std/crypto>"],
     "description": "Crypto module"
   },
-  "Nexa: include std/http": {
-    "prefix": "inchttp",
-    "body": ["#include <std/http>"],
-    "description": "HTTP module"
+  "Nexa: include std/network": {
+    "prefix": "incnetwork",
+    "body": ["#include <std/network>"],
+    "description": "Network module: http.*, tcp.* and udp.*"
   },
   "Nexa: include std/json": {
     "prefix": "incjson",

@@ -1,7 +1,7 @@
 #!/bin/sh
-# std/http cover (BOB-35).
+# std/network http.* cover (BOB-35).
 #
-# std/http reaches the network, and the four backends it is built on -- WinHTTP,
+# http.* reaches the network, and the four backends it is built on -- WinHTTP,
 # CFNetwork, Emscripten FETCH, POSIX sockets -- are each reachable from exactly
 # one kind of machine. The cover is therefore layered, cheapest and most
 # portable first, so every machine runs as much of it as it can:
@@ -78,7 +78,7 @@ transpile() {
     name=$1
     body=$2
     shift 2
-    printf '#include <std/http>\n#include <std/io>\nfn main() {\n%s\n}\n' "$body" > "$WORK/$name.nxa"
+    printf '#include <std/network>\n#include <std/io>\nfn main() {\n%s\n}\n' "$body" > "$WORK/$name.nxa"
     if ! "$NEXAC" "$WORK/$name.nxa" "$@" --source "$WORK/$name.cpp" \
             > "$WORK/$name.log" 2>&1; then
         echo "FAIL $name: NexaC could not transpile"

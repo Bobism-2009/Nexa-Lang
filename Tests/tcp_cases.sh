@@ -1,7 +1,7 @@
 #!/bin/sh
-# std/tcp cover (BOB-44).
+# std/network tcp.* cover (BOB-44).
 #
-# std/tcp is one implementation over two socket APIs -- Winsock on Windows,
+# tcp.* is one implementation over two socket APIs -- Winsock on Windows,
 # POSIX everywhere else -- and only one of them is reachable from any given
 # machine. The cover is therefore layered, cheapest and most portable first, so
 # every machine runs as much of it as it can:
@@ -80,7 +80,7 @@ transpile() {
     name=$1
     body=$2
     shift 2
-    printf '#include <std/tcp>\n#include <std/io>\nfn main() {\n%s\n}\n' "$body" > "$WORK/$name.nxa"
+    printf '#include <std/network>\n#include <std/io>\nfn main() {\n%s\n}\n' "$body" > "$WORK/$name.nxa"
     if ! "$NEXAC" "$WORK/$name.nxa" "$@" --source "$WORK/$name.cpp" \
             > "$WORK/$name.log" 2>&1; then
         echo "FAIL $name: NexaC could not transpile"
@@ -199,7 +199,7 @@ carries "both_carries_both" \
     let a = tcp.accept(l);
     io.println(tcp.send(c, "x") + len(tcp.recv(a)));' yes yes
 
-# A program that includes std/tcp and never calls it pays nothing at all.
+# A program that includes std/network and never calls tcp.* pays nothing at all.
 if transpile "include_without_calls" '    io.println("hi");'; then
     if grep -q '__nexa_tcp_\|socket(' "$WORK/include_without_calls.cpp"; then
         echo "FAIL include_without_calls: the runtime was emitted anyway"
@@ -286,7 +286,7 @@ else
     fi
 
     # The wasm slice is pure C++ with no socket headers under it, so it
-    # type-checks anywhere -- no emsdk needed, unlike std/http's FETCH backend.
+    # type-checks anywhere -- no emsdk needed, unlike http.*'s FETCH backend.
     if "$CXX" -std=c++17 -Wall -Wextra -D__EMSCRIPTEN__ -c "$WORK/slice_wasm.cpp" \
             -o "$WORK/wasm.o" > "$WORK/wasm.cc.log" 2>&1 \
             && ! grep -q 'warning:' "$WORK/wasm.cc.log"; then
@@ -315,7 +315,7 @@ else
     fi
 fi
 
-# --- loopback: std/tcp against a peer that is not Nexa ----------------------
+# --- loopback: tcp.* against a peer that is not Nexa ----------------------
 
 echo "-- loopback: the dialling half, against plain Python sockets"
 

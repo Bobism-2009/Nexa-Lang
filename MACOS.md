@@ -39,8 +39,10 @@ Linux-only static runtime and GNU linker flags are not passed to Apple Clang.
 
 ## HTTP support
 
-`std/http` links against the macOS CoreFoundation and CFNetwork frameworks and
-supports HTTP and HTTPS through the operating system networking stack.
+`std/network`'s http.* links against the macOS CoreFoundation and CFNetwork
+frameworks and supports HTTP and HTTPS through the operating system networking
+stack. Its tcp.* and udp.* are POSIX sockets and link nothing extra; a program
+that calls only those does not pull the frameworks in.
 
 ## Graphics (`std/gfx`)
 

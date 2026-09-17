@@ -1,0 +1,77 @@
+// udp.* answering udp.*, in one program (BOB-45).
+//
+// Both ends are Nexa here and nothing outside the process is involved: one
+// program binds a port, answers two datagrams from a worker thread, and is the
+// client that sends them. Tests/udp_loopback_test.nxa is the other side of
+// this coin -- the same calls against a peer that is not Nexa. Driven by the
+// server layer of Tests/network_cases.sh.
+//
+// The worker is what udp.sender is really for: the reply goes back to whoever
+// wrote, and the thread that read the packet is the thread that answers it.
+#include <std/network>
+#include <std/io>
+#include <std/thread>
+
+// A handle is an int, and 0 is the one value that means "no socket" -- so
+// "did it work" is the handle itself, not a field on a struct.
+fn udp_ok(h: int): int {
+    if (h) {
+        return 1;
+    }
+    return 0;
+}
+
+// n datagrams, each answered to where it came from, then the thread is done.
+// Nothing here knows the client's address: udp.sender is how it finds out, and
+// it is the only way.
+fn serve(s: int, n: int) {
+    for (i, n) {
+        let msg: string = udp.recv(s);
+        udp.send(s, udp.sender(s), udp.sender_port(s), "echo:" + msg);
+    }
+}
+
+fn main() {
+    // Port 0 asks the OS for a free one; udp.port says which, so no test ever
+    // picks a port and hopes it was free.
+    let s: int = udp.open(0);
+    io.println("open " + udp_ok(s));
+    let p: int = udp.port(s);
+    io.println("port " + udp_ok(p));
+
+    // The client binds a port of its own. It has to: the server's reply has to
+    // land somewhere, and there is no connection for it to come back down.
+    let c: int = udp.open(0);
+    io.println("client " + udp_ok(c));
+    let cp: int = udp.port(c);
+    let same: int = 0;
+    if (cp == p) {
+        same = 1;
+    }
+    io.println("same " + same);
+
+    let t = thread.spawn(serve(s, 2));
+
+    io.println("sent " + udp.send(c, "127.0.0.1", p, "one"));
+    io.println("back [" + udp.recv(c) + "]");
+    // The answer came from the server socket, which is the port this program
+    // asked the OS for a moment ago.
+    io.println("from [" + udp.sender(c) + "]");
+    let src: int = udp.sender_port(c);
+    let matched: int = 0;
+    if (src == p) {
+        matched = 1;
+    }
+    io.println("sender " + matched);
+
+    // The socket is still open, so a second datagram is answered too. There is
+    // nothing to re-open and nothing to re-dial -- that is the whole shape of
+    // UDP next to tcp.accept.
+    io.println("sent " + udp.send(c, "127.0.0.1", p, "two"));
+    io.println("back [" + udp.recv(c) + "]");
+
+    thread.join(t);
+    io.println("shut " + udp.close(s));
+    io.println("close " + udp.close(c));
+    return 0;
+}

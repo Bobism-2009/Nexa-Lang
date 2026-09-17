@@ -1,5 +1,5 @@
 // request takes method, url and body before the optional headers.
-#include <std/http>
+#include <std/network>
 fn main() {
     http.request("GET", "http://example.com/");
 }

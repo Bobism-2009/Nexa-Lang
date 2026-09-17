@@ -1,4 +1,4 @@
-// std/tcp's client half against a peer that is not Nexa (BOB-44).
+// tcp.*'s client half against a peer that is not Nexa (BOB-44).
 //
 // Tests/tcp_peer.py is plain Python sockets on the other end, so what this
 // test checks is that a Nexa program speaks TCP rather than speaking to its
@@ -8,7 +8,7 @@
 // The three things a raw socket has to get right, in order: a line-at-a-time
 // text exchange, a payload too big for one send, and bytes that are bytes --
 // a NUL in the middle of a read is data, and a hang-up is an empty read.
-#include <std/tcp>
+#include <std/network>
 #include <std/io>
 
 // TCP is a stream: a send does not arrive as a send, so a program that wants a

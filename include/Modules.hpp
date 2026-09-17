@@ -10,7 +10,9 @@
 #include "JsonRuntime.hpp"
 #include "PlatformEmit.hpp"
 #include "ResultRuntime.hpp"
+#include "SocketPlatform.hpp"
 #include "TcpRuntime.hpp"
+#include "UdpRuntime.hpp"
 
 namespace nexa {
 
@@ -74,7 +76,12 @@ public:
         bool cryptoHmac = false;
         bool cryptoRandom = false;
         bool http = false;
-        // The three halves of std/http above the transports: httpSimple is
+        // The three protocols of std/network. One include brings all three
+        // namespaces in; these say which of them a program actually calls, and
+        // a protocol nobody calls is not emitted at all -- so the umbrella
+        // costs a udp-only program no http and no tcp.
+        //
+        // The three halves of http.* above the transports: httpSimple is
         // get/post/put/patch/delete, httpResponse is http.request and the
         // response struct it hands back, httpServer is http.localhost and the
         // calls around it. A program carries what it calls -- and a program
@@ -83,11 +90,15 @@ public:
         bool httpResponse = false;
         bool httpServer = false;
         bool tcp = false;
-        // The two entry points of std/tcp: tcpConnect is tcp.connect, tcpListen
+        // The two entry points of tcp.*: tcpConnect is tcp.connect, tcpListen
         // is tcp.listen and tcp.accept. send/recv/port/close sit under both and
         // ride along with either.
         bool tcpConnect = false;
         bool tcpListen = false;
+        bool udp = false;
+        // udp.sender/udp.sender_port and the per-handle table behind them. A
+        // program that never asks who sent a packet carries no answer for it.
+        bool udpSender = false;
         bool str = false;
         bool time = false;
         bool timeSleep = false;
@@ -174,12 +185,23 @@ public:
         return enabled_.count("std/crypto") > 0;
     }
 
+    // One include for the whole wire. http.*, tcp.* and udp.* all arrive with
+    // #include <std/network>; the prefix on the call is what says which of them
+    // a line is speaking, so nothing had to be renamed to put them together.
+    bool hasNetwork() const {
+        return enabled_.count("std/network") > 0;
+    }
+
     bool hasHttp() const {
-        return enabled_.count("std/http") > 0;
+        return hasNetwork();
     }
 
     bool hasTcp() const {
-        return enabled_.count("std/tcp") > 0;
+        return hasNetwork();
+    }
+
+    bool hasUdp() const {
+        return hasNetwork();
     }
 
     bool hasTime() const {
@@ -1459,8 +1481,17 @@ public:
         if (hasHttp() && usage.http) {
             out += httpRuntimeCpp(usage.httpSimple, usage.httpResponse, usage.httpServer);
         }
+        // tcp.* and udp.* are the same sockets under two protocols, so the
+        // typedefs and the Winsock wake-up are emitted once ahead of both --
+        // and only when at least one of them is actually called.
+        if ((hasTcp() && usage.tcp) || (hasUdp() && usage.udp)) {
+            out += socketPlatformCpp();
+        }
         if (hasTcp() && usage.tcp) {
             out += tcpRuntimeCpp(usage.tcpConnect, usage.tcpListen);
+        }
+        if (hasUdp() && usage.udp) {
+            out += udpRuntimeCpp(usage.udpSender);
         }
         if (hasGfx() && usage.gfx) {
             GfxNeed need;

@@ -1,5 +1,5 @@
 // An unknown tcp call is named back to the user, with the ones that do exist.
-#include <std/tcp>
+#include <std/network>
 fn main() {
     tcp.open("example.com", 7);
 }

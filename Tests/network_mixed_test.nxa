@@ -1,0 +1,88 @@
+// One include, two protocols, one program (BOB-45).
+//
+// This is the point of std/network: `#include <std/network>` once, and then
+// the prefix on every call is what says which protocol the line is speaking.
+// A stream and a datagram socket are open at the same time here, on ports the
+// OS picked, and the program never has to say which module a call came from --
+// tcp.send and udp.send are told apart by their names, not by their includes.
+//
+// Driven by the mixed layer of Tests/network_cases.sh.
+#include <std/network>
+#include <std/io>
+#include <std/thread>
+
+fn live(h: int): int {
+    if (h) {
+        return 1;
+    }
+    return 0;
+}
+
+// A whole line off a stream: TCP does not deliver a send as a send, so this
+// reads until it has one. The udp side below needs no such thing, which is
+// most of the difference between the two in one program.
+fn recv_line(h: int): string {
+    let buf: string = "";
+    while (true) {
+        if (buf.contains("\n")) {
+            break;
+        }
+        let chunk: string = tcp.recv(h);
+        if (len(chunk) == 0) {
+            break;
+        }
+        buf += chunk;
+    }
+    return buf.trim();
+}
+
+fn serve_tcp(l: int) {
+    let peer: int = tcp.accept(l);
+    if (peer == 0) {
+        return;
+    }
+    tcp.send(peer, "tcp:" + recv_line(peer) + "\n");
+    tcp.close(peer);
+}
+
+fn serve_udp(s: int) {
+    let msg: string = udp.recv(s);
+    udp.send(s, udp.sender(s), udp.sender_port(s), "udp:" + msg);
+}
+
+fn main() {
+    let l: int = tcp.listen(0);
+    let u: int = udp.open(0);
+    io.println("tcp " + live(l));
+    io.println("udp " + live(u));
+
+    let tp: int = tcp.port(l);
+    let up: int = udp.port(u);
+    io.println("ports " + live(tp) + live(up));
+    // Two sockets, two ports: one stream and one datagram socket can hold the
+    // same number, but these were both picked by the OS, so they are not it.
+    let clash: int = 0;
+    if (tp == up) {
+        clash = 1;
+    }
+    io.println("clash " + clash);
+
+    let ts = thread.spawn(serve_tcp(l));
+    let us = thread.spawn(serve_udp(u));
+
+    let c: int = tcp.connect("127.0.0.1", tp);
+    io.println("dial " + live(c));
+    io.println("sent " + tcp.send(c, "hello\n"));
+    io.println("back [" + recv_line(c) + "]");
+    io.println("close " + tcp.close(c));
+
+    let d: int = udp.open(0);
+    io.println("sent " + udp.send(d, "127.0.0.1", up, "hello"));
+    io.println("back [" + udp.recv(d) + "]");
+    io.println("close " + udp.close(d));
+
+    thread.join(ts);
+    thread.join(us);
+    io.println("shut " + tcp.close(l) + udp.close(u));
+    return 0;
+}

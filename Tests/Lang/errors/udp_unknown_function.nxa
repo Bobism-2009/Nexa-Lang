@@ -1,0 +1,5 @@
+// An unknown udp call is named back to the user, with the ones that do exist.
+#include <std/network>
+fn main() {
+    udp.connect("example.com", 7);
+}
