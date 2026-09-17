@@ -6224,6 +6224,7 @@ private:
                 if (fn == "scale") return "__nexa_gfx_scale()";
                 if (fn == "poll") return "__nexa_gfx_poll()";
                 if (fn == "present") return "__nexa_gfx_present()";
+                if (fn == "maxfps") return "__nexa_gfx_maxfps(" + a(0) + ")";
                 if (fn == "closed") return "__nexa_gfx_closed()";
                 if (fn == "key") return "__nexa_gfx_key(" + a(0) + ")";
                 if (fn == "pressed") return "__nexa_gfx_pressed(" + a(0) + ")";
@@ -6962,6 +6963,8 @@ private:
         } else if (fn == "resize" || fn == "width" || fn == "height" ||
                    fn == "scale" || fn == "title") {
             cppUsage.gfxWindow = true;
+        } else if (fn == "maxfps") {
+            cppUsage.gfxMaxfps = true;
         }
     }
 

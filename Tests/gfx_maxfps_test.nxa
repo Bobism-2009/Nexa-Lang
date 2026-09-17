@@ -1,0 +1,70 @@
+// Wall-clock cover for gfx.maxfps (BOB-48). Built and run by
+// Tests/gfx_maxfps_cases.sh against the fake X server in Tests/gfx_x11_stub,
+// so it needs no display -- but it does need a window, because present()
+// returns before it paces when there is none.
+//
+// The frame limiter has nothing to look at: no pixel changes and no value is
+// returned. The only thing it produces is time, so time is what this measures.
+// Every threshold is a wide margin around the arithmetic -- 50 fps means 20 ms
+// a frame, so 30 frames is 29 waits, 580 ms -- because a loaded machine can
+// always be late, and never early.
+
+#include <std/io>
+#include <std/gfx>
+#include <std/time>
+
+fn frames(n: int) {
+    let i: int = 0;
+    while (i < n) {
+        gfx.clear(0, 0, 0);
+        gfx.present();
+        i = i + 1;
+    }
+}
+
+fn check(label: string, ok: int) {
+    if (ok == 1) {
+        io.println("ok " + label);
+    } else {
+        io.println("FAIL " + label);
+    }
+}
+
+fn main() {
+    gfx.open("maxfps", 8, 8, 1);
+
+    // Thirty frames of nothing. Uncapped this is the default and costs
+    // microseconds; it is the baseline the cap is measured against.
+    let t0 = time.now_ms();
+    frames(30);
+    let uncapped = time.now_ms() - t0;
+
+    // The same thirty frames at 50 fps: 29 waits of 20 ms.
+    gfx.maxfps(50);
+    let t1 = time.now_ms();
+    frames(30);
+    let capped = time.now_ms() - t1;
+
+    // A frame that blows its whole budget and then some. The schedule resyncs
+    // rather than paying the overrun back, so the frames after it are paced
+    // normally instead of firing off in a burst with no wait at all.
+    gfx.present();
+    time.sleep(100);
+    gfx.present();
+    let t2 = time.now_ms();
+    frames(10);
+    let after_overrun = time.now_ms() - t2;
+
+    // And zero puts things back exactly as they started.
+    gfx.maxfps(0);
+    let t3 = time.now_ms();
+    frames(30);
+    let released = time.now_ms() - t3;
+
+    gfx.close();
+
+    check("uncapped_is_the_speed_of_the_machine", (uncapped < 200.0) ? 1 : 0);
+    check("fifty_fps_takes_the_time_fifty_fps_takes", (capped >= 500.0) ? 1 : 0);
+    check("an_overrun_frame_is_not_paid_back_in_a_burst", (after_overrun >= 150.0) ? 1 : 0);
+    check("zero_removes_the_cap", (released < 200.0) ? 1 : 0);
+}

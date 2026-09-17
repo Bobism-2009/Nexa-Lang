@@ -51,6 +51,7 @@ struct GfxNeed {
     bool sound = false;          // sound, play, loop, stop, volume -- the mixer
     bool cursor = false;         // gfx.cursor
     bool window = false;         // resize, width, height, scale, title
+    bool maxfps = false;         // gfx.maxfps -- the clock and the frame wait
 };
 
 // gfx.sound / play / loop / stop / volume: a WAV loader and a polyphonic
@@ -364,7 +365,18 @@ inline std::string gfxRuntimeCpp(const GfxNeed& need) {
 #include <X11/Xutil.h>
 #include <X11/keysym.h>
 #endif
-
+)NEXA_GFX";
+    // The frame limiter reads a monotonic clock and waits on it. Windows has
+    // both in windows.h and Emscripten has both in emscripten.h, already
+    // included above; everywhere else it is POSIX, and clock_gettime and
+    // nanosleep live in the same header.
+    if (need.maxfps) out += R"NEXA_GFX(
+#if !defined(__EMSCRIPTEN__) && !defined(_WIN32)
+#include <cerrno>
+#include <time.h>
+#endif
+)NEXA_GFX";
+    out += R"NEXA_GFX(
 struct __nexa_Gfx {
     int w;
     int h;
@@ -401,6 +413,17 @@ struct __nexa_Gfx {
     std::string type_buf;
     // A DBCS lead byte held over from one WM_CHAR to the next (Win32 only).
     int type_lead;
+)NEXA_GFX";
+    if (need.maxfps) out += R"NEXA_GFX(
+    // gfx.maxfps: the frame period in nanoseconds, 0 while uncapped, and the
+    // monotonic timestamp the next frame is due at. A deadline rather than a
+    // duration, because a frame that took 3 ms of a 20 ms budget has to be
+    // followed by a 17 ms wait, not another 20 -- sleeping a fixed amount every
+    // frame drifts by however long the drawing took.
+    long long fps_period;
+    long long fps_due;
+)NEXA_GFX";
+    out += R"NEXA_GFX(
 #ifdef _WIN32
     HWND hwnd;
     BITMAPINFO bmi;
@@ -2685,6 +2708,96 @@ static void __nexa_gfx_x11_present() {
 }
 #endif
 
+)NEXA_GFX";
+    if (need.maxfps) out += R"NEXA_GFX(
+// --- frame limiter ----------------------------------------------------------
+// An uncapped loop that draws a few shapes runs at thousands of frames a
+// second: it spends the whole machine on redraws, and because a key that goes
+// down and up between two of those frames was never seen down, input starts
+// going missing. gfx.maxfps(n) hands each frame 1/n of a second and present()
+// waits out whatever the drawing did not use.
+static long long __nexa_gfx_now_ns() {
+#ifdef __EMSCRIPTEN__
+    return (long long)(emscripten_get_now() * 1000000.0);
+#elif defined(_WIN32)
+    LARGE_INTEGER freq;
+    LARGE_INTEGER now;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&now);
+    if (freq.QuadPart <= 0) return 0;
+    // Whole seconds first, then the remainder: the counter ticks fast enough
+    // that scaling it to nanoseconds in one multiply overflows 64 bits within a
+    // day of uptime, and a frame limiter built on a clock that wraps is worse
+    // than no limiter at all.
+    long long secs = (long long)(now.QuadPart / freq.QuadPart);
+    long long rest = (long long)(now.QuadPart % freq.QuadPart);
+    return secs * 1000000000LL + rest * 1000000000LL / (long long)freq.QuadPart;
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
+#endif
+}
+
+static void __nexa_gfx_maxfps(int fps) {
+    if (fps <= 0) {
+        // Not a rejected argument: "no cap" is a thing to ask for, and it is
+        // also where every program starts.
+        __nexa_g.fps_period = 0;
+        return;
+    }
+    __nexa_g.fps_period = 1000000000LL / fps;
+    // 0 is "nothing is due yet", so the next present() starts the schedule from
+    // itself rather than from whenever some earlier cap was set.
+    __nexa_g.fps_due = 0;
+#ifdef _WIN32
+    // Sleep() rounds up to the scheduler tick, 15.6 ms by default, which would
+    // turn a 60 fps cap into 64 ms frames. Asking for a 1 ms tick is a
+    // process-wide setting, so it is asked for once and left in place.
+    static int __nexa_gfx_tick_set = 0;
+    if (!__nexa_gfx_tick_set) {
+        __nexa_gfx_tick_set = 1;
+        timeBeginPeriod(1);
+    }
+#endif
+}
+
+static void __nexa_gfx_pace() {
+    if (__nexa_g.fps_period <= 0) return;
+    long long now = __nexa_gfx_now_ns();
+    long long due = __nexa_g.fps_due;
+    // The first frame under a cap, and any frame that overran its budget by a
+    // whole period, start the count again from now. Catching up instead would
+    // fire a burst of frames with no wait at all, which is the stutter the cap
+    // was there to stop.
+    if (due == 0 || now > due + __nexa_g.fps_period) due = now;
+    long long left = due - now;
+    if (left > 0) {
+#ifdef __EMSCRIPTEN__
+        // Rounded up to the millisecond the browser deals in; whatever it
+        // actually gives back, the deadline below is measured, not assumed.
+        emscripten_sleep((unsigned int)((left + 999999LL) / 1000000LL));
+#elif defined(_WIN32)
+        // Even on a 1 ms tick Sleep is only good to about a millisecond, and a
+        // limiter that overshoots its frame is worse than one that burns a few
+        // microseconds, so the last millisecond is spun out instead.
+        long long ms = (left - 1000000LL) / 1000000LL;
+        if (ms > 0) Sleep((DWORD)ms);
+        while (__nexa_gfx_now_ns() < due) {}
+#else
+        struct timespec ts;
+        struct timespec rem;
+        ts.tv_sec = (time_t)(left / 1000000000LL);
+        ts.tv_nsec = (long)(left % 1000000000LL);
+        // A signal cuts a sleep short and leaves the rest of it in rem; the
+        // frame is not over until the deadline is.
+        while (nanosleep(&ts, &rem) != 0 && errno == EINTR) ts = rem;
+#endif
+    }
+    __nexa_g.fps_due = due + __nexa_g.fps_period;
+}
+)NEXA_GFX";
+    out += R"NEXA_GFX(
 static void __nexa_gfx_present() {
     if (!__nexa_g.ready || !__nexa_g.fb) return;
 #ifdef __EMSCRIPTEN__
@@ -2721,7 +2834,12 @@ static void __nexa_gfx_present() {
     __nexa_gfx_x11_present();
     __nexa_gfx_poll();
 #endif
-}
+)NEXA_GFX";
+    // Last thing in the frame, after the pixels are out and the events are in.
+    // Nothing is read during the wait, so whatever the user does lands in the
+    // OS queue and is there for the next frame's poll to pick up.
+    if (need.maxfps) out += "    __nexa_gfx_pace();\n";
+    out += R"NEXA_GFX(}
 )NEXA_GFX";
     if (need.keys) out += R"NEXA_GFX(
 #ifdef __APPLE__

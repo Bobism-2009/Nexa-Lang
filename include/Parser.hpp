@@ -4282,7 +4282,7 @@ private:
                  || method == "audio_queued" || method == "audio_flush") argc = 0;
         else if (method == "fullscreen") { argc = 0; argcMax = 1; }
         else if (method == "key" || method == "pressed" || method == "released"
-                 || method == "mouse") argc = 1;
+                 || method == "mouse" || method == "maxfps") argc = 1;
         else if (method == "get") argc = 2;
         else if (method == "clear") argc = 3;
         else if (method == "plot") argc = 5;
@@ -4314,7 +4314,7 @@ private:
         else {
             throw std::runtime_error("Unknown gfx method 'gfx." + method +
                 "' at line " + std::to_string(methodTok.line) +
-                " (use open, close, resize, width, height, scale, title, icon, cursor, poll, closed, clear, plot, fill, rect, round_rect, fill_round_rect, line, circle, fill_circle, ellipse, fill_ellipse, arc, pie, tri, fill_tri, poly, fill_poly, text, text_size, text_width, text_height, get, present, image, decode, image_w, image_h, blit, blit_rot, alpha, save, key, pressed, released, wheel, wheel_x, typed, mouse_x, mouse_y, mouse, audio, sample, audio_queued, audio_flush, sound, play, loop, stop, volume, fullscreen)");
+                " (use open, close, resize, width, height, scale, title, icon, cursor, poll, closed, clear, plot, fill, rect, round_rect, fill_round_rect, line, circle, fill_circle, ellipse, fill_ellipse, arc, pie, tri, fill_tri, poly, fill_poly, text, text_size, text_width, text_height, get, present, image, decode, image_w, image_h, blit, blit_rot, alpha, save, key, pressed, released, wheel, wheel_x, typed, mouse_x, mouse_y, mouse, audio, sample, audio_queued, audio_flush, sound, play, loop, stop, volume, fullscreen, maxfps)");
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after gfx." + method + " at line " + std::to_string(peek().line));

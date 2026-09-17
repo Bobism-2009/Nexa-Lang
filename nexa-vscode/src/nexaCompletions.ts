@@ -269,6 +269,7 @@ export const MODULE_MEMBERS: Record<string, { name: string; detail: string }[]> 
     { name: "text_width", detail: "gfx.text_width(s[, scale]) — measure width, no draw" },
     { name: "text_height", detail: "gfx.text_height(s[, scale]) — measure height, no draw" },
     { name: "present", detail: "gfx.present() — blit framebuffer (letterboxed, double-buffered on Windows)" },
+    { name: "maxfps", detail: "gfx.maxfps(n) — cap the loop at n frames a second; 0 removes the cap" },
     { name: "fullscreen", detail: "gfx.fullscreen() / gfx.fullscreen(on) — get or set fullscreen" },
     { name: "audio", detail: "gfx.audio([rate]) — open 16-bit mono PCM (default 44100)" },
     { name: "sample", detail: "gfx.sample(s) — queue one s16 sample" },

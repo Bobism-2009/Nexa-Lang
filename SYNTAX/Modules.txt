@@ -566,6 +566,26 @@ Nexa Standard Modules
   gfx.present()                  - blit framebuffer to the window (Windows: offscreen
                                    back buffer, then one BitBlt; letterboxed integer scale.
                                    wasm: putImageData, then yield so the tab can composite)
+  gfx.maxfps(n)                  - cap the loop at n frames a second; gfx.present() waits
+                                   out whatever the frame did not use. gfx.maxfps(0), or
+                                   any n below it, removes the cap; no cap is the default
+                                   and is where every program starts.
+                                   Uncapped, a loop that draws a few shapes runs at
+                                   thousands of frames a second, and a key that goes down
+                                   and up between two of them was never seen down -- so a
+                                   cap is also what gives gfx.pressed() and gfx.released()
+                                   a window worth polling.
+                                   The wait is on a deadline, not a duration: a frame that
+                                   took 3 ms of a 20 ms budget is followed by a 17 ms
+                                   wait, so the pacing does not drift by however long the
+                                   drawing took. A frame that overruns its budget by more
+                                   than a whole period starts the count again from itself
+                                   rather than firing off the frames it owes.
+                                   Linux/macOS: CLOCK_MONOTONIC and nanosleep. Windows:
+                                   QueryPerformanceCounter, a 1 ms scheduler tick and
+                                   Sleep, with the last millisecond spun out.
+                                   wasm: emscripten_sleep, so the browser clamps as it
+                                   sees fit
   gfx.fullscreen()               - 1 if the window is fullscreen, else 0 (0 if closed)
   gfx.fullscreen(on)             - set fullscreen (1) or windowed (0); returns new state
                                    Windows: borderless monitor; maximize enters it; Esc / F11 /

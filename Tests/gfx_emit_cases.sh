@@ -264,6 +264,10 @@ run_groups() {
         '    let n: int = gfx.sound("b.wav");' "$@"
     group "window$suffix" '^static int __nexa_gfx_resize' \
         '    gfx.resize(4, 4);' "$@"
+    # The frame limiter is a clock and a wait, and present() is core, so a
+    # draw loop that never asks for a cap must not carry either.
+    group "maxfps$suffix" '^static void __nexa_gfx_pace' \
+        '    gfx.maxfps(60);' "$@"
 }
 
 run_groups ""
@@ -533,6 +537,8 @@ else
     link_case "stop_voice" '    let n: int = gfx.stop(1);'
     link_case "volume_get" '    let n: int = gfx.volume();'
     link_case "volume_set" '    let n: int = gfx.volume(128);'
+    link_case "maxfps" '    gfx.maxfps(60);'
+    link_case "maxfps_off" '    gfx.maxfps(0);'
 fi
 
 # --- headers: what slicing must not take away -------------------------------

@@ -141,6 +141,7 @@ public:
         bool gfxSound = false;
         bool gfxCursor = false;
         bool gfxWindow = false;
+        bool gfxMaxfps = false;
         bool json = false;
         bool result = false;
     };
@@ -1522,6 +1523,7 @@ public:
             need.sound = usage.gfxSound;
             need.cursor = usage.gfxCursor;
             need.window = usage.gfxWindow;
+            need.maxfps = usage.gfxMaxfps;
             // Cross-group dependency, the same way hmac pulls in sha256: a blit
             // needs the table it blits out of, and loading an image needs
             // somewhere to put what it loaded. (A blit already implies the load:
