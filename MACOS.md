@@ -52,5 +52,10 @@ and `-framework ApplicationServices`. `gfx.key` uses the HID key state
 (`CGEventSourceKeyState`) only while the gfx window is the key window.
 `gfx.mouse_x` / `gfx.mouse_y` / `gfx.mouse` use the cursor location in the
 content view and `pressedMouseButtons`. `gfx.fullscreen(1)` / `gfx.fullscreen(0)`
-call `toggleFullScreen`. `gfx.audio` / `gfx.sample` compile but return 0 on
+call `toggleFullScreen`. `gfx.borderless(1)` swaps the window's style mask for
+`NSWindowStyleMaskBorderless | NSWindowStyleMaskResizable` — the resize bar is
+kept because a mask of `Borderless` alone answers NO to `canBecomeKeyWindow`,
+which would cost the program its keyboard — and puts the content rect back
+where it was, since `setStyleMask:` keeps the frame rather than the content.
+`gfx.audio` / `gfx.sample` compile but return 0 on
 macOS (PCM output is implemented on Windows and wasm).

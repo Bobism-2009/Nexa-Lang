@@ -268,6 +268,11 @@ run_groups() {
     # draw loop that never asks for a cap must not carry either.
     group "maxfps$suffix" '^static void __nexa_gfx_pace' \
         '    gfx.maxfps(60);' "$@"
+    # Nothing but the call itself takes a window's frame off -- unlike
+    # fullscreen, which maximising a window also reaches -- so a program that
+    # never says gfx.borderless cannot get there and must not carry it.
+    group "borderless$suffix" '^static int __nexa_gfx_borderless' \
+        '    gfx.borderless(1);' "$@"
 }
 
 run_groups ""
@@ -511,6 +516,8 @@ else
     link_case "title_get" '    let s: string = gfx.title();'
     link_case "title_set" '    gfx.title("hi");'
     link_case "fullscreen" '    let f: int = gfx.fullscreen();'
+    link_case "borderless_get" '    let b: int = gfx.borderless();'
+    link_case "borderless_set" '    let b: int = gfx.borderless(1);'
     link_case "drop" '    let s: string = gfx.drop();'
     link_case "opendialog" '    let p: string = gfx.opendialog();'
     link_case "save" '    let ok: int = gfx.save("/dev/null");'

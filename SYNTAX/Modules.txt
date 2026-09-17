@@ -594,6 +594,28 @@ Nexa Standard Modules
                                    Linux: _NET_WM_STATE_FULLSCREEN
                                    wasm: Element.requestFullscreen / exitFullscreen; Esc leaves
                                    fullscreen and does not close the page
+  gfx.borderless()               - 1 if the window frame is off, else 0 (0 if closed)
+  gfx.borderless(on)             - take the title bar and frame off (1) or put them
+                                   back (0); returns the new state. The window keeps the
+                                   size and the place it had -- this is not fullscreen,
+                                   it is the same window with nothing drawn around it.
+                                   A window opens framed, and gfx.open() puts it back.
+                                   Borderless and fullscreen are independent: going
+                                   fullscreen and back leaves the window borderless if
+                                   that is how the program last asked for it, and
+                                   gfx.borderless(0) during fullscreen takes effect on
+                                   the way out.
+                                   Windows: WS_POPUP in place of the overlapped style,
+                                   with SWP_FRAMECHANGED; the client area stays put.
+                                   Linux: _MOTIF_WM_HINTS with decorations = 0. The
+                                   window is unmapped and remapped so that window
+                                   managers which read the hint only when they frame a
+                                   window pick it up -- one flicker, and the position is
+                                   restored afterwards.
+                                   macOS: NSWindowStyleMaskBorderless, keeping Resizable
+                                   so the window can still become key.
+                                   wasm: a canvas has no frame, so nothing happens; the
+                                   state is still remembered and returned
   gfx.audio([rate])              - open 16-bit mono PCM output (default 44100 Hz); 1/0
                                    Windows: winmm waveOut (-lwinmm). wasm: Web Audio
                                    macOS: AudioQueue (-framework AudioToolbox)
@@ -763,8 +785,8 @@ Nexa Standard Modules
   gfx.open() failed -- no gfx call is an error. Drawing (clear, plot, fill, rect,
   round_rect, fill_round_rect, line, circle, fill_circle, ellipse, fill_ellipse,
   arc, pie, tri, fill_tri, poly, fill_poly, text, blit, blit_rot, present, poll)
-  does nothing; width, height, scale, resize, fullscreen, blit, blit_rot, icon,
-  cursor, text, poly, fill_poly, save, wheel, wheel_x,
+  does nothing; width, height, scale, resize, fullscreen, borderless, blit,
+  blit_rot, icon, cursor, text, poly, fill_poly, save, wheel, wheel_x,
   mouse_x, mouse_y, mouse, key, pressed and released return 0; get returns -1;
   typed returns ""; title and drop return what they last held. The calls with no
   window in them still work: text_width, text_height, text_size, alpha, image,

@@ -17,6 +17,31 @@ enum { NEXA_STUB_WINDOW = 0x2101, NEXA_STUB_EVENTS = 64, NEXA_STUB_KEYS = 240 };
 
 static int nexa_stub_display_works = 0;
 static int nexa_stub_focused = 1;
+static int nexa_stub_map_state = -1;         /* < 0: XGetWindowAttributes fails */
+static int nexa_stub_origin_x = 0;
+static int nexa_stub_origin_y = 0;
+
+/* Interned atoms, so that a property can be told apart by name. A real server
+   hands out distinct non-zero ids and so does this. */
+enum { NEXA_STUB_ATOMS = 32, NEXA_STUB_ATOM_LEN = 48 };
+static char nexa_stub_atom_names[NEXA_STUB_ATOMS][NEXA_STUB_ATOM_LEN];
+static int nexa_stub_atom_count = 0;
+
+/* The last XChangeProperty, and the map/unmap/move log. */
+static Atom nexa_stub_prop_atom = 0;
+static Atom nexa_stub_prop_type = 0;
+static int nexa_stub_prop_format = 0;
+static int nexa_stub_prop_count = 0;
+static long nexa_stub_prop_data[8];
+enum { NEXA_STUB_CALLS = 32 };
+static int nexa_stub_calls[NEXA_STUB_CALLS];
+static int nexa_stub_call_n = 0;
+static int nexa_stub_moved_x = 0;
+static int nexa_stub_moved_y = 0;
+
+static void nexa_stub_log_call(int what) {
+    if (nexa_stub_call_n < NEXA_STUB_CALLS) nexa_stub_calls[nexa_stub_call_n++] = what;
+}
 static XEvent nexa_stub_queue[NEXA_STUB_EVENTS];
 static char nexa_stub_text[NEXA_STUB_EVENTS][64];
 static int nexa_stub_head = 0;
@@ -54,7 +79,53 @@ void nexa_x11_stub_reset(int display_works) {
     nexa_stub_tail = 0;
     nexa_stub_keysym_count = 0;
     memset(nexa_stub_keymap, 0, sizeof(nexa_stub_keymap));
+    nexa_stub_map_state = -1;
+    nexa_stub_origin_x = 0;
+    nexa_stub_origin_y = 0;
+    nexa_stub_prop_atom = 0;
+    nexa_stub_prop_type = 0;
+    nexa_stub_prop_format = 0;
+    nexa_stub_prop_count = 0;
+    memset(nexa_stub_prop_data, 0, sizeof(nexa_stub_prop_data));
+    nexa_stub_call_n = 0;
+    nexa_stub_moved_x = 0;
+    nexa_stub_moved_y = 0;
 }
+
+void nexa_x11_stub_set_mapped(int map_state) { nexa_stub_map_state = map_state; }
+
+void nexa_x11_stub_set_origin(int x, int y) {
+    nexa_stub_origin_x = x;
+    nexa_stub_origin_y = y;
+}
+
+const char* nexa_x11_stub_property_name(void) {
+    if (nexa_stub_prop_atom == 0 || (int)nexa_stub_prop_atom > nexa_stub_atom_count) return "";
+    return nexa_stub_atom_names[nexa_stub_prop_atom - 1];
+}
+
+int nexa_x11_stub_property_type_matches(void) {
+    return nexa_stub_prop_type != 0 && nexa_stub_prop_type == nexa_stub_prop_atom;
+}
+
+int nexa_x11_stub_property_format(void) { return nexa_stub_prop_format; }
+int nexa_x11_stub_property_count(void) { return nexa_stub_prop_count; }
+
+long nexa_x11_stub_property_word(int i) {
+    if (i < 0 || i >= (int)(sizeof(nexa_stub_prop_data) / sizeof(nexa_stub_prop_data[0]))) return 0;
+    return nexa_stub_prop_data[i];
+}
+
+void nexa_x11_stub_calls_clear(void) { nexa_stub_call_n = 0; }
+int nexa_x11_stub_call_count(void) { return nexa_stub_call_n; }
+
+int nexa_x11_stub_call(int i) {
+    if (i < 0 || i >= nexa_stub_call_n) return 0;
+    return nexa_stub_calls[i];
+}
+
+int nexa_x11_stub_move_x(void) { return nexa_stub_moved_x; }
+int nexa_x11_stub_move_y(void) { return nexa_stub_moved_y; }
 
 void nexa_x11_stub_set_focus(int focused) { nexa_stub_focused = focused ? 1 : 0; }
 
@@ -114,18 +185,66 @@ Window XCreateSimpleWindow(Display* d, Window parent, int x, int y,
     return nexa_stub_display_works ? (Window)NEXA_STUB_WINDOW : (Window)0;
 }
 int XDestroyWindow(Display* d, Window w) { (void)d; (void)w; return 0; }
-int XMapWindow(Display* d, Window w) { (void)d; (void)w; return 0; }
+int XMapWindow(Display* d, Window w) {
+    (void)d; (void)w;
+    nexa_stub_log_call(NEXA_STUB_CALL_MAP);
+    return 0;
+}
+int XUnmapWindow(Display* d, Window w) {
+    (void)d; (void)w;
+    nexa_stub_log_call(NEXA_STUB_CALL_UNMAP);
+    return 0;
+}
+int XMoveWindow(Display* d, Window w, int x, int y) {
+    (void)d; (void)w;
+    nexa_stub_moved_x = x;
+    nexa_stub_moved_y = y;
+    nexa_stub_log_call(NEXA_STUB_CALL_MOVE);
+    return 0;
+}
+Bool XTranslateCoordinates(Display* d, Window src, Window dst,
+                           int sx, int sy, int* dx, int* dy, Window* child) {
+    (void)d; (void)src; (void)dst;
+    if (dx) *dx = sx + nexa_stub_origin_x;
+    if (dy) *dy = sy + nexa_stub_origin_y;
+    if (child) *child = 0;
+    return 0;
+}
 int XResizeWindow(Display* d, Window w, unsigned int w2, unsigned int h) {
     (void)d; (void)w; (void)w2; (void)h; return 0;
 }
 int XStoreName(Display* d, Window w, const char* n) { (void)d; (void)w; (void)n; return 0; }
-Atom XInternAtom(Display* d, const char* n, Bool o) { (void)d; (void)n; (void)o; return 0; }
+Atom XInternAtom(Display* d, const char* n, Bool o) {
+    (void)d; (void)o;
+    if (!n) return 0;
+    for (int i = 0; i < nexa_stub_atom_count; i++) {
+        if (strcmp(nexa_stub_atom_names[i], n) == 0) return (Atom)(i + 1);
+    }
+    if (nexa_stub_atom_count >= NEXA_STUB_ATOMS) return 0;
+    size_t len = strlen(n);
+    if (len >= NEXA_STUB_ATOM_LEN) len = NEXA_STUB_ATOM_LEN - 1;
+    memcpy(nexa_stub_atom_names[nexa_stub_atom_count], n, len);
+    nexa_stub_atom_names[nexa_stub_atom_count][len] = 0;
+    return (Atom)(++nexa_stub_atom_count);
+}
 Status XSetWMProtocols(Display* d, Window w, Atom* p, int c) {
     (void)d; (void)w; (void)p; (void)c; return 0;
 }
 int XChangeProperty(Display* d, Window w, Atom pr, Atom t, int f, int m,
                     const unsigned char* data, int n) {
-    (void)d; (void)w; (void)pr; (void)t; (void)f; (void)m; (void)data; (void)n; return 0;
+    (void)d; (void)w; (void)m;
+    nexa_stub_prop_atom = pr;
+    nexa_stub_prop_type = t;
+    nexa_stub_prop_format = f;
+    nexa_stub_prop_count = n;
+    memset(nexa_stub_prop_data, 0, sizeof(nexa_stub_prop_data));
+    /* Format 32 means an array of long on the wire as far as Xlib callers are
+       concerned, which is what the tests read back. */
+    if (data && f == 32 && n > 0 &&
+        n <= (int)(sizeof(nexa_stub_prop_data) / sizeof(nexa_stub_prop_data[0]))) {
+        memcpy(nexa_stub_prop_data, data, sizeof(long) * (size_t)n);
+    }
+    return 0;
 }
 /* The invisible cursor gfx.cursor(0) makes. Handing back a fixed non-zero id
    is enough for the runtime to believe it has one and to free it again. */
@@ -143,7 +262,13 @@ int XUndefineCursor(Display* d, Window w) { (void)d; (void)w; return 0; }
 int XFreeCursor(Display* d, Cursor c) { (void)d; (void)c; return 0; }
 int XFreePixmap(Display* d, Pixmap p) { (void)d; (void)p; return 0; }
 Status XGetWindowAttributes(Display* d, Window w, XWindowAttributes* a) {
-    (void)d; (void)w; if (a) memset(a, 0, sizeof(*a)); return 0;
+    (void)d; (void)w;
+    if (a) memset(a, 0, sizeof(*a));
+    /* Fails unless a test has said what the window looks like -- which is the
+       honest answer for a server that never created one. */
+    if (!a || nexa_stub_map_state < 0) return 0;
+    a->map_state = nexa_stub_map_state;
+    return 1;
 }
 Bool XQueryPointer(Display* d, Window w, Window* root, Window* child,
                    int* rx, int* ry, int* wx, int* wy, unsigned int* mask) {

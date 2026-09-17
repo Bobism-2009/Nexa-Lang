@@ -1,0 +1,7 @@
+// gfx.borderless is a getter and a setter in one name, the way gfx.fullscreen
+// is: nothing takes two arguments, and a window size written here is a
+// gfx.resize in the wrong place.
+#include <std/gfx>
+fn main() {
+    let b: int = gfx.borderless(1, 2);
+}

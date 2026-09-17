@@ -6292,6 +6292,10 @@ private:
                     std::string v = e.children.empty() ? "-1" : a(0);
                     return "__nexa_gfx_fullscreen(" + v + ")";
                 }
+                if (fn == "borderless") {
+                    std::string v = e.children.empty() ? "-1" : a(0);
+                    return "__nexa_gfx_borderless(" + v + ")";
+                }
                 if (fn == "audio") {
                     std::string r = e.children.empty() ? "44100" : a(0);
                     return "__nexa_gfx_audio(" + r + ")";
@@ -6965,6 +6969,11 @@ private:
             cppUsage.gfxWindow = true;
         } else if (fn == "maxfps") {
             cppUsage.gfxMaxfps = true;
+        } else if (fn == "borderless") {
+            // Both forms: unlike gfx.alpha, the reader is the only thing that
+            // can answer, because nothing else in the runtime takes a frame
+            // off and so there is no state to read without this call.
+            cppUsage.gfxBorderless = true;
         }
     }
 

@@ -44,6 +44,11 @@ typedef struct { int x, y, width, height; } Screen;
 #define ZPixmap 2
 #define XYPixmap 1
 
+/* XWindowAttributes::map_state */
+#define IsUnmapped 0
+#define IsUnviewable 1
+#define IsViewable 2
+
 #define KeyPress 2
 #define KeyRelease 3
 #define ButtonPress 4
@@ -216,6 +221,10 @@ extern Window XCreateSimpleWindow(Display* d, Window parent, int x, int y,
                                   unsigned long border, unsigned long background);
 extern int XDestroyWindow(Display* d, Window w);
 extern int XMapWindow(Display* d, Window w);
+extern int XUnmapWindow(Display* d, Window w);
+extern int XMoveWindow(Display* d, Window w, int x, int y);
+extern Bool XTranslateCoordinates(Display* d, Window src, Window dst,
+                                  int sx, int sy, int* dx, int* dy, Window* child);
 extern int XResizeWindow(Display* d, Window w, unsigned int w2, unsigned int h);
 extern int XStoreName(Display* d, Window w, const char* name);
 extern Atom XInternAtom(Display* d, const char* name, Bool only_if_exists);
@@ -273,6 +282,37 @@ extern void nexa_x11_stub_set_focus(int focused);
 extern void nexa_x11_stub_push_button(int press, unsigned int button);
 extern void nexa_x11_stub_push_key(const char* latin1_text);
 extern void nexa_x11_stub_set_key(KeySym ks, int down);
+
+/* The window as the fake server sees it. Both are off by default, which is
+ * the state the input tests want: XGetWindowAttributes fails, the way it does
+ * for a window that was never created.
+ *   nexa_x11_stub_set_mapped   XGetWindowAttributes succeeds and reports this
+ *                              map_state (IsViewable / IsUnmapped)
+ *   nexa_x11_stub_set_origin   what XTranslateCoordinates reports for the
+ *                              window's own 0,0 in root coordinates
+ */
+extern void nexa_x11_stub_set_mapped(int map_state);
+extern void nexa_x11_stub_set_origin(int x, int y);
+
+/* What the runtime asked the server to do, for tests that assert on the
+ * request rather than on a pixel. The property accessors describe the last
+ * XChangeProperty; the call log records XMapWindow / XUnmapWindow /
+ * XMoveWindow in the order they arrived. Both are cleared by
+ * nexa_x11_stub_reset. */
+extern const char* nexa_x11_stub_property_name(void);
+extern int nexa_x11_stub_property_type_matches(void);
+extern int nexa_x11_stub_property_format(void);
+extern int nexa_x11_stub_property_count(void);
+extern long nexa_x11_stub_property_word(int i);
+
+#define NEXA_STUB_CALL_MAP 1
+#define NEXA_STUB_CALL_UNMAP 2
+#define NEXA_STUB_CALL_MOVE 3
+extern void nexa_x11_stub_calls_clear(void);
+extern int nexa_x11_stub_call_count(void);
+extern int nexa_x11_stub_call(int i);
+extern int nexa_x11_stub_move_x(void);
+extern int nexa_x11_stub_move_y(void);
 
 #ifdef __cplusplus
 }

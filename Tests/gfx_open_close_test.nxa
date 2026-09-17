@@ -285,6 +285,31 @@ fn main() {
         gfx.close();
         return 43;
     }
+    // The frame comes off and goes back on a window that is already up. What
+    // the window manager draws around the window cannot be read back, so what
+    // is checked is the state the runtime reports and that the framebuffer
+    // survives the round trip -- on Windows and macOS the window is resized to
+    // keep the client area, and on Linux it is remapped.
+    if (gfx.borderless() != 0) {
+        io.println("fail borderless starts off");
+        gfx.close();
+        return 56;
+    }
+    if (gfx.borderless(1) != 1 || gfx.borderless() != 1) {
+        io.println("fail borderless on");
+        gfx.close();
+        return 57;
+    }
+    if (gfx.borderless(0) != 0 || gfx.borderless() != 0) {
+        io.println("fail borderless off");
+        gfx.close();
+        return 58;
+    }
+    if (gfx.width() != 8 || gfx.height() != 8 || gfx.scale() != 2) {
+        io.println("fail size after borderless");
+        gfx.close();
+        return 59;
+    }
     gfx.close();
     if (gfx.resize(10, 10) != 0 || gfx.width() != 0 || gfx.height() != 0 || gfx.scale() != 0) {
         io.println("fail size after close");
@@ -297,6 +322,10 @@ fn main() {
     if (gfx.get(0, 0) != -1) {
         io.println("fail get after close");
         return 22;
+    }
+    if (gfx.borderless() != 0 || gfx.borderless(1) != 0) {
+        io.println("fail borderless after close");
+        return 60;
     }
     if (gfx.image_w(img) != 2 || gfx.image_h(img) != 2) {
         io.println("fail image after close");

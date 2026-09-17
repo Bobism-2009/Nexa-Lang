@@ -23,6 +23,14 @@ namespace nexa {
 // call it themselves: maximising a window is a way into fullscreen that does
 // not go through gfx.fullscreen, so slicing it would change behaviour rather
 // than remove dead code.
+//
+// gfx.borderless is the other half of that argument and comes out the other
+// way: nothing but the call itself takes a window's frame off, so a program
+// that never says gfx.borderless cannot become borderless by any other route
+// and the function is sliced like gfx.maxfps. What is *not* sliced is the one
+// `borderless` flag in __nexa_Gfx, because fullscreen reads it -- on Windows
+// both states are WS_POPUP, and telling them apart is what stops
+// gfx.fullscreen(0) growing back a frame the program asked to remove.
 struct GfxNeed {
     bool alpha = false;          // gfx.alpha() -- the reader; the setter is core
     bool plot = false;           // gfx.plot
@@ -52,6 +60,7 @@ struct GfxNeed {
     bool cursor = false;         // gfx.cursor
     bool window = false;         // resize, width, height, scale, title
     bool maxfps = false;         // gfx.maxfps -- the clock and the frame wait
+    bool borderless = false;     // gfx.borderless -- the decoration toggle
 };
 
 // gfx.sound / play / loop / stop / volume: a WAV loader and a polyphonic
@@ -391,6 +400,12 @@ struct __nexa_Gfx {
     int mrb;
     int text_scale;
     int fullscreen;
+    // 1 while the program has asked for the window frame to be off. Always
+    // here, even when gfx.borderless itself is sliced away, because the
+    // Win32 fullscreen path reads it: fullscreen and borderless are the same
+    // WS_POPUP style, so this is the only thing that says which of the two a
+    // popup window is, and therefore what leaving fullscreen goes back to.
+    int borderless;
     // 1 while the OS cursor is visible over the window, which is how a window
     // starts. Kept here rather than asked of the OS: X11 has no "is my cursor
     // hidden" query, and NSCursor's hide/unhide is a counter that only stays
@@ -1062,6 +1077,8 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
     __nexa_g.scale = scale;
     __nexa_g.closed = 0;
     __nexa_g.fullscreen = 0;
+    // A new window starts framed, the same way it starts windowed.
+    __nexa_g.borderless = 0;
     // A new window starts with the cursor showing, the same way it starts
     // opaque and windowed.
     __nexa_g.cursor = 1;
@@ -1295,7 +1312,12 @@ static int __nexa_gfx_fullscreen(int on) {
         GetWindowPlacement(__nexa_g.hwnd, &__nexa_g.wnd_place);
         __nexa_g.wnd_place.showCmd = SW_SHOWNORMAL;
         LONG style = GetWindowLongA(__nexa_g.hwnd, GWL_STYLE);
-        if (style & WS_POPUP) style = __nexa_gfx_overlapped;
+        // A WS_POPUP window is either fullscreen's own style or the frame the
+        // program took off with gfx.borderless, and only __nexa_g.borderless
+        // tells the two apart. Saving fullscreen's own style would be saving
+        // nothing to come back to; saving the borderless one is the whole
+        // point, so that gfx.fullscreen(0) does not hand back a frame.
+        if ((style & WS_POPUP) && !__nexa_g.borderless) style = (LONG)__nexa_gfx_overlapped;
         __nexa_g.wnd_style = (style & ~(WS_MAXIMIZE | WS_MINIMIZE)) | WS_VISIBLE;
         HMONITOR mon = MonitorFromWindow(__nexa_g.hwnd, MONITOR_DEFAULTTONEAREST);
         MONITORINFO mi;
@@ -1355,6 +1377,124 @@ static int __nexa_gfx_fullscreen(int on) {
 #else
     (void)on;
     return 0;
+#endif
+}
+)NEXA_GFX";
+    if (need.borderless) out += R"NEXA_GFX(
+// gfx.borderless: the window without its title bar and frame, the same
+// argument shape as gfx.fullscreen -- 1 off with the frame, 0 back on, and a
+// negative argument reports the state without touching the window.
+//
+// This is not fullscreen: the window keeps the size and the place it had, so
+// what the program gets is its own rectangle of pixels and nothing the window
+// manager drew around them.
+static int __nexa_gfx_borderless(int on) {
+    if (!__nexa_g.ready) return 0;
+    if (on < 0) return __nexa_g.borderless;
+    int want = on ? 1 : 0;
+#ifdef __EMSCRIPTEN__
+    // A canvas has no frame to take off. The state is still remembered and
+    // handed back, so a program that toggles it reads what it asked for
+    // rather than a flat 0 -- the wasm build of that program stays the same
+    // program, it just has nothing to do here.
+    __nexa_g.borderless = want;
+    return __nexa_g.borderless;
+#elif defined(_WIN32)
+    if (!__nexa_g.hwnd) return 0;
+    if (want == __nexa_g.borderless) return __nexa_g.borderless;
+    __nexa_g.borderless = want;
+    LONG style = (want ? (LONG)WS_POPUP : (LONG)__nexa_gfx_overlapped) | WS_VISIBLE;
+    if (__nexa_g.fullscreen) {
+        // Fullscreen already owns the style, and it is already frameless.
+        // Leaving it restores wnd_style, so writing the wish there is what
+        // makes the window come back the way the program last asked for
+        // rather than the way it happened to be when fullscreen started.
+        __nexa_g.wnd_style = style;
+        return __nexa_g.borderless;
+    }
+    // Where the client area is now, in screen coordinates: the frame is about
+    // to stop existing (or start), and the drawing should not walk up the
+    // screen by a title bar's height because of it.
+    RECT rc;
+    GetClientRect(__nexa_g.hwnd, &rc);
+    POINT tl;
+    tl.x = rc.left;
+    tl.y = rc.top;
+    ClientToScreen(__nexa_g.hwnd, &tl);
+    RECT outer;
+    outer.left = tl.x;
+    outer.top = tl.y;
+    outer.right = tl.x + (rc.right - rc.left);
+    outer.bottom = tl.y + (rc.bottom - rc.top);
+    AdjustWindowRect(&outer, (DWORD)style, FALSE);
+    SetWindowLongA(__nexa_g.hwnd, GWL_STYLE, style);
+    // SWP_FRAMECHANGED is what makes Windows recompute the non-client area;
+    // without it the old frame stays drawn until something else disturbs it.
+    SetWindowPos(__nexa_g.hwnd, nullptr, outer.left, outer.top,
+        outer.right - outer.left, outer.bottom - outer.top,
+        SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    InvalidateRect(__nexa_g.hwnd, nullptr, FALSE);
+    return __nexa_g.borderless;
+#elif defined(__APPLE__)
+    if (!__nexa_gfx_nswin) return 0;
+    if (want == __nexa_g.borderless) return __nexa_g.borderless;
+    __nexa_g.borderless = want;
+    // NSWindowStyleMaskBorderless is 0, and a window whose mask is only that
+    // answers NO to canBecomeKeyWindow -- which would cost the program its
+    // keyboard. Keeping Resizable gives it a resize bar, which is the other
+    // way AppKit says yes, and keeps the window resizable besides.
+    NSUInteger style = want
+        ? (NSWindowStyleMaskBorderless | NSWindowStyleMaskResizable)
+        : (NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
+           NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable);
+    // Read the content rect under the old mask and put it back under the new
+    // one: setStyleMask keeps the frame, so without this the content grows or
+    // shrinks by the title bar.
+    NSRect content = [__nexa_gfx_nswin contentRectForFrameRect:[__nexa_gfx_nswin frame]];
+    [__nexa_gfx_nswin setStyleMask:style];
+    [__nexa_gfx_nswin setFrame:[__nexa_gfx_nswin frameRectForContentRect:content] display:YES];
+    if (__nexa_gfx_nsview) [__nexa_gfx_nswin makeFirstResponder:__nexa_gfx_nsview];
+    [__nexa_gfx_nswin makeKeyAndOrderFront:nil];
+    return __nexa_g.borderless;
+#elif defined(__linux__)
+    if (!__nexa_g.dpy || !__nexa_g.win) return 0;
+    if (want == __nexa_g.borderless) return __nexa_g.borderless;
+    __nexa_g.borderless = want;
+    // _MOTIF_WM_HINTS: five 32-bit fields, of which only the flags word and
+    // the decorations word matter here. flags = 2 is MWM_HINTS_DECORATIONS,
+    // "the decorations field is the one I am setting", and 0 decorations is
+    // no frame at all. There is no _NET_WM equivalent -- every window manager
+    // that can do this reads the Motif hint, twenty-five years on.
+    Atom mh = XInternAtom(__nexa_g.dpy, "_MOTIF_WM_HINTS", False);
+    struct { unsigned long flags, functions, decorations; long input_mode; unsigned long status; } hints;
+    std::memset(&hints, 0, sizeof(hints));
+    hints.flags = 2;
+    hints.decorations = want ? 0 : 1;
+    XChangeProperty(__nexa_g.dpy, __nexa_g.win, mh, mh, 32, PropModeReplace,
+        (const unsigned char*)&hints, 5);
+    // Plenty of window managers reframe on the property change alone, but the
+    // ones that read the hint only when they frame a window need the window
+    // framed again. Unmapping and remapping is that, and it costs the good
+    // ones a flicker -- which beats a window that keeps its frame on half the
+    // desktops out there. The remap is a fresh placement as far as the window
+    // manager is concerned, so the position is taken first and put back after.
+    XWindowAttributes wa;
+    std::memset(&wa, 0, sizeof(wa));
+    if (XGetWindowAttributes(__nexa_g.dpy, __nexa_g.win, &wa) && wa.map_state != IsUnmapped) {
+        int rx = 0;
+        int ry = 0;
+        Window child;
+        XTranslateCoordinates(__nexa_g.dpy, __nexa_g.win, DefaultRootWindow(__nexa_g.dpy),
+            0, 0, &rx, &ry, &child);
+        XUnmapWindow(__nexa_g.dpy, __nexa_g.win);
+        XMapWindow(__nexa_g.dpy, __nexa_g.win);
+        XMoveWindow(__nexa_g.dpy, __nexa_g.win, rx, ry);
+    }
+    XFlush(__nexa_g.dpy);
+    return __nexa_g.borderless;
+#else
+    __nexa_g.borderless = want;
+    return __nexa_g.borderless;
 #endif
 }
 )NEXA_GFX";

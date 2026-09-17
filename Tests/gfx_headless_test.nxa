@@ -29,6 +29,10 @@ fn main() {
     io.println("get_negative=", gfx.get(-1, -1));
     io.println("resize=", gfx.resize(16, 16));
     io.println("fullscreen=", gfx.fullscreen());
+    // A frame that does not exist cannot come off, and asking to take it off
+    // does not make the answer 1.
+    io.println("borderless=", gfx.borderless());
+    io.println("borderless_set=", gfx.borderless(1));
     io.println("text=", gfx.text(0, 0, "hi", 255, 255, 255));
     io.println("drop=", gfx.drop());
 
