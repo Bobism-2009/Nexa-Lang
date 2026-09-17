@@ -57,7 +57,7 @@ inline std::string tcpRuntimeCpp(bool needConnect = true, bool needListen = true
 // tcp.connect: the first address the name resolves to that answers. AF_UNSPEC
 // means an IPv6-only host is reachable without the program saying so.
 [[maybe_unused]] static int __nexa_tcp_connect(const std::string& host, int port) {
-  if (!__nexa_sock_start()) return 0;
+  if (!__nexa_net_start()) return 0;
   struct addrinfo hints;
   memset(&hints, 0, sizeof(hints));
   hints.ai_family = AF_UNSPEC;
@@ -65,17 +65,17 @@ inline std::string tcpRuntimeCpp(bool needConnect = true, bool needListen = true
   struct addrinfo* res = nullptr;
   std::string portStr = std::to_string(port);
   if (getaddrinfo(host.c_str(), portStr.c_str(), &hints, &res) != 0 || !res) return 0;
-  __nexa_sock_t fd = __NEXA_SOCK_BAD;
+  __nexa_net_sock_t fd = __NEXA_NET_BAD;
   for (struct addrinfo* p = res; p; p = p->ai_next) {
     fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
-    if (fd == __NEXA_SOCK_BAD) continue;
+    if (fd == __NEXA_NET_BAD) continue;
     if (connect(fd, p->ai_addr, (socklen_t)p->ai_addrlen) == 0) break;
-    __nexa_sock_shut(fd);
-    fd = __NEXA_SOCK_BAD;
+    __nexa_net_shut(fd);
+    fd = __NEXA_NET_BAD;
   }
   freeaddrinfo(res);
-  if (fd != __NEXA_SOCK_BAD) __nexa_sock_nosigpipe(fd);
-  return __nexa_sock_handle(fd);
+  if (fd != __NEXA_NET_BAD) __nexa_net_nosigpipe(fd);
+  return __nexa_net_handle(fd);
 }
 )NEXA_TCP_CONNECT";
     }
@@ -87,9 +87,9 @@ inline std::string tcpRuntimeCpp(bool needConnect = true, bool needListen = true
 // game server is the opposite case, and a program that wants loopback-only
 // here gets it by refusing the connections it does not want.
 [[maybe_unused]] static int __nexa_tcp_listen(int port) {
-  if (!__nexa_sock_start()) return 0;
-  __nexa_sock_t fd = socket(AF_INET, SOCK_STREAM, 0);
-  if (fd == __NEXA_SOCK_BAD) return 0;
+  if (!__nexa_net_start()) return 0;
+  __nexa_net_sock_t fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd == __NEXA_NET_BAD) return 0;
   int one = 1;
   setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&one, (socklen_t)sizeof(one));
   struct sockaddr_in addr;
@@ -98,20 +98,20 @@ inline std::string tcpRuntimeCpp(bool needConnect = true, bool needListen = true
   addr.sin_port = htons((unsigned short)port);
   addr.sin_addr.s_addr = htonl(INADDR_ANY);
   if (bind(fd, (struct sockaddr*)&addr, (socklen_t)sizeof(addr)) != 0) {
-    __nexa_sock_shut(fd);
+    __nexa_net_shut(fd);
     return 0;
   }
   if (listen(fd, 64) != 0) {
-    __nexa_sock_shut(fd);
+    __nexa_net_shut(fd);
     return 0;
   }
-  return __nexa_sock_handle(fd);
+  return __nexa_net_handle(fd);
 }
 [[maybe_unused]] static int __nexa_tcp_accept(int listener) {
-  __nexa_sock_t fd = accept((__nexa_sock_t)listener, nullptr, nullptr);
-  if (fd == __NEXA_SOCK_BAD) return 0;
-  __nexa_sock_nosigpipe(fd);
-  return __nexa_sock_handle(fd);
+  __nexa_net_sock_t fd = accept((__nexa_net_sock_t)listener, nullptr, nullptr);
+  if (fd == __NEXA_NET_BAD) return 0;
+  __nexa_net_nosigpipe(fd);
+  return __nexa_net_handle(fd);
 }
 )NEXA_TCP_LISTEN";
     }
@@ -122,14 +122,14 @@ inline std::string tcpRuntimeCpp(bool needConnect = true, bool needListen = true
 // takes what it has room for, and the write that follows is the one that
 // fails.
 [[maybe_unused]] static int __nexa_tcp_send(int h, const std::string& data) {
-  __nexa_sock_t s = (__nexa_sock_t)h;
+  __nexa_net_sock_t s = (__nexa_net_sock_t)h;
   const char* p = data.data();
   size_t n = data.size();
   size_t sent = 0;
   while (sent < n) {
     size_t left = n - sent;
     int chunk = left > 0x7fffffff ? 0x7fffffff : (int)left;
-    int k = (int)send(s, p + sent, chunk, __NEXA_SOCK_SEND_FLAGS);
+    int k = (int)send(s, p + sent, chunk, __NEXA_NET_SEND_FLAGS);
     if (k <= 0) break;
     sent += (size_t)k;
   }
@@ -141,7 +141,7 @@ inline std::string tcpRuntimeCpp(bool needConnect = true, bool needListen = true
 [[maybe_unused]] static std::string __nexa_tcp_recv(int h, int max) {
   std::string out;
   out.resize((size_t)max);
-  int n = (int)recv((__nexa_sock_t)h, &out[0], max, 0);
+  int n = (int)recv((__nexa_net_sock_t)h, &out[0], max, 0);
   if (n <= 0) return std::string();
   out.resize((size_t)n);
   return out;
@@ -152,11 +152,11 @@ inline std::string tcpRuntimeCpp(bool needConnect = true, bool needListen = true
   struct sockaddr_in a;
   memset(&a, 0, sizeof(a));
   socklen_t len = (socklen_t)sizeof(a);
-  if (getsockname((__nexa_sock_t)h, (struct sockaddr*)&a, &len) != 0) return 0;
+  if (getsockname((__nexa_net_sock_t)h, (struct sockaddr*)&a, &len) != 0) return 0;
   return (int)ntohs(a.sin_port);
 }
 [[maybe_unused]] static int __nexa_tcp_close(int h) {
-  __nexa_sock_shut((__nexa_sock_t)h);
+  __nexa_net_shut((__nexa_net_sock_t)h);
   return 1;
 }
 )NEXA_TCP_IO";

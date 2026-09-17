@@ -159,10 +159,10 @@ if transpile "socket_preamble_emitted_once" \
         '    let c = tcp.connect("h", 9);
     let s = udp.open(0);
     io.println(tcp.close(c) + udp.close(s));'; then
-    n=$(grep -c '^\[\[maybe_unused\]\] static int __nexa_sock_start' \
+    n=$(grep -c '^\[\[maybe_unused\]\] static int __nexa_net_start' \
         "$WORK/socket_preamble_emitted_once.cpp")
     if [ "$n" != 1 ]; then
-        echo "FAIL socket_preamble_emitted_once: __nexa_sock_start defined $n time(s), expected 1"
+        echo "FAIL socket_preamble_emitted_once: __nexa_net_start defined $n time(s), expected 1"
         fails=$((fails + 1))
     else
         echo "ok socket_preamble_emitted_once"
@@ -381,6 +381,26 @@ else
         else
             echo "FAIL both_protocols_build: tcp and udp together do not build clean"
             sed 's/^/  /' "$WORK/both.cc.log" | head -n 20
+            fails=$((fails + 1))
+        fi
+    fi
+
+    # http.*'s listening half has a platform layer of its own, under names that
+    # read like this one's. A program that serves HTTP and opens a raw socket
+    # emits both, and this is the only place that would catch them colliding.
+    if transpile "http_server_and_sockets" \
+            '    let s = http.localhost(0);
+    let u = udp.open(0);
+    let c = tcp.connect("h", 9);
+    io.println(s.ok());
+    io.println(udp.close(u) + tcp.close(c));'; then
+        if "$CXX" -std=c++17 -Wall -Wextra -c "$WORK/http_server_and_sockets.cpp" \
+                -o "$WORK/hs.o" > "$WORK/hs.cc.log" 2>&1 \
+                && ! grep -q 'warning:' "$WORK/hs.cc.log"; then
+            echo "ok http_server_and_sockets_build"
+        else
+            echo "FAIL http_server_and_sockets_build: http.localhost beside tcp/udp does not build clean"
+            sed 's/^/  /' "$WORK/hs.cc.log" | head -n 20
             fails=$((fails + 1))
         fi
     fi

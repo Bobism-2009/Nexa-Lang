@@ -71,9 +71,9 @@ struct __nexa_udp_peer {
 // a packet has to be able to arrive from off the machine for this to be UDP
 // and not a pipe.
 [[maybe_unused]] static int __nexa_udp_open(int port) {
-  if (!__nexa_sock_start()) return 0;
-  __nexa_sock_t fd = socket(AF_INET, SOCK_DGRAM, 0);
-  if (fd == __NEXA_SOCK_BAD) return 0;
+  if (!__nexa_net_start()) return 0;
+  __nexa_net_sock_t fd = socket(AF_INET, SOCK_DGRAM, 0);
+  if (fd == __NEXA_NET_BAD) return 0;
   int one = 1;
   setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&one, (socklen_t)sizeof(one));
   struct sockaddr_in addr;
@@ -82,10 +82,10 @@ struct __nexa_udp_peer {
   addr.sin_port = htons((unsigned short)port);
   addr.sin_addr.s_addr = htonl(INADDR_ANY);
   if (bind(fd, (struct sockaddr*)&addr, (socklen_t)sizeof(addr)) != 0) {
-    __nexa_sock_shut(fd);
+    __nexa_net_shut(fd);
     return 0;
   }
-  return __nexa_sock_handle(fd);
+  return __nexa_net_handle(fd);
 }
 // udp.port: the port this socket is on, which is how a program that asked for
 // 0 tells its peer where to write.
@@ -93,7 +93,7 @@ struct __nexa_udp_peer {
   struct sockaddr_in a;
   memset(&a, 0, sizeof(a));
   socklen_t len = (socklen_t)sizeof(a);
-  if (getsockname((__nexa_sock_t)h, (struct sockaddr*)&a, &len) != 0) return 0;
+  if (getsockname((__nexa_net_sock_t)h, (struct sockaddr*)&a, &len) != 0) return 0;
   return (int)ntohs(a.sin_port);
 }
 // udp.send: one datagram, one call. A UDP write is all-or-nothing -- there is
@@ -111,7 +111,7 @@ struct __nexa_udp_peer {
   if (getaddrinfo(host.c_str(), portStr.c_str(), &hints, &res) != 0 || !res) return 0;
   size_t n = data.size();
   int chunk = n > 0x7fffffff ? 0x7fffffff : (int)n;
-  int k = (int)sendto((__nexa_sock_t)h, data.data(), chunk, __NEXA_SOCK_SEND_FLAGS,
+  int k = (int)sendto((__nexa_net_sock_t)h, data.data(), chunk, __NEXA_NET_SEND_FLAGS,
                       res->ai_addr, (socklen_t)res->ai_addrlen);
   freeaddrinfo(res);
   return k < 0 ? 0 : k;
@@ -131,7 +131,7 @@ struct __nexa_udp_peer {
   struct sockaddr_storage from;
   memset(&from, 0, sizeof(from));
   socklen_t fromLen = (socklen_t)sizeof(from);
-  int n = (int)recvfrom((__nexa_sock_t)h, &out[0], max, 0, (struct sockaddr*)&from, &fromLen);
+  int n = (int)recvfrom((__nexa_net_sock_t)h, &out[0], max, 0, (struct sockaddr*)&from, &fromLen);
   if (n < 0) return std::string();
   char hostBuf[NI_MAXHOST];
   char portBuf[NI_MAXSERV];
@@ -171,7 +171,7 @@ struct __nexa_udp_peer {
 [[maybe_unused]] static std::string __nexa_udp_recv(int h, int max) {
   std::string out;
   out.resize((size_t)max);
-  int n = (int)recvfrom((__nexa_sock_t)h, &out[0], max, 0, nullptr, nullptr);
+  int n = (int)recvfrom((__nexa_net_sock_t)h, &out[0], max, 0, nullptr, nullptr);
   if (n < 0) return std::string();
   out.resize((size_t)n);
   return out;
@@ -181,7 +181,7 @@ struct __nexa_udp_peer {
 
     real += R"NEXA_UDP_CLOSE(
 [[maybe_unused]] static int __nexa_udp_close(int h) {
-  __nexa_sock_shut((__nexa_sock_t)h);
+  __nexa_net_shut((__nexa_net_sock_t)h);
   return 1;
 }
 )NEXA_UDP_CLOSE";
