@@ -27,11 +27,11 @@
 # same code all four backends run, so checking it here checks it everywhere.
 #
 # Replacing the marked range rather than the backend's own lines is what keeps
-# this half running on any machine: which of waveOut, AudioQueue, ALSA or Web
-# Audio was emitted below the marker makes no difference to it.
+# this half running on any machine: which of waveOut, AudioQueue, kernel PCM or
+# Web Audio was emitted below the marker makes no difference to it.
 #
-# The ALSA backend itself, which is the one this machine could run, has its own
-# cover in Tests/gfx_alsa_cases.sh.
+# The Linux backend itself, which is the one this machine could run, has its own
+# cover in Tests/gfx_pcm_cases.sh.
 #
 # Emit slicing (a program that never plays a sound carries none of this) is
 # covered in Tests/gfx_emit_cases.sh, and the arity diagnostics in

@@ -1,15 +1,14 @@
 #!/bin/sh
-# Cover for the kernel /dev/snd fallback behind gfx.audio() (BOB-46).
+# Cover for the Linux audio backend behind gfx.audio() (BOB-46, BOB-47).
 #
-# Tests/gfx_alsa_cases.sh covers the first way a Nexa program reaches a speaker
-# on Linux: libasound, dlopened, which a fake shared library can stand in for.
-# This file covers the second, taken when there is no libasound on the machine
-# at all -- the kernel's own PCM interface, driven through ioctls on /dev/snd
-# with the uapi structs written out by hand in include/GfxRuntime.hpp.
+# There is one way a Nexa program reaches a speaker on Linux: the kernel's own
+# PCM interface, driven through ioctls on /dev/snd with the uapi structs written
+# out by hand in include/GfxRuntime.hpp. Nothing is dlopened and nothing is
+# linked, so nothing has to be installed on the machine that runs the binary.
 #
-# That hand-writing is the thing worth testing, and it cannot be tested the same
-# way. A kernel PCM has no shared library to substitute, so there is no fake
-# device to point the program at. What there is instead is two halves:
+# That hand-writing is the thing worth testing, and a kernel PCM has no shared
+# library to substitute, so there is no fake device to point the program at.
+# What there is instead is two halves:
 #
 #   abi   -- always runs. Cuts the [nexa:kernel-pcm-*] range out of a generated
 #            program, compiles it on its own, and checks every struct size and
@@ -18,11 +17,10 @@
 #            never makes a sound, because the size is part of the ioctl number
 #            and the kernel simply refuses a request it does not recognise.
 #
-#   live  -- runs only on a machine that has a sound card and has no libasound,
-#            which is exactly the machine the fallback exists for. There the
-#            program has to actually play, and the clock is what proves it: a
-#            stream that opened but never started hands three thousand samples
-#            back instantly, and a real card cannot.
+#   live  -- runs on any machine with a sound card. The program has to actually
+#            play, and the clock is what proves it: a stream that opened but
+#            never started hands three thousand samples back instantly, and a
+#            real card cannot.
 #
 # Linux only, and quiet -- the live half feeds silence.
 #
@@ -46,7 +44,7 @@ fails=0
 skips=0
 
 if [ "$(uname -s)" != "Linux" ]; then
-    echo "SKIP gfx_pcm: the kernel PCM fallback is Linux only (this is $(uname -s))"
+    echo "SKIP gfx_pcm: the kernel PCM backend is Linux only (this is $(uname -s))"
     echo "gfx_pcm ok"
     exit 0
 fi
@@ -87,21 +85,25 @@ if ! "$NEXAC" "$SUITE/gfx_pcm_test.nxa" --source "$WORK/prog.cpp" > "$WORK/trans
 fi
 
 if grep -q '/dev/snd/pcmC%dD%dp' "$WORK/prog.cpp"; then
-    say_ok "slice: the kernel PCM fallback survived into the generated program"
+    say_ok "slice: the kernel PCM backend survived into the generated program"
 else
-    say_fail "slice: the generated program has no kernel PCM fallback in it"
+    say_fail "slice: the generated program has no kernel PCM backend in it"
 fi
 
-# libasound stays the first path tried. On a desktop it is the one that shares
-# the card with whatever else is making noise, and the fallback is only correct
-# because it is reached when there is no such thing to share with.
-if grep -q 'if (!__nexa_alsa_load()) {' "$WORK/prog.cpp"; then
-    say_ok "order: the kernel path is only reached when libasound will not load"
+# The whole point of the backend: a program that plays a sound owes nothing to
+# a library. Neither a link to libasound nor a dlopen looking for one belongs
+# anywhere in the audio it carries. Comments are cut first, because the design
+# note at the top of the backend says the word "libasound" to explain what is
+# deliberately not there.
+grep -vE '^[[:space:]]*//' "$WORK/prog.cpp" > "$WORK/code.cpp"
+if grep -nE 'libasound|snd_pcm_open|dlfcn|dlopen' "$WORK/code.cpp" > "$WORK/dep.out"; then
+    say_fail "nodep: the generated program still reaches for a sound library"
+    sed 's/^/  /' "$WORK/dep.out" | head -n 5
 else
-    say_fail "order: the kernel path is no longer guarded by the libasound load"
+    say_ok "nodep: the generated program reaches no sound library, only the kernel"
 fi
 
-# The fallback belongs to the sound slice, so a gfx program that never makes a
+# The backend belongs to the sound slice, so a gfx program that never makes a
 # noise must not be carrying it.
 if ! "$NEXAC" "$SUITE/gfx_shapes_test.nxa" --source "$WORK/quiet.cpp" > "$WORK/quiet.log" 2>&1; then
     echo "FAIL slice: NexaC could not transpile Tests/gfx_shapes_test.nxa"
@@ -201,8 +203,11 @@ fi
 
 # --- the whole program, built the way the other gfx suites build one ---------
 
-# -Wno-unused-function for the same reason Tests/gfx_alsa_cases.sh gives: the
-# window helpers are emitted into every gfx program whether it opens one or not.
+# -Wno-unused-function on purpose: gfx.open/close/poll/present are emitted into
+# every gfx program whether or not it calls them (see GfxNeed in
+# include/GfxRuntime.hpp), so a program that only opens an audio stream carries
+# window helpers nothing reaches. That is the slicing design, not a defect, and
+# it is the only warning class this build is excused from.
 if ! "$CXX" -std=c++17 -O1 -Wall -Wextra -Wno-unused-function -I "$SUITE/gfx_x11_stub" \
         "$WORK/prog.cpp" "$SUITE/gfx_x11_stub/x11_stub.cpp" \
         -o "$WORK/prog" > "$WORK/build.log" 2>&1; then
@@ -223,44 +228,24 @@ if [ -n "$diags" ]; then
     printf '%s\n' "$diags" | head -n 5 | sed 's/^/  /'
     fails=$((fails + 1))
 else
-    say_ok "build: the kernel PCM fallback compiles clean under -Wall -Wextra"
+    say_ok "build: the kernel PCM backend compiles clean under -Wall -Wextra"
 fi
 
-# --- live: only on the machine this fallback is for --------------------------
-
-# libasound present means the program never reaches the kernel path, so there is
-# nothing here to run -- Tests/gfx_alsa_cases.sh is the suite for that machine.
-has_libasound=$(python3 - <<'PY' 2>/dev/null || echo unknown
-import ctypes
-try:
-    ctypes.CDLL("libasound.so.2")
-    print("yes")
-except OSError:
-    try:
-        ctypes.CDLL("libasound.so")
-        print("yes")
-    except OSError:
-        print("no")
-PY
-)
+# --- live: on any machine with a card ----------------------------------------
 
 has_pcm=no
 for n in /dev/snd/pcmC*D*p; do
     [ -c "$n" ] && has_pcm=yes && break
 done
 
-if [ "$has_libasound" != "no" ]; then
-    echo "SKIP live: this machine has libasound, so gfx.audio() never reaches"
-    echo "     the kernel path (that machine is Tests/gfx_alsa_cases.sh's)"
-    skips=$((skips + 1))
-elif [ "$has_pcm" != "yes" ]; then
+if [ "$has_pcm" != "yes" ]; then
     echo "SKIP live: no /dev/snd playback node on this machine, so there is no"
-    echo "     card for the fallback to open"
+    echo "     card for the backend to open"
     skips=$((skips + 1))
 else
-    echo "-- a real card, reached without libasound"
+    echo "-- a real card, reached without a library"
 
-    # A device node that is not a PCM at all. The fallback has to give up on it
+    # A device node that is not a PCM at all. The backend has to give up on it
     # and say so the way it says everything else: a quiet 0 and a program that
     # finishes. /dev/null opens, so this gets past the open and fails where it
     # matters, on the first ioctl.

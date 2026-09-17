@@ -542,8 +542,9 @@ fi
 # branch, slicing then deletes that branch, and the target that needed the
 # header is left with none. That is not a gfx bug in itself; it bites whenever
 # two modules happen to want the same header and one of them is guarded, which
-# is why the gfx audio backends (`<thread>` for the macOS AudioQueue wait,
-# `<dlfcn.h>` for the ALSA dlopen) collide with std/thread and std/dll.
+# is why the gfx audio backends (`<thread>` for the macOS AudioQueue wait) and
+# std/network's non-Emscripten branch (`<dlfcn.h>` for the libssl dlopen)
+# collide with std/thread and std/dll.
 #
 # So this layer is written as the general rule rather than the two known pairs:
 # if the emitted C++ names the symbol, the header has to be in the same file,
@@ -610,8 +611,8 @@ fn main() {
 }
 '
 
-# The same collision one module over: the ALSA branch dlopens libasound, and
-# std/dll dlopens what it was asked to.
+# The same wire one module over: std/dll dlopens what it was asked to, and the
+# audio backend is the guarded neighbour that must not have taken its header.
 AUDIO_DLL='#include <std/gfx>
 #include <std/dll>
 

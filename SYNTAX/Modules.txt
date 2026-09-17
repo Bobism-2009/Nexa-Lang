@@ -577,20 +577,18 @@ Nexa Standard Modules
   gfx.audio([rate])              - open 16-bit mono PCM output (default 44100 Hz); 1/0
                                    Windows: winmm waveOut (-lwinmm). wasm: Web Audio
                                    macOS: AudioQueue (-framework AudioToolbox)
-                                   Linux: no library needed, to build or to run. ALSA is
-                                   dlopened at this call and used when it is there, so the
-                                   card stays shared with the desktop's sound server; with
-                                   no libasound on the machine the kernel PCM interface is
-                                   driven directly instead -- /dev/snd, compiled into the
-                                   binary, nothing installed. Set NEXA_PCM_DEVICE to a node
-                                   (/dev/snd/pcmC1D0p) to pick the card that path opens;
-                                   otherwise it takes the first that plays, display outputs
-                                   last. A card that will only take stereo or its own rate
-                                   gets both, and gfx.play is matched to whatever it took --
-                                   so on one, raw gfx.sample plays at the card's rate rather
-                                   than the rate asked for. With no card at all this returns
-                                   0 and the rest of the audio API stays quiet rather than
-                                   failing
+                                   Linux: no library needed, to build or to run. The kernel
+                                   PCM interface is driven directly -- /dev/snd ioctls
+                                   compiled into the binary, no libasound, nothing
+                                   installed. The card is held exclusively while the stream
+                                   is open. Set NEXA_PCM_DEVICE to a node
+                                   (/dev/snd/pcmC1D0p) to pick the card; otherwise it takes
+                                   the first that plays, display outputs last. A card that
+                                   will only take stereo or its own rate gets both, and
+                                   gfx.play is matched to whatever it took -- so on one, raw
+                                   gfx.sample plays at the card's rate rather than the rate
+                                   asked for. With no card at all this returns 0 and the
+                                   rest of the audio API stays quiet rather than failing
                                    gfx.close() also closes the stream
   gfx.sample(s)                  - queue one signed 16-bit sample (-32768..32767); 1/0
   gfx.audio_queued()             - samples still waiting to play

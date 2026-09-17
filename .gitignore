@@ -11,7 +11,6 @@
 !Tests/gfx_input_semantics.cpp
 !Tests/gfx_sound_semantics.cpp
 !Tests/gfx_x11_stub/x11_stub.cpp
-!Tests/gfx_alsa_stub/alsa_stub.cpp
 
 # Packages
 .nexa/

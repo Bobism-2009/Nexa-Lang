@@ -1,10 +1,10 @@
-// Drives the kernel /dev/snd fallback behind gfx.audio() (BOB-46).
+// Drives the kernel /dev/snd backend behind gfx.audio() (BOB-46, BOB-47).
 //
 // Run by Tests/gfx_pcm_cases.sh. Everything here goes through the public API --
 // there is no fake device under this one, because a kernel PCM cannot be faked
-// from outside the way libasound can be. What it prints is therefore either a
-// real sound card answering or a quiet 0, and the suite decides which of those
-// the machine it is on is allowed to give.
+// from outside the way a shared library can be. What it prints is therefore
+// either a real sound card answering or a quiet 0, and the suite decides which
+// of those the machine it is on is allowed to give.
 //
 // The interesting value is elapsed_ms. A stream that opened but is not actually
 // running gives back every sample instantly and the drain below finishes in no
