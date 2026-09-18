@@ -2893,28 +2893,28 @@ private:
     // floor and the variable silently becomes 0 — `let x = os.exit(1);` would
     // not exit. Refusing them in the parser is the whole fix.
     static std::string osVoidCallHint(const std::string& m) {
-        if (m == "lock") return "os.lock() locks the screen and returns nothing";
-        if (m == "shutdown") return "os.shutdown() powers the machine off and returns nothing";
-        if (m == "reboot") return "os.reboot() restarts the machine and returns nothing";
-        if (m == "suspend") return "os.suspend() sleeps the machine and returns nothing";
-        if (m == "logout") return "os.logout() ends the session and returns nothing";
-        if (m == "mute") return "os.mute() silences the output and returns nothing";
-        if (m == "unmute") return "os.unmute() restores the output and returns nothing";
-        if (m == "toggle_mute") return "os.toggle_mute() flips the mute and returns nothing";
-        if (m == "set_volume") return "os.set_volume(v) sets the output level and returns nothing";
-        if (m == "set_brightness") return "os.set_brightness(v) sets the screen level and returns nothing";
-        if (m == "clip_set") return "os.clip_set(s) writes the clipboard and returns nothing";
-        if (m == "type" || m == "type_text") return "os." + m + "(s) types the text and returns nothing";
-        if (m == "notify") return "os.notify(title, message) shows a notification and returns nothing";
-        if (m == "open") return "os.open(target) hands the target to the desktop and returns nothing";
-        if (m == "messagebox") return "os.messagebox(text, title) shows a box and returns nothing";
-        if (m == "exit") return "os.exit(code) ends the program and returns nothing";
-        if (m == "setenv") return "os.setenv(name, value) sets the variable and returns nothing";
-        if (m == "unsetenv") return "os.unsetenv(name) clears the variable and returns nothing";
+        if (m == "lock") return "os.lock() locks the screen";
+        if (m == "shutdown") return "os.shutdown() powers the machine off";
+        if (m == "reboot") return "os.reboot() restarts the machine";
+        if (m == "suspend") return "os.suspend() sleeps the machine";
+        if (m == "logout") return "os.logout() ends the session";
+        if (m == "mute") return "os.mute() silences the output";
+        if (m == "unmute") return "os.unmute() restores the output";
+        if (m == "toggle_mute") return "os.toggle_mute() flips the mute";
+        if (m == "set_volume") return "os.set_volume(v) sets the output level";
+        if (m == "set_brightness") return "os.set_brightness(v) sets the screen level";
+        if (m == "clip_set") return "os.clip_set(s) writes the clipboard";
+        if (m == "type" || m == "type_text") return "os." + m + "(s) types the text";
+        if (m == "notify") return "os.notify(title, message) shows a notification";
+        if (m == "open") return "os.open(target) hands the target to the desktop";
+        if (m == "messagebox") return "os.messagebox(text, title) shows a box";
+        if (m == "exit") return "os.exit(code) ends the program";
+        if (m == "setenv") return "os.setenv(name, value) sets the variable";
+        if (m == "unsetenv") return "os.unsetenv(name) clears the variable";
         if (m == "hideconsolewindow" || m == "showconsolewindow" ||
             m == "minimizeconsolewindow" || m == "minimiseconsolewindow" ||
             m == "maximizeconsolewindow" || m == "maximiseconsolewindow") {
-            return "os." + m + "() moves the console window and returns nothing";
+            return "os." + m + "() moves the console window";
         }
         return std::string();
     }
@@ -2944,7 +2944,8 @@ private:
         if (valuePosition) {
             std::string hint = osVoidCallHint(method);
             if (!hint.empty()) {
-                throw std::runtime_error(hint + "; call it as a statement at line " + std::to_string(line));
+                throw std::runtime_error(hint + "; you aren't allowed to turn it into a variable at line " +
+                                         std::to_string(line));
             }
         }
         if (method == "hideconsolewindow" || method == "showconsolewindow" ||
@@ -4305,25 +4306,25 @@ private:
     // Modules.txt: gfx.poll is void too, while gfx.text and gfx.poly are not.
     // Returns the "what it does" clause for a void method, or nullptr.
     static const char* gfxVoidCallHint(const std::string& m) {
-        if (m == "clear") return "gfx.clear(r, g, b) paints the whole window and returns nothing";
-        if (m == "plot") return "gfx.plot(x, y, r, g, b) draws to the window and returns nothing";
-        if (m == "fill") return "gfx.fill(x, y, w, h, r, g, b) draws to the window and returns nothing";
-        if (m == "rect") return "gfx.rect(x, y, w, h, r, g, b) draws to the window and returns nothing";
-        if (m == "line") return "gfx.line(x1, y1, x2, y2, r, g, b[, t]) draws to the window and returns nothing";
-        if (m == "circle") return "gfx.circle(cx, cy, rad, r, g, b) draws to the window and returns nothing";
-        if (m == "fill_circle") return "gfx.fill_circle(cx, cy, rad, r, g, b) draws to the window and returns nothing";
-        if (m == "ellipse") return "gfx.ellipse(cx, cy, rx, ry, r, g, b) draws to the window and returns nothing";
-        if (m == "fill_ellipse") return "gfx.fill_ellipse(cx, cy, rx, ry, r, g, b) draws to the window and returns nothing";
-        if (m == "arc") return "gfx.arc(cx, cy, rad, a0, a1, r, g, b) draws to the window and returns nothing";
-        if (m == "pie") return "gfx.pie(cx, cy, rad, a0, a1, r, g, b) draws to the window and returns nothing";
-        if (m == "round_rect") return "gfx.round_rect(x, y, w, h, rad, r, g, b) draws to the window and returns nothing";
-        if (m == "fill_round_rect") return "gfx.fill_round_rect(x, y, w, h, rad, r, g, b) draws to the window and returns nothing";
-        if (m == "tri") return "gfx.tri(x1, y1, x2, y2, x3, y3, r, g, b) draws to the window and returns nothing";
-        if (m == "fill_tri") return "gfx.fill_tri(x1, y1, x2, y2, x3, y3, r, g, b) draws to the window and returns nothing";
-        if (m == "present") return "gfx.present() shows what you drew and returns nothing";
-        if (m == "poll") return "gfx.poll() takes in the window's input and returns nothing";
-        if (m == "close") return "gfx.close() closes the window and returns nothing";
-        if (m == "maxfps") return "gfx.maxfps(fps) sets the frame cap and returns nothing";
+        if (m == "clear") return "gfx.clear(r, g, b) paints the whole window";
+        if (m == "plot") return "gfx.plot(x, y, r, g, b) draws to the window";
+        if (m == "fill") return "gfx.fill(x, y, w, h, r, g, b) draws to the window";
+        if (m == "rect") return "gfx.rect(x, y, w, h, r, g, b) draws to the window";
+        if (m == "line") return "gfx.line(x1, y1, x2, y2, r, g, b[, t]) draws to the window";
+        if (m == "circle") return "gfx.circle(cx, cy, rad, r, g, b) draws to the window";
+        if (m == "fill_circle") return "gfx.fill_circle(cx, cy, rad, r, g, b) draws to the window";
+        if (m == "ellipse") return "gfx.ellipse(cx, cy, rx, ry, r, g, b) draws to the window";
+        if (m == "fill_ellipse") return "gfx.fill_ellipse(cx, cy, rx, ry, r, g, b) draws to the window";
+        if (m == "arc") return "gfx.arc(cx, cy, rad, a0, a1, r, g, b) draws to the window";
+        if (m == "pie") return "gfx.pie(cx, cy, rad, a0, a1, r, g, b) draws to the window";
+        if (m == "round_rect") return "gfx.round_rect(x, y, w, h, rad, r, g, b) draws to the window";
+        if (m == "fill_round_rect") return "gfx.fill_round_rect(x, y, w, h, rad, r, g, b) draws to the window";
+        if (m == "tri") return "gfx.tri(x1, y1, x2, y2, x3, y3, r, g, b) draws to the window";
+        if (m == "fill_tri") return "gfx.fill_tri(x1, y1, x2, y2, x3, y3, r, g, b) draws to the window";
+        if (m == "present") return "gfx.present() shows what you drew";
+        if (m == "poll") return "gfx.poll() takes in the window's input";
+        if (m == "close") return "gfx.close() closes the window";
+        if (m == "maxfps") return "gfx.maxfps(fps) sets the frame cap";
         return nullptr;
     }
 
@@ -4509,7 +4510,7 @@ private:
         if (valuePosition) {
             if (const char* hint = gfxVoidCallHint(method)) {
                 throw std::runtime_error(std::string(hint) +
-                    "; call it as a statement at line " + std::to_string(line));
+                    "; you aren't allowed to turn it into a variable at line " + std::to_string(line));
             }
         }
         if (requireSemicolon && !match(TokenType::Semicolon)) {

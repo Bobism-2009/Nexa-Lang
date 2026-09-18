@@ -1,3 +1,3 @@
-gfx.poll() takes in the window's input and returns nothing
-call it as a statement
+gfx.poll() takes in the window's input
+you aren't allowed to turn it into a variable
 at line 6

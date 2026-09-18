@@ -719,7 +719,7 @@ value_reject() {
         return
     fi
     case $out in
-        *"returns nothing; call it as a statement"*) echo "ok $label" ;;
+        *"; you aren't allowed to turn it into a variable"*) echo "ok $label" ;;
         *)
             echo "FAIL $label: refused, but not with the void-call diagnostic"
             printf '%s\n' "$out" | tail -n 2 | sed 's/^/  /'
