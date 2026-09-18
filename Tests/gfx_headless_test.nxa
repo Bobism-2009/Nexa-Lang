@@ -36,6 +36,10 @@ fn main() {
     // Nor can a window that is not there be above the windows that are.
     io.println("ontop=", gfx.ontop());
     io.println("ontop_set=", gfx.ontop(1));
+    // And a window that is not there cannot stop being there: the third of
+    // the overlay trio answers 0 with no window, the same as the other two.
+    io.println("transparent=", gfx.transparent());
+    io.println("transparent_set=", gfx.transparent(1));
     io.println("text=", gfx.text(0, 0, "hi", 255, 255, 255));
     io.println("drop=", gfx.drop());
 

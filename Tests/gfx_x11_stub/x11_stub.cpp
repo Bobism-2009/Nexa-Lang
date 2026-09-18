@@ -51,6 +51,33 @@ static Window nexa_stub_msg_target = 0;
 static long nexa_stub_msg_mask = 0;
 static int nexa_stub_msg_propagate = 0;
 
+/* How the window was asked for, and the resources that came with it. The gfx
+   runtime picks a visual before it creates a window, so what it asked the
+   server for is the only visible half of gfx.transparent's X11 side: a visual
+   cannot be changed afterwards and nothing reads one back. */
+static int nexa_stub_argb_visual = 1;
+static int nexa_stub_win_depth = 0;
+static int nexa_stub_win_class = 0;
+static VisualID nexa_stub_win_visual_id = 0;
+static unsigned long nexa_stub_win_mask = 0;
+static Colormap nexa_stub_win_colormap = 0;
+static unsigned long nexa_stub_win_border_pixel = 0;
+static int nexa_stub_cmaps_made = 0;
+static int nexa_stub_cmaps_freed = 0;
+static int nexa_stub_gcs_made = 0;
+static int nexa_stub_gcs_freed = 0;
+
+/* The last XCreateImage's depth and the first few pixels of the last
+   XPutImage, which is where the alpha the runtime chose becomes visible. */
+enum { NEXA_STUB_PIXELS = 16 };
+static int nexa_stub_image_depth = 0;
+static unsigned long nexa_stub_image_px[NEXA_STUB_PIXELS];
+
+/* The depth-32 TrueColor visual the fake server offers, when it offers one. A
+   real Visual is opaque to callers; all the runtime does with this one is hand
+   it back to XCreateWindow and XCreateImage. */
+static Visual nexa_stub_argb = { 0x20, TrueColor, 0xFF0000UL, 0xFF00UL, 0xFFUL, 8, 256 };
+
 enum { NEXA_STUB_CALLS = 32 };
 static int nexa_stub_calls[NEXA_STUB_CALLS];
 static int nexa_stub_call_n = 0;
@@ -116,6 +143,40 @@ void nexa_x11_stub_reset(int display_works) {
     nexa_stub_call_n = 0;
     nexa_stub_moved_x = 0;
     nexa_stub_moved_y = 0;
+    nexa_stub_argb_visual = 1;
+    nexa_stub_win_depth = 0;
+    nexa_stub_win_class = 0;
+    nexa_stub_win_visual_id = 0;
+    nexa_stub_win_mask = 0;
+    nexa_stub_win_colormap = 0;
+    nexa_stub_win_border_pixel = 0;
+    nexa_stub_cmaps_made = 0;
+    nexa_stub_cmaps_freed = 0;
+    nexa_stub_gcs_made = 0;
+    nexa_stub_gcs_freed = 0;
+    nexa_stub_image_depth = 0;
+    memset(nexa_stub_image_px, 0, sizeof(nexa_stub_image_px));
+}
+
+void nexa_x11_stub_set_argb_visual(int available) {
+    nexa_stub_argb_visual = available ? 1 : 0;
+}
+
+int nexa_x11_stub_window_depth(void) { return nexa_stub_win_depth; }
+int nexa_x11_stub_window_class(void) { return nexa_stub_win_class; }
+unsigned long nexa_x11_stub_window_visual_id(void) { return (unsigned long)nexa_stub_win_visual_id; }
+unsigned long nexa_x11_stub_window_mask(void) { return nexa_stub_win_mask; }
+unsigned long nexa_x11_stub_window_colormap(void) { return (unsigned long)nexa_stub_win_colormap; }
+unsigned long nexa_x11_stub_window_border_pixel(void) { return nexa_stub_win_border_pixel; }
+int nexa_x11_stub_colormaps_made(void) { return nexa_stub_cmaps_made; }
+int nexa_x11_stub_colormaps_freed(void) { return nexa_stub_cmaps_freed; }
+int nexa_x11_stub_gcs_made(void) { return nexa_stub_gcs_made; }
+int nexa_x11_stub_gcs_freed(void) { return nexa_stub_gcs_freed; }
+int nexa_x11_stub_image_depth(void) { return nexa_stub_image_depth; }
+
+unsigned long nexa_x11_stub_image_pixel(int i) {
+    if (i < 0 || i >= NEXA_STUB_PIXELS) return 0;
+    return nexa_stub_image_px[i];
 }
 
 void nexa_x11_stub_set_mapped(int map_state) { nexa_stub_map_state = map_state; }
@@ -245,7 +306,53 @@ Window XCreateSimpleWindow(Display* d, Window parent, int x, int y,
                            unsigned long border, unsigned long background) {
     (void)d; (void)parent; (void)x; (void)y; (void)w; (void)h; (void)bw;
     (void)border; (void)background;
+    /* A simple window copies its parent's depth and visual, which is what the
+       zeroes recorded here mean: nothing of its own was asked for. */
+    nexa_stub_win_depth = 0;
+    nexa_stub_win_class = 0;
+    nexa_stub_win_visual_id = 0;
+    nexa_stub_win_mask = 0;
+    nexa_stub_win_colormap = 0;
+    nexa_stub_win_border_pixel = 0;
     return nexa_stub_display_works ? (Window)NEXA_STUB_WINDOW : (Window)0;
+}
+Window XCreateWindow(Display* d, Window parent, int x, int y,
+                     unsigned int w, unsigned int h, unsigned int bw,
+                     int depth, unsigned int c_class, Visual* visual,
+                     unsigned long valuemask, XSetWindowAttributes* attrs) {
+    (void)d; (void)parent; (void)x; (void)y; (void)w; (void)h; (void)bw;
+    nexa_stub_win_depth = depth;
+    nexa_stub_win_class = (int)c_class;
+    nexa_stub_win_visual_id = visual ? visual->visualid : 0;
+    nexa_stub_win_mask = valuemask;
+    /* Only what the mask says is read, the way a real server reads it: an
+       attribute left out of the mask is not a zero, it is absent. */
+    nexa_stub_win_colormap = (attrs && (valuemask & CWColormap)) ? attrs->colormap : 0;
+    nexa_stub_win_border_pixel =
+        (attrs && (valuemask & CWBorderPixel)) ? attrs->border_pixel : 0;
+    return nexa_stub_display_works ? (Window)NEXA_STUB_WINDOW : (Window)0;
+}
+Colormap XCreateColormap(Display* d, Window w, Visual* visual, int alloc) {
+    (void)d; (void)w; (void)visual; (void)alloc;
+    nexa_stub_cmaps_made++;
+    return (Colormap)0x2301;
+}
+int XFreeColormap(Display* d, Colormap cmap) {
+    (void)d; (void)cmap;
+    nexa_stub_cmaps_freed++;
+    return 0;
+}
+GC XCreateGC(Display* d, Drawable dr, unsigned long valuemask, void* values) {
+    (void)d; (void)dr; (void)valuemask; (void)values;
+    nexa_stub_gcs_made++;
+    /* Non-null and distinct from the default GC, which is 0 here. */
+    static int fake_gc;
+    return (GC)&fake_gc;
+}
+int XFreeGC(Display* d, GC gc) {
+    (void)d; (void)gc;
+    nexa_stub_gcs_freed++;
+    return 0;
 }
 int XDestroyWindow(Display* d, Window w) { (void)d; (void)w; return 0; }
 int XMapWindow(Display* d, Window w) {
@@ -384,13 +491,27 @@ XImage* XCreateImage(Display* d, Visual* v, unsigned int depth, int format,
     img->data = data;
     img->bits_per_pixel = 32;
     img->bytes_per_line = bpl ? bpl : (int)(w * 4);
+    nexa_stub_image_depth = (int)depth;
     return img;
 }
 int XDestroyImage(XImage* img) { free(img); return 0; }
 int XPutImage(Display* d, Drawable dr, GC gc, XImage* img,
               int sx, int sy, int dx, int dy, unsigned int w, unsigned int h) {
-    (void)d; (void)dr; (void)gc; (void)img; (void)sx; (void)sy;
-    (void)dx; (void)dy; (void)w; (void)h;
+    (void)d; (void)dr; (void)gc; (void)sx; (void)sy; (void)dx; (void)dy;
+    (void)w; (void)h;
+    /* Keep the first few pixels as they went out. The runtime lays them out
+       for this machine's byte order, so a test reads them back as whole 32-bit
+       words rather than as four bytes in a particular order. */
+    memset(nexa_stub_image_px, 0, sizeof(nexa_stub_image_px));
+    if (img && img->data) {
+        int n = img->width * img->height;
+        if (n > NEXA_STUB_PIXELS) n = NEXA_STUB_PIXELS;
+        for (int i = 0; i < n; i++) {
+            unsigned int v = 0;
+            memcpy(&v, (unsigned char*)img->data + i * 4, 4);
+            nexa_stub_image_px[i] = (unsigned long)v;
+        }
+    }
     return 0;
 }
 GC XDefaultGC(Display* d, int s) { (void)d; (void)s; return 0; }
@@ -400,5 +521,25 @@ int XDefaultDepth(Display* d, int s) { (void)d; (void)s; return 24; }
 Window XRootWindow(Display* d, int s) { (void)d; (void)s; return 0; }
 unsigned long XBlackPixel(Display* d, int s) { (void)d; (void)s; return 0; }
 unsigned long XWhitePixel(Display* d, int s) { (void)d; (void)s; return 0xFFFFFFUL; }
+/* The one visual the fake server has beyond the screen's own: depth 32
+   TrueColor, which is the one with an alpha channel. Anything else is not on
+   offer, and neither is this one once a test has said so. */
+Status XMatchVisualInfo(Display* d, int screen, int depth, int c_class, XVisualInfo* out) {
+    (void)d;
+    if (!out) return 0;
+    if (depth != 32 || c_class != TrueColor || !nexa_stub_argb_visual) return 0;
+    memset(out, 0, sizeof(*out));
+    out->visual = &nexa_stub_argb;
+    out->visualid = nexa_stub_argb.visualid;
+    out->screen = screen;
+    out->depth = 32;
+    out->c_class = TrueColor;
+    out->red_mask = nexa_stub_argb.red_mask;
+    out->green_mask = nexa_stub_argb.green_mask;
+    out->blue_mask = nexa_stub_argb.blue_mask;
+    out->colormap_size = nexa_stub_argb.map_entries;
+    out->bits_per_rgb = nexa_stub_argb.bits_per_rgb;
+    return 1;
+}
 int XSetWMNormalHints(Display* d, Window w, XSizeHints* h) { (void)d; (void)w; (void)h; return 0; }
 XSizeHints* XAllocSizeHints(void) { return (XSizeHints*)calloc(1, sizeof(XSizeHints)); }

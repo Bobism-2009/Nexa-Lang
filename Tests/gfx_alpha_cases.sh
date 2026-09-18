@@ -223,6 +223,10 @@ struct __nexa_Gfx {
     int w;
     int h;
     int ready;
+    // gfx.clear reads this to decide what alpha it writes (BOB-51), and
+    // gfx.clear is in the lifted block. 0 here is a solid window, which is
+    // the state every one of these cases is about.
+    int transparent;
     unsigned char* fb;
 };
 static __nexa_Gfx __nexa_g = {};

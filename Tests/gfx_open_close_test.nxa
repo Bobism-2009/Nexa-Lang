@@ -339,6 +339,74 @@ fn main() {
         gfx.close();
         return 65;
     }
+    // Whether the desktop actually composites the window away is the
+    // compositor's business and there is nothing to ask it, but what the call
+    // does to the framebuffer is this program's own and can be read back: a
+    // clear leaves nothing shown, a draw over it is the colour as drawn, and
+    // gfx.get reports the colours either way.
+    if (gfx.transparent() != 0) {
+        io.println("fail transparent starts off");
+        gfx.close();
+        return 67;
+    }
+    if (gfx.transparent(1) != 1 || gfx.transparent() != 1) {
+        io.println("fail transparent on");
+        gfx.close();
+        return 68;
+    }
+    gfx.clear(10, 20, 30);
+    if (gfx.get(0, 0) != 0x0A141E) {
+        io.println("fail clear colour while transparent");
+        gfx.close();
+        return 69;
+    }
+    // Half-covering a cleared see-through pixel has to give the drawn colour
+    // at half coverage, not the drawn colour mixed toward a clear colour that
+    // is not on the screen. 200 here; 105 in the same draw with it off.
+    gfx.alpha(128);
+    gfx.fill(1, 1, 1, 1, 200, 100, 50);
+    if (gfx.get(1, 1) != 0xC86432) {
+        io.println("fail translucent draw on a see-through clear");
+        gfx.close();
+        return 70;
+    }
+    gfx.alpha(255);
+    // The other three of the overlay trio compose, and the window does not
+    // move when any of them changes.
+    if (gfx.borderless(1) != 1 || gfx.ontop(1) != 1 || gfx.transparent() != 1) {
+        io.println("fail overlay trio together");
+        gfx.close();
+        return 71;
+    }
+    if (gfx.fullscreen(1) != 1 || gfx.fullscreen(0) != 0 || gfx.transparent() != 1) {
+        io.println("fail transparent through fullscreen");
+        gfx.close();
+        return 72;
+    }
+    if (gfx.borderless(0) != 0 || gfx.ontop(0) != 0) {
+        io.println("fail overlay trio back off");
+        gfx.close();
+        return 73;
+    }
+    if (gfx.transparent(0) != 0 || gfx.transparent() != 0) {
+        io.println("fail transparent off");
+        gfx.close();
+        return 74;
+    }
+    gfx.clear(10, 20, 30);
+    gfx.alpha(128);
+    gfx.fill(1, 1, 1, 1, 200, 100, 50);
+    if (gfx.get(1, 1) != 0x693C28) {
+        io.println("fail translucent draw on a solid clear");
+        gfx.close();
+        return 75;
+    }
+    gfx.alpha(255);
+    if (gfx.width() != 8 || gfx.height() != 8 || gfx.scale() != 2) {
+        io.println("fail size after transparent");
+        gfx.close();
+        return 76;
+    }
     gfx.close();
     if (gfx.resize(10, 10) != 0 || gfx.width() != 0 || gfx.height() != 0 || gfx.scale() != 0) {
         io.println("fail size after close");
@@ -359,6 +427,10 @@ fn main() {
     if (gfx.ontop() != 0 || gfx.ontop(1) != 0) {
         io.println("fail ontop after close");
         return 66;
+    }
+    if (gfx.transparent() != 0 || gfx.transparent(1) != 0) {
+        io.println("fail transparent after close");
+        return 77;
     }
     if (gfx.image_w(img) != 2 || gfx.image_h(img) != 2) {
         io.println("fail image after close");

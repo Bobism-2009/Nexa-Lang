@@ -444,7 +444,10 @@ Nexa Standard Modules
   gfx.poll()                     - process events (call each frame)
   gfx.closed()                   - 1 if the user closed the window; 0 before the first
                                    gfx.open()
-  gfx.clear(r, g, b)             - fill the framebuffer
+  gfx.clear(r, g, b)             - fill the framebuffer. With gfx.transparent(1) this
+                                   also makes the whole window see-through: the colour
+                                   is still written and still what gfx.get reports, but
+                                   nothing of it is shown until something is drawn on it
   gfx.plot(x, y, r, g, b)        - set one pixel (0..255)
   gfx.get(x, y)                  - pixel as 0xRRGGBB, or -1 if out of bounds / closed
   gfx.fill(x, y, w, h, r, g, b)  - filled rectangle, clipped (negative w/h flip)
@@ -541,6 +544,12 @@ Nexa Standard Modules
                                    of a thick line, and two shapes that overlap. Draw
                                    translucent pieces so they do not overlap if that
                                    matters, or draw them opaque into a cleared frame.
+                                   That formula is the whole story on a solid window.
+                                   With gfx.transparent(1) a draw onto a pixel nothing
+                                   has been drawn on blends against what is behind the
+                                   window instead, which means the colour comes out as
+                                   drawn and the coverage is what a < 255 sets. See
+                                   gfx.transparent.
   gfx.save(path)                 - write the framebuffer to path as a 24-bit uncompressed
                                    BMP; 1 on success, 0 if the window is closed, the path
                                    is empty, or the file could not be written whole. The
@@ -549,6 +558,9 @@ Nexa Standard Modules
                                    is not inspected: gfx.save writes a BMP whatever the
                                    name says. Call it after drawing; gfx.present() is not
                                    required first.
+                                   24 bits is three channels, so a screenshot of a
+                                   see-through window is the colours and not the
+                                   see-through-ness -- see gfx.transparent.
   gfx.text(x, y, s, r, g, b[, scale]) - 5x7 ASCII (32..126); optional scale 1..64
                                    omits scale: uses gfx.text_size(); 6x8 cell * scale; \\n / \\t
                                    \\t advances to the next multiple of 4 cells (24*scale px)
@@ -642,6 +654,67 @@ Nexa Standard Modules
                                    wasm: a canvas has no other programs to be above, so
                                    nothing happens; the state is still remembered and
                                    returned
+  gfx.transparent()              - 1 if the window was asked to be see-through, else 0
+                                   (0 if closed)
+  gfx.transparent(on)            - make the window itself invisible while everything
+                                   drawn stays visible (1), or solid again (0); returns
+                                   the new state. For overlays: pair it with gfx.ontop
+                                   and gfx.borderless and the program is a drawing on
+                                   the desktop rather than a window on it.
+                                   What it changes is what a pixel's fourth byte -- how
+                                   much of it is the program's -- gets written as from
+                                   here on:
+                                     gfx.clear writes "none of it", so with this on a
+                                     clear makes the whole window see-through. The
+                                     colour is still written and is still what gfx.get
+                                     reports; it is the colour the pixels drawn back
+                                     over start from.
+                                     An opaque draw is opaque, so what the program
+                                     draws is what is left showing.
+                                     A draw at gfx.alpha(a) below 255 onto a pixel
+                                     nothing has been drawn on comes out at that
+                                     coverage against WHAT IS BEHIND THE WINDOW -- the
+                                     colour as drawn, not that colour blended toward a
+                                     clear colour nobody can see. Onto a pixel that is
+                                     already drawn it is the blend it has always been.
+                                     Two translucent draws over the same undrawn pixel
+                                     build the coverage up, not the colour.
+                                   So a window goes see-through at its next gfx.clear
+                                   rather than at this call: after the fact there is no
+                                   telling which pixels in the framebuffer the program
+                                   meant and which it merely cleared.
+                                   A window opens solid and gfx.open() puts it back.
+                                   Transparent, on top and borderless are independent,
+                                   and a fullscreen round trip leaves all three as the
+                                   program last asked for them.
+                                   What is returned is what the program asked for, not
+                                   what the desktop did with it -- the same as gfx.ontop.
+                                   An X11 session with no compositor running draws the
+                                   alpha channel however it likes; nothing is probed and
+                                   nothing is warned about.
+                                   gfx.save is unaffected and deliberately so: a 24-bit
+                                   BMP has no alpha channel, so a screenshot is the
+                                   colours and not the see-through-ness. A pixel that
+                                   was never drawn saves as the colour it was last
+                                   cleared to, which is what gfx.get reports for it.
+                                   Linux: the window is created on the depth-32 ARGB
+                                   TrueColor visual, with a colormap of its own. A
+                                   visual is fixed when a window is created, so this
+                                   happens in any program that mentions gfx.transparent
+                                   at all -- including one that only ever asks. A screen
+                                   with no such visual gets the ordinary window and the
+                                   call still reports what was asked for.
+                                   Windows: WS_EX_LAYERED and UpdateLayeredWindow with a
+                                   premultiplied 32-bit bitmap, which is the only route
+                                   where per-pixel alpha means anything. It replaces the
+                                   whole window rather than the client area, so the
+                                   frame goes with it -- gfx.borderless(1) is the honest
+                                   pairing.
+                                   macOS: setOpaque:NO, a clear background colour and a
+                                   premultiplied bitmap.
+                                   wasm: the canvas composites over the page already, so
+                                   this takes away the opaque backdrop it is given when
+                                   the window opens and lets the page through
   gfx.audio([rate])              - open 16-bit mono PCM output (default 44100 Hz); 1/0
                                    Windows: winmm waveOut (-lwinmm). wasm: Web Audio
                                    macOS: AudioQueue (-framework AudioToolbox)
@@ -812,7 +885,7 @@ Nexa Standard Modules
   round_rect, fill_round_rect, line, circle, fill_circle, ellipse, fill_ellipse,
   arc, pie, tri, fill_tri, poly, fill_poly, text, blit, blit_rot, present, poll)
   does nothing; width, height, scale, resize, fullscreen, borderless, ontop,
-  blit, blit_rot, icon, cursor, text, poly, fill_poly, save, wheel, wheel_x,
+  transparent, blit, blit_rot, icon, cursor, text, poly, fill_poly, save, wheel, wheel_x,
   mouse_x, mouse_y, mouse, key, pressed and released return 0; get returns -1;
   typed returns ""; title and drop return what they last held. The calls with no
   window in them still work: text_width, text_height, text_size, alpha, image,

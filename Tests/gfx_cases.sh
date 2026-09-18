@@ -23,13 +23,18 @@
 #             Tests/gfx_x11_stub instead, which is sound because this program
 #             never opens a window. Skipped only when neither route builds.
 #
-#   semantics Build Tests/gfx_borderless_semantics.cpp and
-#             Tests/gfx_ontop_semantics.cpp against the same fake X11 and drive
-#             the runtime directly. Both are calls whose result belongs to the
-#             window manager -- the frame it draws around a window, the pile it
-#             stacks the window in -- so nothing can read either back. What is
-#             checked is the request the runtime makes, which the stub records.
-#             Needs no display.
+#   semantics Build Tests/gfx_borderless_semantics.cpp,
+#             Tests/gfx_ontop_semantics.cpp and
+#             Tests/gfx_transparent_semantics.cpp against the same fake X11 and
+#             drive the runtime directly. The first two are calls whose result
+#             belongs to the window manager -- the frame it draws around a
+#             window, the pile it stacks the window in -- so nothing can read
+#             either back, and what is checked is the request the runtime
+#             makes, which the stub records. The third is half that and half
+#             something a test can read for itself: which window the runtime
+#             asked the server for is a request, but what a clear and a
+#             translucent draw leave in the framebuffer, and what goes out on
+#             the wire for them, are bytes. Needs no display.
 #
 #   window    Build and run Tests/gfx_open_close_test.nxa, which opens a real
 #             window and reads pixels back. Needs a display; skipped without
@@ -151,6 +156,10 @@ expect_emit "ontop with no argument queries" \
     '__nexa_gfx_ontop\(-1\)' '    let t: int = gfx.ontop();'
 expect_emit "ontop with an argument sets" \
     '__nexa_gfx_ontop\(1\)' '    gfx.ontop(1);'
+expect_emit "transparent with no argument queries" \
+    '__nexa_gfx_transparent\(-1\)' '    let t: int = gfx.transparent();'
+expect_emit "transparent with an argument sets" \
+    '__nexa_gfx_transparent\(1\)' '    gfx.transparent(1);'
 expect_emit "audio defaults to 44100 Hz" \
     '__nexa_gfx_audio\(44100\)' '    gfx.audio();'
 expect_emit "audio passes an explicit rate" \
@@ -419,6 +428,17 @@ if [ -z "$CXX" ]; then
 else
     semantics_case "borderless" '    gfx.borderless(1);'
     semantics_case "ontop" '    gfx.ontop(1);'
+    # gfx.transparent's driver needs a program that draws as well as toggles,
+    # since half of what it checks is the bytes a draw leaves in the
+    # framebuffer and the slicing would otherwise take the rasterizers away.
+    semantics_case "transparent" '    gfx.transparent(1);
+    gfx.clear(0, 0, 0);
+    gfx.fill(0, 0, 1, 1, 1, 2, 3);
+    gfx.alpha(128);
+    let p: int = gfx.get(0, 0);
+    let ok: int = gfx.save("/dev/null");
+    gfx.resize(4, 4);
+    gfx.present();'
 fi
 
 echo "-- window: std/gfx against a real window"

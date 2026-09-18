@@ -6300,6 +6300,10 @@ private:
                     std::string v = e.children.empty() ? "-1" : a(0);
                     return "__nexa_gfx_ontop(" + v + ")";
                 }
+                if (fn == "transparent") {
+                    std::string v = e.children.empty() ? "-1" : a(0);
+                    return "__nexa_gfx_transparent(" + v + ")";
+                }
                 if (fn == "audio") {
                     std::string r = e.children.empty() ? "44100" : a(0);
                     return "__nexa_gfx_audio(" + r + ")";
@@ -6982,6 +6986,12 @@ private:
             // Both forms again, and for the same reason: the field is always
             // emitted, but the only thing that ever writes it is this call.
             cppUsage.gfxOntop = true;
+        } else if (fn == "transparent") {
+            // And a third time, with more riding on it: this flag is what the
+            // X11 window's visual is chosen from, so a program that only ever
+            // *asks* whether it is transparent still has to get the window
+            // that could have been -- gfx.open runs long before the question.
+            cppUsage.gfxTransparent = true;
         }
     }
 

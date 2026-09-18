@@ -36,6 +36,18 @@ namespace nexa {
 // the `ontop` flag is not, because the Win32 fullscreen path picks the window
 // it inserts itself after out of it and would otherwise drop a program out of
 // the topmost band on the way back from fullscreen.
+//
+// gfx.transparent is the third of the overlay trio and the same shape a third
+// time, with more behind the flag than either neighbour. The function slices,
+// and with it everything only it can reach: the ARGB visual the X11 window is
+// created with, the layered-window blit on Windows, the canvas background on
+// wasm. The `transparent` flag does not slice, and this time it is gfx.clear
+// that reads it -- clear is core, it is what decides whether the whole window
+// goes see-through, and a program that never asks always finds a 0 there and
+// writes the byte it always wrote. Every other reader of the flag (the resize
+// fill, the X11 present, the Cocoa drawRect) is core for the same reason: what
+// the fourth byte of a pixel *means* is not a feature that can be sliced out
+// from under the code that writes it.
 struct GfxNeed {
     bool alpha = false;          // gfx.alpha() -- the reader; the setter is core
     bool plot = false;           // gfx.plot
@@ -67,6 +79,7 @@ struct GfxNeed {
     bool maxfps = false;         // gfx.maxfps -- the clock and the frame wait
     bool borderless = false;     // gfx.borderless -- the decoration toggle
     bool ontop = false;          // gfx.ontop -- the stacking toggle
+    bool transparent = false;    // gfx.transparent -- the see-through toggle
 };
 
 // gfx.sound / play / loop / stop / volume: a WAV loader and a polyphonic
@@ -420,6 +433,14 @@ struct __nexa_Gfx {
     // window manager may refuse the request and never say so -- so what is
     // reported is what the program asked for.
     int ontop;
+    // 1 while the window itself is see-through and only what the program drew
+    // is visible. Always here, for a plainer reason than the two above: this
+    // is what the fourth byte of every framebuffer pixel means. gfx.clear
+    // reads it to decide whether to write 0 or 255 there, the resize fill
+    // reads it for the strip it exposes, and the present paths read that byte
+    // -- and all of those are core. A program that never asks finds a 0 here
+    // and writes the 255 it has always written.
+    int transparent;
     // 1 while the OS cursor is visible over the window, which is how a window
     // starts. Kept here rather than asked of the OS: X11 has no "is my cursor
     // hidden" query, and NSCursor's hide/unhide is a counter that only stays
@@ -469,6 +490,17 @@ struct __nexa_Gfx {
     GC gc;
     XImage* img;
     Visual* vis;
+    // The depth the window was created at, and the colormap that came with it
+    // when that depth is not the screen's. 24 is the ordinary case and leaves
+    // cmap 0; gfx.transparent asks for a 32-bit ARGB visual instead, and a
+    // window on a non-default visual needs a colormap of its own. The present
+    // path reads the depth, because an XImage has to agree with its window.
+    int xdepth;
+    Colormap cmap;
+    // 1 when `gc` was made for this window rather than borrowed from the
+    // screen. A GC has to share its drawable's depth, so a window on the ARGB
+    // visual cannot use the root's -- and only the one we made is ours to free.
+    int gc_own;
     unsigned char* xbuf;
     int xbw;
     int xbh;
@@ -650,7 +682,10 @@ static void __nexa_gfx_mouse_apply(int x, int y, int inside, int left, int middl
 @interface __NexaGfxView : NSView
 @end
 @implementation __NexaGfxView
-- (BOOL)isOpaque { return YES; }
+// A view that says it is opaque is a promise AppKit takes at its word: it
+// stops drawing whatever is behind the view at all. gfx.transparent is exactly
+// the request to stop making that promise.
+- (BOOL)isOpaque { return __nexa_g.transparent ? NO : YES; }
 - (BOOL)acceptsFirstResponder { return YES; }
 - (instancetype)initWithFrame:(NSRect)frame {
     self = [super initWithFrame:frame];
@@ -676,10 +711,34 @@ static void __nexa_gfx_mouse_apply(int x, int y, int inside, int left, int middl
     if (!__nexa_g.fb || __nexa_g.w < 1 || __nexa_g.h < 1) return;
     CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
     if (!cs) return;
+    // Ordinarily the fourth byte of a pixel is not a colour component at all
+    // and CoreGraphics is told to skip it. While the window is see-through it
+    // is the whole point, and a bitmap context has no non-premultiplied form
+    // to offer -- CGBitmapContextCreate takes Premultiplied or None and
+    // nothing in between -- so the frame is premultiplied into a scratch copy
+    // on the way out. The framebuffer itself stays as it is drawn, straight,
+    // because that is what gfx.get and every blend read back.
+    unsigned char* src = __nexa_g.fb;
+    CGBitmapInfo info = (CGBitmapInfo)kCGImageAlphaNoneSkipLast |
+                        (CGBitmapInfo)kCGBitmapByteOrder32Big;
+    std::vector<unsigned char> pm;
+    if (__nexa_g.transparent) {
+        size_t n = (size_t)__nexa_g.w * (size_t)__nexa_g.h;
+        pm.resize(n * 4);
+        for (size_t i = 0; i < n; i++) {
+            unsigned char a = __nexa_g.fb[i * 4 + 3];
+            pm[i * 4 + 0] = (unsigned char)(__nexa_g.fb[i * 4 + 0] * a / 255);
+            pm[i * 4 + 1] = (unsigned char)(__nexa_g.fb[i * 4 + 1] * a / 255);
+            pm[i * 4 + 2] = (unsigned char)(__nexa_g.fb[i * 4 + 2] * a / 255);
+            pm[i * 4 + 3] = a;
+        }
+        src = pm.data();
+        info = (CGBitmapInfo)kCGImageAlphaPremultipliedLast |
+               (CGBitmapInfo)kCGBitmapByteOrder32Big;
+    }
     CGContextRef bmp = CGBitmapContextCreate(
-        __nexa_g.fb, (size_t)__nexa_g.w, (size_t)__nexa_g.h, 8,
-        (size_t)__nexa_g.w * 4, cs,
-        (CGBitmapInfo)kCGImageAlphaNoneSkipLast | (CGBitmapInfo)kCGBitmapByteOrder32Big);
+        src, (size_t)__nexa_g.w, (size_t)__nexa_g.h, 8,
+        (size_t)__nexa_g.w * 4, cs, info);
     CGColorSpaceRelease(cs);
     if (!bmp) return;
     CGImageRef img = CGBitmapContextCreateImage(bmp);
@@ -691,6 +750,10 @@ static void __nexa_gfx_mouse_apply(int x, int y, int inside, int left, int middl
     NSRect b = [self bounds];
     CGContextTranslateCTM(ctx, 0, b.size.height);
     CGContextScaleCTM(ctx, 1.0, -1.0);
+    // Copy rather than source-over, so that a frame drawn at alpha 0 leaves
+    // nothing of the frame before it behind. Over an opaque frame the two are
+    // the same thing, which is why this costs the ordinary path nothing.
+    if (__nexa_g.transparent) CGContextSetBlendMode(ctx, kCGBlendModeCopy);
     CGContextDrawImage(ctx, CGRectMake(0, 0, b.size.width, b.size.height), img);
     CGContextRestoreGState(ctx);
     CGImageRelease(img);
@@ -715,6 +778,13 @@ static void __nexa_gfx_bb_free();
                        : "static void __nexa_gfx_cursor_reset() {}\n";
     out += need.icon ? "static void __nexa_gfx_icon_reset();\n"
                      : "static void __nexa_gfx_icon_reset() {}\n";
+    // Same trick again for the layered-window buffer gfx.transparent keeps on
+    // Windows: the Win32 back-buffer teardown is core and has to hand it back,
+    // and there is nothing to hand back in a program that never asks. Guarded
+    // because the buffer is Win32's alone: on the other three targets the
+    // platform slicing takes the declaration away with its only caller.
+    out += need.transparent ? "#ifdef _WIN32\nstatic void __nexa_gfx_ulw_free();\n#endif\n"
+                            : "#ifdef _WIN32\nstatic void __nexa_gfx_ulw_free() {}\n#endif\n";
     out += R"NEXA_GFX(
 static void __nexa_gfx_free() {
     __nexa_gfx_cursor_reset();
@@ -731,15 +801,31 @@ static void __nexa_gfx_free() {
     __nexa_g.xbuf = nullptr;
     __nexa_g.xbw = 0;
     __nexa_g.xbh = 0;
+    // Before the window, because a GC is freed by name and the window is what
+    // it was made for.
+    if (__nexa_g.dpy && __nexa_g.gc && __nexa_g.gc_own) {
+        XFreeGC(__nexa_g.dpy, __nexa_g.gc);
+    }
+    __nexa_g.gc = 0;
+    __nexa_g.gc_own = 0;
     if (__nexa_g.dpy && __nexa_g.win) {
         XDestroyWindow(__nexa_g.dpy, __nexa_g.win);
         __nexa_g.win = 0;
+    }
+    // A colormap is a server resource in its own right: destroying the window
+    // that used it does not take it with it. 0 is the ordinary case -- a
+    // window on the screen's own visual borrows the screen's own colormap and
+    // has nothing of its own to hand back.
+    if (__nexa_g.dpy && __nexa_g.cmap) {
+        XFreeColormap(__nexa_g.dpy, __nexa_g.cmap);
+        __nexa_g.cmap = 0;
     }
     if (__nexa_g.dpy) {
         XCloseDisplay(__nexa_g.dpy);
         __nexa_g.dpy = nullptr;
     }
     __nexa_g.vis = nullptr;
+    __nexa_g.xdepth = 0;
 #endif
 #ifdef _WIN32
     __nexa_gfx_bb_free();
@@ -784,6 +870,7 @@ static int __nexa_bb_w = 0;
 static int __nexa_bb_h = 0;
 
 static void __nexa_gfx_bb_free() {
+    __nexa_gfx_ulw_free();
     if (__nexa_bb_dc) {
         DeleteDC(__nexa_bb_dc);
         __nexa_bb_dc = NULL;
@@ -861,7 +948,167 @@ static void __nexa_gfx_flip(HDC dst, int cw, int ch) {
         __nexa_gfx_blit_letterbox(dst, cw, ch);
     }
 }
+#endif
+)NEXA_GFX";
+    // The layered-window present, which is the whole of gfx.transparent on
+    // Windows: StretchDIBits copies the fourth byte of every pixel across and
+    // the desktop compositor never looks at it, so a frame with real alpha in
+    // it has to go out a different door. The other three targets get the empty
+    // body, because their ordinary present path already carries the alpha.
+    if (need.transparent) out += R"NEXA_GFX(
+#ifdef _WIN32
+// UpdateLayeredWindow takes a whole frame at once -- position, size and a
+// premultiplied 32-bit bitmap -- and hands it to the compositor, which is the
+// only route on Windows where the alpha of a pixel means anything. It replaces
+// the *window*, not the client area: a see-through window is one the desktop
+// draws no part of, frame included, so what the program drew is left sitting
+// where it would have been and everything around it is gone. Pair it with
+// gfx.borderless if a caption that is there but invisible would be confusing.
+static HDC __nexa_ulw_dc = NULL;
+static HBITMAP __nexa_ulw_bmp = NULL;
+static unsigned char* __nexa_ulw_px = NULL;
+static int __nexa_ulw_w = 0;
+static int __nexa_ulw_h = 0;
 
+static void __nexa_gfx_ulw_free() {
+    if (__nexa_ulw_dc) {
+        DeleteDC(__nexa_ulw_dc);
+        __nexa_ulw_dc = NULL;
+    }
+    if (__nexa_ulw_bmp) {
+        DeleteObject(__nexa_ulw_bmp);
+        __nexa_ulw_bmp = NULL;
+    }
+    // Owned by the bitmap, so deleting that freed them.
+    __nexa_ulw_px = NULL;
+    __nexa_ulw_w = 0;
+    __nexa_ulw_h = 0;
+}
+
+// A top-down 32-bit DIB section, kept across frames the same way the ordinary
+// back buffer is. A DIB section rather than a compatible bitmap because this
+// one is written pixel by pixel rather than drawn into.
+static int __nexa_gfx_ulw_lock(int w, int h) {
+    if (w < 1 || h < 1) return 0;
+    if (__nexa_ulw_dc && __nexa_ulw_w == w && __nexa_ulw_h == h) return 1;
+    __nexa_gfx_ulw_free();
+    HDC screen = GetDC(NULL);
+    if (!screen) return 0;
+    BITMAPINFO bi;
+    std::memset(&bi, 0, sizeof(bi));
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = w;
+    bi.bmiHeader.biHeight = -h;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    void* bits = NULL;
+    HBITMAP bmp = CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+    HDC dc = CreateCompatibleDC(screen);
+    ReleaseDC(NULL, screen);
+    if (!bmp || !dc || !bits) {
+        if (bmp) DeleteObject(bmp);
+        if (dc) DeleteDC(dc);
+        return 0;
+    }
+    SelectObject(dc, bmp);
+    __nexa_ulw_dc = dc;
+    __nexa_ulw_bmp = bmp;
+    __nexa_ulw_px = (unsigned char*)bits;
+    __nexa_ulw_w = w;
+    __nexa_ulw_h = h;
+    return 1;
+}
+
+// 1 when this took the frame, so that gfx.present knows to leave the ordinary
+// path alone.
+static int __nexa_gfx_present_alpha() {
+    if (!__nexa_g.transparent || !__nexa_g.hwnd || !__nexa_g.fb) return 0;
+    // A minimised window has nothing to composite, but the frame still belongs
+    // to this path: falling through would paint it the opaque way.
+    if (IsIconic(__nexa_g.hwnd)) return 1;
+    RECT wr;
+    RECT cr;
+    POINT org;
+    org.x = 0;
+    org.y = 0;
+    if (!GetWindowRect(__nexa_g.hwnd, &wr)) return 0;
+    if (!GetClientRect(__nexa_g.hwnd, &cr)) return 0;
+    if (!ClientToScreen(__nexa_g.hwnd, &org)) return 0;
+    int ww = (int)(wr.right - wr.left);
+    int wh = (int)(wr.bottom - wr.top);
+    if (!__nexa_gfx_ulw_lock(ww, wh)) return 0;
+    // Zero is a premultiplied nothing, and nothing is what the compositor
+    // shows the desktop through. Everything the program did not draw -- the
+    // letterbox bars, the frame's own rectangle -- starts and stays there.
+    std::memset(__nexa_ulw_px, 0, (size_t)ww * (size_t)wh * 4);
+    int cw = (int)(cr.right - cr.left);
+    int ch = (int)(cr.bottom - cr.top);
+    if (__nexa_g.w > 0 && __nexa_g.h > 0 && cw > 0 && ch > 0) {
+        // The same letterboxed integer scale __nexa_gfx_blit_letterbox works
+        // out, done here by hand because this writes pixels rather than asking
+        // GDI to stretch them -- and GDI stretching is what would throw the
+        // alpha away.
+        int sx = cw / __nexa_g.w;
+        int sy = ch / __nexa_g.h;
+        int sc = sx < sy ? sx : sy;
+        if (sc < 1) sc = 1;
+        int dw = __nexa_g.w * sc;
+        int dh = __nexa_g.h * sc;
+        if (dw > cw) dw = cw;
+        if (dh > ch) dh = ch;
+        int ox = (int)(org.x - wr.left) + (cw - dw) / 2;
+        int oy = (int)(org.y - wr.top) + (ch - dh) / 2;
+        for (int y = 0; y < dh; y++) {
+            int ty = oy + y;
+            if (ty < 0 || ty >= wh) continue;
+            const unsigned char* s = __nexa_g.fb + (size_t)(y / sc) * (size_t)__nexa_g.w * 4;
+            unsigned char* row = __nexa_ulw_px + (size_t)ty * (size_t)ww * 4;
+            for (int x = 0; x < dw; x++) {
+                int tx = ox + x;
+                if (tx < 0 || tx >= ww) continue;
+                const unsigned char* p = s + (size_t)(x / sc) * 4;
+                unsigned char a = p[3];
+                unsigned char* d = row + (size_t)tx * 4;
+                // ULW_ALPHA wants premultiplied BGRA, and the framebuffer is
+                // already B, G, R, A on this platform -- so the only thing
+                // this does to a colour is scale it by its own alpha.
+                d[0] = (unsigned char)(p[0] * a / 255);
+                d[1] = (unsigned char)(p[1] * a / 255);
+                d[2] = (unsigned char)(p[2] * a / 255);
+                d[3] = a;
+            }
+        }
+    }
+    POINT pos;
+    POINT src;
+    SIZE sz;
+    BLENDFUNCTION bf;
+    pos.x = wr.left;
+    pos.y = wr.top;
+    src.x = 0;
+    src.y = 0;
+    sz.cx = ww;
+    sz.cy = wh;
+    bf.BlendOp = AC_SRC_OVER;
+    bf.BlendFlags = 0;
+    // 255 is "do not fade the window as a whole": AC_SRC_ALPHA is what says
+    // the per-pixel alpha in the bitmap is the one that counts.
+    bf.SourceConstantAlpha = 255;
+    bf.AlphaFormat = AC_SRC_ALPHA;
+    HDC screen = GetDC(NULL);
+    UpdateLayeredWindow(__nexa_g.hwnd, screen, &pos, &sz, __nexa_ulw_dc, &src,
+        0, &bf, ULW_ALPHA);
+    if (screen) ReleaseDC(NULL, screen);
+    return 1;
+}
+#else
+static int __nexa_gfx_present_alpha() { return 0; }
+#endif
+)NEXA_GFX";
+    else out += "static int __nexa_gfx_present_alpha() { return 0; }\n";
+    out += R"NEXA_GFX(
+#ifdef _WIN32
 static LRESULT CALLBACK __nexa_gfx_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (msg == WM_CLOSE) {
         __nexa_g.closed = 1;
@@ -943,7 +1190,11 @@ static LRESULT CALLBACK __nexa_gfx_wndproc(HWND hwnd, UINT msg, WPARAM wParam, L
     if (msg == WM_PAINT) {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
-        if (!IsIconic(hwnd)) {
+        // Not while the window is layered: what a layered window shows is the
+        // bitmap UpdateLayeredWindow was last handed, and painting into its DC
+        // is work the desktop throws away -- with the fourth byte of every
+        // pixel in it, which is the byte that was the point.
+        if (!IsIconic(hwnd) && !__nexa_g.transparent) {
             RECT rc;
             GetClientRect(hwnd, &rc);
             __nexa_gfx_flip(hdc, rc.right, rc.bottom);
@@ -1095,6 +1346,10 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
     __nexa_g.borderless = 0;
     // And in the ordinary stacking order, where the window manager put it.
     __nexa_g.ontop = 0;
+    // And solid: every pixel of a new window is the program's, including the
+    // ones it has not drawn on yet. This is set before the clear below, which
+    // is what writes the alpha that says so.
+    __nexa_g.transparent = 0;
     // A new window starts with the cursor showing, the same way it starts
     // opaque and windowed.
     __nexa_g.cursor = 1;
@@ -1243,10 +1498,58 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
         return 0;
     }
     int scr = DefaultScreen(__nexa_g.dpy);
+)NEXA_GFX";
+    // Which window gets created is the one decision gfx.transparent cannot
+    // make at the time it is called: an X11 window's visual is fixed when the
+    // window is born and no call changes it afterwards. So the slicing does it
+    // instead -- a program that mentions the call anywhere gets a window that
+    // can be see-through from the start, and one that never does gets exactly
+    // the window it has always had.
+    if (need.transparent) out += R"NEXA_GFX(
+    // An alpha channel needs a visual that has one, and the screen's own
+    // visual is 24-bit: colour, no fourth channel for a compositor to read.
+    // Depth 32 TrueColor is the one that does, and a window on a visual that
+    // is not the screen's needs a colormap of its own to go with it.
+    XVisualInfo vi;
+    std::memset(&vi, 0, sizeof(vi));
+    if (XMatchVisualInfo(__nexa_g.dpy, scr, 32, TrueColor, &vi) && vi.visual) {
+        __nexa_g.vis = vi.visual;
+        __nexa_g.xdepth = vi.depth;
+        __nexa_g.cmap = XCreateColormap(__nexa_g.dpy, RootWindow(__nexa_g.dpy, scr),
+            vi.visual, AllocNone);
+    } else {
+        // A screen with no 32-bit visual gets the ordinary window, and the
+        // program gets whatever the server does with an alpha byte it does not
+        // read -- which is nothing. Nothing is probed and nothing is said: the
+        // call reports what the program asked for, here as everywhere.
+        __nexa_g.vis = DefaultVisual(__nexa_g.dpy, scr);
+        __nexa_g.xdepth = DefaultDepth(__nexa_g.dpy, scr);
+        __nexa_g.cmap = 0;
+    }
+    XSetWindowAttributes swa;
+    std::memset(&swa, 0, sizeof(swa));
+    swa.colormap = __nexa_g.cmap;
+    swa.background_pixel = 0;
+    // Not optional, and the reason XCreateSimpleWindow cannot be used here: a
+    // window inherits its parent's border pixmap by default, and a pixmap
+    // belonging to the root's 24-bit visual cannot be worn by a 32-bit window.
+    // Leaving border_pixel out is a BadMatch, not a default.
+    swa.border_pixel = 0;
+    unsigned long swa_mask = CWBackPixel | CWBorderPixel;
+    if (__nexa_g.cmap) swa_mask |= CWColormap;
+    __nexa_g.win = XCreateWindow(__nexa_g.dpy, RootWindow(__nexa_g.dpy, scr),
+        80, 80, (unsigned)(w * scale), (unsigned)(h * scale), 1,
+        __nexa_g.xdepth, InputOutput, __nexa_g.vis, swa_mask, &swa);
+)NEXA_GFX";
+    else out += R"NEXA_GFX(
     __nexa_g.vis = DefaultVisual(__nexa_g.dpy, scr);
+    __nexa_g.xdepth = DefaultDepth(__nexa_g.dpy, scr);
+    __nexa_g.cmap = 0;
     __nexa_g.win = XCreateSimpleWindow(__nexa_g.dpy, RootWindow(__nexa_g.dpy, scr),
         80, 80, (unsigned)(w * scale), (unsigned)(h * scale), 1,
         BlackPixel(__nexa_g.dpy, scr), BlackPixel(__nexa_g.dpy, scr));
+)NEXA_GFX";
+    out += R"NEXA_GFX(
     XStoreName(__nexa_g.dpy, __nexa_g.win, title.c_str());
     Atom wm = XInternAtom(__nexa_g.dpy, "WM_DELETE_WINDOW", False);
     XSetWMProtocols(__nexa_g.dpy, __nexa_g.win, &wm, 1);
@@ -1254,7 +1557,23 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
     XSelectInput(__nexa_g.dpy, __nexa_g.win,
         ExposureMask | KeyPressMask | KeyReleaseMask | StructureNotifyMask |
         PointerMotionMask | ButtonPressMask | ButtonReleaseMask);
-    __nexa_g.gc = DefaultGC(__nexa_g.dpy, scr);
+)NEXA_GFX";
+    if (need.transparent) out += R"NEXA_GFX(
+    // The default GC belongs to the root window, and therefore to the root
+    // window's depth. A GC and the drawable it draws on have to agree about
+    // that, so a 32-bit window needs a GC of its own: XPutImage through the
+    // root's 24-bit one is a BadMatch. `gc_own` is what says it is ours to
+    // free again, since the default GC is not.
+    __nexa_g.gc = XCreateGC(__nexa_g.dpy, __nexa_g.win, 0, nullptr);
+    __nexa_g.gc_own = 1;
+    if (!__nexa_g.gc) {
+        __nexa_g.gc = DefaultGC(__nexa_g.dpy, scr);
+        __nexa_g.gc_own = 0;
+    }
+)NEXA_GFX";
+    else out += "    __nexa_g.gc = DefaultGC(__nexa_g.dpy, scr);\n"
+                "    __nexa_g.gc_own = 0;\n";
+    out += R"NEXA_GFX(
     XMapWindow(__nexa_g.dpy, __nexa_g.win);
     XFlush(__nexa_g.dpy);
     __nexa_g.ready = 1;
@@ -1271,8 +1590,18 @@ static int __nexa_gfx_resize(int w, int h, int scale) {
     if (!__nexa_g.ready || !__nexa_g.fb) return 0;
     __nexa_gfx_clamp_whs(&w, &h, &scale, __nexa_g.scale);
     if (w != __nexa_g.w || h != __nexa_g.h) {
-        unsigned char* nfb = new unsigned char[(size_t)w * (size_t)h * 4];
-        std::memset(nfb, 0, (size_t)w * (size_t)h * 4);
+        size_t bytes = (size_t)w * (size_t)h * 4;
+        unsigned char* nfb = new unsigned char[bytes];
+        std::memset(nfb, 0, bytes);
+        // Growing a window exposes framebuffer nobody has drawn on, and
+        // undrawn is what gfx.clear leaves behind -- so the new strip gets the
+        // alpha a clear would have written it. See-through while
+        // gfx.transparent is on, which the memset already did; solid black
+        // otherwise, which needs the fourth byte put back. The rows copied
+        // over below bring their own alpha with them.
+        if (!__nexa_g.transparent) {
+            for (size_t i = 3; i < bytes; i += 4) nfb[i] = 255;
+        }
         int cw = w < __nexa_g.w ? w : __nexa_g.w;
         int ch = h < __nexa_g.h ? h : __nexa_g.h;
         for (int y = 0; y < ch; y++) {
@@ -1602,6 +1931,89 @@ static int __nexa_gfx_ontop(int on) {
 #else
     __nexa_g.ontop = want;
     return __nexa_g.ontop;
+#endif
+}
+)NEXA_GFX";
+    if (need.transparent) out += R"NEXA_GFX(
+// gfx.transparent: the window itself stops being there and only what the
+// program drew is left, in gfx.borderless and gfx.ontop's argument shape --
+// 1 on, 0 back to a solid window, and a negative argument reports the state
+// without touching anything.
+//
+// What the toggle decides is what the fourth byte of a pixel gets written as
+// from here on: gfx.clear writes 0 -- nothing drawn, nothing shown -- and a
+// draw at gfx.alpha() below 255 lands translucent against whatever is behind
+// the window rather than against the colour of a background nobody can see.
+// So a window goes see-through at its next gfx.clear, not at this call: there
+// is no telling, after the fact, which of the pixels already in the
+// framebuffer the program meant and which it merely cleared.
+//
+// Whether the desktop can honour any of it is not asked and not reported. An
+// X11 session with no compositor running draws the alpha channel however it
+// likes, and the answer handed back here is what the program asked for, the
+// same as for the other two.
+static int __nexa_gfx_transparent(int on) {
+    if (!__nexa_g.ready) return 0;
+    if (on < 0) return __nexa_g.transparent;
+    int want = on ? 1 : 0;
+#ifdef __EMSCRIPTEN__
+    __nexa_g.transparent = want;
+    // A canvas composites over the page already; what stops the page showing
+    // through is the opaque backdrop the canvas is given when the window
+    // opens. putImageData writes the alpha straight through -- ImageData is
+    // straight RGBA, the one place in this runtime where nothing has to be
+    // premultiplied on the way out -- so taking the backdrop away is the whole
+    // of it.
+    EM_ASM(({
+        var c = Module["canvas"] || document.getElementById("canvas");
+        if (!c) return;
+        c.style.background = $0 ? "transparent" : "#000";
+    }), want);
+    return __nexa_g.transparent;
+#elif defined(_WIN32)
+    if (!__nexa_g.hwnd) return 0;
+    if (want == __nexa_g.transparent) return __nexa_g.transparent;
+    __nexa_g.transparent = want;
+    // WS_EX_LAYERED is what makes a window one the compositor draws from a
+    // bitmap the program hands it, which is the only Win32 route where the
+    // alpha of a pixel means anything. gfx.present does the handing; see
+    // __nexa_gfx_present_alpha.
+    LONG ex = GetWindowLongA(__nexa_g.hwnd, GWL_EXSTYLE);
+    if (want) ex |= WS_EX_LAYERED;
+    else ex &= ~(LONG)WS_EX_LAYERED;
+    SetWindowLongA(__nexa_g.hwnd, GWL_EXSTYLE, ex);
+    // Coming back down, the window has no painted content at all: the layered
+    // bitmap *was* the paint, and dropping the style threw it away. Asking for
+    // a repaint is what gives the ordinary path a frame to draw.
+    if (!want) InvalidateRect(__nexa_g.hwnd, NULL, TRUE);
+    return __nexa_g.transparent;
+#elif defined(__APPLE__)
+    if (!__nexa_gfx_nswin) return 0;
+    if (want == __nexa_g.transparent) return __nexa_g.transparent;
+    __nexa_g.transparent = want;
+    // Two promises to stop making: the window's, that everything inside its
+    // frame is painted, and the background colour it paints the rest with.
+    // The view's own -- isOpaque -- answers from this flag and has already
+    // changed; invalidateShadow is what stops the old shape's drop shadow
+    // being drawn around a window that no longer has that shape.
+    [__nexa_gfx_nswin setOpaque:(want ? NO : YES)];
+    [__nexa_gfx_nswin setBackgroundColor:(want ? [NSColor clearColor]
+                                              : [NSColor windowBackgroundColor])];
+    [__nexa_gfx_nswin invalidateShadow];
+    if (__nexa_gfx_nsview) [__nexa_gfx_nsview setNeedsDisplay:YES];
+    return __nexa_g.transparent;
+#elif defined(__linux__)
+    if (!__nexa_g.dpy || !__nexa_g.win) return 0;
+    __nexa_g.transparent = want;
+    // Nothing is asked of the server here. A visual is fixed when a window is
+    // created, so the window this program opened already has an alpha channel
+    // -- gfx.open took the 32-bit ARGB visual because this call is in the
+    // program at all -- and all that is left for the toggle to decide is what
+    // goes into it.
+    return __nexa_g.transparent;
+#else
+    __nexa_g.transparent = want;
+    return __nexa_g.transparent;
 #endif
 }
 )NEXA_GFX";
@@ -1962,18 +2374,35 @@ static int __nexa_gfx_mouse(const std::string& name) {
 // --- framebuffer rasterizers ------------------------------------------------
 )NEXA_GFX";
     out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
-static void __nexa_gfx_put(int i, unsigned char R, unsigned char G, unsigned char B) {
+// The four-byte write every draw ends at, in the platform's channel order. The
+// fourth byte is the pixel's own alpha: how much of the pixel is the program's
+// and how much of it is whatever is behind the window. It is 255 -- all of it
+// is the program's -- in every program that never says gfx.transparent, which
+// is why it was a constant here for as long as there was no such call.
+//
+// Held straight, not premultiplied: gfx.get, gfx.save and every blend read
+// these bytes back as colours, and a colour that has been scaled by its own
+// alpha is no longer the colour that was drawn. The present paths premultiply
+// on the way out, where the OS asks for it.
+static void __nexa_gfx_put4(int i, unsigned char R, unsigned char G, unsigned char B, unsigned char A) {
 #ifdef _WIN32
     __nexa_g.fb[i + 0] = B;
     __nexa_g.fb[i + 1] = G;
     __nexa_g.fb[i + 2] = R;
-    __nexa_g.fb[i + 3] = 255;
+    __nexa_g.fb[i + 3] = A;
 #else
     __nexa_g.fb[i + 0] = R;
     __nexa_g.fb[i + 1] = G;
     __nexa_g.fb[i + 2] = B;
-    __nexa_g.fb[i + 3] = 255;
+    __nexa_g.fb[i + 3] = A;
 #endif
+}
+
+// An opaque draw covers what was under it whatever that was, see-through
+// included: drawing on a transparent window is how a pixel stops being
+// see-through.
+static void __nexa_gfx_put(int i, unsigned char R, unsigned char G, unsigned char B) {
+    __nexa_gfx_put4(i, R, G, B, 255);
 }
 
 // The global draw alpha behind gfx.alpha(). 255 -- the default, and what
@@ -1998,6 +2427,16 @@ static int __nexa_gfx_alpha_set(int a) {
 // Source-over blend of one pixel, in integers: dst = (src*A + dst*(255-A))/255,
 // rounded to nearest. A == 255 is the plain opaque write and A == 0 leaves the
 // pixel untouched, so both ends of the range cost nothing extra.
+//
+// That formula is the whole story only while the destination is opaque, which
+// it is in every program that never says gfx.transparent. Once a pixel can be
+// partly see-through the destination has an alpha of its own, and what a blend
+// has to produce is a pixel that is still partly see-through: half-covering a
+// window's transparent background with red has to give translucent red against
+// the desktop, not red mixed with the colour of a background nobody can see.
+// So the general case blends the alphas too, and divides the colours out by
+// the alpha that came of it -- because these bytes are a straight colour, not
+// a premultiplied one.
 static void __nexa_gfx_put_a(int i, unsigned char R, unsigned char G, unsigned char B, unsigned char A) {
     if (!__nexa_g.fb || A == 0) return;
     if (A == 255) {
@@ -2005,16 +2444,39 @@ static void __nexa_gfx_put_a(int i, unsigned char R, unsigned char G, unsigned c
         return;
     }
     unsigned char* d = __nexa_g.fb + i;
+    int da = d[3];
+    if (da == 255) {
 #ifdef _WIN32
-    d[0] = (unsigned char)((B * A + d[0] * (255 - A) + 127) / 255);
-    d[1] = (unsigned char)((G * A + d[1] * (255 - A) + 127) / 255);
-    d[2] = (unsigned char)((R * A + d[2] * (255 - A) + 127) / 255);
+        d[0] = (unsigned char)((B * A + d[0] * (255 - A) + 127) / 255);
+        d[1] = (unsigned char)((G * A + d[1] * (255 - A) + 127) / 255);
+        d[2] = (unsigned char)((R * A + d[2] * (255 - A) + 127) / 255);
 #else
-    d[0] = (unsigned char)((R * A + d[0] * (255 - A) + 127) / 255);
-    d[1] = (unsigned char)((G * A + d[1] * (255 - A) + 127) / 255);
-    d[2] = (unsigned char)((B * A + d[2] * (255 - A) + 127) / 255);
+        d[0] = (unsigned char)((R * A + d[0] * (255 - A) + 127) / 255);
+        d[1] = (unsigned char)((G * A + d[1] * (255 - A) + 127) / 255);
+        d[2] = (unsigned char)((B * A + d[2] * (255 - A) + 127) / 255);
 #endif
-    d[3] = 255;
+        return;
+    }
+    // out_a = A + da*(255-A)/255, and out_c = (c*A*255 + d*da*(255-A)) / den
+    // with den = A*255 + da*(255-A) -- the same two sums, since the 255s that
+    // scale them cancel. den is never 0: A == 0 went back above, so the first
+    // term alone is at least 255. Over an opaque destination this is the
+    // formula above again, and over an empty one it is the drawn colour
+    // untouched at the drawn alpha, which is what makes a translucent shape on
+    // a cleared transparent window translucent against the desktop.
+    int den = A * 255 + da * (255 - A);
+    int keep = da * (255 - A);
+    int half = den / 2;
+#ifdef _WIN32
+    d[0] = (unsigned char)((B * A * 255 + d[0] * keep + half) / den);
+    d[1] = (unsigned char)((G * A * 255 + d[1] * keep + half) / den);
+    d[2] = (unsigned char)((R * A * 255 + d[2] * keep + half) / den);
+#else
+    d[0] = (unsigned char)((R * A * 255 + d[0] * keep + half) / den);
+    d[1] = (unsigned char)((G * A * 255 + d[1] * keep + half) / den);
+    d[2] = (unsigned char)((B * A * 255 + d[2] * keep + half) / den);
+#endif
+    d[3] = (unsigned char)((den + 127) / 255);
 }
 )NEXA_GFX";  // [nexa:rasterizers-end]
     if (wantDraw) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
@@ -2034,8 +2496,15 @@ static void __nexa_gfx_clear(int r, int g, int b) {
     unsigned char R = (unsigned char)(r < 0 ? 0 : (r > 255 ? 255 : r));
     unsigned char G = (unsigned char)(g < 0 ? 0 : (g > 255 ? 255 : g));
     unsigned char B = (unsigned char)(b < 0 ? 0 : (b > 255 ? 255 : b));
+    // A clear is what says "nothing here is drawn yet", and on a see-through
+    // window nothing-drawn is what the desktop shows through -- so with
+    // gfx.transparent on, a clear makes the whole window disappear. The colour
+    // is still written, and is still what gfx.get and gfx.save report: it is
+    // the colour the window would have been, kept for the pixels that get
+    // drawn back over.
+    unsigned char A = __nexa_g.transparent ? (unsigned char)0 : (unsigned char)255;
     int n = __nexa_g.w * __nexa_g.h;
-    for (int i = 0; i < n; i++) __nexa_gfx_put(i * 4, R, G, B);
+    for (int i = 0; i < n; i++) __nexa_gfx_put4(i * 4, R, G, B, A);
 }
 )NEXA_GFX";  // [nexa:rasterizers-end]
     if (need.plot) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
@@ -2920,7 +3389,10 @@ static void __nexa_gfx_x11_present() {
         __nexa_g.xbw = dw;
         __nexa_g.xbh = dh;
         int scr = DefaultScreen(__nexa_g.dpy);
-        int depth = DefaultDepth(__nexa_g.dpy, scr);
+        // The window's depth, not the screen's: an image and the drawable it
+        // is put on have to agree, and gfx.transparent's window is 32-bit on a
+        // 24-bit screen. They are the same number everywhere else.
+        int depth = __nexa_g.xdepth > 0 ? __nexa_g.xdepth : DefaultDepth(__nexa_g.dpy, scr);
         __nexa_g.img = XCreateImage(__nexa_g.dpy, __nexa_g.vis ? __nexa_g.vis : DefaultVisual(__nexa_g.dpy, scr),
             (unsigned)depth, ZPixmap, 0, (char*)__nexa_g.xbuf, (unsigned)dw, (unsigned)dh, 32, 0);
         if (!__nexa_g.img) return;
@@ -2936,16 +3408,41 @@ static void __nexa_gfx_x11_present() {
             if (sx >= sw) sx = sw - 1;
             const unsigned char* s = __nexa_g.fb + (size_t)(sy * sw + sx) * 4;
             unsigned char* d = __nexa_g.xbuf + (size_t)(y * dw + x) * 4;
-            if (lsb) {
-                d[0] = s[2];
-                d[1] = s[1];
-                d[2] = s[0];
-                d[3] = 255;
+            unsigned char a = s[3];
+            // A 32-bit window's pixels are ARGB, and a compositor reads them
+            // premultiplied -- so a colour goes out scaled by its own alpha.
+            // An opaque pixel is the same byte either way, which is why the
+            // whole question costs a window that never goes see-through one
+            // comparison per pixel and nothing else. On a 24-bit window the
+            // fourth byte is padding the server ignores, so carrying the alpha
+            // there is neither wrong nor useful.
+            if (a == 255) {
+                if (lsb) {
+                    d[0] = s[2];
+                    d[1] = s[1];
+                    d[2] = s[0];
+                    d[3] = 255;
+                } else {
+                    d[0] = 255;
+                    d[1] = s[0];
+                    d[2] = s[1];
+                    d[3] = s[2];
+                }
             } else {
-                d[0] = 255;
-                d[1] = s[0];
-                d[2] = s[1];
-                d[3] = s[2];
+                unsigned char pr = (unsigned char)(s[0] * a / 255);
+                unsigned char pg = (unsigned char)(s[1] * a / 255);
+                unsigned char pb = (unsigned char)(s[2] * a / 255);
+                if (lsb) {
+                    d[0] = pb;
+                    d[1] = pg;
+                    d[2] = pr;
+                    d[3] = a;
+                } else {
+                    d[0] = a;
+                    d[1] = pr;
+                    d[2] = pg;
+                    d[3] = pb;
+                }
             }
         }
     }
@@ -3047,8 +3544,13 @@ static void __nexa_gfx_pace() {
     out += R"NEXA_GFX(
 static void __nexa_gfx_present() {
     if (!__nexa_g.ready || !__nexa_g.fb) return;
+    // Windows is the one platform where a frame with real alpha in it cannot
+    // go out the ordinary door -- see __nexa_gfx_present_alpha. Everywhere
+    // else this is 0 and the frame goes the way it always has; the canvas, the
+    // X server and CoreGraphics all take the fourth byte as it stands.
+    int taken = __nexa_gfx_present_alpha();
 #ifdef __EMSCRIPTEN__
-    EM_ASM(({
+    if (!taken) EM_ASM(({
         var c = Module["canvas"] || document.getElementById("canvas");
         if (!c) return;
         var ww = $0;
@@ -3063,7 +3565,7 @@ static void __nexa_gfx_present() {
     }), __nexa_g.w, __nexa_g.h, (int)(uintptr_t)__nexa_g.fb);
     emscripten_sleep(0);
 #elif defined(_WIN32)
-    if (__nexa_g.hwnd && !IsIconic(__nexa_g.hwnd)) {
+    if (!taken && __nexa_g.hwnd && !IsIconic(__nexa_g.hwnd)) {
         RECT rc;
         GetClientRect(__nexa_g.hwnd, &rc);
         HDC hdc = GetDC(__nexa_g.hwnd);
@@ -3074,12 +3576,14 @@ static void __nexa_gfx_present() {
     }
     __nexa_gfx_poll();
 #elif defined(__APPLE__)
-    if (__nexa_gfx_nsview) [__nexa_gfx_nsview setNeedsDisplay:YES];
-    if (__nexa_gfx_nswin) [__nexa_gfx_nswin displayIfNeeded];
+    if (!taken && __nexa_gfx_nsview) [__nexa_gfx_nsview setNeedsDisplay:YES];
+    if (!taken && __nexa_gfx_nswin) [__nexa_gfx_nswin displayIfNeeded];
     __nexa_gfx_poll();
 #elif defined(__linux__)
-    __nexa_gfx_x11_present();
+    if (!taken) __nexa_gfx_x11_present();
     __nexa_gfx_poll();
+#else
+    (void)taken;
 #endif
 )NEXA_GFX";
     // Last thing in the frame, after the pixels are out and the events are in.
@@ -3893,6 +4397,14 @@ static void __nexa_gfx_icon_reset() {
 // new dependency on the WASM build. The framebuffer is read back through
 // __nexa_gfx_get, so the BGRA/RGBA difference between the platforms is already
 // handled in one place.
+//
+// 24 bits is three channels, so a screenshot of a see-through window is the
+// colours and not the see-through-ness: a pixel the program never drew saves
+// as the colour it was last cleared to, the same colour gfx.get reports for
+// it. That is a deliberate answer rather than an oversight. The alternative --
+// a 32-bit BMP -- is read as opaque by half the software that opens one, so it
+// would trade a screenshot that is right about the colours for one that is
+// wrong in a way nobody can see until they look at it somewhere else.
 static void __nexa_gfx_le32(std::string& out, unsigned int v) {
     out.push_back((char)(unsigned char)(v & 0xFF));
     out.push_back((char)(unsigned char)((v >> 8) & 0xFF));

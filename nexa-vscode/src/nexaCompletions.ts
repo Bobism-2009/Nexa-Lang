@@ -273,6 +273,7 @@ export const MODULE_MEMBERS: Record<string, { name: string; detail: string }[]> 
     { name: "fullscreen", detail: "gfx.fullscreen() / gfx.fullscreen(on) — get or set fullscreen" },
     { name: "borderless", detail: "gfx.borderless() / gfx.borderless(on) — get or set the window frame off" },
     { name: "ontop", detail: "gfx.ontop() / gfx.ontop(on) — get or set staying above other programs" },
+    { name: "transparent", detail: "gfx.transparent() / gfx.transparent(on) — get or set the window itself being invisible while what is drawn stays" },
     { name: "audio", detail: "gfx.audio([rate]) — open 16-bit mono PCM (default 44100)" },
     { name: "sample", detail: "gfx.sample(s) — queue one s16 sample" },
     { name: "audio_queued", detail: "gfx.audio_queued() — samples still buffered" },

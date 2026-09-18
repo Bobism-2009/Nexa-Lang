@@ -61,5 +61,14 @@ where it was, since `setStyleMask:` keeps the frame rather than the content.
 `NSFloatingWindowLevel` / `NSNormalWindowLevel` — Floating is the level AppKit
 keeps palettes at, above every normal window including other applications' and
 below the ones the system reserves for menus and alerts.
+`gfx.transparent(1)` sets `setOpaque:NO` and a `clearColor` background, and the
+content view's `isOpaque` answers from the same flag — a view that says it is
+opaque is a promise AppKit takes at its word and stops drawing anything behind.
+The frame goes out as `kCGImageAlphaPremultipliedLast` rather than
+`kCGImageAlphaNoneSkipLast`, premultiplied into a scratch copy on the way
+because `CGBitmapContextCreate` has no non-premultiplied form to offer; the
+framebuffer itself stays straight, which is what `gfx.get` and every blend read
+back. `invalidateShadow` goes with the toggle, so the old shape's drop shadow
+is not left drawn around a window that no longer has that shape.
 `gfx.audio` / `gfx.sample` compile but return 0 on
 macOS (PCM output is implemented on Windows and wasm).

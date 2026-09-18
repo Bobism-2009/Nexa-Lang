@@ -277,6 +277,11 @@ run_groups() {
     # puts a window above other programs.
     group "ontop$suffix" '^static int __nexa_gfx_ontop' \
         '    gfx.ontop(1);' "$@"
+    # The third of the trio slices further than either: the function, and with
+    # it the X11 window that could be see-through and the layered-window blit
+    # on Windows. What stays behind is the flag, which gfx.clear reads.
+    group "transparent$suffix" '^static int __nexa_gfx_transparent' \
+        '    gfx.transparent(1);' "$@"
 }
 
 run_groups ""
@@ -393,6 +398,90 @@ if transpile "win_draw_only" "$DRAW_ONLY" --win; then
     fi
 fi
 
+# gfx.transparent slices the same way and one layer deeper, because what it can
+# reach is not only a function: on X11 the *window* is created differently when
+# the call is in the program at all, since a visual is fixed at creation and no
+# call changes it afterwards. So a draw loop must carry neither -- and must
+# still carry the flag, which its own gfx.clear reads.
+for target in "" _wasm; do
+    f="$WORK/draw_only$target.cpp"
+    [ -f "$f" ] || continue
+    if grep -q '__nexa_gfx_transparent' "$f"; then
+        echo "FAIL transparent_field$target: a draw loop carried gfx.transparent"
+        fails=$((fails + 1))
+    elif ! grep -q '^    int transparent;' "$f"; then
+        echo "FAIL transparent_field$target: a draw loop lost the flag its gfx.clear reads"
+        fails=$((fails + 1))
+    elif ! grep -q '__nexa_g.transparent ? (unsigned char)0 : (unsigned char)255' "$f"; then
+        echo "FAIL transparent_field$target: gfx.clear does not read the flag"
+        fails=$((fails + 1))
+    else
+        echo "ok transparent_field$target"
+    fi
+done
+
+# The X11 window is the part that cannot be decided at call time, so it is the
+# part slicing has to get right: a draw loop gets XCreateSimpleWindow on the
+# screen's own visual, and a program that says gfx.transparent anywhere gets
+# XCreateWindow on a depth-32 one -- even if all it ever does is ask.
+if ! grep -q 'XCreateSimpleWindow' "$WORK/draw_only.cpp" ||
+   grep -qE 'XMatchVisualInfo|XCreateWindow\(' "$WORK/draw_only.cpp"; then
+    echo "FAIL transparent_visual: a draw loop did not get the ordinary X11 window"
+    fails=$((fails + 1))
+else
+    echo "ok transparent_visual_draw_only"
+fi
+if transpile "transparent_query" '    let t: int = gfx.transparent();'; then
+    bad=0
+    # XMatchVisualInfo depth 32 TrueColor, and a window created with a
+    # colormap AND a border pixel: leaving border_pixel out of the valuemask
+    # is a BadMatch on a non-default visual rather than a default.
+    grep -q 'XMatchVisualInfo(__nexa_g.dpy, scr, 32, TrueColor' \
+        "$WORK/transparent_query.cpp" || bad=1
+    grep -q 'XCreateWindow(' "$WORK/transparent_query.cpp" || bad=1
+    grep -q 'swa.border_pixel = 0;' "$WORK/transparent_query.cpp" || bad=1
+    grep -q 'CWBackPixel | CWBorderPixel' "$WORK/transparent_query.cpp" || bad=1
+    grep -q 'swa_mask |= CWColormap' "$WORK/transparent_query.cpp" || bad=1
+    # A GC has to share its drawable's depth, so the 32-bit window needs one.
+    grep -q 'XCreateGC(__nexa_g.dpy, __nexa_g.win' "$WORK/transparent_query.cpp" || bad=1
+    if [ $bad -ne 0 ]; then
+        echo "FAIL transparent_visual: a program that only asks did not get the ARGB window"
+        grep -nE 'XCreate|XMatchVisual|swa' "$WORK/transparent_query.cpp" | head -n 8 | sed 's/^/  /'
+        fails=$((fails + 1))
+    else
+        echo "ok transparent_visual_query"
+    fi
+fi
+
+# Windows is the one platform whose present path has to change, and the Win32
+# branch is sliced out of every other target -- so this is where the layered
+# window would quietly go missing.
+if transpile "win_transparent" '    gfx.transparent(1);' --win; then
+    bad=0
+    grep -q 'ex |= WS_EX_LAYERED;' "$WORK/win_transparent.cpp" || bad=1
+    grep -q 'UpdateLayeredWindow(__nexa_g.hwnd' "$WORK/win_transparent.cpp" || bad=1
+    grep -q 'ULW_ALPHA);' "$WORK/win_transparent.cpp" || bad=1
+    grep -q 'bf.AlphaFormat = AC_SRC_ALPHA;' "$WORK/win_transparent.cpp" || bad=1
+    if [ $bad -ne 0 ]; then
+        echo "FAIL transparent_win: the Win32 layered-window present is not there"
+        fails=$((fails + 1))
+    else
+        echo "ok transparent_win"
+    fi
+fi
+if transpile "win_draw_only2" "$DRAW_ONLY" --win; then
+    # The call forms rather than the bare names: the core WM_PAINT handler
+    # names UpdateLayeredWindow in a comment explaining why it stands aside for
+    # one, and a comment is not machinery to carry.
+    if grep -qE 'UpdateLayeredWindow\(|\| WS_EX_LAYERED' "$WORK/win_draw_only2.cpp"; then
+        echo "FAIL transparent_win: a Windows draw loop carried the layered window"
+        grep -nE 'UpdateLayeredWindow\(|WS_EX_LAYERED' "$WORK/win_draw_only2.cpp" | head -n 3 | sed 's/^/  /'
+        fails=$((fails + 1))
+    else
+        echo "ok transparent_win_draw_only"
+    fi
+fi
+
 # --- size: the point of all of it -------------------------------------------
 
 echo "-- size: the file the C++ compiler is handed"
@@ -409,9 +498,10 @@ size_under() {
 }
 
 # The draw loop measured 9,591 lines with the stb blob, 1,602 with the whole
-# gfx runtime and 490 sliced. The ceilings are loose enough not to be a
-# tripwire for an honest new line of core runtime, and tight enough that a
-# re-introduced blob (~8,000 lines) or an unsliced runtime (~1,600) cannot
+# gfx runtime and 490 sliced -- 666 since gfx.transparent (BOB-51) put real
+# alpha in the framebuffer, which is core. The ceilings are loose enough not to
+# be a tripwire for an honest new line of core runtime, and tight enough that a
+# re-introduced blob (~8,000 lines) or an unsliced runtime (~1,800) cannot
 # sneak under them.
 size_under "draw_only_stays_small" "$WORK/draw_only.cpp" 900
 size_under "wasm_draw_only_stays_small" "$WORK/draw_only_wasm.cpp" 900
@@ -420,9 +510,18 @@ size_under "wasm_draw_only_stays_small" "$WORK/draw_only_wasm.cpp" 900
 # Nexa that transpiled to 1,793 lines of C++ before the slicing and 1,341
 # after. It uses 24 gfx builtins, so it is the case where slicing has the
 # least to remove.
+#
+# It measured 1,525 after gfx.transparent (BOB-51), which is what the fourth
+# byte of a pixel meaning something costs a program that never asks for it:
+# the destination-alpha arm of the blend, the alpha the clear and the resize
+# write, and the premultiply on the way out of the X11 present. All core, all
+# reachable from gfx.clear, none of it sliceable -- so the ceiling moved rather
+# than the code. It still catches what it was built to catch: paint_demo with
+# the runtime unsliced is past 2,000 lines, and the stb blob is 8,000 on its
+# own.
 if "$NEXAC" "$ROOT/Examples/paint_demo.nxa" --source "$WORK/paint_demo.cpp" \
         > "$WORK/paint_demo.log" 2>&1; then
-    size_under "paint_demo_stays_small" "$WORK/paint_demo.cpp" 1500
+    size_under "paint_demo_stays_small" "$WORK/paint_demo.cpp" 1650
 else
     echo "FAIL paint_demo_stays_small: NexaC could not transpile it"
     sed 's/^/  /' "$WORK/paint_demo.log"
@@ -561,6 +660,8 @@ else
     link_case "borderless_set" '    let b: int = gfx.borderless(1);'
     link_case "ontop_get" '    let t: int = gfx.ontop();'
     link_case "ontop_set" '    let t: int = gfx.ontop(1);'
+    link_case "transparent_get" '    let t: int = gfx.transparent();'
+    link_case "transparent_set" '    let t: int = gfx.transparent(1);'
     link_case "drop" '    let s: string = gfx.drop();'
     link_case "opendialog" '    let p: string = gfx.opendialog();'
     link_case "save" '    let ok: int = gfx.save("/dev/null");'

@@ -44,6 +44,27 @@ typedef struct { int x, y, width, height; } Screen;
 #define ZPixmap 2
 #define XYPixmap 1
 
+/* Visual classes, and the window attributes a window on a non-default visual
+   has to be given. See XCreateWindow / XMatchVisualInfo below. */
+#define StaticGray 0
+#define GrayScale 1
+#define StaticColor 2
+#define PseudoColor 3
+#define TrueColor 4
+#define DirectColor 5
+
+#define InputOutput 1
+#define InputOnly 2
+
+#define CWBackPixmap (1L << 0)
+#define CWBackPixel (1L << 1)
+#define CWBorderPixmap (1L << 2)
+#define CWBorderPixel (1L << 3)
+#define CWOverrideRedirect (1L << 9)
+#define CWEventMask (1L << 11)
+#define CWColormap (1L << 13)
+#define CWCursor (1L << 14)
+
 /* XWindowAttributes::map_state */
 #define IsUnmapped 0
 #define IsUnviewable 1
@@ -180,6 +201,20 @@ typedef struct {
     char pad;
 } XColor;
 
+/* Only the members the gfx runtime sets. A real XSetWindowAttributes has
+   fifteen; XCreateWindow is told by its valuemask which ones to read, and the
+   stub records the mask alongside them. */
+typedef struct {
+    Pixmap background_pixmap;
+    unsigned long background_pixel;
+    Pixmap border_pixmap;
+    unsigned long border_pixel;
+    long event_mask;
+    Colormap colormap;
+    Cursor cursor;
+    Bool override_redirect;
+} XSetWindowAttributes;
+
 typedef struct {
     int x, y;
     int width, height;
@@ -219,6 +254,14 @@ extern int XSelectInput(Display* d, Window w, long mask);
 extern Window XCreateSimpleWindow(Display* d, Window parent, int x, int y,
                                   unsigned int w, unsigned int h, unsigned int bw,
                                   unsigned long border, unsigned long background);
+extern Window XCreateWindow(Display* d, Window parent, int x, int y,
+                            unsigned int w, unsigned int h, unsigned int bw,
+                            int depth, unsigned int c_class, Visual* visual,
+                            unsigned long valuemask, XSetWindowAttributes* attrs);
+extern Colormap XCreateColormap(Display* d, Window w, Visual* visual, int alloc);
+extern int XFreeColormap(Display* d, Colormap cmap);
+extern GC XCreateGC(Display* d, Drawable dr, unsigned long valuemask, void* values);
+extern int XFreeGC(Display* d, GC gc);
 extern int XDestroyWindow(Display* d, Window w);
 extern int XMapWindow(Display* d, Window w);
 extern int XUnmapWindow(Display* d, Window w);
@@ -293,6 +336,43 @@ extern void nexa_x11_stub_set_key(KeySym ks, int down);
  */
 extern void nexa_x11_stub_set_mapped(int map_state);
 extern void nexa_x11_stub_set_origin(int x, int y);
+
+/* Whether the fake server has a depth-32 TrueColor visual to offer. On by
+ * default, which is what a compositing desktop looks like; turning it off is
+ * how a test drives the fallback in gfx.open -- the screen where an alpha
+ * channel is not on offer and nothing is said about it. */
+extern void nexa_x11_stub_set_argb_visual(int available);
+
+/* The window as it was asked for. XCreateSimpleWindow records a depth of 0 and
+ * no visual, the way a window that borrows the screen's does; XCreateWindow
+ * records what it was handed.
+ *   _window_depth     the depth argument
+ *   _window_class     InputOutput / InputOnly
+ *   _window_visual_id the VisualID of the visual, or 0 for none
+ *   _window_mask      the XCreateWindow valuemask
+ *   _window_colormap  the colormap in the attributes, when CWColormap is set
+ *   _window_border_pixel  the border pixel, when CWBorderPixel is set. Leaving
+ *                     it out of the mask is a BadMatch on a non-default
+ *                     visual, so "was it named at all" is the thing to check.
+ *   _colormaps_made / _colormaps_freed   XCreateColormap / XFreeColormap
+ *   _gcs_made / _gcs_freed               XCreateGC / XFreeGC. A GC must share
+ *                     its drawable's depth, so a 32-bit window needs its own.
+ *   _image_depth      the depth of the last XCreateImage, which has to agree
+ *                     with the window's.
+ *   _image_pixel(i)   the i'th 32-bit word of the last XPutImage's data, so a
+ *                     test can read the alpha the runtime put on the wire. */
+extern int nexa_x11_stub_window_depth(void);
+extern int nexa_x11_stub_window_class(void);
+extern unsigned long nexa_x11_stub_window_visual_id(void);
+extern unsigned long nexa_x11_stub_window_mask(void);
+extern unsigned long nexa_x11_stub_window_colormap(void);
+extern unsigned long nexa_x11_stub_window_border_pixel(void);
+extern int nexa_x11_stub_colormaps_made(void);
+extern int nexa_x11_stub_colormaps_freed(void);
+extern int nexa_x11_stub_gcs_made(void);
+extern int nexa_x11_stub_gcs_freed(void);
+extern int nexa_x11_stub_image_depth(void);
+extern unsigned long nexa_x11_stub_image_pixel(int i);
 
 /* What the runtime asked the server to do, for tests that assert on the
  * request rather than on a pixel. The property accessors describe the last
