@@ -1,0 +1,3 @@
+io.readln() reads a line and hands it back
+you aren't allowed to call it as a statement
+at line 6

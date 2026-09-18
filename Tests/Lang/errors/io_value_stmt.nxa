@@ -1,0 +1,7 @@
+// A call that hands a value back can't stand alone: the line would be read
+// and dropped. This used to fail as "Expected 'print', 'println', or 'flush'".
+#include <std/io>
+fn main() {
+    io.println("press enter");
+    io.readln();
+}

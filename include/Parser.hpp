@@ -2704,6 +2704,22 @@ private:
             if (method == "getline") return parseIoGetlineExpr();
             if (method == "to_int") return parseIoToIntExpr();
             if (method == "trim") return parseIoTrimExpr();
+            // Any other io.<method>(...) call would fall through to the plain
+            // identifier path and die as "Undefined variable 'io'", which
+            // blames the wrong word. Bare io.<field> (no call) still falls
+            // through, in case `io` is someone's struct variable.
+            if (pos_ + 3 < tokens_.size() && tokens_[pos_ + 3].type == TokenType::LParen) {
+                std::string what;
+                if (method == "print") what = "io.print(text) writes the text";
+                else if (method == "println") what = "io.println(text) writes the text and ends the line";
+                else if (method == "flush") what = "io.flush() pushes the buffered output out";
+                if (!what.empty()) {
+                    throw std::runtime_error(what + "; you aren't allowed to turn it into a variable at line " +
+                                             std::to_string(peek().line));
+                }
+                throw std::runtime_error("Unknown io method 'io." + method + "' at line " +
+                                         std::to_string(peek().line));
+            }
         }
         if (peek().type == TokenType::Identifier && peek().value == "os" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
@@ -2849,7 +2865,12 @@ private:
         }
         bool isPrintln = (method == "println");
         if (method != "print" && !isPrintln) {
-            throw std::runtime_error("Expected 'print', 'println', or 'flush' at line " +
+            std::string hint = ioValueCallHint(method);
+            if (!hint.empty()) {
+                throw std::runtime_error(hint + "; you aren't allowed to call it as a statement at line " +
+                                         std::to_string(methodTok.line));
+            }
+            throw std::runtime_error("Unknown io method 'io." + method + "' at line " +
                                      std::to_string(methodTok.line));
         }
         if (!match(TokenType::LParen)) {
@@ -2885,6 +2906,20 @@ private:
         if (requireSemicolon && !match(TokenType::Semicolon)) {
             throw std::runtime_error("Expected ';' at line " + std::to_string(line));
         }
+    }
+
+    // The other side of the void/value split for io.*: these hand a value
+    // back, so a bare `io.readln();` statement would read a line only to drop
+    // it. parseIoCall names the call instead of failing with the print/println
+    // parse error, and parsePrimary's io branch uses the same names when a
+    // statement-only io call is written in value position.
+    static std::string ioValueCallHint(const std::string& m) {
+        if (m == "readln") return "io.readln() reads a line and hands it back";
+        if (m == "read_int") return "io.read_int() reads a line as an int and hands it back";
+        if (m == "getline") return "io.getline(text, at) picks a line out of the text";
+        if (m == "to_int") return "io.to_int(s) turns the text into an int";
+        if (m == "trim") return "io.trim(s) trims the whitespace off";
+        return std::string();
     }
 
     // The same void/value split gfxVoidCallHint draws, for os.*. These are the

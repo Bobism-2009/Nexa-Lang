@@ -1,0 +1,3 @@
+io.println(text) writes the text and ends the line
+you aren't allowed to turn it into a variable
+at line 5

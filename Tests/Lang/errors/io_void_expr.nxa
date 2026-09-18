@@ -1,0 +1,6 @@
+// The io side of the gfx_void_expr rule: a call that only writes can't
+// become a variable. This also used to die as "Undefined variable 'io'".
+#include <std/io>
+fn main() {
+    let x = io.println("hi");
+}

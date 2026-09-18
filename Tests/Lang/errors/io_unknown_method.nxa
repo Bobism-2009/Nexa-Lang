@@ -1,0 +1,5 @@
+// A typo'd io method used to blame the wrong word: "Undefined variable 'io'".
+#include <std/io>
+fn main() {
+    let s = io.readLn();
+}
