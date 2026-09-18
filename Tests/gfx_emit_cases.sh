@@ -288,16 +288,20 @@ run_groups ""
 # The wasm target slices the same runtime, so the whole table runs twice.
 run_groups "_wasm" --wasm
 
-# gfx.typed() is the only reader of the typed-text queue, but the backends feed
-# it from inside the window procedure and the X11 event loop, which are core.
-# Slicing the queue therefore has to leave those callees behind as no-ops.
-if ! grep -q 'static void __nexa_gfx_type_push_latin1(const char\*, int) {}' \
-        "$WORK/draw_only.cpp"; then
-    echo "FAIL typed_stub: a draw loop lost the no-op typed-text helpers"
-    fails=$((fails + 1))
-else
-    echo "ok typed_stub"
-fi
+# gfx.typed() is the only reader of the typed-text queue, and since BOB-57 the
+# backend code that fills it -- WM_CHAR, the X11 KeyPress branch, the Cocoa
+# key-down branch, the browser keydown callback -- is sliced by the same flag.
+# So the queue goes away whole, rather than staying behind as the no-op
+# push helpers a live caller used to need.
+for target in "" _wasm; do
+    if grep -q '__nexa_gfx_type_push' "$WORK/draw_only$target.cpp"; then
+        echo "FAIL typed_gone$target: a draw loop carried typed-text helpers nothing feeds"
+        grep -n '__nexa_gfx_type_push' "$WORK/draw_only$target.cpp" | head -n 3 | sed 's/^/  /'
+        fails=$((fails + 1))
+    else
+        echo "ok typed_gone$target"
+    fi
+done
 
 # gfx.close() calls the audio shutdown itself, so slicing audio out has to
 # leave that behind too.
@@ -482,6 +486,146 @@ if transpile "win_draw_only2" "$DRAW_ONLY" --win; then
     fi
 fi
 
+# --- input: the collection side of the four input families ------------------
+
+echo "-- input: what a program that reads no input collects"
+
+# BOB-57. Every other group above is a function the program calls and nothing
+# else can reach. The four input families are the only ones with a second side:
+# a reader reports something that happened *to* the program, so behind it sits
+# the code that collects it -- state the backends write as events arrive, the
+# branches of the event pump that write it, and on X11 the events the window is
+# subscribed to at all. The reader side was already sliced; this layer is the
+# cover for the collection side.
+#
+# The founder's report is the case: a program that opens a window and presents
+# it, and says nothing about keys, the mouse, the wheel or typed text.
+WINDOW_ONLY='    gfx.open("t", 8, 8, 1);
+    gfx.present();'
+
+transpile "window_only" "$WINDOW_ONLY"
+transpile "window_only_wasm" "$WINDOW_ONLY" --wasm
+transpile "window_only_win" "$WINDOW_ONLY" --win
+
+# emit_has <label> <file> <ERE> / emit_lacks <label> <file> <ERE>
+emit_has() {
+    if [ ! -f "$2" ]; then
+        echo "FAIL $1: no emission to check"
+        fails=$((fails + 1))
+        return
+    fi
+    if ! grep -Eq "$3" "$2"; then
+        echo "FAIL $1: the emission does not contain /$3/"
+        fails=$((fails + 1))
+        return
+    fi
+    echo "ok $1"
+}
+
+emit_lacks() {
+    if [ ! -f "$2" ]; then
+        echo "FAIL $1: no emission to check"
+        fails=$((fails + 1))
+        return
+    fi
+    if grep -Eq "$3" "$2"; then
+        echo "FAIL $1: the emission still contains /$3/"
+        grep -nE "$3" "$2" | head -n 3 | sed 's/^/  /'
+        fails=$((fails + 1))
+        return
+    fi
+    echo "ok $1"
+}
+
+# Nothing named for any of the four, on any target. Deliberately a blunt
+# pattern over the whole file rather than one sentinel per group: the point of
+# the report was that a window-only program carried input machinery, and the
+# way to check that is to look for any of it.
+#
+# __nexa_gfx_ekey is the one name spelled like input that is not input, and it
+# is checked below rather than here: the browser has no way to say "Escape was
+# pressed" other than a keydown callback, so gfx.fullscreen owns one.
+for target in "" _wasm _win; do
+    emit_lacks "window_only_no_input$target" "$WORK/window_only$target.cpp" \
+        '__nexa_gfx_(vk|key|pressed|released|key_snapshot|mouse|mouse_x|mouse_y|mouse_apply|mouse_refresh|map_mouse|wheel|wheel_add|wheel_x|typed|type_push|type_cap|has_focus|input_publish|dom_key_is_text|emouse|ewheel|mac_held)'
+    emit_lacks "window_only_no_input_state$target" "$WORK/window_only$target.cpp" \
+        '__nexa_g\.(mx|my|min|mlb|mmb|mrb|k_now|k_prev|keys|wheel_acc_x|wheel_acc_y|wheel_x|wheel_y|type_acc|type_buf|type_lead)'
+done
+
+# X11 is where the slicing shows on the wire rather than only in the file: the
+# event mask is a request to the server, and Tests/gfx_x11_stub records it.
+# Here the emission is enough to pin which mask is asked for.
+emit_has "window_only_bare_mask" "$WORK/window_only.cpp" \
+    '^        ExposureMask \| StructureNotifyMask\);$'
+emit_lacks "window_only_no_keysym" "$WORK/window_only.cpp" 'X11/keysym\.h'
+
+# The two collection points that are *not* input and must survive: Escape
+# leaves fullscreen, on Win32 through WM_KEYDOWN and in the browser through the
+# keydown callback. gfx.fullscreen is core, so a program that never reads a key
+# still has to be able to leave fullscreen with one.
+emit_has "window_only_win_keeps_fullscreen_escape" "$WORK/window_only_win.cpp" \
+    'msg == WM_KEYDOWN && wParam == VK_ESCAPE'
+emit_lacks "window_only_win_no_collection" "$WORK/window_only_win.cpp" \
+    'WM_CHAR|WM_MOUSEWHEEL|WM_MOUSEHWHEEL|GetAsyncKeyState'
+emit_has "window_only_wasm_keeps_fullscreen_escape" "$WORK/window_only_wasm.cpp" \
+    'emscripten_set_keydown_callback'
+emit_has "window_only_wasm_escape_still_leaves" "$WORK/window_only_wasm.cpp" \
+    'code == 27 && down && __nexa_g\.fullscreen'
+emit_lacks "window_only_wasm_no_collection" "$WORK/window_only_wasm.cpp" \
+    'emscripten_set_keyup_callback|emscripten_set_mouse|emscripten_set_wheel_callback'
+# The keydown callback stays, but what it did on the way past does not: the
+# key-state table is gfx.key's and the text push is gfx.typed's.
+emit_lacks "window_only_wasm_ekey_collects_nothing" "$WORK/window_only_wasm.cpp" \
+    '__nexa_g\.keys\[code\]|__nexa_gfx_type_push_utf8\(e->key'
+
+# Each family on its own. The interesting cases are the neighbours: the wheel
+# rides on X11 ButtonPress, so wheel-only has to subscribe to button presses
+# without pulling the mouse in; and gfx.typed() reads KeyPress without wanting
+# a single XK_ name, which is the whole of <X11/keysym.h>.
+transpile "keys_only" '    let k: int = gfx.key("w");'
+transpile "mouse_only" '    let n: int = gfx.mouse_x();'
+transpile "wheel_only" '    let n: int = gfx.wheel();'
+transpile "typed_only" '    let s: string = gfx.typed();'
+transpile "all_input" '    let k: int = gfx.key("w");
+    let n: int = gfx.mouse_x();
+    let w: int = gfx.wheel();
+    let s: string = gfx.typed();'
+
+emit_has "keys_only_mask" "$WORK/keys_only.cpp" \
+    'KeyPressMask \| KeyReleaseMask\);$'
+emit_has "keys_only_keysym" "$WORK/keys_only.cpp" 'X11/keysym\.h'
+emit_lacks "keys_only_no_neighbours" "$WORK/keys_only.cpp" \
+    'PointerMotionMask|ButtonPressMask|__nexa_gfx_wheel_add|__nexa_gfx_type_push|__nexa_gfx_mouse_refresh'
+
+emit_has "mouse_only_mask" "$WORK/mouse_only.cpp" \
+    'PointerMotionMask \| ButtonPressMask \| ButtonReleaseMask\);$'
+emit_has "mouse_only_refresh" "$WORK/mouse_only.cpp" '^static void __nexa_gfx_mouse_refresh\(\) \{'
+emit_lacks "mouse_only_no_neighbours" "$WORK/mouse_only.cpp" \
+    'KeyPressMask|KeyReleaseMask|X11/keysym\.h|__nexa_gfx_wheel_add|__nexa_gfx_type_push'
+
+# Wheel-only takes ButtonPressMask -- that is the event the notches arrive on
+# -- and neither of the other two button-and-motion bits, which belong to the
+# mouse.
+emit_has "wheel_only_mask" "$WORK/wheel_only.cpp" \
+    '^        ExposureMask \| StructureNotifyMask \| ButtonPressMask\);$'
+emit_has "wheel_only_add" "$WORK/wheel_only.cpp" '^static void __nexa_gfx_wheel_add'
+emit_lacks "wheel_only_no_neighbours" "$WORK/wheel_only.cpp" \
+    'PointerMotionMask|ButtonReleaseMask|KeyPressMask|X11/keysym\.h|__nexa_gfx_mouse_refresh|__nexa_gfx_type_push'
+
+emit_has "typed_only_mask" "$WORK/typed_only.cpp" \
+    '^        ExposureMask \| StructureNotifyMask \| KeyPressMask\);$'
+emit_has "typed_only_push" "$WORK/typed_only.cpp" '^static void __nexa_gfx_type_push_cp'
+emit_lacks "typed_only_no_neighbours" "$WORK/typed_only.cpp" \
+    'KeyReleaseMask|X11/keysym\.h|PointerMotionMask|ButtonPressMask|__nexa_gfx_wheel_add|__nexa_gfx_mouse_refresh'
+
+# And a program that reads all four asks for exactly the mask every gfx program
+# asked for before any of this: the slicing takes nothing away from a program
+# that uses the feature.
+emit_has "all_input_full_mask" "$WORK/all_input.cpp" \
+    'ExposureMask \| StructureNotifyMask \|
+        KeyPressMask \| KeyReleaseMask \|
+        PointerMotionMask \| ButtonPressMask \| ButtonReleaseMask\);'
+
 # --- size: the point of all of it -------------------------------------------
 
 echo "-- size: the file the C++ compiler is handed"
@@ -499,12 +643,19 @@ size_under() {
 
 # The draw loop measured 9,591 lines with the stb blob, 1,602 with the whole
 # gfx runtime and 490 sliced -- 666 since gfx.transparent (BOB-51) put real
-# alpha in the framebuffer, which is core. The ceilings are loose enough not to
-# be a tripwire for an honest new line of core runtime, and tight enough that a
-# re-introduced blob (~8,000 lines) or an unsliced runtime (~1,800) cannot
-# sneak under them.
+# alpha in the framebuffer, which is core, and back to 491 since BOB-57 sliced
+# the input-collection side as well: a draw loop calls gfx.poll() but reads no
+# key, mouse, wheel or typed text, so it now carries none of the code that
+# collects them either. The ceilings are loose enough not to be a tripwire for
+# an honest new line of core runtime, and tight enough that a re-introduced
+# blob (~8,000 lines) or an unsliced runtime (~1,800) cannot sneak under them.
 size_under "draw_only_stays_small" "$WORK/draw_only.cpp" 900
 size_under "wasm_draw_only_stays_small" "$WORK/draw_only_wasm.cpp" 900
+
+# And the founder's own case, a rung below it: a program that opens a window
+# and presents it reads no input at all, so nothing of the four families is
+# emitted for it. It measured 600 lines before BOB-57 and 425 after.
+size_under "window_only_stays_small" "$WORK/window_only.cpp" 600
 
 # Examples/paint_demo.nxa is the program the founder measured: 217 lines of
 # Nexa that transpiled to 1,793 lines of C++ before the slicing and 1,341

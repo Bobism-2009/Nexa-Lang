@@ -262,6 +262,86 @@ fn main() {
             fails=$((fails + 1))
         fi
     fi
+
+    # --- what the window is subscribed to (BOB-57) --------------------------
+    #
+    # Reading an input family is one half; the other is the code that collects
+    # it, and on X11 the outermost layer of that is the event mask -- what the
+    # window tells the server to send it in the first place. That is a request
+    # and nothing else: no X call reports it back, so the only way to check it
+    # is to record what went out, which Tests/gfx_x11_stub does.
+    #
+    # One binary per program, because the runtime the driver includes is the
+    # thing under test.
+    #
+    # mask_case <label> <expected-mask-expr> <nexa-body>
+    mask_case() {
+        label=$1
+        want=$2
+        body=$3
+        printf '#include <std/gfx>\nfn main() {\n%s\n}\n' "$body" > "$WORK/$label.nxa"
+        if ! "$NEXAC" "$WORK/$label.nxa" --source "$WORK/$label.cpp" \
+                > "$WORK/$label.log" 2>&1; then
+            echo "FAIL mask_$label: NexaC could not transpile the driver program"
+            sed 's/^/  /' "$WORK/$label.log"
+            fails=$((fails + 1))
+            return
+        fi
+        if ! "$CXX" -std=c++17 -O1 -I "$HERE/gfx_x11_stub" \
+                -DNEXA_GEN="\"$WORK/$label.cpp\"" \
+                -DNEXA_WANT_MASK="$want" \
+                -DNEXA_CASE="\"$label\"" \
+                "$HERE/gfx_mask_semantics.cpp" "$HERE/gfx_x11_stub/x11_stub.cpp" \
+                -o "$WORK/mask_$label" > "$WORK/$label.build" 2>&1; then
+            echo "FAIL mask_$label: could not build the driver"
+            sed 's/^/  /' "$WORK/$label.build" | head -n 5
+            fails=$((fails + 1))
+            return
+        fi
+        out=$("$WORK/mask_$label" 2>&1)
+        status=$?
+        printf '%s\n' "$out" | grep '^ok ' | sed 's/^ok /ok mask: /'
+        if [ $status -ne 0 ]; then
+            printf '%s\n' "$out" | grep -v '^ok ' | sed 's/^/  /'
+            fails=$((fails + 1))
+        fi
+    }
+
+    # The founder's report: a window and nothing else. Before BOB-57 this
+    # program asked the server for key presses, key releases, pointer motion
+    # and button presses and releases it could not read.
+    mask_case "window_only" \
+        'ExposureMask | StructureNotifyMask' \
+        '    gfx.open("t", 8, 8, 1);
+    gfx.present();'
+
+    # One family at a time. The wheel is the interesting one: on X11 a notch
+    # arrives as a press of button 4 to 7, so wheel-only has to subscribe to
+    # button presses -- and to neither of the other two bits, which are the
+    # mouse's.
+    mask_case "keys_only" \
+        'ExposureMask | StructureNotifyMask | KeyPressMask | KeyReleaseMask' \
+        '    let k: int = gfx.key("space");'
+    mask_case "mouse_only" \
+        'ExposureMask | StructureNotifyMask | PointerMotionMask | ButtonPressMask | ButtonReleaseMask' \
+        '    let n: int = gfx.mouse_x();'
+    mask_case "wheel_only" \
+        'ExposureMask | StructureNotifyMask | ButtonPressMask' \
+        '    let n: int = gfx.wheel();'
+    # gfx.typed() reads KeyPress and runs it through XLookupString; it never
+    # names a key, so it wants no KeyReleaseMask and no keysym table.
+    mask_case "typed_only" \
+        'ExposureMask | StructureNotifyMask | KeyPressMask' \
+        '    let s: string = gfx.typed();'
+
+    # And the other way: a program that reads all four asks for exactly what
+    # every gfx program asked for before the collection side was sliced.
+    mask_case "all_input" \
+        'ExposureMask | KeyPressMask | KeyReleaseMask | StructureNotifyMask | PointerMotionMask | ButtonPressMask | ButtonReleaseMask' \
+        '    let k: int = gfx.key("space");
+    let n: int = gfx.mouse_x();
+    let w: int = gfx.wheel();
+    let s: string = gfx.typed();'
 fi
 
 if [ $fails -eq 0 ]; then

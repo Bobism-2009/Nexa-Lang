@@ -48,6 +48,23 @@ namespace nexa {
 // fill, the X11 present, the Cocoa drawRect) is core for the same reason: what
 // the fourth byte of a pixel *means* is not a feature that can be sliced out
 // from under the code that writes it.
+//
+// The four input families -- keys, mouse, typed, wheel -- are the only groups
+// with two sides to slice. A drawing call is a function the program calls and
+// nothing else reaches; an input call reports something that happened *to* the
+// program, so behind each reader sits a collection side: state the backends
+// write as events arrive, the branches of the event pump that write it, and on
+// X11 the events the window is subscribed to at all. Both sides hang off the
+// one flag, so a program that never reads a family asks the window system
+// nothing about it -- a window-only program subscribes to ExposureMask and
+// StructureNotifyMask and no more.
+//
+// Two collection points are not input and must not slice with it. The
+// fullscreen escape -- Escape leaves fullscreen, on Win32 through WM_KEYDOWN
+// and on wasm through the keydown callback -- is part of gfx.fullscreen, which
+// is core; it keeps its handler and its registration whatever `keys` says. And
+// gfx.poll()'s window bookkeeping (close, destroy, resize, drop) is core for
+// the same reason it always was.
 struct GfxNeed {
     bool alpha = false;          // gfx.alpha() -- the reader; the setter is core
     bool plot = false;           // gfx.plot
@@ -360,6 +377,15 @@ inline std::string gfxRuntimeCpp(const GfxNeed& need) {
                           need.line || need.lineThick || need.text || wantRound ||
                           wantSector;
     const bool wantPutA = wantDraw || need.blit || need.blitRot;
+    // "Something reads input at all", which is what __nexa_gfx_has_focus hangs
+    // off: every family drops whatever arrived while the window was not the
+    // one the user was typing at, and nothing else asks the question.
+    const bool wantInput = need.keys || need.mouse || need.typed || need.wheel;
+    // The per-frame latch in gfx.poll(). Wheel notches and typed text are edge
+    // events -- they are accumulated as they arrive and handed over whole once
+    // a frame -- and they are the only two that need anything of poll beyond
+    // draining the event queue.
+    const bool wantPublish = need.wheel || need.typed;
 
     std::string out;
     out += R"NEXA_GFX(
@@ -392,8 +418,12 @@ inline std::string gfxRuntimeCpp(const GfxNeed& need) {
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/Xatom.h>
-#include <X11/keysym.h>
-#endif
+)NEXA_GFX";
+    // The XK_* names, and only gfx.key/gfx.pressed/gfx.released spell keys
+    // with them. gfx.typed() asks XLookupString for characters and never names
+    // a key, so it does not bring this in.
+    if (need.keys) out += "#include <X11/keysym.h>\n";
+    out += R"NEXA_GFX(#endif
 )NEXA_GFX";
     // The frame limiter reads a monotonic clock and waits on it. Windows has
     // both in windows.h and Emscripten has both in emscripten.h, already
@@ -412,13 +442,18 @@ struct __nexa_Gfx {
     int scale;
     int closed;
     int ready;
-    int mx;
+)NEXA_GFX";
+    // Where the pointer was and which buttons were down the last time anything
+    // asked. Nothing core reads these -- unlike `borderless` and `ontop` below,
+    // which gfx.fullscreen reads -- so they go when gfx.mouse* does.
+    if (need.mouse) out += R"NEXA_GFX(    int mx;
     int my;
     int min;
     int mlb;
     int mmb;
     int mrb;
-    int text_scale;
+)NEXA_GFX";
+    out += R"NEXA_GFX(    int text_scale;
     int fullscreen;
     // 1 while the program has asked for the window frame to be off. Always
     // here, even when gfx.borderless itself is sliced away, because the
@@ -450,17 +485,22 @@ struct __nexa_Gfx {
     unsigned char* fb;
     std::string title;
     std::string drop_path;
-    int k_now[64];
+)NEXA_GFX";
+    // The two snapshots gfx.pressed/gfx.released tell an edge from a hold
+    // with. gfx.poll() takes them, and only when something reads them.
+    if (need.keys) out += R"NEXA_GFX(    int k_now[64];
     int k_prev[64];
-    // Wheel and typed text are edge events, so they are collected as they arrive
-    // and published as a whole-frame value by gfx.poll(). The *_acc fields are
-    // what the backend event handlers write to; the published fields are what
-    // gfx.wheel()/gfx.wheel_x()/gfx.typed() read.
-    double wheel_acc_y;
+)NEXA_GFX";
+    // Wheel and typed text are edge events, so they are collected as they
+    // arrive and published as a whole-frame value by gfx.poll(). The *_acc
+    // fields are what the backend event handlers write to; the published
+    // fields are what gfx.wheel()/gfx.wheel_x()/gfx.typed() read.
+    if (need.wheel) out += R"NEXA_GFX(    double wheel_acc_y;
     double wheel_acc_x;
     int wheel_y;
     int wheel_x;
-    std::string type_acc;
+)NEXA_GFX";
+    if (need.typed) out += R"NEXA_GFX(    std::string type_acc;
     std::string type_buf;
     // A DBCS lead byte held over from one WM_CHAR to the next (Win32 only).
     int type_lead;
@@ -511,10 +551,15 @@ struct __nexa_Gfx {
     Cursor blank_cursor;
     Pixmap blank_pixmap;
 #endif
-#ifdef __EMSCRIPTEN__
+)NEXA_GFX";
+    // The browser is the one backend with no "is this key down" to ask, so the
+    // key state is kept here, one slot per DOM keyCode, written by the keydown
+    // and keyup callbacks. Nothing else reads it.
+    if (need.keys) out += R"NEXA_GFX(#ifdef __EMSCRIPTEN__
     int keys[512];
 #endif
-};
+)NEXA_GFX";
+    out += R"NEXA_GFX(};
 
 static __nexa_Gfx __nexa_g = {};
 
@@ -596,20 +641,11 @@ static void __nexa_gfx_type_push_latin1(const char* s, int n) {
 }
 #endif
 )NEXA_GFX";
-    else out += R"NEXA_GFX(
-// gfx.typed() is never called, so nothing reads the typed-text queue. The
-// backends still report "the user typed something" -- that is wired into the
-// window procedure and the X11 event loop -- so the helpers they hand it to
-// stay, as no-ops.
-#if defined(_WIN32) || defined(__APPLE__) || defined(__EMSCRIPTEN__)
-static void __nexa_gfx_type_push_utf8(const char*, int) {}
-#endif
-
-#if defined(__linux__) && !defined(__EMSCRIPTEN__)
-static void __nexa_gfx_type_push_latin1(const char*, int) {}
-#endif
-)NEXA_GFX";
-    out += R"NEXA_GFX(
+    // No `else` here, and none needed: the backend code that says "the user
+    // typed something" -- WM_CHAR, the X11 KeyPress branch, the Cocoa key-down
+    // branch, the browser keydown callback -- is sliced by the same flag, so
+    // when gfx.typed() goes there is nothing left to hand text to.
+    if (need.wheel) out += R"NEXA_GFX(
 // --- wheel accumulator ------------------------------------------------------
 // Backends report scrolling in wildly different units (whole notches on X11,
 // 1/120ths on Win32, pixels from a trackpad). Each converts to fractional
@@ -633,7 +669,12 @@ static void __nexa_gfx_wheel_add(double dx, double dy) {
     __nexa_g.wheel_acc_x = ax;
     __nexa_g.wheel_acc_y = ay;
 }
-
+)NEXA_GFX";
+    // Where in the program's own pixels a backend's pointer position lands.
+    // Every backend reports the pointer in the window's device pixels, which
+    // is the framebuffer times the scale, and clamping happens here so that
+    // none of the four has to know it.
+    if (need.mouse) out += R"NEXA_GFX(
 static int __nexa_gfx_map_mouse(int px, int py, int cw, int ch, int* ox, int* oy) {
     if (cw < 1 || ch < 1 || __nexa_g.w < 1 || __nexa_g.h < 1) return 0;
     if (px < 0 || py < 0 || px >= cw || py >= ch) return 0;
@@ -649,9 +690,6 @@ static int __nexa_gfx_map_mouse(int px, int py, int cw, int ch, int* ox, int* oy
 }
 
 static void __nexa_gfx_mouse_refresh();
-)NEXA_GFX";
-    if (need.keys) out += "static void __nexa_gfx_key_snapshot();\n";
-    out += R"NEXA_GFX(static int __nexa_gfx_has_focus();
 
 static void __nexa_gfx_mouse_apply(int x, int y, int inside, int left, int middle, int right) {
     if (inside) {
@@ -668,7 +706,13 @@ static void __nexa_gfx_mouse_apply(int x, int y, int inside, int left, int middl
         __nexa_g.mrb = 0;
     }
 }
-
+)NEXA_GFX";
+    if (need.keys) out += "\nstatic void __nexa_gfx_key_snapshot();\n";
+    // Focus is the one thing every input family asks about, and nothing else
+    // does: what arrived while the window was not the user's is dropped rather
+    // than queued up to land in the program's lap when it comes back.
+    if (wantInput) out += "\nstatic int __nexa_gfx_has_focus();\n";
+    out += R"NEXA_GFX(
 #ifdef __APPLE__
 @interface __NexaGfxDelegate : NSObject <NSWindowDelegate>
 @end
@@ -845,20 +889,24 @@ static void __nexa_gfx_free() {
     __nexa_gfx_delegate = nil;
 #endif
     __nexa_g.ready = 0;
-    __nexa_g.min = 0;
+)NEXA_GFX";
+    // A closed window reports no mouse buttons, no scrolling and no typed
+    // text, the same way it reports no keys.
+    if (need.mouse) out += R"NEXA_GFX(    __nexa_g.min = 0;
     __nexa_g.mlb = 0;
     __nexa_g.mmb = 0;
     __nexa_g.mrb = 0;
-    // A closed window reports no scrolling and no typed text, the same way it
-    // reports no keys and no mouse buttons.
-    __nexa_g.wheel_acc_x = 0.0;
+)NEXA_GFX";
+    if (need.wheel) out += R"NEXA_GFX(    __nexa_g.wheel_acc_x = 0.0;
     __nexa_g.wheel_acc_y = 0.0;
     __nexa_g.wheel_x = 0;
     __nexa_g.wheel_y = 0;
-    __nexa_g.type_acc.clear();
+)NEXA_GFX";
+    if (need.typed) out += R"NEXA_GFX(    __nexa_g.type_acc.clear();
     __nexa_g.type_buf.clear();
     __nexa_g.type_lead = 0;
-}
+)NEXA_GFX";
+    out += R"NEXA_GFX(}
 
 static int __nexa_gfx_fullscreen(int on);
 
@@ -1143,10 +1191,11 @@ static LRESULT CALLBACK __nexa_gfx_wndproc(HWND hwnd, UINT msg, WPARAM wParam, L
             }
         }
     }
+)NEXA_GFX";
     // The window class is ANSI (RegisterClassA / DispatchMessageA), so WM_CHAR
     // arrives as one byte in the process code page — possibly the lead byte of
     // a DBCS pair. Pair it up, then convert through UTF-16 to UTF-8.
-    if (msg == WM_CHAR) {
+    if (need.typed) out += R"NEXA_GFX(    if (msg == WM_CHAR) {
         char mb[2];
         int mbn = 0;
         if (__nexa_g.type_lead) {
@@ -1170,7 +1219,8 @@ static LRESULT CALLBACK __nexa_gfx_wndproc(HWND hwnd, UINT msg, WPARAM wParam, L
         }
         return 0;
     }
-    if (msg == WM_MOUSEWHEEL) {
+)NEXA_GFX";
+    if (need.wheel) out += R"NEXA_GFX(    if (msg == WM_MOUSEWHEEL) {
         __nexa_gfx_wheel_add(0.0, (double)GET_WHEEL_DELTA_WPARAM(wParam) / (double)WHEEL_DELTA);
         return 0;
     }
@@ -1180,7 +1230,8 @@ static LRESULT CALLBACK __nexa_gfx_wndproc(HWND hwnd, UINT msg, WPARAM wParam, L
         __nexa_gfx_wheel_add((double)GET_WHEEL_DELTA_WPARAM(wParam) / (double)WHEEL_DELTA, 0.0);
         return 0;
     }
-    if (msg == WM_DROPFILES) {
+)NEXA_GFX";
+    out += R"NEXA_GFX(    if (msg == WM_DROPFILES) {
         HDROP drop = (HDROP)wParam;
         char path[MAX_PATH];
         if (DragQueryFileA(drop, 0, path, MAX_PATH) > 0) __nexa_g.drop_path = path;
@@ -1208,9 +1259,10 @@ static LRESULT CALLBACK __nexa_gfx_wndproc(HWND hwnd, UINT msg, WPARAM wParam, L
 #endif
 
 #ifdef __EMSCRIPTEN__
-// True when a DOM KeyboardEvent.key holds a single character rather than a key
-// name: "a", "A", "€", " " are text; "ArrowUp", "Shift", "Enter" are not.
-static int __nexa_gfx_dom_key_is_text(const char* k) {
+)NEXA_GFX";
+    // True when a DOM KeyboardEvent.key holds a single character rather than a key
+    // name: "a", "A", "€", " " are text; "ArrowUp", "Shift", "Enter" are not.
+    if (need.typed) out += R"NEXA_GFX(static int __nexa_gfx_dom_key_is_text(const char* k) {
     if (!k || !k[0]) return 0;
     unsigned char b = (unsigned char)k[0];
     size_t want = 1;
@@ -1221,23 +1273,30 @@ static int __nexa_gfx_dom_key_is_text(const char* k) {
     return std::strlen(k) == want;
 }
 
-static EM_BOOL __nexa_gfx_ekey(int type, const EmscriptenKeyboardEvent* e, void*) {
+)NEXA_GFX";
+    // The keydown callback stays whatever the program reads, because the last
+    // thing in it is gfx.fullscreen's Escape and that is core. What it
+    // collects on the way past is not.
+    out += R"NEXA_GFX(static EM_BOOL __nexa_gfx_ekey(int type, const EmscriptenKeyboardEvent* e, void*) {
     int down = (type == EMSCRIPTEN_EVENT_KEYDOWN) ? 1 : 0;
     int code = (int)e->keyCode;
-    if (code >= 0 && code < 512) __nexa_g.keys[code] = down;
-    // keypress is deprecated, so character input comes off keydown: the browser
+)NEXA_GFX";
+    if (need.keys) out += "    if (code >= 0 && code < 512) __nexa_g.keys[code] = down;\n";
+    if (need.typed) out += R"NEXA_GFX(    // keypress is deprecated, so character input comes off keydown: the browser
     // has already applied shift and the keyboard layout to e->key.
     if (down && !e->ctrlKey && !e->altKey && !e->metaKey &&
         __nexa_gfx_dom_key_is_text(e->key)) {
         __nexa_gfx_type_push_utf8(e->key, -1);
     }
-    if (code == 27 && down && __nexa_g.fullscreen) {
+)NEXA_GFX";
+    out += R"NEXA_GFX(    if (code == 27 && down && __nexa_g.fullscreen) {
         __nexa_gfx_fullscreen(0);
         return EM_TRUE;
     }
     return EM_TRUE;
 }
-
+)NEXA_GFX";
+    if (need.mouse) out += R"NEXA_GFX(
 static EM_BOOL __nexa_gfx_emouse(int type, const EmscriptenMouseEvent* e, void*) {
     if (type == EMSCRIPTEN_EVENT_MOUSELEAVE) {
         __nexa_gfx_mouse_apply(0, 0, 0, 0, 0, 0);
@@ -1255,7 +1314,8 @@ static EM_BOOL __nexa_gfx_emouse(int type, const EmscriptenMouseEvent* e, void*)
     __nexa_gfx_mouse_apply(ox, oy, inside, (bt & 1) != 0, (bt & 4) != 0, (bt & 2) != 0);
     return EM_TRUE;
 }
-
+)NEXA_GFX";
+    if (need.wheel) out += R"NEXA_GFX(
 static EM_BOOL __nexa_gfx_ewheel(int, const EmscriptenWheelEvent* e, void*) {
     // DOM deltas depend on deltaMode: 0 is pixels, 1 is lines, 2 is pages. Scale
     // each to notches. DOM deltaY is positive scrolling *down*, the opposite of
@@ -1266,7 +1326,8 @@ static EM_BOOL __nexa_gfx_ewheel(int, const EmscriptenWheelEvent* e, void*) {
     __nexa_gfx_wheel_add(e->deltaX / div, -e->deltaY / div);
     return EM_TRUE;
 }
-#endif
+)NEXA_GFX";
+    out += R"NEXA_GFX(#endif
 
 static const int __nexa_gfx_max = 4096;
 
@@ -1354,32 +1415,46 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
     // A new window starts with the cursor showing, the same way it starts
     // opaque and windowed.
     __nexa_g.cursor = 1;
-    __nexa_g.mx = 0;
+)NEXA_GFX";
+    if (need.mouse) out += R"NEXA_GFX(    __nexa_g.mx = 0;
     __nexa_g.my = 0;
     __nexa_g.min = 0;
     __nexa_g.mlb = 0;
     __nexa_g.mmb = 0;
     __nexa_g.mrb = 0;
-    if (__nexa_g.text_scale < 1) __nexa_g.text_scale = 1;
+)NEXA_GFX";
+    out += R"NEXA_GFX(    if (__nexa_g.text_scale < 1) __nexa_g.text_scale = 1;
     __nexa_g.title = title;
     __nexa_g.drop_path.clear();
-    std::memset(__nexa_g.k_now, 0, sizeof(__nexa_g.k_now));
+)NEXA_GFX";
+    if (need.keys) out += R"NEXA_GFX(    std::memset(__nexa_g.k_now, 0, sizeof(__nexa_g.k_now));
     std::memset(__nexa_g.k_prev, 0, sizeof(__nexa_g.k_prev));
-    __nexa_g.wheel_acc_x = 0.0;
+)NEXA_GFX";
+    if (need.wheel) out += R"NEXA_GFX(    __nexa_g.wheel_acc_x = 0.0;
     __nexa_g.wheel_acc_y = 0.0;
     __nexa_g.wheel_x = 0;
     __nexa_g.wheel_y = 0;
-    __nexa_g.type_acc.clear();
+)NEXA_GFX";
+    if (need.typed) out += R"NEXA_GFX(    __nexa_g.type_acc.clear();
     __nexa_g.type_buf.clear();
     __nexa_g.type_lead = 0;
-    __nexa_g.fb = new unsigned char[(size_t)w * (size_t)h * 4];
+)NEXA_GFX";
+    out += R"NEXA_GFX(    __nexa_g.fb = new unsigned char[(size_t)w * (size_t)h * 4];
     std::memset(__nexa_g.fb, 0, (size_t)w * (size_t)h * 4);
     __nexa_gfx_clear(0, 0, 0);
 #ifdef __EMSCRIPTEN__
-    std::memset(__nexa_g.keys, 0, sizeof(__nexa_g.keys));
-    emscripten_set_keydown_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, 0, 1, __nexa_gfx_ekey);
-    emscripten_set_keyup_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, 0, 1, __nexa_gfx_ekey);
-    EM_ASM(({
+)NEXA_GFX";
+    if (need.keys) out += R"NEXA_GFX(    std::memset(__nexa_g.keys, 0, sizeof(__nexa_g.keys));
+)NEXA_GFX";
+    // The keydown subscription is gfx.fullscreen's as much as gfx.key's -- the
+    // browser has no other way to tell the runtime that Escape was pressed --
+    // so it is made whatever the program reads. keyup has only ever cleared a
+    // key-state slot, and goes with it.
+    out += R"NEXA_GFX(    emscripten_set_keydown_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, 0, 1, __nexa_gfx_ekey);
+)NEXA_GFX";
+    if (need.keys) out += R"NEXA_GFX(    emscripten_set_keyup_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, 0, 1, __nexa_gfx_ekey);
+)NEXA_GFX";
+    out += R"NEXA_GFX(    EM_ASM(({
         var c = Module['canvas'] || document.getElementById('canvas');
         if (!c) {
             c = document.createElement('canvas');
@@ -1431,12 +1506,15 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
         nexaBindDrop(cnv);
         nexaBindDrop(document.body);
     }), w, h, scale, title.c_str());
-    emscripten_set_mousemove_callback("#canvas", 0, 1, __nexa_gfx_emouse);
+)NEXA_GFX";
+    if (need.mouse) out += R"NEXA_GFX(    emscripten_set_mousemove_callback("#canvas", 0, 1, __nexa_gfx_emouse);
     emscripten_set_mousedown_callback("#canvas", 0, 1, __nexa_gfx_emouse);
     emscripten_set_mouseup_callback("#canvas", 0, 1, __nexa_gfx_emouse);
     emscripten_set_mouseleave_callback("#canvas", 0, 1, __nexa_gfx_emouse);
-    emscripten_set_wheel_callback("#canvas", 0, 1, __nexa_gfx_ewheel);
-    __nexa_g.ready = 1;
+)NEXA_GFX";
+    if (need.wheel) out += R"NEXA_GFX(    emscripten_set_wheel_callback("#canvas", 0, 1, __nexa_gfx_ewheel);
+)NEXA_GFX";
+    out += R"NEXA_GFX(    __nexa_g.ready = 1;
     __nexa_gfx_present();
     return 1;
 #elif defined(_WIN32)
@@ -1555,10 +1633,23 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
     Atom wm = XInternAtom(__nexa_g.dpy, "WM_DELETE_WINDOW", False);
     XSetWMProtocols(__nexa_g.dpy, __nexa_g.win, &wm, 1);
     __nexa_g.wm_delete = (int)wm;
-    XSelectInput(__nexa_g.dpy, __nexa_g.win,
-        ExposureMask | KeyPressMask | KeyReleaseMask | StructureNotifyMask |
-        PointerMotionMask | ButtonPressMask | ButtonReleaseMask);
 )NEXA_GFX";
+    // What the window is subscribed to, which is the one place the slicing is
+    // visible on the wire rather than only in the emitted file: a window-only
+    // program tells the X server it wants redraws and size changes and nothing
+    // else. Each family adds the events it reads -- keys the two key events,
+    // typed the KeyPress it runs through XLookupString, the wheel the
+    // ButtonPress that carries buttons 4 to 7, and the mouse the motion and
+    // button events. A program that reads all four asks for exactly the mask
+    // every gfx program used to ask for.
+    {
+        std::string mask = "ExposureMask | StructureNotifyMask";
+        if (need.keys) mask += " |\n        KeyPressMask | KeyReleaseMask";
+        else if (need.typed) mask += " | KeyPressMask";
+        if (need.mouse) mask += " |\n        PointerMotionMask | ButtonPressMask | ButtonReleaseMask";
+        else if (need.wheel) mask += " | ButtonPressMask";
+        out += "    XSelectInput(__nexa_g.dpy, __nexa_g.win,\n        " + mask + ");\n";
+    }
     if (need.transparent) out += R"NEXA_GFX(
     // The default GC belongs to the root window, and therefore to the root
     // window's depth. A GC and the drawable it draws on have to agree about
@@ -1615,12 +1706,17 @@ static int __nexa_gfx_resize(int w, int h, int scale) {
     __nexa_g.w = w;
     __nexa_g.h = h;
     __nexa_g.scale = scale;
-    if (__nexa_g.mx >= w) __nexa_g.mx = w > 0 ? w - 1 : 0;
+)NEXA_GFX";
+    // A shrink can leave the last known pointer position outside the window it
+    // is supposed to be a position in.
+    if (need.window && need.mouse) out += R"NEXA_GFX(    if (__nexa_g.mx >= w) __nexa_g.mx = w > 0 ? w - 1 : 0;
     if (__nexa_g.my >= h) __nexa_g.my = h > 0 ? h - 1 : 0;
-    __nexa_gfx_apply_window_size(w, h, scale);
+)NEXA_GFX";
+    if (need.window) out += R"NEXA_GFX(    __nexa_gfx_apply_window_size(w, h, scale);
     return 1;
 }
-
+)NEXA_GFX";
+    out += R"NEXA_GFX(
 static int __nexa_gfx_width() {
     return __nexa_g.ready ? __nexa_g.w : 0;
 }
@@ -2202,34 +2298,43 @@ static void __nexa_gfx_close() {
     __nexa_g.closed = 1;
     __nexa_gfx_free();
 }
-
-// Turns everything the backends accumulated since the last gfx.poll() into the
-// values gfx.wheel()/gfx.wheel_x()/gfx.typed() report for this frame. Whole
-// notches are published and the fraction is carried forward.
-//
-// Like gfx.key and gfx.mouse, this input is only visible while the window has
-// focus: anything that arrived while it did not is dropped rather than queued
-// up to land in the program's lap the moment it comes back.
+)NEXA_GFX";
+    // Turns everything the backends accumulated since the last gfx.poll() into
+    // the values gfx.wheel()/gfx.wheel_x()/gfx.typed() report for this frame.
+    // Whole notches are published and the fraction is carried forward.
+    //
+    // Like gfx.key and gfx.mouse, this input is only visible while the window
+    // has focus: anything that arrived while it did not is dropped rather than
+    // queued up to land in the program's lap the moment it comes back.
+    if (wantPublish) {
+        out += R"NEXA_GFX(
 static void __nexa_gfx_input_publish() {
     if (!__nexa_gfx_has_focus()) {
-        __nexa_g.wheel_acc_x = 0.0;
+)NEXA_GFX";
+        if (need.wheel) out += R"NEXA_GFX(        __nexa_g.wheel_acc_x = 0.0;
         __nexa_g.wheel_acc_y = 0.0;
         __nexa_g.wheel_x = 0;
         __nexa_g.wheel_y = 0;
-        __nexa_g.type_acc.clear();
+)NEXA_GFX";
+        if (need.typed) out += R"NEXA_GFX(        __nexa_g.type_acc.clear();
         __nexa_g.type_buf.clear();
-        return;
+)NEXA_GFX";
+        out += R"NEXA_GFX(        return;
     }
-    int nx = (int)__nexa_g.wheel_acc_x;   // truncates toward zero
+)NEXA_GFX";
+        if (need.wheel) out += R"NEXA_GFX(    int nx = (int)__nexa_g.wheel_acc_x;   // truncates toward zero
     int ny = (int)__nexa_g.wheel_acc_y;
     __nexa_g.wheel_acc_x -= (double)nx;
     __nexa_g.wheel_acc_y -= (double)ny;
     __nexa_g.wheel_x = nx;
     __nexa_g.wheel_y = ny;
-    __nexa_g.type_buf.swap(__nexa_g.type_acc);
+)NEXA_GFX";
+        if (need.typed) out += R"NEXA_GFX(    __nexa_g.type_buf.swap(__nexa_g.type_acc);
     __nexa_g.type_acc.clear();
-}
-
+)NEXA_GFX";
+        out += "}\n";
+    }
+    out += R"NEXA_GFX(
 static void __nexa_gfx_poll() {
     // Ahead of the window check on purpose: the audio stream is not owned by
     // the window, so a program that plays a sound without opening one still
@@ -2251,14 +2356,21 @@ static void __nexa_gfx_poll() {
             untilDate:[NSDate distantPast]
             inMode:NSDefaultRunLoopMode
             dequeue:YES])) {
-            NSEventType et = [ev type];
-            if (et == NSEventTypeScrollWheel) {
+)NEXA_GFX";
+    // Cocoa hands the whole queue over one event at a time and the runtime
+    // passes each one straight back to AppKit; the only reason to look at one
+    // on the way past is to collect from it. A program that reads neither the
+    // wheel nor typed text does not ask what kind of event it is.
+    if (wantPublish) out += "            NSEventType et = [ev type];\n";
+    if (need.wheel) out += R"NEXA_GFX(            if (et == NSEventTypeScrollWheel) {
                 // A trackpad reports pixels ("precise deltas"); a wheel reports
                 // whole lines. Scale the former into the same notch unit.
                 double s = [ev hasPreciseScrollingDeltas] ? 0.1 : 1.0;
                 __nexa_gfx_wheel_add((double)[ev scrollingDeltaX] * s,
                                      (double)[ev scrollingDeltaY] * s);
-            } else if (et == NSEventTypeKeyDown) {
+            }
+)NEXA_GFX";
+    if (need.typed) out += R"NEXA_GFX(            if (et == NSEventTypeKeyDown) {
                 // -characters has already applied shift and the layout. Function
                 // keys arrive here too, as private-use code points, and the
                 // printable filter in the push helper drops them. Auto-repeat is
@@ -2267,7 +2379,8 @@ static void __nexa_gfx_poll() {
                 NSString* chars = [ev characters];
                 if (chars) __nexa_gfx_type_push_utf8([chars UTF8String], -1);
             }
-            [NSApp sendEvent:ev];
+)NEXA_GFX";
+    out += R"NEXA_GFX(            [NSApp sendEvent:ev];
         }
     }
 #elif defined(__linux__)
@@ -2276,7 +2389,8 @@ static void __nexa_gfx_poll() {
         XNextEvent(__nexa_g.dpy, &ev);
         if (ev.type == ClientMessage && (int)ev.xclient.data.l[0] == __nexa_g.wm_delete) __nexa_g.closed = 1;
         if (ev.type == DestroyNotify) __nexa_g.closed = 1;
-        if (ev.type == ButtonPress) {
+)NEXA_GFX";
+    if (need.wheel) out += R"NEXA_GFX(        if (ev.type == ButtonPress) {
             // X11 sends scrolling as button clicks: 4/5 are up/down and 6/7 are
             // left/right. The matching ButtonRelease is ignored so one click of
             // the wheel counts once.
@@ -2288,7 +2402,8 @@ static void __nexa_gfx_poll() {
                 default: break;
             }
         }
-        if (ev.type == KeyPress) {
+)NEXA_GFX";
+    if (need.typed) out += R"NEXA_GFX(        if (ev.type == KeyPress) {
             // XLookupString applies shift and the layout, but only reaches
             // Latin-1: scripts beyond it need an input method, which the
             // runtime does not open (it would mean changing the process locale).
@@ -2297,7 +2412,8 @@ static void __nexa_gfx_poll() {
             int n = XLookupString(&ev.xkey, buf, (int)sizeof(buf), &ks, nullptr);
             if (n > 0) __nexa_gfx_type_push_latin1(buf, n);
         }
-    }
+)NEXA_GFX";
+    out += R"NEXA_GFX(    }
 #endif
 #ifdef __EMSCRIPTEN__
     {
@@ -2312,16 +2428,21 @@ static void __nexa_gfx_poll() {
         if (got) __nexa_g.drop_path = buf;
     }
 #endif
-    __nexa_gfx_mouse_refresh();
 )NEXA_GFX";
+    if (need.mouse) out += "    __nexa_gfx_mouse_refresh();\n";
     if (need.keys) out += "    __nexa_gfx_key_snapshot();\n";
-    out += R"NEXA_GFX(    __nexa_gfx_input_publish();
-}
+    if (wantPublish) out += "    __nexa_gfx_input_publish();\n";
+    out += R"NEXA_GFX(}
 
 static int __nexa_gfx_closed() {
     return __nexa_g.closed;
 }
-
+)NEXA_GFX";
+    // Where the pointer is and which buttons are down, asked of the window
+    // system rather than remembered from an event: Win32, Cocoa and X11 all
+    // answer the question directly, so the only backend that has to be told is
+    // the browser, whose callbacks call __nexa_gfx_mouse_apply instead.
+    if (need.mouse) out += R"NEXA_GFX(
 static void __nexa_gfx_mouse_refresh() {
     if (!__nexa_g.ready) return;
 #ifdef _WIN32
@@ -3647,7 +3768,7 @@ static int __nexa_gfx_mac_held(unsigned short kc) {
 }
 #endif
 )NEXA_GFX";
-    out += R"NEXA_GFX(
+    if (wantInput) out += R"NEXA_GFX(
 static int __nexa_gfx_has_focus() {
 #ifdef _WIN32
     return (__nexa_g.hwnd && GetForegroundWindow() == __nexa_g.hwnd) ? 1 : 0;

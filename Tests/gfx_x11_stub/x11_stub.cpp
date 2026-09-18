@@ -81,6 +81,11 @@ static VisualID nexa_stub_win_visual_id = 0;
 static unsigned long nexa_stub_win_mask = 0;
 static Colormap nexa_stub_win_colormap = 0;
 static unsigned long nexa_stub_win_border_pixel = 0;
+/* The last XSelectInput mask: which events the window asked the server to
+   send it. Like the visual, this is a request nothing can read back, and since
+   BOB-57 it is a request that changes with the program -- a window-only one
+   asks for redraws and size changes and nothing else. */
+static long nexa_stub_event_mask = 0;
 static int nexa_stub_cmaps_made = 0;
 static int nexa_stub_cmaps_freed = 0;
 static int nexa_stub_gcs_made = 0;
@@ -168,6 +173,7 @@ void nexa_x11_stub_reset(int display_works) {
     nexa_stub_win_mask = 0;
     nexa_stub_win_colormap = 0;
     nexa_stub_win_border_pixel = 0;
+    nexa_stub_event_mask = 0;
     nexa_stub_cmaps_made = 0;
     nexa_stub_cmaps_freed = 0;
     nexa_stub_gcs_made = 0;
@@ -184,6 +190,7 @@ int nexa_x11_stub_window_depth(void) { return nexa_stub_win_depth; }
 int nexa_x11_stub_window_class(void) { return nexa_stub_win_class; }
 unsigned long nexa_x11_stub_window_visual_id(void) { return (unsigned long)nexa_stub_win_visual_id; }
 unsigned long nexa_x11_stub_window_mask(void) { return nexa_stub_win_mask; }
+long nexa_x11_stub_event_mask(void) { return nexa_stub_event_mask; }
 unsigned long nexa_x11_stub_window_colormap(void) { return (unsigned long)nexa_stub_win_colormap; }
 unsigned long nexa_x11_stub_window_border_pixel(void) { return nexa_stub_win_border_pixel; }
 int nexa_x11_stub_colormaps_made(void) { return nexa_stub_cmaps_made; }
@@ -353,7 +360,12 @@ Status XSendEvent(Display* d, Window w, Bool p, long m, XEvent* e) {
     nexa_stub_log_call(NEXA_STUB_CALL_SEND);
     return 0;
 }
-int XSelectInput(Display* d, Window w, long m) { (void)d; (void)w; (void)m; return 0; }
+int XSelectInput(Display* d, Window w, long m) {
+    (void)d;
+    (void)w;
+    nexa_stub_event_mask = m;
+    return 0;
+}
 Window XCreateSimpleWindow(Display* d, Window parent, int x, int y,
                            unsigned int w, unsigned int h, unsigned int bw,
                            unsigned long border, unsigned long background) {

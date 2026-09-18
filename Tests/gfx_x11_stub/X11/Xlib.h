@@ -374,6 +374,14 @@ extern int nexa_x11_stub_gcs_freed(void);
 extern int nexa_x11_stub_image_depth(void);
 extern unsigned long nexa_x11_stub_image_pixel(int i);
 
+/* The mask of the last XSelectInput: which events the window asked the server
+ * to send it. A request, like the visual -- no X call reports it back -- and
+ * since BOB-57 one that changes with the program, because the code that
+ * collects each input family is emitted only when something reads that family.
+ * A program that opens a window and draws asks for ExposureMask and
+ * StructureNotifyMask and nothing else. */
+extern long nexa_x11_stub_event_mask(void);
+
 /* Atom ids the fake server hands out for interned names. They start above
  * every predefined atom in X11/Xatom.h so that an id which is XA_ATOM is
  * XA_ATOM and not the fourth name some test happened to intern. */
