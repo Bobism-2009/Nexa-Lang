@@ -12,6 +12,7 @@
 !Tests/gfx_sound_semantics.cpp
 !Tests/gfx_borderless_semantics.cpp
 !Tests/gfx_ontop_semantics.cpp
+!Tests/gfx_overlay_semantics.cpp
 !Tests/gfx_transparent_semantics.cpp
 !Tests/gfx_x11_stub/x11_stub.cpp
 

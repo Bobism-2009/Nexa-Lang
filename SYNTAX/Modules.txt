@@ -623,7 +623,10 @@ Nexa Standard Modules
                                    window is unmapped and remapped so that window
                                    managers which read the hint only when they frame a
                                    window pick it up -- one flicker, and the position is
-                                   restored afterwards.
+                                   restored afterwards. A window manager forgets the
+                                   states of a window it stops managing, so gfx.ontop
+                                   and gfx.fullscreen are asked for again around that
+                                   remap and survive it in either order.
                                    macOS: NSWindowStyleMaskBorderless, keeping Resizable
                                    so the window can still become key.
                                    wasm: a canvas has no frame, so nothing happens; the

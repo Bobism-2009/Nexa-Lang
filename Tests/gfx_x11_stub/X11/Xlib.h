@@ -374,16 +374,38 @@ extern int nexa_x11_stub_gcs_freed(void);
 extern int nexa_x11_stub_image_depth(void);
 extern unsigned long nexa_x11_stub_image_pixel(int i);
 
+/* Atom ids the fake server hands out for interned names. They start above
+ * every predefined atom in X11/Xatom.h so that an id which is XA_ATOM is
+ * XA_ATOM and not the fourth name some test happened to intern. */
+#define NEXA_STUB_ATOM_BASE 1024
+
 /* What the runtime asked the server to do, for tests that assert on the
- * request rather than on a pixel. The property accessors describe the last
+ * request rather than on a pixel. The property accessors describe one
  * XChangeProperty; the message accessors the last XSendEvent; the call log
- * records XMapWindow / XUnmapWindow / XMoveWindow / XSendEvent in the order
- * they arrived. All are cleared by nexa_x11_stub_reset. */
+ * records XChangeProperty / XMapWindow / XUnmapWindow / XMoveWindow /
+ * XSendEvent in the order they arrived. All are cleared by
+ * nexa_x11_stub_reset.
+ *
+ * A single gfx call can write more than one property -- gfx.borderless writes
+ * the Motif hint, and the _NET_WM_STATE that has to survive its remap -- so
+ * the writes are all kept and the readers report one of them:
+ *   _select(name)  report the last write of that property, and say whether
+ *                  there was one; _select(0) goes back to the last write of
+ *                  any property, which is where every reader starts
+ *   _writes()      how many writes have been recorded since the last clear
+ *   _type()        the property's type atom, for the ones whose type is not
+ *                  their own atom -- a list of atoms is XA_ATOM
+ *   _word_name(i)  the i'th word read back as an atom name, which is how the
+ *                  states in a _NET_WM_STATE list are told apart */
 extern const char* nexa_x11_stub_property_name(void);
 extern int nexa_x11_stub_property_type_matches(void);
+extern unsigned long nexa_x11_stub_property_type(void);
 extern int nexa_x11_stub_property_format(void);
 extern int nexa_x11_stub_property_count(void);
 extern long nexa_x11_stub_property_word(int i);
+extern const char* nexa_x11_stub_property_word_name(int i);
+extern int nexa_x11_stub_property_writes(void);
+extern int nexa_x11_stub_property_select(const char* name);
 
 /* The last XSendEvent. _NET_WM_STATE changes are asked for with a
  * ClientMessage to the root window and nothing else -- no property, no reply
@@ -410,6 +432,7 @@ extern int nexa_x11_stub_message_propagate(void);
 #define NEXA_STUB_CALL_UNMAP 2
 #define NEXA_STUB_CALL_MOVE 3
 #define NEXA_STUB_CALL_SEND 4
+#define NEXA_STUB_CALL_PROP 5
 extern void nexa_x11_stub_calls_clear(void);
 extern int nexa_x11_stub_call_count(void);
 extern int nexa_x11_stub_call(int i);

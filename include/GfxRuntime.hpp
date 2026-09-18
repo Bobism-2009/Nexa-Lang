@@ -391,6 +391,7 @@ inline std::string gfxRuntimeCpp(const GfxNeed& need) {
 #elif defined(__linux__)
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <X11/Xatom.h>
 #include <X11/keysym.h>
 #endif
 )NEXA_GFX";
@@ -1844,9 +1845,56 @@ static int __nexa_gfx_borderless(int on) {
         Window child;
         XTranslateCoordinates(__nexa_g.dpy, __nexa_g.win, DefaultRootWindow(__nexa_g.dpy),
             0, 0, &rx, &ry, &child);
+        // Taking the window down is also where its _NET_WM_STATE goes: EWMH
+        // has a window manager forget the states of a window it stops
+        // managing, so a remap that says nothing hands back a window that is
+        // neither on top nor fullscreen however the program left it. Worse,
+        // __nexa_g.ontop would still say 1, so gfx.ontop(1) would agree there
+        // was nothing to do and the program would have no way back.
+        //
+        // What the flags say is therefore said again -- and said twice,
+        // because the two halves land on different window managers. Setting
+        // the property while the window is withdrawn is what a window manager
+        // reads when it takes the window on at map time; the ClientMessages
+        // after the remap are for the one that had already deleted that
+        // property on its way out of managing the window, which it is free to
+        // do after this property write and before the map.
+        //
+        // The flags are read rather than gfx.ontop and gfx.fullscreen called:
+        // those two are sliced away in a program that does not name them, and
+        // the flags are in __nexa_Gfx whether or not they are.
+        long states[2];
+        int nstates = 0;
+        if (__nexa_g.ontop) {
+            states[nstates++] = (long)XInternAtom(__nexa_g.dpy, "_NET_WM_STATE_ABOVE", False);
+        }
+        if (__nexa_g.fullscreen) {
+            states[nstates++] = (long)XInternAtom(__nexa_g.dpy, "_NET_WM_STATE_FULLSCREEN", False);
+        }
+        Atom wm = nstates ? XInternAtom(__nexa_g.dpy, "_NET_WM_STATE", False) : (Atom)0;
         XUnmapWindow(__nexa_g.dpy, __nexa_g.win);
+        // A list of atoms, so the property's type is the atom type itself --
+        // XA_ATOM, which is 4 and predefined, no interning needed for it.
+        if (nstates) {
+            XChangeProperty(__nexa_g.dpy, __nexa_g.win, wm, XA_ATOM, 32, PropModeReplace,
+                (const unsigned char*)states, nstates);
+        }
         XMapWindow(__nexa_g.dpy, __nexa_g.win);
         XMoveWindow(__nexa_g.dpy, __nexa_g.win, rx, ry);
+        for (int i = 0; i < nstates; i++) {
+            XEvent ev;
+            std::memset(&ev, 0, sizeof(ev));
+            ev.xclient.type = ClientMessage;
+            ev.xclient.window = __nexa_g.win;
+            ev.xclient.message_type = wm;
+            ev.xclient.format = 32;
+            ev.xclient.data.l[0] = 1;              // _NET_WM_STATE_ADD
+            ev.xclient.data.l[1] = states[i];
+            ev.xclient.data.l[2] = 0;
+            ev.xclient.data.l[3] = 1;
+            XSendEvent(__nexa_g.dpy, DefaultRootWindow(__nexa_g.dpy), False,
+                SubstructureRedirectMask | SubstructureNotifyMask, &ev);
+        }
     }
     XFlush(__nexa_g.dpy);
     return __nexa_g.borderless;

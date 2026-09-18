@@ -24,17 +24,20 @@
 #             never opens a window. Skipped only when neither route builds.
 #
 #   semantics Build Tests/gfx_borderless_semantics.cpp,
-#             Tests/gfx_ontop_semantics.cpp and
+#             Tests/gfx_ontop_semantics.cpp,
+#             Tests/gfx_overlay_semantics.cpp and
 #             Tests/gfx_transparent_semantics.cpp against the same fake X11 and
 #             drive the runtime directly. The first two are calls whose result
 #             belongs to the window manager -- the frame it draws around a
 #             window, the pile it stacks the window in -- so nothing can read
 #             either back, and what is checked is the request the runtime
-#             makes, which the stub records. The third is half that and half
-#             something a test can read for itself: which window the runtime
-#             asked the server for is a request, but what a clear and a
-#             translucent draw leave in the framebuffer, and what goes out on
-#             the wire for them, are bytes. Needs no display.
+#             makes, which the stub records. The third is those two and
+#             gfx.fullscreen in one program, where taking the frame off has to
+#             carry the other two across the remap it does. The fourth is half
+#             a request and half something a test can read for itself: which
+#             window the runtime asked the server for is a request, but what a
+#             clear and a translucent draw leave in the framebuffer, and what
+#             goes out on the wire for them, are bytes. Needs no display.
 #
 #   window    Build and run Tests/gfx_open_close_test.nxa, which opens a real
 #             window and reads pixels back. Needs a display; skipped without
@@ -428,6 +431,13 @@ if [ -z "$CXX" ]; then
 else
     semantics_case "borderless" '    gfx.borderless(1);'
     semantics_case "ontop" '    gfx.ontop(1);'
+    # The three window-manager calls in one program, which is the only way to
+    # see what they do to each other: taking the frame off on X11 puts the
+    # window down and up again, and a window manager forgets the states of a
+    # window it stops managing.
+    semantics_case "overlay" '    gfx.borderless(1);
+    gfx.ontop(1);
+    gfx.fullscreen(1);'
     # gfx.transparent's driver needs a program that draws as well as toggles,
     # since half of what it checks is the bytes a draw leaves in the
     # framebuffer and the slicing would otherwise take the rasterizers away.

@@ -28,16 +28,35 @@ static char nexa_stub_atom_names[NEXA_STUB_ATOMS][NEXA_STUB_ATOM_LEN];
 static int nexa_stub_atom_count = 0;
 
 static const char* nexa_stub_atom_name(Atom a) {
-    if (a == 0 || (int)a > nexa_stub_atom_count) return "";
-    return nexa_stub_atom_names[a - 1];
+    if (a < NEXA_STUB_ATOM_BASE || (int)(a - NEXA_STUB_ATOM_BASE) >= nexa_stub_atom_count) {
+        return "";
+    }
+    return nexa_stub_atom_names[a - NEXA_STUB_ATOM_BASE];
 }
 
-/* The last XChangeProperty, and the map/unmap/move/send log. */
-static Atom nexa_stub_prop_atom = 0;
-static Atom nexa_stub_prop_type = 0;
-static int nexa_stub_prop_format = 0;
-static int nexa_stub_prop_count = 0;
-static long nexa_stub_prop_data[8];
+/* The XChangeProperty calls, in the order they arrived, and the map/unmap/
+   move/send log. More than one property goes onto a window in a single gfx
+   call -- gfx.borderless writes the Motif hint and, when the window is on top
+   or fullscreen, the _NET_WM_STATE that survives its remap -- so each one is
+   kept and a test picks the one it means by name. */
+enum { NEXA_STUB_PROPS = 8, NEXA_STUB_PROP_WORDS = 8 };
+typedef struct {
+    Atom atom;
+    Atom type;
+    int format;
+    int count;
+    long data[NEXA_STUB_PROP_WORDS];
+} nexa_stub_prop;
+static nexa_stub_prop nexa_stub_props[NEXA_STUB_PROPS];
+static nexa_stub_prop nexa_stub_prop_none;      /* what a reader gets when there is nothing */
+static int nexa_stub_prop_n = 0;
+static int nexa_stub_prop_sel = -1;             /* -1 is the last one written */
+
+static const nexa_stub_prop* nexa_stub_prop_read(void) {
+    int i = nexa_stub_prop_sel < 0 ? nexa_stub_prop_n - 1 : nexa_stub_prop_sel;
+    if (i < 0 || i >= nexa_stub_prop_n) return &nexa_stub_prop_none;
+    return &nexa_stub_props[i];
+}
 
 /* The last XSendEvent. A ClientMessage to the root window is how a program
    asks the window manager for a _NET_WM_STATE change, and the message is the
@@ -127,11 +146,10 @@ void nexa_x11_stub_reset(int display_works) {
     nexa_stub_map_state = -1;
     nexa_stub_origin_x = 0;
     nexa_stub_origin_y = 0;
-    nexa_stub_prop_atom = 0;
-    nexa_stub_prop_type = 0;
-    nexa_stub_prop_format = 0;
-    nexa_stub_prop_count = 0;
-    memset(nexa_stub_prop_data, 0, sizeof(nexa_stub_prop_data));
+    memset(nexa_stub_props, 0, sizeof(nexa_stub_props));
+    memset(&nexa_stub_prop_none, 0, sizeof(nexa_stub_prop_none));
+    nexa_stub_prop_n = 0;
+    nexa_stub_prop_sel = -1;
     nexa_stub_msg_type = 0;
     nexa_stub_msg_message_type = 0;
     nexa_stub_msg_format = 0;
@@ -187,22 +205,57 @@ void nexa_x11_stub_set_origin(int x, int y) {
 }
 
 const char* nexa_x11_stub_property_name(void) {
-    return nexa_stub_atom_name(nexa_stub_prop_atom);
+    return nexa_stub_atom_name(nexa_stub_prop_read()->atom);
 }
 
 int nexa_x11_stub_property_type_matches(void) {
-    return nexa_stub_prop_type != 0 && nexa_stub_prop_type == nexa_stub_prop_atom;
+    const nexa_stub_prop* p = nexa_stub_prop_read();
+    return p->type != 0 && p->type == p->atom;
 }
 
-int nexa_x11_stub_property_format(void) { return nexa_stub_prop_format; }
-int nexa_x11_stub_property_count(void) { return nexa_stub_prop_count; }
+unsigned long nexa_x11_stub_property_type(void) {
+    return (unsigned long)nexa_stub_prop_read()->type;
+}
+
+int nexa_x11_stub_property_format(void) { return nexa_stub_prop_read()->format; }
+int nexa_x11_stub_property_count(void) { return nexa_stub_prop_read()->count; }
 
 long nexa_x11_stub_property_word(int i) {
-    if (i < 0 || i >= (int)(sizeof(nexa_stub_prop_data) / sizeof(nexa_stub_prop_data[0]))) return 0;
-    return nexa_stub_prop_data[i];
+    if (i < 0 || i >= NEXA_STUB_PROP_WORDS) return 0;
+    return nexa_stub_prop_read()->data[i];
 }
 
-void nexa_x11_stub_calls_clear(void) { nexa_stub_call_n = 0; }
+const char* nexa_x11_stub_property_word_name(int i) {
+    return nexa_stub_atom_name((Atom)nexa_x11_stub_property_word(i));
+}
+
+int nexa_x11_stub_property_writes(void) { return nexa_stub_prop_n; }
+
+/* Which of the recorded writes the readers above report. A name picks the last
+   write of that property, 0 goes back to the last write of any; a name that
+   was never written selects nothing, and then every reader says zero. */
+int nexa_x11_stub_property_select(const char* name) {
+    if (!name) {
+        nexa_stub_prop_sel = -1;
+        return 1;
+    }
+    for (int i = nexa_stub_prop_n - 1; i >= 0; i--) {
+        if (strcmp(nexa_stub_atom_name(nexa_stub_props[i].atom), name) == 0) {
+            nexa_stub_prop_sel = i;
+            return 1;
+        }
+    }
+    nexa_stub_prop_sel = NEXA_STUB_PROPS;      /* out of range: reads as nothing */
+    return 0;
+}
+
+void nexa_x11_stub_calls_clear(void) {
+    nexa_stub_call_n = 0;
+    /* The property writes are part of the same recording -- they are in the
+       call log too -- so starting a fresh one starts them both. */
+    nexa_stub_prop_n = 0;
+    nexa_stub_prop_sel = -1;
+}
 int nexa_x11_stub_call_count(void) { return nexa_stub_call_n; }
 
 int nexa_x11_stub_call(int i) {
@@ -388,14 +441,14 @@ Atom XInternAtom(Display* d, const char* n, Bool o) {
     (void)d; (void)o;
     if (!n) return 0;
     for (int i = 0; i < nexa_stub_atom_count; i++) {
-        if (strcmp(nexa_stub_atom_names[i], n) == 0) return (Atom)(i + 1);
+        if (strcmp(nexa_stub_atom_names[i], n) == 0) return (Atom)(NEXA_STUB_ATOM_BASE + i);
     }
     if (nexa_stub_atom_count >= NEXA_STUB_ATOMS) return 0;
     size_t len = strlen(n);
     if (len >= NEXA_STUB_ATOM_LEN) len = NEXA_STUB_ATOM_LEN - 1;
     memcpy(nexa_stub_atom_names[nexa_stub_atom_count], n, len);
     nexa_stub_atom_names[nexa_stub_atom_count][len] = 0;
-    return (Atom)(++nexa_stub_atom_count);
+    return (Atom)(NEXA_STUB_ATOM_BASE + nexa_stub_atom_count++);
 }
 Status XSetWMProtocols(Display* d, Window w, Atom* p, int c) {
     (void)d; (void)w; (void)p; (void)c; return 0;
@@ -403,16 +456,18 @@ Status XSetWMProtocols(Display* d, Window w, Atom* p, int c) {
 int XChangeProperty(Display* d, Window w, Atom pr, Atom t, int f, int m,
                     const unsigned char* data, int n) {
     (void)d; (void)w; (void)m;
-    nexa_stub_prop_atom = pr;
-    nexa_stub_prop_type = t;
-    nexa_stub_prop_format = f;
-    nexa_stub_prop_count = n;
-    memset(nexa_stub_prop_data, 0, sizeof(nexa_stub_prop_data));
+    nexa_stub_log_call(NEXA_STUB_CALL_PROP);
+    if (nexa_stub_prop_n >= NEXA_STUB_PROPS) return 0;
+    nexa_stub_prop* p = &nexa_stub_props[nexa_stub_prop_n++];
+    memset(p, 0, sizeof(*p));
+    p->atom = pr;
+    p->type = t;
+    p->format = f;
+    p->count = n;
     /* Format 32 means an array of long on the wire as far as Xlib callers are
        concerned, which is what the tests read back. */
-    if (data && f == 32 && n > 0 &&
-        n <= (int)(sizeof(nexa_stub_prop_data) / sizeof(nexa_stub_prop_data[0]))) {
-        memcpy(nexa_stub_prop_data, data, sizeof(long) * (size_t)n);
+    if (data && f == 32 && n > 0 && n <= NEXA_STUB_PROP_WORDS) {
+        memcpy(p->data, data, sizeof(long) * (size_t)n);
     }
     return 0;
 }
