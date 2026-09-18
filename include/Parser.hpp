@@ -2723,7 +2723,7 @@ private:
             if (method == "clip_get") return parseOsClipGet();
             // Any other os.* expression (load, play, spawn, cwd, ...) goes through parseOsCall.
             // Do not fall through to identifier + parseDotChain — that treats os.load as a string method.
-            return parseOsCall(false);
+            return parseOsCall(false, true);
         }
         if (peek().type == TokenType::Identifier && (peek().value == "getprocessid" || peek().value == "getpid") &&
             pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::LParen) {
@@ -2748,7 +2748,7 @@ private:
         }
         if (peek().type == TokenType::Identifier && peek().value == "gfx" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
-            return parseGfxCall(false);
+            return parseGfxCall(false, true);
         }
         if (peek().type == TokenType::Identifier && peek().value == "http" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot &&
@@ -2887,7 +2887,42 @@ private:
         }
     }
 
-    AstNode parseOsCall(bool requireSemicolon = true) {
+    // The same void/value split gfxVoidCallHint draws, for os.*. These are the
+    // `static void __nexa_os_*` builtins: the transpiler only emits them from
+    // the statement walk, so in value position the call is dropped on the
+    // floor and the variable silently becomes 0 — `let x = os.exit(1);` would
+    // not exit. Refusing them in the parser is the whole fix.
+    static std::string osVoidCallHint(const std::string& m) {
+        if (m == "lock") return "os.lock() locks the screen and returns nothing";
+        if (m == "shutdown") return "os.shutdown() powers the machine off and returns nothing";
+        if (m == "reboot") return "os.reboot() restarts the machine and returns nothing";
+        if (m == "suspend") return "os.suspend() sleeps the machine and returns nothing";
+        if (m == "logout") return "os.logout() ends the session and returns nothing";
+        if (m == "mute") return "os.mute() silences the output and returns nothing";
+        if (m == "unmute") return "os.unmute() restores the output and returns nothing";
+        if (m == "toggle_mute") return "os.toggle_mute() flips the mute and returns nothing";
+        if (m == "set_volume") return "os.set_volume(v) sets the output level and returns nothing";
+        if (m == "set_brightness") return "os.set_brightness(v) sets the screen level and returns nothing";
+        if (m == "clip_set") return "os.clip_set(s) writes the clipboard and returns nothing";
+        if (m == "type" || m == "type_text") return "os." + m + "(s) types the text and returns nothing";
+        if (m == "notify") return "os.notify(title, message) shows a notification and returns nothing";
+        if (m == "open") return "os.open(target) hands the target to the desktop and returns nothing";
+        if (m == "messagebox") return "os.messagebox(text, title) shows a box and returns nothing";
+        if (m == "exit") return "os.exit(code) ends the program and returns nothing";
+        if (m == "setenv") return "os.setenv(name, value) sets the variable and returns nothing";
+        if (m == "unsetenv") return "os.unsetenv(name) clears the variable and returns nothing";
+        if (m == "hideconsolewindow" || m == "showconsolewindow" ||
+            m == "minimizeconsolewindow" || m == "minimiseconsolewindow" ||
+            m == "maximizeconsolewindow" || m == "maximiseconsolewindow") {
+            return "os." + m + "() moves the console window and returns nothing";
+        }
+        return std::string();
+    }
+
+    // valuePosition is not the negation of requireSemicolon: parseThreadJob
+    // parses `thread.spawn(os.lock())` with neither, and a job body is a
+    // statement to run, not a value to read.
+    AstNode parseOsCall(bool requireSemicolon = true, bool valuePosition = false) {
         size_t line = peek().line;
         if (!modules_.hasOs()) {
             throw std::runtime_error("os.* requires #include <std/os> at line " + std::to_string(line));
@@ -2904,6 +2939,14 @@ private:
         }
         std::string method = methodTok.value;
         advance();
+        // os.* has no single arity stage to hang this off, so it goes ahead of
+        // the per-method branches: every void builtin is covered by one check.
+        if (valuePosition) {
+            std::string hint = osVoidCallHint(method);
+            if (!hint.empty()) {
+                throw std::runtime_error(hint + "; call it as a statement at line " + std::to_string(line));
+            }
+        }
         if (method == "hideconsolewindow" || method == "showconsolewindow" ||
             method == "minimizeconsolewindow" || method == "minimiseconsolewindow" ||
             method == "maximizeconsolewindow" || method == "maximiseconsolewindow") {
@@ -4254,7 +4297,37 @@ private:
         return node;
     }
 
-    AstNode parseGfxCall(bool requireSemicolon) {
+    // Most gfx builtins hand something back, but the drawing ones are
+    // `static void` in include/GfxRuntime.hpp. Used as a value they would
+    // transpile to `int x = __nexa_gfx_rect(...)` and surface as a clang
+    // error naming a generated variable, so they are named here and refused
+    // in the parser instead. The split is the runtime signatures, not
+    // Modules.txt: gfx.poll is void too, while gfx.text and gfx.poly are not.
+    // Returns the "what it does" clause for a void method, or nullptr.
+    static const char* gfxVoidCallHint(const std::string& m) {
+        if (m == "clear") return "gfx.clear(r, g, b) paints the whole window and returns nothing";
+        if (m == "plot") return "gfx.plot(x, y, r, g, b) draws to the window and returns nothing";
+        if (m == "fill") return "gfx.fill(x, y, w, h, r, g, b) draws to the window and returns nothing";
+        if (m == "rect") return "gfx.rect(x, y, w, h, r, g, b) draws to the window and returns nothing";
+        if (m == "line") return "gfx.line(x1, y1, x2, y2, r, g, b[, t]) draws to the window and returns nothing";
+        if (m == "circle") return "gfx.circle(cx, cy, rad, r, g, b) draws to the window and returns nothing";
+        if (m == "fill_circle") return "gfx.fill_circle(cx, cy, rad, r, g, b) draws to the window and returns nothing";
+        if (m == "ellipse") return "gfx.ellipse(cx, cy, rx, ry, r, g, b) draws to the window and returns nothing";
+        if (m == "fill_ellipse") return "gfx.fill_ellipse(cx, cy, rx, ry, r, g, b) draws to the window and returns nothing";
+        if (m == "arc") return "gfx.arc(cx, cy, rad, a0, a1, r, g, b) draws to the window and returns nothing";
+        if (m == "pie") return "gfx.pie(cx, cy, rad, a0, a1, r, g, b) draws to the window and returns nothing";
+        if (m == "round_rect") return "gfx.round_rect(x, y, w, h, rad, r, g, b) draws to the window and returns nothing";
+        if (m == "fill_round_rect") return "gfx.fill_round_rect(x, y, w, h, rad, r, g, b) draws to the window and returns nothing";
+        if (m == "tri") return "gfx.tri(x1, y1, x2, y2, x3, y3, r, g, b) draws to the window and returns nothing";
+        if (m == "fill_tri") return "gfx.fill_tri(x1, y1, x2, y2, x3, y3, r, g, b) draws to the window and returns nothing";
+        if (m == "present") return "gfx.present() shows what you drew and returns nothing";
+        if (m == "poll") return "gfx.poll() takes in the window's input and returns nothing";
+        if (m == "close") return "gfx.close() closes the window and returns nothing";
+        if (m == "maxfps") return "gfx.maxfps(fps) sets the frame cap and returns nothing";
+        return nullptr;
+    }
+
+    AstNode parseGfxCall(bool requireSemicolon, bool valuePosition = false) {
         size_t line = peek().line;
         if (!modules_.hasGfx()) {
             throw std::runtime_error("gfx.* requires #include <std/gfx> at line " + std::to_string(line));
@@ -4430,6 +4503,14 @@ private:
                 throw std::runtime_error(sig + " at line " + std::to_string(line));
             }
             throw std::runtime_error("gfx." + method + " argument count at line " + std::to_string(line));
+        }
+        // Checked after the arity rules so a call that is wrong in both ways
+        // still gets told its shape first.
+        if (valuePosition) {
+            if (const char* hint = gfxVoidCallHint(method)) {
+                throw std::runtime_error(std::string(hint) +
+                    "; call it as a statement at line " + std::to_string(line));
+            }
         }
         if (requireSemicolon && !match(TokenType::Semicolon)) {
             throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));

@@ -1,0 +1,10 @@
+// gfx.rect draws and hands nothing back, so there is no value to bind. The
+// founder's report on BOB-4: without this check the initializer is guessed to
+// be int and clang complains about a generated variable name instead.
+#include <std/gfx>
+fn main() {
+    let Width = 640;
+    let Height = 480;
+    let W = gfx.open(Width, Height, "demo");
+    let MainRect = gfx.rect(50, 50, (Width / 2), (Height / 2), 255, 255, 255);
+}

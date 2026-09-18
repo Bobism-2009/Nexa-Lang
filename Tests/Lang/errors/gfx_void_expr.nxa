@@ -1,0 +1,8 @@
+// The same rule inside an expression: gfx.clear has nothing to compare to 1.
+#include <std/gfx>
+fn main() {
+    let W = gfx.open(320, 240, "demo");
+    if (gfx.clear(0, 0, 0) == 1) {
+        println("cleared");
+    }
+}

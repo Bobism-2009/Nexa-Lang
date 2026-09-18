@@ -2386,7 +2386,15 @@ private:
                     || e.value == "alpha" || e.value == "save"
                     || e.value == "sound" || e.value == "play" || e.value == "loop"
                     || e.value == "stop" || e.value == "volume"
+                    || e.value == "audio" || e.value == "sample"
+                    || e.value == "audio_queued" || e.value == "audio_flush"
+                    || e.value == "fullscreen" || e.value == "borderless"
+                    || e.value == "ontop" || e.value == "transparent"
                     || e.value == "poly" || e.value == "fill_poly") return "int";
+                // What is left is the void set the parser refuses in value
+                // position: the drawing calls plus poll, present, close and
+                // maxfps. Anything value-returning must be named above, or
+                // passing it to a function reports its type as void.
                 return "void";
             case AstNode::Type::StrMethod:
                 if (strMethodReturnsString(e.value)) return "string";

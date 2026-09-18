@@ -120,6 +120,12 @@ Nexa Standard Modules
                         \\n = Enter, \\t = Tab. Windows: SendInput. Linux: xdotool/wtype.
                         macOS: osascript (Accessibility permission required).
   cmd: string literal or expression (e.g. "mkdir -p " + dir)
+  The os.* calls that do something rather than report something hand nothing
+  back, and are statements only: lock, shutdown, reboot, suspend, logout, mute,
+  unmute, toggle_mute, set_volume, set_brightness, clip_set, type, type_text,
+  notify, open, messagebox, exit, setenv, unsetenv, and the console-window
+  four. Binding one to a name -- let X = os.exit(1); -- is an error, not a
+  value of 0. Everything else on this list is usable as a value.
 
 #include <std/random>
   random.int(min, max)  - Random int in [min, max] inclusive
@@ -894,6 +900,12 @@ Nexa Standard Modules
   window in them still work: text_width, text_height, text_size, alpha, image,
   decode, image_w and image_h. A program can therefore load and measure its
   assets before it opens a window, and keep running after the user closes one.
+  The drawing calls hand nothing back, and so are statements only: clear, plot,
+  fill, rect, round_rect, fill_round_rect, line, circle, fill_circle, ellipse,
+  fill_ellipse, arc, pie, tri, fill_tri, present, poll, close and maxfps.
+  Writing let R = gfx.rect(...); is an error naming the call, not a value.
+  Note text, poly, fill_poly, blit and blit_rot are NOT in that list -- they
+  return the 0 described above -- and neither is poll's neighbour closed.
   Note that the two pieces of draw state differ on purpose: gfx.open() puts the
   alpha back to 255, so setting it before opening a window buys nothing, while
   the text size is carried across and lasts until changed.

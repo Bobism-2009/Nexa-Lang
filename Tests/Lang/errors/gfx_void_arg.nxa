@@ -1,0 +1,7 @@
+// Argument position is value position too. gfx.poll() is void in the runtime
+// even though it reads like a query, so it is refused here as well.
+#include <std/gfx>
+fn main() {
+    let W = gfx.open(320, 240, "demo");
+    println(gfx.poll());
+}

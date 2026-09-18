@@ -692,6 +692,136 @@ else
     link_case "maxfps_off" '    gfx.maxfps(0);'
 fi
 
+# --- value: which gfx calls may be used as a value --------------------------
+# The link layer above binds each builtin the way it is meant to be used. This
+# layer is the other half: that NexaC *refuses* the wrong way, and refuses it
+# in Nexa rather than letting clang complain about a generated variable name.
+#
+# The split is the runtime signatures in include/GfxRuntime.hpp -- the drawing
+# calls plus poll, present, close and maxfps are `static void` -- and it is
+# written down in three places that have to agree: the hint tables in
+# Parser.hpp, the int/string lists in inferExprNexaType, and this layer. A new
+# builtin that is added to none of them lands in the void set by default, so
+# the accept half is what catches it.
+#
+# Transpile only: none of this reaches the C++ compiler.
+
+echo "-- value: void builtins refused as values, the rest usable as values"
+
+# value_reject <label> <call>
+# A void builtin bound to a name. NexaC must fail, naming the call.
+value_reject() {
+    label="value_$1"
+    printf '#include <std/gfx>\nfn main() {\n    let V = %s;\n}\n' "$2" > "$WORK/$label.nxa"
+    if out=$("$NEXAC" "$WORK/$label.nxa" --source "$WORK/$label.cpp" 2>&1); then
+        echo "FAIL $label: NexaC accepted a void gfx call as a value"
+        fails=$((fails + 1))
+        return
+    fi
+    case $out in
+        *"returns nothing; call it as a statement"*) echo "ok $label" ;;
+        *)
+            echo "FAIL $label: refused, but not with the void-call diagnostic"
+            printf '%s\n' "$out" | tail -n 2 | sed 's/^/  /'
+            fails=$((fails + 1))
+            ;;
+    esac
+}
+
+# value_accept <label> <call> [string]
+# A value-returning builtin handed to a function. Deliberately not `let n: int
+# = ...`: an annotated let never asks inferExprNexaType what the call returns,
+# so it would not notice one misfiled as void.
+value_accept() {
+    label="value_$1"
+    sink=take
+    [ "${3:-int}" = "string" ] && sink=takes
+    printf '#include <std/gfx>\nfn take(n: int): int { return n; }\nfn takes(s: string): int { return 1; }\nfn main() {\n    let V = %s(%s);\n}\n' \
+        "$sink" "$2" > "$WORK/$label.nxa"
+    if ! out=$("$NEXAC" "$WORK/$label.nxa" --source "$WORK/$label.cpp" 2>&1); then
+        echo "FAIL $label: NexaC refused a value-returning gfx call used as a value"
+        printf '%s\n' "$out" | tail -n 2 | sed 's/^/  /'
+        fails=$((fails + 1))
+        return
+    fi
+    echo "ok $label"
+}
+
+value_reject "close" 'gfx.close()'
+value_reject "poll" 'gfx.poll()'
+value_reject "present" 'gfx.present()'
+value_reject "maxfps" 'gfx.maxfps(60)'
+value_reject "clear" 'gfx.clear(1, 2, 3)'
+value_reject "plot" 'gfx.plot(1, 2, 3, 4, 5)'
+value_reject "fill" 'gfx.fill(1, 2, 3, 4, 5, 6, 7)'
+value_reject "rect" 'gfx.rect(1, 2, 3, 4, 5, 6, 7)'
+value_reject "line" 'gfx.line(1, 2, 3, 4, 5, 6, 7)'
+value_reject "line_thick" 'gfx.line(1, 2, 3, 4, 5, 6, 7, 2)'
+value_reject "circle" 'gfx.circle(1, 2, 3, 4, 5, 6)'
+value_reject "fill_circle" 'gfx.fill_circle(1, 2, 3, 4, 5, 6)'
+value_reject "ellipse" 'gfx.ellipse(1, 2, 3, 4, 5, 6, 7)'
+value_reject "fill_ellipse" 'gfx.fill_ellipse(1, 2, 3, 4, 5, 6, 7)'
+value_reject "arc" 'gfx.arc(1, 2, 3, 0, 90, 5, 6, 7)'
+value_reject "pie" 'gfx.pie(1, 2, 3, 0, 90, 5, 6, 7)'
+value_reject "round_rect" 'gfx.round_rect(1, 2, 8, 6, 2, 5, 6, 7)'
+value_reject "fill_round_rect" 'gfx.fill_round_rect(1, 2, 8, 6, 2, 5, 6, 7)'
+value_reject "tri" 'gfx.tri(0, 0, 4, 0, 0, 4, 1, 2, 3)'
+value_reject "fill_tri" 'gfx.fill_tri(0, 0, 4, 0, 0, 4, 1, 2, 3)'
+
+value_accept "open" 'gfx.open("t", 8, 8, 1)'
+value_accept "resize" 'gfx.resize(4, 4)'
+value_accept "closed" 'gfx.closed()'
+value_accept "width" 'gfx.width()'
+value_accept "height" 'gfx.height()'
+value_accept "scale" 'gfx.scale()'
+value_accept "get" 'gfx.get(1, 2)'
+value_accept "key" 'gfx.key("space")'
+value_accept "pressed" 'gfx.pressed("space")'
+value_accept "released" 'gfx.released("space")'
+value_accept "wheel" 'gfx.wheel()'
+value_accept "wheel_x" 'gfx.wheel_x()'
+value_accept "mouse" 'gfx.mouse("left")'
+value_accept "mouse_x" 'gfx.mouse_x()'
+value_accept "mouse_y" 'gfx.mouse_y()'
+value_accept "typed" 'gfx.typed()' string
+value_accept "text" 'gfx.text(0, 0, "a", 1, 2, 3)'
+value_accept "text_size_get" 'gfx.text_size()'
+value_accept "text_size_set" 'gfx.text_size(2)'
+value_accept "text_width" 'gfx.text_width("a")'
+value_accept "text_height" 'gfx.text_height("a")'
+value_accept "title_get" 'gfx.title()' string
+value_accept "title_set" 'gfx.title("hi")'
+value_accept "drop" 'gfx.drop()' string
+value_accept "opendialog" 'gfx.opendialog()' string
+value_accept "fullscreen" 'gfx.fullscreen()'
+value_accept "borderless" 'gfx.borderless(1)'
+value_accept "ontop" 'gfx.ontop(1)'
+value_accept "transparent" 'gfx.transparent(1)'
+value_accept "alpha_get" 'gfx.alpha()'
+value_accept "alpha_set" 'gfx.alpha(128)'
+value_accept "cursor_get" 'gfx.cursor()'
+value_accept "cursor_set" 'gfx.cursor(0)'
+value_accept "save" 'gfx.save("/dev/null")'
+value_accept "image" 'gfx.image("nope.png")'
+value_accept "decode" 'gfx.decode("xx")'
+value_accept "image_w" 'gfx.image_w(1)'
+value_accept "image_h" 'gfx.image_h(1)'
+value_accept "blit" 'gfx.blit(0, 0, 1)'
+value_accept "blit_rot" 'gfx.blit_rot(0, 0, 1, 45)'
+value_accept "icon" 'gfx.icon(1)'
+value_accept "audio" 'gfx.audio()'
+value_accept "sample" 'gfx.sample(1)'
+value_accept "audio_queued" 'gfx.audio_queued()'
+value_accept "audio_flush" 'gfx.audio_flush()'
+value_accept "sound" 'gfx.sound("nope.wav")'
+value_accept "play" 'gfx.play(1)'
+value_accept "loop" 'gfx.loop(1, 128)'
+value_accept "stop" 'gfx.stop()'
+value_accept "volume_get" 'gfx.volume()'
+value_accept "volume_set" 'gfx.volume(128)'
+# gfx.poly and gfx.fill_poly want slice variables rather than an inline call,
+# so the link layer above is what covers them as values.
+
 # --- headers: what slicing must not take away -------------------------------
 # Two passes act on the generated file in order: duplicate `#include <...>`
 # lines are dropped, then the inactive platform branches are deleted. Together

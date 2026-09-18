@@ -1,0 +1,8 @@
+// os.* shares the hole, and worse: the transpiler only emits these from the
+// statement walk, so `let X = os.exit(1);` used to drop the call entirely and
+// set X to 0 -- a program that says it exits and does not.
+#include <std/os>
+fn main() {
+    let X = os.exit(1);
+    println(X);
+}
