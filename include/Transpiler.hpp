@@ -1157,7 +1157,16 @@ public:
             }
         }
 
-        std::string src = stripInactivePlatformGuards(dedupUnconditionalIncludes(out.str()), target_);
+        // Strip first, then dedup. A header that two runtime blocks both need
+        // is written by both -- std/gfx and std/time each want <windows.h> --
+        // and whether the two copies are duplicates is a question that can only
+        // be answered once the platform ladders are gone: before the strip the
+        // gfx copy sits inside `#elif defined(_WIN32)` and std/time's inside its
+        // own, so neither counts as unconditional and neither is dropped. After
+        // it, on a Windows build, both are plain lines in a flat file and the
+        // second goes. On a build where only one branch survives, only one copy
+        // was ever there to keep.
+        std::string src = dedupUnconditionalIncludes(stripInactivePlatformGuards(out.str(), target_));
         if (cppUsage_.gfx && cppUsage_.gfxImage &&
             (target_ == CppTarget::Linux || target_ == CppTarget::Wasm)) {
             // ~8,000 lines of stb, so only a program that can reach the decoder gets it.
@@ -7424,7 +7433,14 @@ private:
         } else if (fn == "mouse" || fn == "mouse_x" || fn == "mouse_y") {
             cppUsage.gfxMouse = true;
         } else if (fn == "key" || fn == "pressed" || fn == "released") {
+            // gfx.key() is a live read every backend but the browser answers on
+            // the spot; gfx.pressed/gfx.released compare this frame with the
+            // last and need the snapshots, the name table and the pass over it
+            // that gfx.poll() makes. The closure in Modules.hpp makes the edge
+            // readers pull the live one in, since a snapshot is taken by asking
+            // it once per name.
             cppUsage.gfxKeys = true;
+            if (fn != "key") cppUsage.gfxKeyEdge = true;
         } else if (fn == "typed") {
             cppUsage.gfxTyped = true;
         } else if (fn == "wheel" || fn == "wheel_x") {
@@ -7452,8 +7468,10 @@ private:
             cppUsage.gfxImageStore = true;
         } else if (fn == "save") {
             cppUsage.gfxSave = true;
-        } else if (fn == "opendialog" || fn == "openfile" || fn == "drop") {
-            cppUsage.gfxDialogs = true;
+        } else if (fn == "opendialog" || fn == "openfile") {
+            cppUsage.gfxOpenDialog = true;
+        } else if (fn == "drop") {
+            cppUsage.gfxDrop = true;
         } else if (fn == "audio" || fn == "sample" || fn == "audio_queued" ||
                    fn == "audio_flush") {
             cppUsage.gfxAudio = true;

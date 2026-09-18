@@ -386,17 +386,20 @@ inline std::string stripInactivePlatformGuards(const std::string& src, CppTarget
 }
 
 // Drop repeated `#include <...>` lines, but only where an earlier copy is
-// unconditional -- outside every `#if`. A copy that lives inside a platform
-// ladder is kept every time it appears.
+// unconditional -- outside every `#if`. A copy that lives inside one is kept
+// every time it appears.
 //
-// The reason is the order of the two passes. Dedup runs before
-// stripInactivePlatformGuards, so "keep the first, drop the rest" can keep only
-// the copy that sits in the branch slicing is about to delete, and the file
-// ends up with no copy at all: that is how `#include <thread>` in the gfx
-// AudioQueue branch used to swallow std/thread's unguarded copy and break every
-// non-Apple build of a program using gfx.play with thread.spawn. Repeating an
-// include costs nothing -- standard headers are idempotent -- while losing one
-// is a build break, so the tie goes to repetition.
+// A guarded copy is one whose branch this build could not decide. The
+// transpiler runs this pass after stripInactivePlatformGuards, so every
+// `#if defined(_WIN32)` ladder is already gone and what is left inside an `#if`
+// is a condition nothing here can evaluate -- a user's own, or a feature test
+// the compiler answers. Dropping one of those on the strength of a copy
+// elsewhere would be guessing, and guessing wrong leaves a branch without a
+// header it needs: that is how `#include <thread>` in the gfx AudioQueue branch
+// once swallowed std/thread's copy and broke every non-Apple build of a program
+// using gfx.play with thread.spawn. Repeating an include costs nothing --
+// standard headers are idempotent -- while losing one is a build break, so the
+// tie goes to repetition.
 inline std::string dedupUnconditionalIncludes(const std::string& src) {
     std::set<std::string> seenUnconditional;
     std::ostringstream filtered;

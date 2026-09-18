@@ -129,6 +129,7 @@ public:
         bool gfxText = false;
         bool gfxMouse = false;
         bool gfxKeys = false;
+        bool gfxKeyEdge = false;
         bool gfxTyped = false;
         bool gfxWheel = false;
         bool gfxImageStore = false;
@@ -136,7 +137,8 @@ public:
         bool gfxBlitRot = false;
         bool gfxIcon = false;
         bool gfxSave = false;
-        bool gfxDialogs = false;
+        bool gfxOpenDialog = false;
+        bool gfxDrop = false;
         bool gfxAudio = false;
         bool gfxSound = false;
         bool gfxCursor = false;
@@ -1513,6 +1515,7 @@ public:
             need.text = usage.gfxText;
             need.mouse = usage.gfxMouse;
             need.keys = usage.gfxKeys;
+            need.keyEdge = usage.gfxKeyEdge;
             need.typed = usage.gfxTyped;
             need.wheel = usage.gfxWheel;
             need.imageStore = usage.gfxImageStore;
@@ -1521,7 +1524,8 @@ public:
             need.blitRot = usage.gfxBlitRot;
             need.icon = usage.gfxIcon;
             need.save = usage.gfxSave;
-            need.dialogs = usage.gfxDialogs;
+            need.openDialog = usage.gfxOpenDialog;
+            need.drop = usage.gfxDrop;
             need.audio = usage.gfxAudio;
             need.sound = usage.gfxSound;
             need.cursor = usage.gfxCursor;
@@ -1540,6 +1544,14 @@ public:
             // it opens the stream itself, so a program that only says gfx.play
             // still carries the platform audio block underneath it.
             if (need.sound) need.audio = true;
+            // The browser has no file dialog that returns a path: gfx.open_dialog
+            // clicks a hidden <input> and the file it picks arrives the same way
+            // a dragged one does, through gfx.drop(). So a dialog needs the drop
+            // family under it, on every slice -- one emitted runtime, not four.
+            if (need.openDialog) need.drop = true;
+            // A snapshot is taken by asking the live reader once per key name,
+            // so the edge readers need the whole of gfx.key() underneath them.
+            if (need.keyEdge) need.keys = true;
             out += gfxRuntimeCpp(need);
         }
         if (hasJson() && usage.json) {

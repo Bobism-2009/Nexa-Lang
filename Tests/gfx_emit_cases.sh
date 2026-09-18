@@ -626,6 +626,126 @@ emit_has "all_input_full_mask" "$WORK/all_input.cpp" \
         KeyPressMask \| KeyReleaseMask \|
         PointerMotionMask \| ButtonPressMask \| ButtonReleaseMask\);'
 
+# --- drop: the fifth input family -------------------------------------------
+
+echo "-- drop: a dropped file is collected only where it is read"
+
+transpile "drop_only" '    let p: string = gfx.drop();'
+transpile "drop_only_win" '    let p: string = gfx.drop();' --win
+transpile "drop_only_wasm" '    let p: string = gfx.drop();' --wasm
+transpile "dialog_only_win" '    let p: string = gfx.opendialog("*.txt");' --win
+transpile "dialog_only_wasm" '    let p: string = gfx.opendialog("*.txt");' --wasm
+
+# Nothing of the family in a program that never reads a dropped path: not the
+# reader, not the field it reads, and not the subscription that fills it. On
+# Windows that subscription is DragAcceptFiles -- WM_DROPFILES is sent only to
+# a window that has asked for it -- which is the exact counterpart of
+# XSelectInput on X11.
+for target in "" _wasm _win; do
+    emit_lacks "window_only_no_drop$target" "$WORK/window_only$target.cpp" \
+        '__nexa_gfx_drop|__nexa_g\.drop_path|WM_DROPFILES|DragAcceptFiles|DragQueryFile|DragFinish|nexaDropPath|registerForDraggedTypes'
+done
+
+emit_has "drop_only_win_handler" "$WORK/drop_only_win.cpp" 'msg == WM_DROPFILES'
+emit_has "drop_only_win_subscribes" "$WORK/drop_only_win.cpp" 'DragAcceptFiles'
+emit_has "drop_only_win_shellapi" "$WORK/drop_only_win.cpp" '#include <shellapi\.h>'
+emit_has "drop_only_wasm_collects" "$WORK/drop_only_wasm.cpp" 'nexaDropPath'
+emit_has "drop_only_reader" "$WORK/drop_only.cpp" '^static std::string __nexa_gfx_drop\(\)'
+
+# gfx.drop() is the reader, not the picker: a program that only reads a dropped
+# path gets no file dialog and no <commdlg.h> with it.
+emit_lacks "drop_only_win_no_dialog" "$WORK/drop_only_win.cpp" \
+    '__nexa_gfx_opendialog|__nexa_gfx_filter_safe|commdlg\.h'
+
+# The coupling the other way round is real and must hold: in the browser
+# gfx.open_dialog clicks a hidden <input> and the file it picks is delivered
+# through gfx.drop(), so a dialog needs the drop family under it. The runtime
+# is emitted once for all four backends, so it holds on every slice.
+emit_has "dialog_only_wasm_needs_drop" "$WORK/dialog_only_wasm.cpp" \
+    '__nexa_gfx_drop|nexaDropPath'
+emit_has "dialog_only_win_needs_drop" "$WORK/dialog_only_win.cpp" '__nexa_g\.drop_path'
+emit_has "dialog_only_win_commdlg" "$WORK/dialog_only_win.cpp" '#include <commdlg\.h>'
+
+# --- keys: the live read and the edge read ----------------------------------
+
+echo "-- keys: gfx.key does not carry gfx.pressed's snapshots"
+
+transpile "key_live_only" '    let k: int = gfx.key("w");'
+transpile "key_live_only_win" '    let k: int = gfx.key("w");' --win
+transpile "key_edge" '    let k: int = gfx.pressed("w");'
+transpile "key_edge_win" '    let k: int = gfx.pressed("w");' --win
+transpile "key_released" '    let k: int = gfx.released("w");'
+
+# gfx.key() asks the backend whether the key is down at the moment it is asked
+# -- GetAsyncKeyState, XQueryKeymap, CGEventSourceKeyState -- and keeps no
+# answer, so none of the machinery that remembers last frame comes with it.
+for target in "" _win; do
+    emit_has "key_live_only_reader$target" "$WORK/key_live_only$target.cpp" \
+        '^static int __nexa_gfx_key\(const std::string&'
+    emit_has "key_live_only_backend$target" "$WORK/key_live_only$target.cpp" \
+        '^static int __nexa_gfx_vk\(const std::string&'
+    emit_lacks "key_live_only_no_snapshots$target" "$WORK/key_live_only$target.cpp" \
+        '__nexa_gfx_key_names|__nexa_gfx_key_slot|__nexa_gfx_key_snapshot|__nexa_gfx_pressed|__nexa_gfx_released|__nexa_g\.k_now|__nexa_g\.k_prev'
+done
+
+# And both edge readers bring all of it, the live read included: a snapshot is
+# taken by asking the live reader once per name in the table.
+for label in key_edge key_edge_win key_released; do
+    emit_has "${label}_names" "$WORK/$label.cpp" '^static const char\* const __nexa_gfx_key_names'
+    emit_has "${label}_snapshot" "$WORK/$label.cpp" '^static void __nexa_gfx_key_snapshot\(\) \{'
+    emit_has "${label}_polls" "$WORK/$label.cpp" '^    __nexa_gfx_key_snapshot\(\);$'
+    emit_has "${label}_state" "$WORK/$label.cpp" '__nexa_g\.k_now'
+    emit_has "${label}_live" "$WORK/$label.cpp" '^static int __nexa_gfx_vk\(const std::string&'
+done
+
+# --- headers: earned by a symbol that survives ------------------------------
+
+echo "-- headers: a header only where something still names it"
+
+transpile "image_win" '    let i: int = gfx.image("a.png");' --win
+transpile "audio_win" '    let r: int = gfx.audio(44100);' --win
+transpile "image_mac_free" '    let i: int = gfx.image("a.png");'
+
+# The founder's report: a window-only Windows program carried the file dialog,
+# COM, the imaging codecs and the multimedia API, all four sliced down to
+# nothing. A header is not free -- <wincodec.h> alone is thousands of lines of
+# COM interface -- so each now comes with the code that names it.
+emit_lacks "window_only_win_no_unearned_headers" "$WORK/window_only_win.cpp" \
+    'commdlg\.h|objbase\.h|wincodec\.h|mmsystem\.h|shellapi\.h'
+emit_has "image_win_wic" "$WORK/image_win.cpp" '#include <wincodec\.h>'
+emit_has "image_win_com" "$WORK/image_win.cpp" '#include <objbase\.h>'
+emit_lacks "image_win_no_audio_header" "$WORK/image_win.cpp" 'mmsystem\.h'
+emit_has "audio_win_mmsystem" "$WORK/audio_win.cpp" '#include <mmsystem\.h>'
+emit_lacks "audio_win_no_codec_headers" "$WORK/audio_win.cpp" 'wincodec\.h|objbase\.h'
+
+# <windows.h> is core and always there -- and exactly once. std/gfx and
+# std/time both want it, and before the include dedup was moved to run after
+# the platform ladders are stripped, neither copy counted as unconditional and
+# both were emitted.
+printf '#include <std/gfx>\n#include <std/time>\nfn main() {\n    gfx.open("t", 8, 8, 1);\n    gfx.present();\n    time.sleep(1);\n}\n' \
+    > "$WORK/gfx_and_time.nxa"
+if "$NEXAC" "$WORK/gfx_and_time.nxa" --win --source "$WORK/gfx_and_time.cpp" \
+        > "$WORK/gfx_and_time.log" 2>&1; then
+    n=$(grep -c '^#include <windows\.h>$' "$WORK/gfx_and_time.cpp")
+    if [ "$n" = "1" ]; then
+        echo "ok gfx_and_time_one_windows_h"
+    else
+        echo "FAIL gfx_and_time_one_windows_h: $n copies of <windows.h>, expected 1"
+        fails=$((fails + 1))
+    fi
+else
+    echo "FAIL gfx_and_time_one_windows_h: NexaC could not transpile it"
+    sed 's/^/  /' "$WORK/gfx_and_time.log"
+    fails=$((fails + 1))
+fi
+
+# The std headers are chosen by reading back what the slicing left rather than
+# from a table, so the check is the same shape: a draw loop names no file and
+# no container, and carries neither header.
+emit_lacks "window_only_no_unused_std_headers" "$WORK/window_only.cpp" \
+    '#include <(cstdio|algorithm|cmath)>'
+emit_has "image_mac_free_reads_a_file" "$WORK/image_mac_free.cpp" '#include <cstdio>'
+
 # --- size: the point of all of it -------------------------------------------
 
 echo "-- size: the file the C++ compiler is handed"

@@ -63,8 +63,28 @@ namespace nexa {
 // fullscreen escape -- Escape leaves fullscreen, on Win32 through WM_KEYDOWN
 // and on wasm through the keydown callback -- is part of gfx.fullscreen, which
 // is core; it keeps its handler and its registration whatever `keys` says. And
-// gfx.poll()'s window bookkeeping (close, destroy, resize, drop) is core for
-// the same reason it always was.
+// gfx.poll()'s window bookkeeping (close, destroy, resize) is core for the same
+// reason it always was.
+//
+// A dropped file is a fifth input family and slices the same way, reader and
+// collection side together: the WM_DROPFILES arm of the window procedure, the
+// DragAcceptFiles that makes Windows send it, the Cocoa view's dragged-types
+// registration and its two dragging methods, the browser's drop listeners and
+// the poll that picks their result up, and the one `drop_path` they all write.
+// gfx.open_dialog enables it too rather than standing alone: in the browser the
+// picked file is delivered through gfx.drop(), so a program that opens a dialog
+// reads the drop path whether or not it ever says gfx.drop.
+//
+// `keys` is the one family that splits in two, because its two readers ask
+// different questions. gfx.key() is "is this key down right now", which every
+// backend but the browser answers on the spot -- GetAsyncKeyState, XQueryKeymap,
+// CGEventSourceKeyState -- and which needs no memory of the last frame.
+// gfx.pressed()/gfx.released() are "did this key change since the last poll",
+// and that needs the two snapshots, the table of every name that can be
+// snapshotted, and the pass over it in gfx.poll(): 53 lines of the Windows
+// slice that a gfx.key-only program has no reader for. `keyEdge` carries those,
+// and implies `keys`, since a snapshot is taken by asking the live reader once
+// per name.
 struct GfxNeed {
     bool alpha = false;          // gfx.alpha() -- the reader; the setter is core
     bool plot = false;           // gfx.plot
@@ -79,7 +99,8 @@ struct GfxNeed {
     bool lineThick = false;      // gfx.line, 8 arguments
     bool text = false;           // text, text_size, text_width, text_height
     bool mouse = false;          // mouse, mouse_x, mouse_y
-    bool keys = false;           // key, pressed, released
+    bool keys = false;           // key, pressed, released -- the live "is it down" read
+    bool keyEdge = false;        // pressed, released -- the two snapshots and their table
     bool typed = false;          // typed
     bool wheel = false;          // wheel, wheel_x
     bool imageStore = false;     // the loaded-image table: image_w, image_h, blit
@@ -88,7 +109,8 @@ struct GfxNeed {
     bool blitRot = false;        // blit_rot
     bool icon = false;           // gfx.icon
     bool save = false;           // gfx.save
-    bool dialogs = false;        // opendialog, drop
+    bool openDialog = false;     // opendialog, openfile -- the native file picker
+    bool drop = false;           // drop -- the dropped-file path, reader and collection
     bool audio = false;          // audio, sample, audio_queued, audio_flush
     bool sound = false;          // sound, play, loop, stop, volume -- the mixer
     bool cursor = false;         // gfx.cursor
@@ -388,16 +410,20 @@ inline std::string gfxRuntimeCpp(const GfxNeed& need) {
     const bool wantPublish = need.wheel || need.typed;
 
     std::string out;
-    out += R"NEXA_GFX(
-#include <string>
-#include <vector>
-#include <algorithm>
-#include <cmath>
-#include <cstdint>
-#include <cstring>
-#include <cstdlib>
-#include <cstdio>
-#ifdef __EMSCRIPTEN__
+    // Every header below is earned by a symbol that survives the slicing. A
+    // header is cheap to write and not cheap to compile -- <wincodec.h> alone
+    // is thousands of lines of COM interface -- and one left behind after the
+    // code that used it was sliced away is exactly the dead weight the rest of
+    // this function exists to remove. So each platform header sits with the
+    // flag that keeps its callers: nothing names a WIC interface unless
+    // gfx.image can decode one, nothing names waveOut unless there is audio to
+    // play, and a program that carries no such call carries no such header.
+    //
+    // <windows.h>, <Cocoa/Cocoa.h>, <CoreGraphics/CoreGraphics.h> and the three
+    // X11 headers are the exception, and are unconditional because core is
+    // written against them: opening a window, presenting a frame and closing
+    // down again all go through them whatever else is sliced.
+    out += R"NEXA_GFX(#ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #include <emscripten/html5.h>
 #elif defined(_WIN32)
@@ -405,16 +431,27 @@ inline std::string gfxRuntimeCpp(const GfxNeed& need) {
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
-#include <shellapi.h>
-#include <commdlg.h>
-#include <objbase.h>
-#include <wincodec.h>
-#include <mmsystem.h>
-#elif defined(__APPLE__)
+)NEXA_GFX";
+    // DragAcceptFiles, DragQueryFileA and DragFinish, and nothing else in the
+    // runtime reaches into the shell.
+    if (need.drop) out += "#include <shellapi.h>\n";
+    // OPENFILENAMEA and GetOpenFileNameA: the common file dialog, and only
+    // gfx.open_dialog opens one.
+    if (need.openDialog) out += "#include <commdlg.h>\n";
+    // The WIC decoder behind gfx.image on Windows: <objbase.h> for
+    // CoInitializeEx/CoCreateInstance, <wincodec.h> for the interfaces they
+    // hand back. There is no other COM in the runtime.
+    if (need.imageLoad) out += "#include <objbase.h>\n#include <wincodec.h>\n";
+    // waveOut, which is the whole Windows audio backend.
+    if (need.audio) out += "#include <mmsystem.h>\n";
+    out += R"NEXA_GFX(#elif defined(__APPLE__)
 #import <Cocoa/Cocoa.h>
 #include <CoreGraphics/CoreGraphics.h>
-#include <ImageIO/ImageIO.h>
-#elif defined(__linux__)
+)NEXA_GFX";
+    // CGImageSource, which is how gfx.image decodes on macOS. Cocoa does not
+    // bring ImageIO in, so a program that decodes needs it named.
+    if (need.imageLoad) out += "#include <ImageIO/ImageIO.h>\n";
+    out += R"NEXA_GFX(#elif defined(__linux__)
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/Xatom.h>
@@ -484,11 +521,14 @@ struct __nexa_Gfx {
     int cursor;
     unsigned char* fb;
     std::string title;
-    std::string drop_path;
 )NEXA_GFX";
+    // Where a dropped file's path waits for gfx.drop() to take it. Written by
+    // whichever backend the window system tells, read once and cleared, and
+    // nothing core touches it -- so it goes when the reader does.
+    if (need.drop) out += "    std::string drop_path;\n";
     // The two snapshots gfx.pressed/gfx.released tell an edge from a hold
     // with. gfx.poll() takes them, and only when something reads them.
-    if (need.keys) out += R"NEXA_GFX(    int k_now[64];
+    if (need.keyEdge) out += R"NEXA_GFX(    int k_now[64];
     int k_prev[64];
 )NEXA_GFX";
     // Wheel and typed text are edge events, so they are collected as they
@@ -707,7 +747,7 @@ static void __nexa_gfx_mouse_apply(int x, int y, int inside, int left, int middl
     }
 }
 )NEXA_GFX";
-    if (need.keys) out += "\nstatic void __nexa_gfx_key_snapshot();\n";
+    if (need.keyEdge) out += "\nstatic void __nexa_gfx_key_snapshot();\n";
     // Focus is the one thing every input family asks about, and nothing else
     // does: what arrived while the window was not the user's is dropped rather
     // than queued up to land in the program's lap when it comes back.
@@ -732,7 +772,11 @@ static void __nexa_gfx_mouse_apply(int x, int y, int inside, int left, int middl
 // the request to stop making that promise.
 - (BOOL)isOpaque { return __nexa_g.transparent ? NO : YES; }
 - (BOOL)acceptsFirstResponder { return YES; }
-- (instancetype)initWithFrame:(NSRect)frame {
+)NEXA_GFX";
+    // Saying yes to a drag is the whole of the collection side on macOS: a view
+    // that registers no dragged types is never offered a file, so this goes
+    // with gfx.drop() and the view is left with nothing to answer.
+    if (need.drop) out += R"NEXA_GFX(- (instancetype)initWithFrame:(NSRect)frame {
     self = [super initWithFrame:frame];
     if (self) {
         [self registerForDraggedTypes:@[NSFilenamesPboardType]];
@@ -751,7 +795,8 @@ static void __nexa_gfx_mouse_apply(int x, int y, int inside, int left, int middl
     __nexa_g.drop_path = [p UTF8String];
     return YES;
 }
-- (void)drawRect:(NSRect)dirtyRect {
+)NEXA_GFX";
+    out += R"NEXA_GFX(- (void)drawRect:(NSRect)dirtyRect {
     (void)dirtyRect;
     if (!__nexa_g.fb || __nexa_g.w < 1 || __nexa_g.h < 1) return;
     CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
@@ -1231,14 +1276,15 @@ static LRESULT CALLBACK __nexa_gfx_wndproc(HWND hwnd, UINT msg, WPARAM wParam, L
         return 0;
     }
 )NEXA_GFX";
-    out += R"NEXA_GFX(    if (msg == WM_DROPFILES) {
+    if (need.drop) out += R"NEXA_GFX(    if (msg == WM_DROPFILES) {
         HDROP drop = (HDROP)wParam;
         char path[MAX_PATH];
         if (DragQueryFileA(drop, 0, path, MAX_PATH) > 0) __nexa_g.drop_path = path;
         DragFinish(drop);
         return 0;
     }
-    if (msg == WM_ERASEBKGND) return 1;
+)NEXA_GFX";
+    out += R"NEXA_GFX(    if (msg == WM_ERASEBKGND) return 1;
     if (msg == WM_PAINT) {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
@@ -1425,9 +1471,9 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
 )NEXA_GFX";
     out += R"NEXA_GFX(    if (__nexa_g.text_scale < 1) __nexa_g.text_scale = 1;
     __nexa_g.title = title;
-    __nexa_g.drop_path.clear();
 )NEXA_GFX";
-    if (need.keys) out += R"NEXA_GFX(    std::memset(__nexa_g.k_now, 0, sizeof(__nexa_g.k_now));
+    if (need.drop) out += "    __nexa_g.drop_path.clear();\n";
+    if (need.keyEdge) out += R"NEXA_GFX(    std::memset(__nexa_g.k_now, 0, sizeof(__nexa_g.k_now));
     std::memset(__nexa_g.k_prev, 0, sizeof(__nexa_g.k_prev));
 )NEXA_GFX";
     if (need.wheel) out += R"NEXA_GFX(    __nexa_g.wheel_acc_x = 0.0;
@@ -1469,7 +1515,14 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
         c.style.imageRendering = 'pixelated';
         c.style.background = '#000';
         document.title = UTF8ToString($3);
-        Module["nexaDropPath"] = "";
+)NEXA_GFX";
+    // The page's whole half of the drop family: the hidden <input> gfx.open_dialog
+    // clicks, the reader that copies whatever the page hands over into the
+    // emulated filesystem, and the listeners that catch a file dragged onto the
+    // canvas or the body. All of it ends at Module["nexaDropPath"], which only
+    // gfx.drop() reads -- and a program that opens a dialog reads it too, since
+    // in the browser that is where the picked file is delivered.
+    if (need.drop) out += R"NEXA_GFX(        Module["nexaDropPath"] = "";
         var cnv = Module["canvas"] || document.getElementById("canvas");
         var inp = document.getElementById("nexa-file");
         if (!inp) {
@@ -1505,7 +1558,8 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
         }
         nexaBindDrop(cnv);
         nexaBindDrop(document.body);
-    }), w, h, scale, title.c_str());
+)NEXA_GFX";
+    out += R"NEXA_GFX(    }), w, h, scale, title.c_str());
 )NEXA_GFX";
     if (need.mouse) out += R"NEXA_GFX(    emscripten_set_mousemove_callback("#canvas", 0, 1, __nexa_gfx_emouse);
     emscripten_set_mousedown_callback("#canvas", 0, 1, __nexa_gfx_emouse);
@@ -1539,8 +1593,12 @@ static int __nexa_gfx_open(const std::string& title, int w, int h, int scale) {
     __nexa_g.bmi.bmiHeader.biBitCount = 32;
     __nexa_g.bmi.bmiHeader.biCompression = BI_RGB;
     __nexa_g.ready = __nexa_g.hwnd ? 1 : 0;
-    if (__nexa_g.hwnd) DragAcceptFiles(__nexa_g.hwnd, TRUE);
-    if (!__nexa_g.hwnd) __nexa_g.closed = 1;
+)NEXA_GFX";
+    // Windows sends WM_DROPFILES only to a window that has asked for it, so
+    // this is the subscription the way XSelectInput is on X11: without a reader
+    // it is asking for messages nothing would look at.
+    if (need.drop) out += "    if (__nexa_g.hwnd) DragAcceptFiles(__nexa_g.hwnd, TRUE);\n";
+    out += R"NEXA_GFX(    if (!__nexa_g.hwnd) __nexa_g.closed = 1;
     return __nexa_g.ready;
 #elif defined(__APPLE__)
     @autoreleasepool {
@@ -2415,7 +2473,11 @@ static void __nexa_gfx_poll() {
 )NEXA_GFX";
     out += R"NEXA_GFX(    }
 #endif
-#ifdef __EMSCRIPTEN__
+)NEXA_GFX";
+    // The browser hands a dropped or picked file over through the page, so the
+    // path has to be fetched from it rather than arriving as an event: this is
+    // the browser's half of the collection side, and goes with the rest of it.
+    if (need.drop) out += R"NEXA_GFX(#ifdef __EMSCRIPTEN__
     {
         char buf[1024];
         int got = EM_ASM_INT(({
@@ -2430,7 +2492,7 @@ static void __nexa_gfx_poll() {
 #endif
 )NEXA_GFX";
     if (need.mouse) out += "    __nexa_gfx_mouse_refresh();\n";
-    if (need.keys) out += "    __nexa_gfx_key_snapshot();\n";
+    if (need.keyEdge) out += "    __nexa_gfx_key_snapshot();\n";
     if (wantPublish) out += "    __nexa_gfx_input_publish();\n";
     out += R"NEXA_GFX(}
 
@@ -3895,7 +3957,17 @@ static int __nexa_gfx_vk(const std::string& name) {
 #endif
     return 0;
 }
-
+)NEXA_GFX";
+    // The gfx.pressed/gfx.released half, and nothing else reads it: the table
+    // of every name that can be snapshotted, the lookup that turns a name into
+    // a slot in it, and the pass gfx.poll() makes over the whole table once a
+    // frame. gfx.key() asks the backend the question the moment it is asked and
+    // keeps no answer, so a program that only says gfx.key carries none of it.
+    //
+    // Emitted in two pieces, around gfx.key() rather than after it, so that a
+    // program which does read an edge gets the file it always got, line for
+    // line: what is sliced is meant to be the only difference slicing makes.
+    if (need.keyEdge) out += R"NEXA_GFX(
 static const char* const __nexa_gfx_key_names[] = {
     "0","1","2","3","4","5","6","7","8","9",
     "a","b","c","d","e","f","g","h","i","j","k","l","m",
@@ -3926,12 +3998,14 @@ static void __nexa_gfx_key_snapshot() {
         __nexa_g.k_now[i] = __nexa_gfx_vk(__nexa_gfx_key_names[i]);
     }
 }
-
+)NEXA_GFX";
+    if (need.keys) out += R"NEXA_GFX(
 static int __nexa_gfx_key(const std::string& name) {
     if (!__nexa_g.ready) return 0;
     return __nexa_gfx_vk(name);
 }
-
+)NEXA_GFX";
+    if (need.keyEdge) out += R"NEXA_GFX(
 static int __nexa_gfx_pressed(const std::string& name) {
     if (!__nexa_g.ready) return 0;
     int slot = __nexa_gfx_key_slot(name);
@@ -4633,7 +4707,12 @@ static int __nexa_gfx_save(const std::string& path) {
 }
 // [nexa:screenshot-end]
 )NEXA_GFX";
-    if (need.dialogs) out += R"NEXA_GFX(
+    // The filter spec is sanitised rather than passed through because only a
+    // narrow set of characters can mean anything in a filter on any of the
+    // three backends that have one. Only the dialog has a filter, so it is the
+    // dialog's -- and, like the key half above, it is emitted where it always
+    // was so that a program using both gets the file it always got.
+    if (need.openDialog) out += R"NEXA_GFX(
 static std::string __nexa_gfx_filter_safe(const std::string& spec) {
     std::string o;
     for (char c : spec) {
@@ -4644,7 +4723,8 @@ static std::string __nexa_gfx_filter_safe(const std::string& spec) {
     }
     return o;
 }
-
+)NEXA_GFX";
+    if (need.drop) out += R"NEXA_GFX(
 static std::string __nexa_gfx_drop() {
 #ifdef __EMSCRIPTEN__
     __nexa_gfx_poll();
@@ -4653,7 +4733,8 @@ static std::string __nexa_gfx_drop() {
     __nexa_g.drop_path.clear();
     return p;
 }
-
+)NEXA_GFX";
+    if (need.openDialog) out += R"NEXA_GFX(
 static std::string __nexa_gfx_opendialog(const std::string& spec) {
 #ifdef __EMSCRIPTEN__
     EM_ASM(({
@@ -5611,7 +5692,53 @@ static void __nexa_gfx_audio_flush() {}
 )NEXA_GFX";
     if (need.sound) out += soundRuntimeCpp();
 
-    return out;
+    // The std headers, chosen last and by reading back what the slicing left
+    // rather than by a second table of which group needs which. A table would
+    // be a third place to keep in step with the first two -- the group flags
+    // and the code they gate -- and the one that rots quietest, because a
+    // header nothing needs breaks nothing and so is never noticed. What the
+    // emitted text actually names cannot drift from what the emitted text
+    // actually needs.
+    //
+    // <string> is unconditional: the window title is a std::string and every
+    // program has a title. Everything else is earned. A miss here is a build
+    // break rather than a silent wrong answer, and Tests/gfx_emit_cases.sh
+    // compiles a program per gfx builtin, so a symbol added later without its
+    // trigger is caught by the suite rather than by a user.
+    //
+    // What is read back is all four backends, because which one survives is
+    // decided later, in the transpiler, and this function is written once for
+    // every target. So a header one backend needs is written for all of them:
+    // <vector> rides along on every slice because the Cocoa drawRect
+    // premultiplies through one. That is a line, and knowing the target here
+    // would cost threading it through every runtime block to save it.
+    struct StdHeader {
+        const char* header;
+        const char* symbols[8];
+    };
+    static const StdHeader kStdHeaders[] = {
+        {"vector",    {"std::vector", nullptr}},
+        {"algorithm", {"std::min", "std::max", "std::sort", "std::swap", nullptr}},
+        {"cmath",     {"std::sin", "std::cos", "std::sqrt", "std::fabs", "std::floor",
+                       "std::ceil", "std::atan2", nullptr}},
+        {"cstdint",   {"int8_t", "int16_t", "int32_t", "int64_t", nullptr}},
+        {"cstring",   {"std::memset", "std::memcpy", "std::memmove", "std::strlen", nullptr}},
+        {"cstdlib",   {"std::malloc", "std::free", "std::abs", "std::strtol", nullptr}},
+        {"cstdio",    {"std::fopen", "std::fread", "std::fwrite", "std::fclose",
+                       "std::snprintf", nullptr}},
+    };
+    std::string head = "\n#include <string>\n";
+    for (const StdHeader& h : kStdHeaders) {
+        for (const char* const* sym = h.symbols; *sym; sym++) {
+            if (out.find(*sym) != std::string::npos) {
+                head += "#include <";
+                head += h.header;
+                head += ">\n";
+                break;
+            }
+        }
+    }
+    return head + out;
 }
 
 }  // namespace nexa
