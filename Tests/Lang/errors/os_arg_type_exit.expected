@@ -1,0 +1,3 @@
+os.exit(code) expects a number for code
+but got text
+at line 6

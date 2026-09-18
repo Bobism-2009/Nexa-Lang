@@ -1,0 +1,9 @@
+// gfx.open takes the title first and the size after, and the runtime signature
+// says so: __nexa_gfx_open(const std::string&, int, int, int). Written the
+// other way round it used to transpile, and the user's first news of it was a
+// clang error naming __nexa_gfx_open -- generated code they never wrote, the
+// same failure mode as `let MainRect = gfx.rect(...)` in BOB-53.
+#include <std/gfx>
+fn main() {
+    gfx.open(100, 100, "t");
+}

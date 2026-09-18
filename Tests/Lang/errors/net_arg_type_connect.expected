@@ -1,0 +1,3 @@
+tcp.connect(host, port) expects text for host
+but got a number
+at line 6

@@ -2175,6 +2175,16 @@ private:
                 if (!e.children.empty()) {
                     std::string ft = fieldTypeOfMemberExpr(e);
                     if (!ft.empty()) return ft;
+                    // Colour.Red names a type and one of its variants, not a
+                    // variable and a field, so there is no field type to find.
+                    // It is still an enum, the same as a variable holding it:
+                    // reporting int here said gfx.clear(Colour.Red, 0, 0) was
+                    // fine and left clang to mention __nexa_E0.
+                    if (e.children[0].type == AstNode::Type::ExprVarRef &&
+                        lookupNexaDecl(e.children[0].value).empty() &&
+                        enumCppNames_.count(e.children[0].value)) {
+                        return "enum:" + e.children[0].value;
+                    }
                 }
                 return "int";
             case AstNode::Type::FnCall: {
@@ -3357,7 +3367,7 @@ private:
             case AstNode::Type::GfxCall:
                 for (const AstNode& c : e.children) semExpr(c);
                 semCheckGfxPoly(e);
-                semCheckGfxSave(e);
+                semCheckBuiltinArgTypes(e);
                 break;
             case AstNode::Type::FnCall:
             case AstNode::Type::ExprCall:
@@ -3366,6 +3376,7 @@ private:
                 break;
             default:
                 for (const AstNode& c : e.children) semExpr(c);
+                semCheckBuiltinArgTypes(e);
                 break;
         }
     }
@@ -3391,6 +3402,477 @@ private:
             if (nexaIsSliceType(t) && nexaIsNumericIntType(nexaSliceElem(t))) continue;
             semError(e, "gfx." + e.value + "(xs, ys, r, g, b) expects []int point lists, but " +
                 std::string(i == 0 ? "xs" : "ys") + " is '" + (t.empty() ? std::string("unknown") : t) + "'");
+        }
+    }
+
+    // ---- module builtin argument types ------------------------------------
+    //
+    // BOB-53 refused a void module builtin in value position because the
+    // runtime signature said void. The argument types in those same
+    // signatures were still nobody's business at Nexa level, so
+    // `gfx.open(100, 100, "t")` transpiled and clang was left to explain it:
+    // an error about __nexa_gfx_open(const std::string&, int, int, int),
+    // generated code the user never wrote.
+    //
+    // So: one table per namespace, one row per builtin, each row read straight
+    // off the runtime signature. A letter per parameter says what the
+    // generated call hands it to.
+    //
+    //   n  a number         an int or double parameter
+    //   t  text             const std::string&, reached with no conversion
+    //   x  text or a number the transpiler converts on the way in (os.* and
+    //                       file.write's content through std::to_string) or
+    //                       the call picks its runtime entry point by which
+    //                       one it got (gfx.blit's src, gfx.icon's)
+    //   h  header lines     []string
+    //   s  a server         the struct http.localhost() hands back
+    //   r  a request        the struct http.accept() hands back
+    //   .  unchecked        checked elsewhere (gfx.poly's point lists), or the
+    //                       parameter really does take anything
+    //
+    // Coarse on purpose. A number is a number whatever its width, and a float
+    // where an int is wanted narrows the way C narrows -- a conversion the
+    // language allows, so not this check's business. What is caught is the
+    // categorical slip: text for a number, a number for text, and any
+    // aggregate (slice, map, struct, enum, Result, json, pointer) where a
+    // scalar is wanted.
+    //
+    // Parameter names are read out of the `call` text rather than listed
+    // twice, so a row can only ever disagree with itself in count. Where the
+    // names change with the argument count (gfx.blit) there is a row per
+    // form, narrowest first, and the first row that can hold the call wins.
+    struct BuiltinArgRow {
+        const char* method;  // "" for the last row of a table
+        const char* call;    // shown to the user; the parameter names live here
+        const char* kinds;   // a letter per parameter; a trailing '*' repeats the last
+    };
+
+    // std/gfx. Zero-argument builtins (close, poll, present, closed, width,
+    // height, scale, wheel, wheel_x, typed, mouse_x, mouse_y, drop,
+    // audio_queued, audio_flush) need no row.
+    static const BuiltinArgRow* gfxArgRows() {
+        static const BuiltinArgRow rows[] = {
+            {"open",            "gfx.open(title, w, h[, scale])",                  "tnnn"},
+            {"resize",          "gfx.resize(w, h[, scale])",                       "nnn"},
+            {"maxfps",          "gfx.maxfps(fps)",                                 "n"},
+            {"key",             "gfx.key(name)",                                   "t"},
+            {"pressed",         "gfx.pressed(name)",                               "t"},
+            {"released",        "gfx.released(name)",                              "t"},
+            {"mouse",           "gfx.mouse(name)",                                 "t"},
+            {"clear",           "gfx.clear(r, g, b)",                              "nnn"},
+            {"plot",            "gfx.plot(x, y, r, g, b)",                         "nnnnn"},
+            {"get",             "gfx.get(x, y)",                                   "nn"},
+            {"fill",            "gfx.fill(x, y, w, h, r, g, b)",                   "nnnnnnn"},
+            {"rect",            "gfx.rect(x, y, w, h, r, g, b)",                   "nnnnnnn"},
+            {"line",            "gfx.line(x1, y1, x2, y2, r, g, b[, t])",          "nnnnnnnn"},
+            {"circle",          "gfx.circle(cx, cy, rad, r, g, b)",                "nnnnnn"},
+            {"fill_circle",     "gfx.fill_circle(cx, cy, rad, r, g, b)",           "nnnnnn"},
+            {"ellipse",         "gfx.ellipse(cx, cy, rx, ry, r, g, b)",            "nnnnnnn"},
+            {"fill_ellipse",    "gfx.fill_ellipse(cx, cy, rx, ry, r, g, b)",       "nnnnnnn"},
+            {"arc",             "gfx.arc(cx, cy, rad, a0, a1, r, g, b)",           "nnnnnnnn"},
+            {"pie",             "gfx.pie(cx, cy, rad, a0, a1, r, g, b)",           "nnnnnnnn"},
+            {"round_rect",      "gfx.round_rect(x, y, w, h, rad, r, g, b)",        "nnnnnnnn"},
+            {"fill_round_rect", "gfx.fill_round_rect(x, y, w, h, rad, r, g, b)",   "nnnnnnnn"},
+            {"tri",             "gfx.tri(x1, y1, x2, y2, x3, y3, r, g, b)",        "nnnnnnnnn"},
+            {"fill_tri",        "gfx.fill_tri(x1, y1, x2, y2, x3, y3, r, g, b)",   "nnnnnnnnn"},
+            // The point lists go through a template; semCheckGfxPoly has them.
+            {"poly",            "gfx.poly(xs, ys, r, g, b)",                       "..nnn"},
+            {"fill_poly",       "gfx.fill_poly(xs, ys, r, g, b)",                  "..nnn"},
+            {"text",            "gfx.text(x, y, s, r, g, b[, scale])",             "nntnnnn"},
+            {"text_size",       "gfx.text_size([n])",                              "n"},
+            {"text_width",      "gfx.text_width(s[, scale])",                      "tn"},
+            {"text_height",     "gfx.text_height(s[, scale])",                     "tn"},
+            {"title",           "gfx.title([s])",                                  "t"},
+            {"opendialog",      "gfx.opendialog([filter])",                        "t"},
+            {"image",           "gfx.image(path)",                                 "t"},
+            {"decode",          "gfx.decode(bytes)",                               "t"},
+            {"image_w",         "gfx.image_w(id)",                                 "n"},
+            {"image_h",         "gfx.image_h(id)",                                 "n"},
+            {"save",            "gfx.save(path)",                                  "t"},
+            {"icon",            "gfx.icon(src)",                                   "x"},
+            {"cursor",          "gfx.cursor([on])",                                "n"},
+            {"alpha",           "gfx.alpha([a])",                                  "n"},
+            {"fullscreen",      "gfx.fullscreen([on])",                            "n"},
+            {"borderless",      "gfx.borderless([on])",                            "n"},
+            {"ontop",           "gfx.ontop([on])",                                 "n"},
+            {"transparent",     "gfx.transparent([on])",                           "n"},
+            {"audio",           "gfx.audio([rate])",                               "n"},
+            {"sample",          "gfx.sample(s)",                                   "n"},
+            {"sound",           "gfx.sound(path)",                                 "t"},
+            {"play",            "gfx.play(sound[, volume])",                       "nn"},
+            {"loop",            "gfx.loop(sound[, volume])",                       "nn"},
+            {"stop",            "gfx.stop([voice])",                               "n"},
+            {"volume",          "gfx.volume([v])",                                 "n"},
+            // gfx.blit names its own arguments differently in each form, so
+            // the three-and-five form comes first and the source-rect form
+            // catches the calls it cannot hold.
+            {"blit",            "gfx.blit(x, y, src[, w, h])",                     "nnxnn"},
+            {"blit",            "gfx.blit(x, y, src, sx, sy, sw, sh[, dw, dh])",   "nnxnnnnnn"},
+            {"blit_rot",        "gfx.blit_rot(x, y, src, angle[, w, h])",          "nnxnnn"},
+            {"", nullptr, nullptr},
+        };
+        return rows;
+    }
+
+    // std/math. Every parameter is cast to double on the way in, which is why
+    // math.sqrt("9") lands as a static_cast on a std::string.
+    static const BuiltinArgRow* mathArgRows() {
+        static const BuiltinArgRow rows[] = {
+            {"abs",   "math.abs(x)",          "n"},
+            {"sqrt",  "math.sqrt(x)",         "n"},
+            {"floor", "math.floor(x)",        "n"},
+            {"ceil",  "math.ceil(x)",         "n"},
+            {"round", "math.round(x)",        "n"},
+            {"sin",   "math.sin(x)",          "n"},
+            {"cos",   "math.cos(x)",          "n"},
+            {"tan",   "math.tan(x)",          "n"},
+            {"log",   "math.log(x)",          "n"},
+            {"log10", "math.log10(x)",        "n"},
+            {"exp",   "math.exp(x)",          "n"},
+            {"min",   "math.min(a, b)",       "nn"},
+            {"max",   "math.max(a, b)",       "nn"},
+            {"pow",   "math.pow(base, exp)",  "nn"},
+            {"", nullptr, nullptr},
+        };
+        return rows;
+    }
+
+    // std/crypto. The data parameters go through emitConcatOperand, which
+    // stringifies a number, so they are 'x'; crypto.random_bytes takes a count
+    // and crypto.xor's keys are a vector<int> unless there is exactly one and
+    // it is text, which is why xor has a row per form.
+    static const BuiltinArgRow* cryptoArgRows() {
+        static const BuiltinArgRow rows[] = {
+            {"sha256",        "crypto.sha256(data)",            "x"},
+            {"sha1",          "crypto.sha1(data)",              "x"},
+            {"hex_encode",    "crypto.hex_encode(data)",        "x"},
+            {"hex_decode",    "crypto.hex_decode(hex)",         "x"},
+            {"base64_encode", "crypto.base64_encode(data)",     "x"},
+            {"base64_decode", "crypto.base64_decode(b64)",      "x"},
+            {"hmac_sha256",   "crypto.hmac_sha256(key, data)",  "xx"},
+            {"random_bytes",  "crypto.random_bytes(n)",         "n"},
+            {"xor",           "crypto.xor(data, key)",          "tx"},
+            {"xor",           "crypto.xor(data, key...)",       "tn*"},
+            {"", nullptr, nullptr},
+        };
+        return rows;
+    }
+
+    // std/network, the http half. The server and request parameters are the
+    // structs http.localhost() and http.accept() hand back, not handles, so a
+    // number there is as wrong as text.
+    static const BuiltinArgRow* httpArgRows() {
+        static const BuiltinArgRow rows[] = {
+            {"request",   "http.request(method, url, body[, headers])",   "ttth"},
+            {"get",       "http.get(url[, headers])",                     "th"},
+            {"delete",    "http.delete(url[, headers])",                  "th"},
+            {"post",      "http.post(url, body[, headers])",              "tth"},
+            {"put",       "http.put(url, body[, headers])",               "tth"},
+            {"patch",     "http.patch(url, body[, headers])",             "tth"},
+            {"localhost", "http.localhost([port])",                       "n"},
+            {"accept",    "http.accept(server)",                          "s"},
+            {"close",     "http.close(server)",                           "s"},
+            {"reply",     "http.reply(request, status, body[, headers])",  "rnth"},
+            {"raw",       "http.raw(request, bytes)",                      "rt"},
+            {"", nullptr, nullptr},
+        };
+        return rows;
+    }
+
+    // std/network, the tcp half: an int handle everywhere, bytes as text.
+    static const BuiltinArgRow* tcpArgRows() {
+        static const BuiltinArgRow rows[] = {
+            {"connect", "tcp.connect(host, port)",   "tn"},
+            {"listen",  "tcp.listen(port)",          "n"},
+            {"accept",  "tcp.accept(listener)",      "n"},
+            {"send",    "tcp.send(handle, data)",    "nt"},
+            {"recv",    "tcp.recv(handle[, max])",   "nn"},
+            {"port",    "tcp.port(handle)",          "n"},
+            {"close",   "tcp.close(handle)",         "n"},
+            {"", nullptr, nullptr},
+        };
+        return rows;
+    }
+
+    // std/network, the udp half.
+    static const BuiltinArgRow* udpArgRows() {
+        static const BuiltinArgRow rows[] = {
+            {"open",        "udp.open(port)",                     "n"},
+            {"port",        "udp.port(handle)",                   "n"},
+            {"send",        "udp.send(handle, host, port, data)", "ntnt"},
+            {"recv",        "udp.recv(handle[, max])",            "nn"},
+            {"sender",      "udp.sender(handle)",                 "n"},
+            {"sender_port", "udp.sender_port(handle)",            "n"},
+            {"close",       "udp.close(handle)",                  "n"},
+            {"", nullptr, nullptr},
+        };
+        return rows;
+    }
+
+    // std/file, the FileCall half. Every path becomes a `const char*` through
+    // .c_str(), so a number there is a member call on an int.
+    static const BuiltinArgRow* fileArgRows() {
+        static const BuiltinArgRow rows[] = {
+            {"remove",     "file.remove(path)",      "t"},
+            {"remove_all", "file.remove_all(path)",  "t"},
+            {"list",       "file.list(path)",        "t"},
+            {"isdir",      "file.isdir(path)",       "t"},
+            {"isfile",     "file.isfile(path)",      "t"},
+            {"size",       "file.size(path)",        "t"},
+            {"chdir",      "file.chdir(path)",       "t"},
+            {"abspath",    "file.abspath(path)",     "t"},
+            {"dirname",    "file.dirname(path)",     "t"},
+            {"basename",   "file.basename(path)",    "t"},
+            {"extension",  "file.extension(path)",   "t"},
+            {"rename",     "file.rename(from, to)",  "tt"},
+            {"copy",       "file.copy(from, to)",    "tt"},
+            {"join",       "file.join(a, b)",        "tt"},
+            {"", nullptr, nullptr},
+        };
+        return rows;
+    }
+
+    // The builtins that are their own AST node rather than a method name on a
+    // namespace node: the whole of os.*, file's original five, time.sleep and
+    // random.*. os.* text parameters are 'x' and not 't' because the
+    // transpiler runs a non-string through std::to_string on the way in --
+    // os.open(8080) is a conversion the language does allow. What it cannot
+    // stringify is a slice or a struct. os.getprocessid(name) is the one
+    // exception: that argument is passed straight through.
+    static const BuiltinArgRow* nodeArgRow(AstNode::Type t, const std::string& tag) {
+        static const BuiltinArgRow setVolume     = {"", "os.set_volume(v)",             "n"};
+        static const BuiltinArgRow setBrightness = {"", "os.set_brightness(v)",         "n"};
+        static const BuiltinArgRow clipSet       = {"", "os.clip_set(s)",               "x"};
+        static const BuiltinArgRow osType        = {"", "os.type(s)",                   "x"};
+        static const BuiltinArgRow notify        = {"", "os.notify(title, message)",    "xx"};
+        static const BuiltinArgRow osOpen        = {"", "os.open(target)",              "x"};
+        static const BuiltinArgRow load          = {"", "os.load(path)",                "x"};
+        static const BuiltinArgRow save          = {"", "os.save(path, data)",          "xx"};
+        static const BuiltinArgRow play          = {"", "os.play(path)",                "x"};
+        static const BuiltinArgRow spawn         = {"", "os.spawn(prog[, arg...])",     "x*"};
+        static const BuiltinArgRow spawnAt       = {"", "os.spawn_at(cwd, prog[, arg...])", "xx*"};
+        static const BuiltinArgRow wait          = {"", "os.wait(pid)",                 "n"};
+        static const BuiltinArgRow kill          = {"", "os.kill(pid)",                 "n"};
+        static const BuiltinArgRow which         = {"", "os.which(name)",               "x"};
+        static const BuiltinArgRow unsetenv      = {"", "os.unsetenv(name)",            "x"};
+        static const BuiltinArgRow chdir         = {"", "os.chdir(path)",               "x"};
+        static const BuiltinArgRow messagebox    = {"", "os.messagebox(text, title)",   "xx"};
+        static const BuiltinArgRow exitRow       = {"", "os.exit(code)",                "n"};
+        static const BuiltinArgRow setenv        = {"", "os.setenv(name, value)",       "xx"};
+        static const BuiltinArgRow system        = {"", "os.system(command)",           "x"};
+        static const BuiltinArgRow pid           = {"", "os.getprocessid([name])",      "t"};
+        static const BuiltinArgRow fileRead      = {"", "file.read(path)",              "t"};
+        static const BuiltinArgRow fileWrite     = {"", "file.write(path, content)",    "tx"};
+        static const BuiltinArgRow fileAppend    = {"", "file.append(path, content)",   "tx"};
+        static const BuiltinArgRow fileExists    = {"", "file.exists(path)",            "t"};
+        static const BuiltinArgRow fileMkdir     = {"", "file.mkdir(path)",             "t"};
+        static const BuiltinArgRow sleepRow      = {"", "time.sleep(ms)",               "n"};
+        static const BuiltinArgRow randomInt     = {"", "random.int(min, max)",         "nn"};
+        static const BuiltinArgRow randomSeed    = {"", "random.seed(n)",               "n"};
+        switch (t) {
+            case AstNode::Type::OsSetVolume:     return &setVolume;
+            case AstNode::Type::OsSetBrightness: return &setBrightness;
+            case AstNode::Type::OsClipSet:       return &clipSet;
+            case AstNode::Type::OsType:          return &osType;
+            case AstNode::Type::OsNotify:        return &notify;
+            case AstNode::Type::OsOpen:          return &osOpen;
+            case AstNode::Type::OsLoad:          return &load;
+            case AstNode::Type::OsSave:          return &save;
+            case AstNode::Type::OsPlay:          return &play;
+            case AstNode::Type::OsSpawn:         return tag == "at" ? &spawnAt : &spawn;
+            case AstNode::Type::OsWait:          return &wait;
+            case AstNode::Type::OsKill:          return &kill;
+            case AstNode::Type::OsWhich:         return &which;
+            case AstNode::Type::OsUnsetenv:      return &unsetenv;
+            case AstNode::Type::OsChdir:         return &chdir;
+            case AstNode::Type::OsMessageBox:    return &messagebox;
+            case AstNode::Type::OsExit:          return &exitRow;
+            case AstNode::Type::OsSetenv:        return &setenv;
+            // os.system in statement position and in value position are two
+            // node types for one builtin, so they share the one row.
+            case AstNode::Type::OsSystem:
+            case AstNode::Type::OsExec:          return &system;
+            case AstNode::Type::OsGetProcessId:  return &pid;
+            case AstNode::Type::FileRead:        return &fileRead;
+            case AstNode::Type::FileWrite:       return &fileWrite;
+            case AstNode::Type::FileAppend:      return &fileAppend;
+            case AstNode::Type::FileExists:      return &fileExists;
+            case AstNode::Type::FileMkdir:       return &fileMkdir;
+            case AstNode::Type::TimeSleep:       return &sleepRow;
+            case AstNode::Type::RandomInt:       return &randomInt;
+            case AstNode::Type::RandomSeed:      return &randomSeed;
+            default: return nullptr;
+        }
+    }
+
+    // The number of parameters a row names, and whether it takes more of the
+    // last one. A trailing '*' is the repeat: os.spawn(prog[, arg...]).
+    static size_t builtinRowArity(const char* kinds, bool* variadic) {
+        std::string k(kinds ? kinds : "");
+        const bool rep = !k.empty() && k.back() == '*';
+        if (variadic) *variadic = rep;
+        return rep ? k.size() - 1 : k.size();
+    }
+
+    // The first row for `method` that can hold `argc` arguments, or the first
+    // row for it at all if none can (the parser's arity rules run earlier, so
+    // that means a form this table does not know).
+    static const BuiltinArgRow* findBuiltinArgRow(const BuiltinArgRow* rows,
+                                                  const std::string& method, size_t argc) {
+        const BuiltinArgRow* first = nullptr;
+        for (const BuiltinArgRow* r = rows; r->call; ++r) {
+            if (method != r->method) continue;
+            if (!first) first = r;
+            bool variadic = false;
+            const size_t arity = builtinRowArity(r->kinds, &variadic);
+            if (variadic || argc <= arity) return r;
+        }
+        return first;
+    }
+
+    // The parameter names, read out of the signature text so a row cannot
+    // name one thing and check another. "gfx.blit(x, y, src[, w, h])" gives
+    // x, y, src, w, h.
+    static std::vector<std::string> builtinParamNames(const char* call) {
+        std::vector<std::string> names;
+        std::string s(call ? call : "");
+        const size_t open = s.find('(');
+        if (open == std::string::npos) return names;
+        std::string cur;
+        for (size_t i = open + 1; i < s.size(); i++) {
+            const char c = s[i];
+            if (c == ',' || c == ')') {
+                if (!cur.empty()) names.push_back(cur);
+                cur.clear();
+                if (c == ')') break;
+                continue;
+            }
+            if (c == ' ' || c == '[' || c == ']' || c == '.') continue;
+            cur += c;
+        }
+        if (!cur.empty()) names.push_back(cur);
+        return names;
+    }
+
+    static char builtinArgKind(const char* kinds, size_t i) {
+        bool variadic = false;
+        const size_t arity = builtinRowArity(kinds, &variadic);
+        if (arity == 0) return '.';
+        if (i < arity) return kinds[i];
+        return variadic ? kinds[arity - 1] : '.';
+    }
+
+    // Anything that reaches an int or double parameter on its own. char and
+    // bool are in because C++ promotes them; float is in because narrowing to
+    // an int is a conversion the language allows, the same as C's.
+    static bool semArgIsNumber(const std::string& t) {
+        return nexaIsNumericIntType(t) || t == "float" || t == "char" || t == "bool";
+    }
+
+    static bool semArgKindAccepts(char kind, const std::string& t) {
+        switch (kind) {
+            case 'n': return semArgIsNumber(t);
+            case 't': return t == "string";
+            case 'x': return t == "string" || semArgIsNumber(t);
+            case 'h': return t == "[]string";
+            case 's': return t == "struct:HttpServer";
+            case 'r': return t == "struct:HttpRequest";
+            default: return true;
+        }
+    }
+
+    static const char* semArgKindWants(char kind) {
+        switch (kind) {
+            case 'n': return "a number";
+            case 't': return "text";
+            case 'x': return "text or a number";
+            case 'h': return "a []string of header lines";
+            case 's': return "an http.localhost() server";
+            case 'r': return "an http.accept() request";
+            default: return nullptr;
+        }
+    }
+
+    // struct:/enum: keep a struct name apart from a plain type inside the
+    // transpiler; the user wrote HttpServer, not struct:HttpServer. Stripped
+    // wherever they appear, since a tag can be nested: a Result of a struct
+    // comes through as Result[struct:HttpServer].
+    static std::string semTypeWithoutTags(const std::string& t) {
+        std::string out = t;
+        for (const char* tag : {"struct:", "enum:"}) {
+            const std::string s(tag);
+            for (size_t at = out.find(s); at != std::string::npos; at = out.find(s, at)) {
+                out.erase(at, s.size());
+            }
+        }
+        return out;
+    }
+
+    // What the user wrote, in the words they wrote it in. The two categories
+    // they think in get the words; anything else is named by its own type.
+    static std::string semArgGot(const std::string& t) {
+        if (t == "string") return "text";
+        if (semArgIsNumber(t)) return "a number";
+        if (t == "void") return "nothing";
+        return "'" + semTypeWithoutTags(t) + "'";
+    }
+
+    void semCheckBuiltinArgRow(const AstNode& e, const BuiltinArgRow* row) const {
+        if (!row) return;
+        const std::vector<std::string> names = builtinParamNames(row->call);
+        bool variadic = false;
+        builtinRowArity(row->kinds, &variadic);
+        for (size_t i = 0; i < e.children.size(); i++) {
+            const char kind = builtinArgKind(row->kinds, i);
+            const char* wants = semArgKindWants(kind);
+            if (!wants) continue;
+            const std::string t = inferExprNexaType(e.children[i]);
+            if (t.empty() || semArgKindAccepts(kind, t)) continue;
+            // The trailing name repeats with its letter: the third key of
+            // crypto.xor(data, key...) is still a key.
+            std::string name = "argument " + std::to_string(i + 1);
+            if (i < names.size()) name = names[i];
+            else if (variadic && !names.empty()) name = names.back();
+            semError(e, std::string(row->call) + " expects " + wants + " for " + name +
+                ", but got " + semArgGot(t));
+        }
+    }
+
+    // Reached for every node in the walk; the namespaces with known
+    // signatures answer, everything else falls straight through.
+    //
+    // Only run when Nexa can see every type in the program. With inline C++ or
+    // a C++ header in play a name can be declared somewhere this walk cannot
+    // read, and inferExprNexaType answers "int" for a name it does not know --
+    // which would read as a number handed to a text parameter. That is the
+    // same condition, for the same reason, as the undefined-name check.
+    void semCheckBuiltinArgTypes(const AstNode& e) const {
+        if (!semNameChecks_) return;
+        switch (e.type) {
+            case AstNode::Type::GfxCall:
+                semCheckBuiltinArgRow(e, findBuiltinArgRow(gfxArgRows(), e.value, e.children.size()));
+                break;
+            case AstNode::Type::MathCall:
+                semCheckBuiltinArgRow(e, findBuiltinArgRow(mathArgRows(), e.value, e.children.size()));
+                break;
+            case AstNode::Type::HttpCall:
+                semCheckBuiltinArgRow(e, findBuiltinArgRow(httpArgRows(), e.value, e.children.size()));
+                break;
+            case AstNode::Type::TcpCall:
+                semCheckBuiltinArgRow(e, findBuiltinArgRow(tcpArgRows(), e.value, e.children.size()));
+                break;
+            case AstNode::Type::UdpCall:
+                semCheckBuiltinArgRow(e, findBuiltinArgRow(udpArgRows(), e.value, e.children.size()));
+                break;
+            case AstNode::Type::FileCall:
+                semCheckBuiltinArgRow(e, findBuiltinArgRow(fileArgRows(), e.value, e.children.size()));
+                break;
+            case AstNode::Type::CryptoCall:
+                semCheckBuiltinArgRow(e, findBuiltinArgRow(cryptoArgRows(), e.value, e.children.size()));
+                break;
+            default:
+                semCheckBuiltinArgRow(e, nodeArgRow(e.type, e.value));
+                break;
         }
     }
 
@@ -3495,16 +3977,6 @@ private:
         if (sliceElemIsOrderable(elem)) return;
         semError(e, "." + m + "() expects []int, []float or []string, but " + subject +
             " is '" + shown + "'");
-    }
-
-    // gfx.save takes a filesystem path. Passing it a number is a plausible slip
-    // (gfx.save(1) reads like "save slot 1"), and without this it lands as a C++
-    // conversion error inside a generated call the user never wrote.
-    void semCheckGfxSave(const AstNode& e) const {
-        if (e.value != "save" || e.children.empty()) return;
-        std::string t = inferExprNexaType(e.children[0]);
-        if (t == "string" || t.empty()) return;
-        semError(e, "gfx.save(path) expects a string path, but got '" + t + "'");
     }
 
     void semCheckNameUse(const AstNode& at, const std::string& name) {
@@ -3948,7 +4420,18 @@ private:
         return "";
     }
     std::string structTypeOfExprValue(const AstNode& e) const {
-        if (e.type == AstNode::Type::ExprVarRef) return varStructLookup(e.value);
+        if (e.type == AstNode::Type::ExprVarRef) {
+            std::string s = varStructLookup(e.value);
+            if (!s.empty()) return s;
+            // varStructScopes_ is filled as codegen walks, so during
+            // checkSemantics it is empty and only the declaration stack knows
+            // a local's type. Without this, `s.xs` on a struct field inferred
+            // as int, and semCheckGfxPoly reported gfx.poly(s.xs, ...) as
+            // being handed an int -- a wrong answer about a correct program.
+            std::string t = lookupNexaDecl(e.value);
+            if (isPointerType(t)) t = pointerPointeeType(t);
+            return isStructDeclType(t) ? structNameFromDecl(t) : std::string();
+        }
         if (e.type == AstNode::Type::ExprStructLit) return e.value;
         if (e.type == AstNode::Type::ExprArrayIndex) {
             std::string t = inferExprNexaType(e);

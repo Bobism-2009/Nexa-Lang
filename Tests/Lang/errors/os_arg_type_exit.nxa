@@ -1,0 +1,7 @@
+// os.exit takes a status code, not a parting message. The int parameters are
+// the half of os.* that cannot be converted into: the text ones stringify a
+// number on the way in, so os.open(8080) is legal and this is not.
+#include <std/os>
+fn main() {
+    os.exit("bye");
+}

@@ -1,0 +1,7 @@
+// Every file.* path becomes a const char* through .c_str(), so a number there
+// is a member call on an int by the time clang sees it.
+#include <std/file>
+#include <std/io>
+fn main() {
+    io.println(file.read(1));
+}

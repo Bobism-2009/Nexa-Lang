@@ -1,0 +1,7 @@
+// tcp.connect(host, port): the host is text and the port is a number, and the
+// two are easy to write the other way round. Both halves are caught, and the
+// first one reported is the first one written.
+#include <std/network>
+fn main() {
+    let c = tcp.connect(80, "127.0.0.1");
+}

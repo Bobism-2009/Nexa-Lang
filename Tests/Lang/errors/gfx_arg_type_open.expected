@@ -1,0 +1,3 @@
+gfx.open(title, w, h[, scale]) expects text for title
+but got a number
+at line 8

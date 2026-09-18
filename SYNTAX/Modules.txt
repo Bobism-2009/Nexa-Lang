@@ -1,6 +1,25 @@
 Nexa Standard Modules
 ======================
 
+ARGUMENT TYPES
+  The signatures below are checked at compile time, by name and by line: a
+  parameter written here as text takes text, and one written as a number takes
+  a number. gfx.open(100, 100, "t") is an error naming gfx.open and its title
+  parameter, not a C++ error about a generated function.
+  The check is deliberately coarse, so the conversions the language allows
+  stay allowed. A number is a number whatever its width, and a float where an
+  int parameter is narrows the way C narrows. Every os.* text parameter also
+  takes a number -- os.open(8080) and os.setenv("PORT", 8080) are converted on
+  the way in -- with os.getprocessid(name) the one exception; so does
+  file.write/file.append's content, and every crypto.* data parameter.
+  gfx.blit's src and gfx.icon's take either an image id or a path. What is
+  refused is the categorical slip: text where a number goes, a number where
+  text goes, and an array, map, struct, enum, Result or json value where a
+  single value goes.
+  Not checked: json.*, which takes any value and wraps it, and thread.* and
+  dll.*, whose arguments are a job and a symbol rather than a fixed list of
+  types.
+
 #include <std/io>
   io.print(arg[, ...])     - Print to stdout, no newline
   io.println(arg[, ...])  - Print args in order, then a newline

@@ -149,7 +149,7 @@ fn main() {
     gfx.save(1);
 }
 ' \
-    "gfx.save(path) expects a string path"
+    "gfx.save(path) expects text for path"
 
 expect_reject "reject: unknown gfx method still lists the new ones" \
 '#include <std/gfx>
