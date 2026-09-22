@@ -34,7 +34,6 @@ block (they will be hoisted) or rely on headers already included by the runtime.
 CLI
 ---
   NexaC --help std/inline
-  NexaC --help --page8
   NexaC --help inline
 
 See also: Includes.txt, Modules.txt, Core.txt

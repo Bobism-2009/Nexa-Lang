@@ -91,7 +91,7 @@ ARGUMENT TYPES
   os.lock()         - Lock the screen / session (cross-platform)
   os.shutdown()     - Power off the machine immediately (no prompt)
   os.reboot()       - Restart the machine immediately (no prompt)
-  os.suspend()      - Suspend / sleep the machine (distinct from os.sleep(ms) timer)
+  os.suspend()      - Suspend / sleep the machine (distinct from time.sleep, the timer)
   os.logout()       - Log out the current user session
                       Power/lock/logout run the native command for the platform;
                       the OS may still require privileges (sudo/polkit) to honor them.

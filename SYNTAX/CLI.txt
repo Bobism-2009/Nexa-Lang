@@ -8,7 +8,7 @@ USAGE
   NexaC <file.nxa> [-o <executable>]
   NexaC <file.nxa> --run
   NexaC <file.nxa> --source <output.cpp>
-  NexaC --help [page|module]
+  NexaC --help [topic]
   NexaC --version
 
   NexaC upgrade [--check] [--yes] [--user | --all-users]
@@ -57,5 +57,17 @@ OPTIONS
   --no-console    Build Windows GUI .exe with no console window
   fn __init__() in a DLL/SO/dylib is auto-executed when the library is loaded
   --run, -r       Compile to temp file and run
-  --help, -h      Show help
+  --help, -h      Show help. With no topic, a one-screen index: usage, the
+                  options in brief, and every topic there is.
+                  A topic is a SUMMARY -- it names what a module has and shows
+                  one example; this folder is the reference it points at.
+                    NexaC --help core          the language at a glance
+                    NexaC --help options       every option, in full
+                    NexaC --help std/gfx       any standard module
+                    NexaC --help nexapkg       the package manager
+                    NexaC --help gfx.blit      the topic a call lives on
+                    NexaC --help all           every topic, for a pager
+                  Topics are named, not numbered. The nine numbered pages NexaC
+                  used to have still resolve, and answer with the name that
+                  replaced them.
   --version, -v   Show version
