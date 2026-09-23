@@ -941,12 +941,25 @@ ARGUMENT TYPES
   triangles to the GPU and lets a depth buffer decide what is in front. There
   is no gfx3d.get and no gfx3d.save for that reason: there is no array of
   pixels here to read back.
-  Windows (Win32 + WGL) and Linux (X11 + GLX). No library to install on
-  either: the OpenGL entry points are declared in the runtime and fetched by
-  name at run time, so no GL development package is needed to build and no
-  loader library is linked. macOS and wasm have no backend yet -- there
-  gfx3d.open returns 0 and the rest of the module does nothing, exactly as
-  every gfx call does before the first gfx.open.
+  Four backends: Windows (Win32 + WGL), macOS (Cocoa + NSOpenGL), Linux
+  (X11 + GLX) and the browser (--wasm, WebGL). No library to install for any
+  of them: the entry points are declared in the runtime and taken by name at
+  run time, so no GL development package is needed to build and no loader
+  library is linked.
+  The first three are the same renderer -- OpenGL 1.1, the fixed-function
+  pipeline -- and only the window differs. The browser is not. WebGL has no
+  glBegin, no matrix stack and no fixed-function anything, so --wasm carries
+  a second renderer: a vertex shader that applies the camera, a fragment
+  shader that paints the colour, and one buffer the triangles are uploaded
+  into. The GLSL is compiled by the browser at run time, so there is still
+  no shader compiler in the build. What a program draws is identical either
+  way, which is the point of the split -- gfx3d.cube is one description of a
+  cube whichever backend takes it.
+  macOS asks for the legacy GL profile on purpose, because that is the one
+  that still has the pipeline this draws with; OpenGL is deprecated there
+  and still runs. Anywhere with no backend at all -- a WASI build, a BSD
+  without X11 -- gfx3d.open returns 0 and the rest of the module does
+  nothing, exactly as every gfx call does before the first gfx.open.
   gfx3d.open(title, w, h)        - create a w*h window; 1 on success, 0 on failure
                                    w and h clamp into 1..8192 rather than failing.
                                    Depth testing and back-face culling are on from

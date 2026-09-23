@@ -1085,6 +1085,7 @@ static std::string nexaWasmCompileCmd(
     bool linkHttp,
     bool linkThread,
     bool linkGfx,
+    bool linkGfx3d,
     bool singleFile,
     const std::vector<std::string>& linkInputs
 ) {
@@ -1105,7 +1106,9 @@ static std::string nexaWasmCompileCmd(
     if (tool.kind == WasmKind::Emscripten) {
         cmd += " -sALLOW_MEMORY_GROWTH=1 -sEXIT_RUNTIME=1";
         if (linkHttp) cmd += " -sFETCH=1";
-        if (linkHttp || linkGfx) cmd += " -sASYNCIFY";
+        // gfx3d.present yields with emscripten_sleep so the page can
+        // composite, exactly as std/gfx does.
+        if (linkHttp || linkGfx || linkGfx3d) cmd += " -sASYNCIFY";
         if (linkThread) cmd += " -pthread -sPTHREAD_POOL_SIZE=4";
         // FORCE_FILESYSTEM is gfx's: the file picker and the drop path need it.
         if (linkGfx) cmd += " -sFORCE_FILESYSTEM=1";
@@ -1286,7 +1289,8 @@ static std::string nexaBuildCompileCmd(
 #endif
 #ifdef __APPLE__
     // Cocoa backend is Objective-C++; -x must precede the generated .cpp path.
-    if (linkGfx) cmd += " -x objective-c++ -fobjc-arc";
+    // std/gfx3d opens its window the same way, so it needs the same treatment.
+    if (linkGfx || linkGfx3d) cmd += " -x objective-c++ -fobjc-arc";
 #endif
     cmd += " \"" + cppPath + "\" " + opt;
     if (cxx.find("clang") != std::string::npos) {
@@ -1438,6 +1442,11 @@ static std::string nexaBuildCompileCmd(
 #elif defined(__APPLE__)
     if (linkHttp) {
         cmd += " -framework CoreFoundation -framework CFNetwork";
+    }
+    if (linkGfx3d && !linkGfx) {
+        // The window, the view and NSOpenGLPixelFormat are all AppKit. The GL
+        // itself is dlopened out of the framework, so it is not linked.
+        cmd += " -framework Cocoa";
     }
     if (linkGfx) {
         // AudioToolbox is gfx.audio (AudioQueue); the rest is the window, the
@@ -2102,7 +2111,7 @@ int main(int argc, char* argv[]) {
             const bool singleFile = (wasmTool.kind == WasmKind::Emscripten) && !wasmSplit;
             std::string cmd = nexaWasmCompileCmd(wasmTool, cppPath, wasmOut, opt, noExceptions, noRtti,
                 modules.hasHttp() && usage.http, modules.hasThread() && usage.thread,
-                modules.hasGfx() && usage.gfx, singleFile, linkInputs);
+                modules.hasGfx() && usage.gfx, linkGfx3d, singleFile, linkInputs);
             int ret = std::system(cmd.c_str());
             std::remove(cppPath.c_str());
             if (ret != 0) {
@@ -2118,7 +2127,10 @@ int main(int argc, char* argv[]) {
                 std::filesystem::path jsPath(wasmOut);
                 wasmHtmlPath = jsPath;
                 wasmHtmlPath.replace_extension(".html");
-                const bool wantsCanvas = modules.hasGfx() && usage.gfx;
+                // Both drawing modules render into a canvas; everything else
+                // gets the console page.
+                const bool wantsCanvas = (modules.hasGfx() && usage.gfx)
+                                      || (modules.hasGfx3d() && usage.gfx3d);
                 if (!nexaWriteWasmHtml(wasmHtmlPath, jsPath.filename().string(), wantsCanvas)) {
                     std::cerr << "[Nexa] Error: Cannot write " << wasmHtmlPath.string() << "\n";
                     return 1;

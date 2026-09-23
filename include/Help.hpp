@@ -601,8 +601,12 @@ Two renderers are named and one is built: asking for vulkan quietly gives you
 opengl, and backend() reports the truth. Depth test and back-face culling are
 on from the start, though a lone gfx3d.tri is drawn from both sides. A cube's
 six faces are shaded by a fixed fraction each, so the shape reads as solid
-while the module has no light in it. Windows and Linux; on macOS and wasm
-gfx3d.open answers 0 and the rest does nothing.
+while the module has no light in it.
+
+Windows, macOS, Linux and the browser. The first three are OpenGL 1.1 with
+three different windows under it; --wasm is a second renderer, because WebGL
+has no fixed-function pipeline -- same picture, shaders underneath. Nothing
+to install for any of them.
 
 Colours are 0..255. The draws hand nothing back and are statements only, so
 `let C = gfx3d.cube(...);` is an error naming the call -- as in std/gfx.)HELP" },

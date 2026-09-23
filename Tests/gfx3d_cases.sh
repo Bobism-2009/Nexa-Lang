@@ -26,6 +26,12 @@
 #             Skipped when the build fails, which on Linux means no X11
 #             development headers.
 #
+#   wasm      The browser backend is not OpenGL 1.1 -- WebGL has no glBegin,
+#             no matrix stack and no fixed-function anything -- so --wasm has
+#             to compile the shader path INSTEAD of the desktop one. Both
+#             halves of that are checked, because a preprocessor ladder
+#             compiles either way and is only right one of them. Needs em++.
+#
 # Arity, unknown methods, void-in-value-position and argument types live in
 # Tests/Lang/errors/gfx3d_*.nxa, where run_tests.sh already checks that NexaC
 # does the complaining and clang never gets to speak.
@@ -207,6 +213,70 @@ else
     skips=$((skips + 1))
 fi
 
+
+# --- wasm layer -------------------------------------------------------------
+
+# The browser is the one backend that is not OpenGL 1.1. WebGL has no glBegin,
+# no matrix stack and no fixed-function anything, so --wasm has to compile the
+# shader path INSTEAD of the desktop one -- not as well as it. That is a
+# preprocessor ladder, which is exactly the kind of thing that compiles either
+# way and is wrong one of them, so both halves are checked: the shader path has
+# to be there and the fixed-function path has to be gone.
+
+have_emcc=0
+if command -v em++ >/dev/null 2>&1; then
+    have_emcc=1
+elif [ -x "$HOME/emsdk/upstream/emscripten/em++" ] || [ -x "$HOME/emsdk/upstream/emscripten/em++.exe" ]; then
+    have_emcc=1
+fi
+
+if [ $have_emcc -eq 0 ]; then
+    echo "skip wasm: no em++ (install Emscripten, or set EMSDK)"
+    skips=$((skips + 1))
+else
+    cat > "$WORK/w.nxa" <<'NXA'
+#include <std/gfx3d>
+
+fn main() {
+    gfx3d.open("w", 320, 240);
+    gfx3d.camera(3.0, 2.0, 4.0, 0.0, 0.0, 0.0);
+    gfx3d.clear(10, 10, 20);
+    gfx3d.cube(0.0, 0.0, 0.0, 1.0, 200, 80, 60);
+    gfx3d.tri(0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1, 2, 3);
+    gfx3d.present();
+    gfx3d.close();
+}
+NXA
+    if "$NEXAC" "$WORK/w.nxa" --wasm -o "$WORK/w" > "$WORK/w.log" 2>&1; then
+        [ -f "$WORK/w.js" ]   || { echo "FAIL wasm: no loader"; fails=$((fails + 1)); }
+        [ -f "$WORK/w.html" ] || { echo "FAIL wasm: no page"; fails=$((fails + 1)); }
+        # A 3D program draws into a canvas, so it must get the canvas page and
+        # not the text console one.
+        if [ -f "$WORK/w.html" ] && ! grep -q '<canvas' "$WORK/w.html"; then
+            echo "FAIL wasm: a gfx3d page has no canvas on it"
+            fails=$((fails + 1))
+        fi
+        # The shader path is what WebGL can actually run.
+        for sym in glCreateShader glLinkProgram glDrawArrays glUniformMatrix4fv emscripten_webgl_create_context; do
+            if ! grep -a -q "$sym" "$WORK/w.js" 2>/dev/null; then
+                echo "FAIL wasm: $sym missing; the WebGL backend was not compiled in"
+                fails=$((fails + 1))
+            fi
+        done
+        # And the fixed-function path must not have come along: none of these
+        # exist in WebGL, so their presence would mean the wrong branch won.
+        for sym in glLoadMatrixf glMatrixMode glVertex3f; do
+            if grep -a -q "$sym" "$WORK/w.js" 2>/dev/null; then
+                echo "FAIL wasm: $sym reached a WebGL build; the desktop branch was taken"
+                fails=$((fails + 1))
+            fi
+        done
+    else
+        echo "FAIL wasm: --wasm build of a gfx3d program failed"
+        sed 's/^/  /' "$WORK/w.log" | tail -6
+        fails=$((fails + 1))
+    fi
+fi
 # --- report -----------------------------------------------------------------
 
 if [ $fails -eq 0 ]; then

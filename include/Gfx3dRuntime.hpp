@@ -36,9 +36,13 @@
 // request. When a Vulkan backend exists, the switch is already where
 // programs expect it.
 //
-// Platforms: Windows (Win32 + WGL) and Linux (X11 + GLX). macOS and wasm
-// have no backend yet, so gfx3d.open returns 0 there and every other call
-// does nothing -- the same "no window open is not an error" rule gfx has.
+// Platforms: Windows (Win32 + WGL), macOS (Cocoa + NSOpenGL), Linux (X11 +
+// GLX) and the browser (WebGL). The first three are one renderer and three
+// windows; the browser is a second renderer, because WebGL has none of the
+// fixed-function pipeline the others draw with. The geometry is described
+// once either way -- see "the vertex batch" below, which is the seam.
+// Anywhere with no backend, gfx3d.open returns 0 and every other call does
+// nothing -- the same "no window open is not an error" rule gfx has.
 
 #include <string>
 
@@ -60,7 +64,17 @@ inline std::string gfx3dRuntimeCpp() {
 
 #if defined(_WIN32)
   #include <windows.h>
-#elif defined(__linux__) && !defined(NEXA_WASM)
+#elif defined(NEXA_WASM)
+  // Emscripten's own headers, which ship with em++ itself -- unlike a GL
+  // development package, having the compiler means having these. The WebGL
+  // context attributes are a struct whose layout has to match exactly, which
+  // is the one thing not worth hand-declaring.
+  #include <emscripten/emscripten.h>
+  #include <emscripten/html5.h>
+#elif defined(__APPLE__)
+  #import <Cocoa/Cocoa.h>
+  #include <dlfcn.h>
+#elif defined(__linux__)
   #include <X11/Xlib.h>
   #include <X11/Xutil.h>
   #include <dlfcn.h>
@@ -79,6 +93,9 @@ typedef int           __nexa_GLsizei;
 typedef float         __nexa_GLfloat;
 typedef unsigned char __nexa_GLubyte;
 typedef void          __nexa_GLvoid;
+typedef unsigned int  __nexa_GLuint;
+typedef char          __nexa_GLchar;
+typedef long          __nexa_GLsizeiptr;
 
 #define NEXA_GL_DEPTH_BUFFER_BIT 0x00000100u
 #define NEXA_GL_COLOR_BUFFER_BIT 0x00004000u
@@ -89,6 +106,13 @@ typedef void          __nexa_GLvoid;
 #define NEXA_GL_CCW              0x0901u
 #define NEXA_GL_MODELVIEW        0x1700u
 #define NEXA_GL_PROJECTION       0x1701u
+#define NEXA_GL_FLOAT            0x1406u
+#define NEXA_GL_ARRAY_BUFFER     0x8892u
+#define NEXA_GL_DYNAMIC_DRAW     0x88E8u
+#define NEXA_GL_FRAGMENT_SHADER  0x8B30u
+#define NEXA_GL_VERTEX_SHADER    0x8B31u
+#define NEXA_GL_COMPILE_STATUS   0x8B81u
+#define NEXA_GL_LINK_STATUS      0x8B82u
 
 #if defined(_WIN32)
   #define NEXA_GLAPI __stdcall
@@ -109,6 +133,44 @@ typedef void (NEXA_GLAPI *__nexa_pfn_glBegin)(__nexa_GLenum);
 typedef void (NEXA_GLAPI *__nexa_pfn_glEnd)(void);
 typedef void (NEXA_GLAPI *__nexa_pfn_glVertex3f)(__nexa_GLfloat, __nexa_GLfloat, __nexa_GLfloat);
 typedef void (NEXA_GLAPI *__nexa_pfn_glColor3ub)(__nexa_GLubyte, __nexa_GLubyte, __nexa_GLubyte);
+
+// The GLES2 entry points the WebGL backend calls. Emscripten links these in
+// itself, so unlike the desktop table they are ordinary symbols rather than
+// pointers looked up at run time -- but they are still declared here rather
+// than included, for the same reason: a runtime that declares what it calls
+// cannot be broken by a header that is not there.
+#if defined(NEXA_WASM)
+extern "C" {
+__nexa_GLuint glCreateShader(__nexa_GLenum);
+void glShaderSource(__nexa_GLuint, __nexa_GLsizei, const __nexa_GLchar* const*, const __nexa_GLint*);
+void glCompileShader(__nexa_GLuint);
+void glGetShaderiv(__nexa_GLuint, __nexa_GLenum, __nexa_GLint*);
+void glDeleteShader(__nexa_GLuint);
+__nexa_GLuint glCreateProgram(void);
+void glAttachShader(__nexa_GLuint, __nexa_GLuint);
+void glLinkProgram(__nexa_GLuint);
+void glGetProgramiv(__nexa_GLuint, __nexa_GLenum, __nexa_GLint*);
+void glUseProgram(__nexa_GLuint);
+__nexa_GLint glGetUniformLocation(__nexa_GLuint, const __nexa_GLchar*);
+__nexa_GLint glGetAttribLocation(__nexa_GLuint, const __nexa_GLchar*);
+void glUniformMatrix4fv(__nexa_GLint, __nexa_GLsizei, __nexa_GLubyte, const __nexa_GLfloat*);
+void glGenBuffers(__nexa_GLsizei, __nexa_GLuint*);
+void glBindBuffer(__nexa_GLenum, __nexa_GLuint);
+void glBufferData(__nexa_GLenum, __nexa_GLsizeiptr, const void*, __nexa_GLenum);
+void glEnableVertexAttribArray(__nexa_GLuint);
+void glVertexAttribPointer(__nexa_GLuint, __nexa_GLint, __nexa_GLenum, __nexa_GLubyte, __nexa_GLsizei, const void*);
+void glDrawArrays(__nexa_GLenum, __nexa_GLint, __nexa_GLsizei);
+// The seven the two backends share, which on wasm are linked rather than
+// looked up; __nexa_g3_load_gl points the table at them.
+void glClearColor(__nexa_GLfloat, __nexa_GLfloat, __nexa_GLfloat, __nexa_GLfloat);
+void glClear(__nexa_GLbitfield);
+void glEnable(__nexa_GLenum);
+void glDisable(__nexa_GLenum);
+void glCullFace(__nexa_GLenum);
+void glFrontFace(__nexa_GLenum);
+void glViewport(__nexa_GLint, __nexa_GLint, __nexa_GLsizei, __nexa_GLsizei);
+}
+#endif
 
 struct __nexa_GL {
     __nexa_pfn_glClearColor  ClearColor  = nullptr;
@@ -141,6 +203,12 @@ struct __nexa_G3State {
     float target[3] = {0.0f, 0.0f, 0.0f};
     float fov = 60.0f, znear = 0.1f, zfar = 500.0f;
 
+    // The camera, as matrices. The fixed-function pipeline takes these the
+    // moment they are built; WebGL has no such pipeline and needs them again
+    // at every draw, as a uniform, so they are kept rather than pushed.
+    float proj[16] = {0};
+    float view[16] = {0};
+
     // What the program asked for, and what it got. They differ only while
     // there is a renderer that is not built yet.
     std::string requested = "opengl";
@@ -153,6 +221,8 @@ struct __nexa_G3State {
     HWND hwnd = nullptr;
     HDC hdc = nullptr;
     HGLRC glrc = nullptr;
+#elif defined(__APPLE__) && !defined(NEXA_WASM)
+    void* libgl = nullptr;
 #elif defined(__linux__) && !defined(NEXA_WASM)
     Display* dpy = nullptr;
     Window win = 0;
@@ -210,20 +280,76 @@ static void __nexa_g3_look_at(float* m, const float* eye, const float* at) {
     m[3] = 0.0f; m[7] = 0.0f; m[11] = 0.0f; m[15] = 1.0f;
 }
 
-// Push the camera into the fixed-function pipeline. Called once per frame from
-// gfx3d.clear, which is the point at which both matrices are known and the
-// window size is settled.
+// Multiply two column-major 4x4s: out = a * b. Only WebGL needs it -- the
+// fixed-function pipeline multiplies projection by modelview itself -- but it
+// is arithmetic, not a backend, so it lives up here with the other two.
+static void __nexa_g3_mul4(float* out, const float* a, const float* b) {
+    for (int c = 0; c < 4; c++) {
+        for (int r = 0; r < 4; r++) {
+            out[c * 4 + r] = a[0 * 4 + r] * b[c * 4 + 0]
+                           + a[1 * 4 + r] * b[c * 4 + 1]
+                           + a[2 * 4 + r] * b[c * 4 + 2]
+                           + a[3 * 4 + r] * b[c * 4 + 3];
+        }
+    }
+}
+
+// --- the vertex batch -------------------------------------------------------
+//
+// Every shape in this module is triangles with a colour per vertex. They are
+// written here once and handed to the platform to submit, because the two
+// backends want them in completely different shapes: desktop OpenGL replays
+// them one at a time through the fixed-function pipeline, and WebGL -- which
+// has no fixed-function pipeline at all, no glBegin and no matrix stack --
+// uploads them to a buffer for a shader to read. Keeping the geometry on this
+// side of that split means gfx3d.cube is six faces of two triangles exactly
+// once, whichever backend is underneath.
+//
+// The buffer is fixed and sized for the largest shape the module can draw, so
+// a frame costs no allocation. gfx3d.cube is 36 vertices; nothing here comes
+// close to the cap.
+
+#define NEXA_G3_MAXVERTS 1024
+
+static float __nexa_g3_vb[NEXA_G3_MAXVERTS * 6];  // x, y, z, r, g, b
+static int   __nexa_g3_vn = 0;
+static int   __nexa_g3_two_sided = 0;
+
+// Declared here, defined by whichever backend is compiled in.
+static void __nexa_g3_platform_camera(void);
+static void __nexa_g3_batch_submit(void);
+
+static void __nexa_g3_batch_begin(int twoSided) {
+    __nexa_g3_vn = 0;
+    __nexa_g3_two_sided = twoSided;
+}
+
+// Colours arrive 0..255 as they do everywhere in gfx; the batch keeps them
+// 0..1, which is what both backends want in the end.
+static void __nexa_g3_batch_vert(float x, float y, float z, float r, float g, float b) {
+    if (__nexa_g3_vn >= NEXA_G3_MAXVERTS) return;
+    float* v = &__nexa_g3_vb[__nexa_g3_vn * 6];
+    v[0] = x; v[1] = y; v[2] = z;
+    v[3] = r * (1.0f / 255.0f);
+    v[4] = g * (1.0f / 255.0f);
+    v[5] = b * (1.0f / 255.0f);
+    __nexa_g3_vn++;
+}
+
+static void __nexa_g3_batch_end(void) {
+    if (__nexa_g3_vn > 0) __nexa_g3_batch_submit();
+    __nexa_g3_vn = 0;
+}
+
+// Rebuild the camera for this frame. Called once from gfx3d.clear, which is
+// the point at which both matrices are known and the window size has settled.
+// What is done with them afterwards is the backend's business.
 static void __nexa_g3_apply_camera(void) {
-    if (!__nexa_gl.loaded || !__nexa_g3.ready) return;
-    float proj[16], view[16];
+    if (!__nexa_g3.ready) return;
     float aspect = (__nexa_g3.h > 0) ? (float)__nexa_g3.w / (float)__nexa_g3.h : 1.0f;
-    __nexa_g3_perspective(proj, __nexa_g3.fov, aspect, __nexa_g3.znear, __nexa_g3.zfar);
-    __nexa_g3_look_at(view, __nexa_g3.eye, __nexa_g3.target);
-    __nexa_gl.Viewport(0, 0, __nexa_g3.w, __nexa_g3.h);
-    __nexa_gl.MatrixMode(NEXA_GL_PROJECTION);
-    __nexa_gl.LoadMatrixf(proj);
-    __nexa_gl.MatrixMode(NEXA_GL_MODELVIEW);
-    __nexa_gl.LoadMatrixf(view);
+    __nexa_g3_perspective(__nexa_g3.proj, __nexa_g3.fov, aspect, __nexa_g3.znear, __nexa_g3.zfar);
+    __nexa_g3_look_at(__nexa_g3.view, __nexa_g3.eye, __nexa_g3.target);
+    __nexa_g3_platform_camera();
 }
 
 // --- monotonic clock, for the frame cap -------------------------------------
@@ -264,7 +390,7 @@ static void* __nexa_g3_sym(const char* name) {
 #if defined(_WIN32)
     if (!__nexa_g3_glmod) return nullptr;
     return (void*)GetProcAddress(__nexa_g3_glmod, name);
-#elif defined(__linux__) && !defined(NEXA_WASM)
+#elif !defined(NEXA_WASM) && (defined(__linux__) || defined(__APPLE__))
     if (!__nexa_g3.libgl) return nullptr;
     return dlsym(__nexa_g3.libgl, name);
 #else
@@ -283,10 +409,34 @@ static void* __nexa_g3_sym(const char* name) {
 // crashing on the first null pointer in the draw loop.
 static int __nexa_g3_load_gl(void) {
     if (__nexa_gl.loaded) return 1;
-#if defined(_WIN32)
+#if defined(NEXA_WASM)
+    // Nothing to open: Emscripten links the GL half of WebGL into the
+    // module, so the shared seven are taken by address rather than by name.
+    // The six fixed-function entries stay null; nothing on this backend
+    // calls them, because WebGL does not have them.
+    __nexa_gl.ClearColor = glClearColor;
+    __nexa_gl.Clear      = glClear;
+    __nexa_gl.Enable     = glEnable;
+    __nexa_gl.Disable    = glDisable;
+    __nexa_gl.CullFace   = glCullFace;
+    __nexa_gl.FrontFace  = glFrontFace;
+    __nexa_gl.Viewport   = glViewport;
+    __nexa_gl.loaded = 1;
+    return 1;
+#elif defined(_WIN32)
     if (!__nexa_g3_glmod) __nexa_g3_glmod = LoadLibraryA("opengl32.dll");
     if (!__nexa_g3_glmod) return 0;
-#elif defined(__linux__) && !defined(NEXA_WASM)
+#elif defined(__APPLE__)
+    // The framework binary, opened by path. Apple ships it on every machine,
+    // so there is nothing to install here either.
+    if (!__nexa_g3.libgl)
+        __nexa_g3.libgl = dlopen("/System/Library/Frameworks/OpenGL.framework/Versions/Current/OpenGL",
+                                 RTLD_LAZY | RTLD_LOCAL);
+    if (!__nexa_g3.libgl)
+        __nexa_g3.libgl = dlopen("/System/Library/Frameworks/OpenGL.framework/OpenGL",
+                                 RTLD_LAZY | RTLD_LOCAL);
+    if (!__nexa_g3.libgl) return 0;
+#elif defined(__linux__)
     if (!__nexa_g3.libgl) __nexa_g3.libgl = dlopen("libGL.so.1", RTLD_LAZY | RTLD_LOCAL);
     if (!__nexa_g3.libgl) __nexa_g3.libgl = dlopen("libGL.so", RTLD_LAZY | RTLD_LOCAL);
     if (!__nexa_g3.libgl) return 0;
@@ -412,6 +562,242 @@ static void __nexa_g3_platform_close(void) {
     __nexa_g3.hwnd = nullptr;
 }
 
+// --- macOS: Cocoa + NSOpenGL ------------------------------------------------
+//
+// The window is the one std/gfx already opens on this platform, with an
+// NSOpenGLContext attached to its view instead of a bitmap blitted into it.
+// The pixel format asks for NSOpenGLProfileVersionLegacy on purpose: that is
+// the profile that still has the fixed-function pipeline this runtime draws
+// with. A core profile would compile and then draw nothing, because glBegin
+// does not exist in one.
+//
+// OpenGL is deprecated on macOS and has been since 10.14. Deprecated is not
+// removed -- it still runs -- but a Metal backend is what this will eventually
+// want, and that is a different renderer rather than a port of this one.
+
+#elif defined(__APPLE__)
+
+@interface __NexaG3Delegate : NSObject <NSWindowDelegate>
+@end
+@implementation __NexaG3Delegate
+- (BOOL)windowShouldClose:(id)sender {
+    (void)sender;
+    __nexa_g3.closed = 1;
+    return YES;
+}
+@end
+
+@interface __NexaG3View : NSView
+@end
+@implementation __NexaG3View
+- (BOOL)isOpaque { return YES; }
+- (BOOL)acceptsFirstResponder { return YES; }
+@end
+
+static NSWindow* __nexa_g3_nswin = nil;
+static __NexaG3View* __nexa_g3_nsview = nil;
+static __NexaG3Delegate* __nexa_g3_nsdel = nil;
+static NSOpenGLContext* __nexa_g3_nsctx = nil;
+
+static int __nexa_g3_platform_open(const std::string& title, int w, int h) {
+    if (!__nexa_g3_load_gl()) return 0;
+    @autoreleasepool {
+        [NSApplication sharedApplication];
+        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+        static int launched = 0;
+        if (!launched) {
+            [NSApp finishLaunching];
+            launched = 1;
+        }
+        NSRect content = NSMakeRect(0, 0, (CGFloat)w, (CGFloat)h);
+        NSUInteger style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
+                           NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable;
+        __nexa_g3_nswin = [[NSWindow alloc] initWithContentRect:content
+            styleMask:style backing:NSBackingStoreBuffered defer:NO];
+        if (!__nexa_g3_nswin) return 0;
+        [__nexa_g3_nswin setReleasedWhenClosed:NO];
+        [__nexa_g3_nswin setTitle:[NSString stringWithUTF8String:title.c_str()]];
+
+        __nexa_g3_nsview = [[__NexaG3View alloc] initWithFrame:content];
+        [__nexa_g3_nswin setContentView:__nexa_g3_nsview];
+        __nexa_g3_nsdel = [[__NexaG3Delegate alloc] init];
+        [__nexa_g3_nswin setDelegate:__nexa_g3_nsdel];
+
+        NSOpenGLPixelFormatAttribute attrs[] = {
+            NSOpenGLPFAOpenGLProfile, NSOpenGLProfileVersionLegacy,
+            NSOpenGLPFADoubleBuffer,
+            NSOpenGLPFAColorSize, 24,
+            NSOpenGLPFAAlphaSize, 8,
+            NSOpenGLPFADepthSize, 24,
+            0
+        };
+        NSOpenGLPixelFormat* pf = [[NSOpenGLPixelFormat alloc] initWithAttributes:attrs];
+        if (!pf) return 0;
+        __nexa_g3_nsctx = [[NSOpenGLContext alloc] initWithFormat:pf shareContext:nil];
+        if (!__nexa_g3_nsctx) return 0;
+        [__nexa_g3_nsctx setView:__nexa_g3_nsview];
+        [__nexa_g3_nsctx makeCurrentContext];
+
+        [__nexa_g3_nswin center];
+        [__nexa_g3_nswin makeKeyAndOrderFront:nil];
+        [NSApp activateIgnoringOtherApps:YES];
+        return 1;
+    }
+}
+
+static void __nexa_g3_platform_poll(void) {
+    @autoreleasepool {
+        // The drawable follows the view, so the size is read back rather than
+        // tracked through a resize notification.
+        if (__nexa_g3_nsview) {
+            NSRect b = [__nexa_g3_nsview bounds];
+            if ((int)b.size.width > 0) __nexa_g3.w = (int)b.size.width;
+            if ((int)b.size.height > 0) __nexa_g3.h = (int)b.size.height;
+        }
+        for (;;) {
+            NSEvent* ev = [NSApp nextEventMatchingMask:NSEventMaskAny
+                                             untilDate:[NSDate distantPast]
+                                                inMode:NSDefaultRunLoopMode
+                                               dequeue:YES];
+            if (!ev) break;
+            [NSApp sendEvent:ev];
+        }
+        // A context whose view has been resized has to be told, or it keeps
+        // drawing at the size it was made with.
+        if (__nexa_g3_nsctx) [__nexa_g3_nsctx update];
+    }
+}
+
+static void __nexa_g3_platform_swap(void) {
+    if (__nexa_g3_nsctx) [__nexa_g3_nsctx flushBuffer];
+}
+
+static void __nexa_g3_platform_close(void) {
+    @autoreleasepool {
+        [NSOpenGLContext clearCurrentContext];
+        if (__nexa_g3_nsctx) { [__nexa_g3_nsctx clearDrawable]; __nexa_g3_nsctx = nil; }
+        if (__nexa_g3_nswin) {
+            [__nexa_g3_nswin setDelegate:nil];
+            [__nexa_g3_nswin close];
+            __nexa_g3_nswin = nil;
+        }
+        __nexa_g3_nsview = nil;
+        __nexa_g3_nsdel = nil;
+    }
+}
+
+// --- wasm: Emscripten + WebGL -----------------------------------------------
+//
+// The one backend that is not OpenGL 1.1, because WebGL is not. There is no
+// glBegin here, no matrix stack and no fixed-function anything: a triangle
+// reaches the screen only through a shader reading a buffer. So this half
+// carries what the others get from the driver -- a vertex shader that applies
+// the camera, a fragment shader that paints the colour, and one buffer the
+// batch is uploaded into.
+//
+// The GLSL is compiled by the browser at run time from the strings below, so
+// there is still no shader compiler in the build and nothing to install. The
+// two matrices are multiplied here rather than by a pipeline, which is what
+// __nexa_g3_mul4 is for.
+
+#elif defined(NEXA_WASM)
+
+static __nexa_GLuint __nexa_g3_prog = 0;
+static __nexa_GLuint __nexa_g3_vbo = 0;
+static __nexa_GLint  __nexa_g3_u_mvp = -1;
+static __nexa_GLint  __nexa_g3_a_pos = -1;
+static __nexa_GLint  __nexa_g3_a_col = -1;
+
+static const char* __nexa_g3_vs =
+    "attribute vec3 aPos;\n"
+    "attribute vec3 aCol;\n"
+    "uniform mat4 uMVP;\n"
+    "varying vec3 vCol;\n"
+    "void main() {\n"
+    "  vCol = aCol;\n"
+    "  gl_Position = uMVP * vec4(aPos, 1.0);\n"
+    "}\n";
+
+static const char* __nexa_g3_fs =
+    "precision mediump float;\n"
+    "varying vec3 vCol;\n"
+    "void main() {\n"
+    "  gl_FragColor = vec4(vCol, 1.0);\n"
+    "}\n";
+
+static __nexa_GLuint __nexa_g3_compile(__nexa_GLenum kind, const char* src) {
+    __nexa_GLuint s = glCreateShader(kind);
+    if (!s) return 0;
+    glShaderSource(s, 1, &src, nullptr);
+    glCompileShader(s);
+    __nexa_GLint ok = 0;
+    glGetShaderiv(s, NEXA_GL_COMPILE_STATUS, &ok);
+    if (!ok) { glDeleteShader(s); return 0; }
+    return s;
+}
+
+static int __nexa_g3_build_program(void) {
+    __nexa_GLuint vs = __nexa_g3_compile(NEXA_GL_VERTEX_SHADER, __nexa_g3_vs);
+    __nexa_GLuint fs = __nexa_g3_compile(NEXA_GL_FRAGMENT_SHADER, __nexa_g3_fs);
+    if (!vs || !fs) return 0;
+    __nexa_g3_prog = glCreateProgram();
+    if (!__nexa_g3_prog) return 0;
+    glAttachShader(__nexa_g3_prog, vs);
+    glAttachShader(__nexa_g3_prog, fs);
+    glLinkProgram(__nexa_g3_prog);
+    __nexa_GLint ok = 0;
+    glGetProgramiv(__nexa_g3_prog, NEXA_GL_LINK_STATUS, &ok);
+    if (!ok) { __nexa_g3_prog = 0; return 0; }
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    __nexa_g3_u_mvp = glGetUniformLocation(__nexa_g3_prog, "uMVP");
+    __nexa_g3_a_pos = glGetAttribLocation(__nexa_g3_prog, "aPos");
+    __nexa_g3_a_col = glGetAttribLocation(__nexa_g3_prog, "aCol");
+    glGenBuffers(1, &__nexa_g3_vbo);
+    return __nexa_g3_vbo != 0;
+}
+
+static int __nexa_g3_platform_open(const std::string& title, int w, int h) {
+    (void)title;  // a page has a <title>; the canvas has no name of its own
+    EmscriptenWebGLContextAttributes attrs;
+    emscripten_webgl_init_context_attributes(&attrs);
+    attrs.alpha = 0;
+    attrs.depth = 1;          // the whole point of this module
+    attrs.stencil = 0;
+    attrs.antialias = 1;
+    attrs.majorVersion = 1;   // WebGL 1 / GLES2, which every browser has
+    attrs.minorVersion = 0;
+    EMSCRIPTEN_WEBGL_CONTEXT_HANDLE ctx = emscripten_webgl_create_context("#canvas", &attrs);
+    if (ctx <= 0) return 0;
+    if (emscripten_webgl_make_context_current(ctx) != EMSCRIPTEN_RESULT_SUCCESS) return 0;
+    emscripten_set_canvas_element_size("#canvas", w, h);
+    if (!__nexa_g3_load_gl()) return 0;
+    if (!__nexa_g3_build_program()) return 0;
+    return 1;
+}
+
+static void __nexa_g3_platform_poll(void) {
+    // Input arrives through browser callbacks rather than a queue to drain,
+    // and this module reads none yet, so there is nothing here to pump. The
+    // canvas is re-read in case the page resized it.
+    int cw = 0, ch = 0;
+    emscripten_get_canvas_element_size("#canvas", &cw, &ch);
+    if (cw > 0) __nexa_g3.w = cw;
+    if (ch > 0) __nexa_g3.h = ch;
+}
+
+static void __nexa_g3_platform_swap(void) {
+    // A browser presents the canvas when the frame yields, so there is no
+    // buffer to swap; what matters is giving the page a chance to composite.
+    // NexaC links --wasm gfx3d builds with -sASYNCIFY so this can suspend.
+    emscripten_sleep(0);
+}
+
+static void __nexa_g3_platform_close(void) {
+    // The canvas belongs to the page, not to the program: there is nothing to
+    // destroy, and a closed gfx3d window on wasm simply stops being drawn to.
+}
+
 // --- Linux: X11 + GLX -------------------------------------------------------
 
 #elif defined(__linux__) && !defined(NEXA_WASM)
@@ -499,10 +885,10 @@ static void __nexa_g3_platform_close(void) {
 
 // --- everywhere else --------------------------------------------------------
 //
-// macOS wants NSOpenGLView and an Objective-C++ slice; wasm wants WebGL, which
-// is a different API and not OpenGL 1.1 at all. Neither is written yet, so
-// gfx3d.open answers 0 and the rest of the module does nothing -- exactly what
-// every gfx call does before the first gfx.open.
+// Windows, macOS, Linux and the browser all have a backend above. Anything
+// else -- a BSD without X11, a WASI build, a platform nobody has tried --
+// gets this, where gfx3d.open answers 0 and the rest of the module does
+// nothing: exactly what every gfx call does before the first gfx.open.
 
 #else
 
@@ -513,6 +899,80 @@ static int  __nexa_g3_platform_open(const std::string& title, int w, int h) {
 static void __nexa_g3_platform_poll(void) {}
 static void __nexa_g3_platform_swap(void) {}
 static void __nexa_g3_platform_close(void) {}
+
+
+#endif
+
+// --- submitting the batch ---------------------------------------------------
+//
+// The two halves of the split this module is built around. Above this line,
+// one description of the geometry; below it, the two ways a machine will take
+// it.
+
+#if defined(NEXA_WASM)
+
+// WebGL keeps no camera of its own, so the matrices go in as a uniform at
+// draw time. Only the viewport can be set here.
+static void __nexa_g3_platform_camera(void) {
+    glViewport(0, 0, __nexa_g3.w, __nexa_g3.h);
+}
+
+static void __nexa_g3_batch_submit(void) {
+    if (!__nexa_g3_prog || !__nexa_g3_vbo) return;
+    if (__nexa_g3_two_sided) glDisable(NEXA_GL_CULL_FACE);
+
+    float mvp[16];
+    __nexa_g3_mul4(mvp, __nexa_g3.proj, __nexa_g3.view);
+
+    glUseProgram(__nexa_g3_prog);
+    glUniformMatrix4fv(__nexa_g3_u_mvp, 1, 0, mvp);
+    glBindBuffer(NEXA_GL_ARRAY_BUFFER, __nexa_g3_vbo);
+    glBufferData(NEXA_GL_ARRAY_BUFFER,
+                 (__nexa_GLsizeiptr)(__nexa_g3_vn * 6 * (int)sizeof(float)),
+                 __nexa_g3_vb, NEXA_GL_DYNAMIC_DRAW);
+
+    const __nexa_GLsizei stride = (__nexa_GLsizei)(6 * sizeof(float));
+    if (__nexa_g3_a_pos >= 0) {
+        glEnableVertexAttribArray((__nexa_GLuint)__nexa_g3_a_pos);
+        glVertexAttribPointer((__nexa_GLuint)__nexa_g3_a_pos, 3, NEXA_GL_FLOAT, 0, stride, (const void*)0);
+    }
+    if (__nexa_g3_a_col >= 0) {
+        glEnableVertexAttribArray((__nexa_GLuint)__nexa_g3_a_col);
+        glVertexAttribPointer((__nexa_GLuint)__nexa_g3_a_col, 3, NEXA_GL_FLOAT, 0, stride,
+                              (const void*)(3 * sizeof(float)));
+    }
+    glDrawArrays(NEXA_GL_TRIANGLES, 0, __nexa_g3_vn);
+
+    if (__nexa_g3_two_sided) glEnable(NEXA_GL_CULL_FACE);
+}
+
+#else
+
+// The fixed-function pipeline takes the camera as two matrices and keeps it,
+// and takes the geometry a vertex at a time.
+static void __nexa_g3_platform_camera(void) {
+    if (!__nexa_gl.loaded) return;
+    __nexa_gl.Viewport(0, 0, __nexa_g3.w, __nexa_g3.h);
+    __nexa_gl.MatrixMode(NEXA_GL_PROJECTION);
+    __nexa_gl.LoadMatrixf(__nexa_g3.proj);
+    __nexa_gl.MatrixMode(NEXA_GL_MODELVIEW);
+    __nexa_gl.LoadMatrixf(__nexa_g3.view);
+}
+
+static void __nexa_g3_batch_submit(void) {
+    if (!__nexa_gl.loaded) return;
+    if (__nexa_g3_two_sided) __nexa_gl.Disable(NEXA_GL_CULL_FACE);
+    __nexa_gl.Begin(NEXA_GL_TRIANGLES);
+    for (int i = 0; i < __nexa_g3_vn; i++) {
+        const float* v = &__nexa_g3_vb[i * 6];
+        __nexa_gl.Color3ub((__nexa_GLubyte)(v[3] * 255.0f + 0.5f),
+                           (__nexa_GLubyte)(v[4] * 255.0f + 0.5f),
+                           (__nexa_GLubyte)(v[5] * 255.0f + 0.5f));
+        __nexa_gl.Vertex3f(v[0], v[1], v[2]);
+    }
+    __nexa_gl.End();
+    if (__nexa_g3_two_sided) __nexa_gl.Enable(NEXA_GL_CULL_FACE);
+}
 
 #endif
 )NEXA_GFX3D";
@@ -619,14 +1079,11 @@ static void __nexa_gfx3d_tri(double x1, double y1, double z1,
     // inside -- but a single triangle has no inside, and one that vanished
     // when the camera passed behind it would read as a bug in the program
     // rather than as a winding rule the program never asked about.
-    __nexa_gl.Disable(NEXA_GL_CULL_FACE);
-    __nexa_gl.Begin(NEXA_GL_TRIANGLES);
-    __nexa_gl.Color3ub((__nexa_GLubyte)r, (__nexa_GLubyte)g, (__nexa_GLubyte)b);
-    __nexa_gl.Vertex3f((float)x1, (float)y1, (float)z1);
-    __nexa_gl.Vertex3f((float)x2, (float)y2, (float)z2);
-    __nexa_gl.Vertex3f((float)x3, (float)y3, (float)z3);
-    __nexa_gl.End();
-    __nexa_gl.Enable(NEXA_GL_CULL_FACE);
+    __nexa_g3_batch_begin(1);
+    __nexa_g3_batch_vert((float)x1, (float)y1, (float)z1, (float)r, (float)g, (float)b);
+    __nexa_g3_batch_vert((float)x2, (float)y2, (float)z2, (float)r, (float)g, (float)b);
+    __nexa_g3_batch_vert((float)x3, (float)y3, (float)z3, (float)r, (float)g, (float)b);
+    __nexa_g3_batch_end();
 }
 
 // A cube of six faces, each two triangles, wound counter-clockwise seen from
@@ -665,18 +1122,16 @@ static void __nexa_gfx3d_cube(double cx, double cy, double cz, double size,
     };
     static const float shade[6] = {1.00f, 0.72f, 0.55f, 0.72f, 0.88f, 0.45f};
 
-    __nexa_gl.Begin(NEXA_GL_TRIANGLES);
+    __nexa_g3_batch_begin(0);
     for (int f = 0; f < 6; f++) {
         float k = shade[f];
-        __nexa_gl.Color3ub((__nexa_GLubyte)((float)r * k),
-                           (__nexa_GLubyte)((float)g * k),
-                           (__nexa_GLubyte)((float)b * k));
         for (int i = 0; i < 6; i++) {
             int c = face[f][i];
-            __nexa_gl.Vertex3f(x + sx[c] * h, y + sy[c] * h, z + sz[c] * h);
+            __nexa_g3_batch_vert(x + sx[c] * h, y + sy[c] * h, z + sz[c] * h,
+                                 (float)r * k, (float)g * k, (float)b * k);
         }
     }
-    __nexa_gl.End();
+    __nexa_g3_batch_end();
 }
 
 static void __nexa_gfx3d_maxfps(int fps) {
