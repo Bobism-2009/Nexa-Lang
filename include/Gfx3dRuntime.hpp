@@ -99,6 +99,7 @@ typedef long          __nexa_GLsizeiptr;
 
 #define NEXA_GL_DEPTH_BUFFER_BIT 0x00000100u
 #define NEXA_GL_COLOR_BUFFER_BIT 0x00004000u
+#define NEXA_GL_LINES            0x0001u
 #define NEXA_GL_TRIANGLES        0x0004u
 #define NEXA_GL_DEPTH_TEST       0x0B71u
 #define NEXA_GL_CULL_FACE        0x0B44u
@@ -327,15 +328,22 @@ static void __nexa_g3_mul4(float* out, const float* a, const float* b) {
 // side of that split means gfx3d.cube is six faces of two triangles exactly
 // once, whichever backend is underneath.
 //
-// The buffer is fixed and sized for the largest shape the module can draw, so
-// a frame costs no allocation. gfx3d.cube is 36 vertices; nothing here comes
-// close to the cap.
+// The buffer is fixed, so a frame costs no allocation, and a shape that
+// outgrows it is submitted in pieces rather than truncated -- a sphere is
+// thousands of vertices and used to lose everything past the first 1024
+// silently. The flush happens on a primitive boundary, which is what
+// __nexa_g3_prim_size is for: half a triangle drawn on its own is worse
+// than the truncation it replaced.
 
-#define NEXA_G3_MAXVERTS 1024
+#define NEXA_G3_MAXVERTS 3072
 
 static float __nexa_g3_vb[NEXA_G3_MAXVERTS * 6];  // x, y, z, r, g, b
 static int   __nexa_g3_vn = 0;
 static int   __nexa_g3_two_sided = 0;
+// 0 draws triangles, 1 draws lines. Lines are what gfx3d.line3 and
+// gfx3d.grid want, and the only thing that changes is the mode both
+// backends are asked to draw in.
+static int   __nexa_g3_prim = 0;
 
 // Declared here, defined by whichever backend is compiled in.
 static void __nexa_g3_platform_camera(void);
@@ -345,14 +353,29 @@ static void __nexa_g3_batch_submit(void);
 // reading, and those collectors run before this file gets to input.
 static int __nexa_g3_focused(void);
 
+static int __nexa_g3_prim_size(void) { return __nexa_g3_prim ? 2 : 3; }
+
 static void __nexa_g3_batch_begin(int twoSided) {
     __nexa_g3_vn = 0;
     __nexa_g3_two_sided = twoSided;
+    __nexa_g3_prim = 0;
+}
+
+static void __nexa_g3_batch_begin_lines(void) {
+    __nexa_g3_vn = 0;
+    __nexa_g3_two_sided = 1;  // a line has no facing to cull
+    __nexa_g3_prim = 1;
 }
 
 // Colours arrive 0..255 as they do everywhere in gfx; the batch keeps them
 // 0..1, which is what both backends want in the end.
 static void __nexa_g3_batch_vert(float x, float y, float z, float r, float g, float b) {
+    // Full, and on a whole primitive: send what there is and carry on.
+    if (__nexa_g3_vn >= NEXA_G3_MAXVERTS - __nexa_g3_prim_size()
+            && __nexa_g3_vn % __nexa_g3_prim_size() == 0) {
+        __nexa_g3_batch_submit();
+        __nexa_g3_vn = 0;
+    }
     if (__nexa_g3_vn >= NEXA_G3_MAXVERTS) return;
     float* v = &__nexa_g3_vb[__nexa_g3_vn * 6];
     v[0] = x; v[1] = y; v[2] = z;
@@ -1327,6 +1350,218 @@ static void __nexa_g3_read_mouse(void) {
 #endif
 }
 
+
+// --- shading ----------------------------------------------------------------
+//
+// There is no gfx3d.light, and these shapes still have to be shape-shaped. A
+// cube can fake it -- six flat faces, six constants, which is what this module
+// did until now -- but that trick has nowhere to go on a sphere, where the
+// surface turns continuously and a single colour comes out as a circle.
+//
+// So brightness is computed from the surface direction against one fixed
+// direction that never moves and is not a light a program can place. It is the
+// smallest thing that makes a curved shape read as curved, and it costs
+// nothing at all to draw: the batch already carries a colour per vertex, and
+// both backends interpolate that across a triangle -- glColor3ub under the
+// fixed-function pipeline, a `varying vec3` in the WebGL shader. Shading a
+// vertex is therefore just picking its colour.
+//
+// Which is also why curved shapes here are smooth and flat ones are faceted,
+// from one mechanism: a sphere hands each vertex the direction it really
+// points and the interpolation does the rest, while a box hands all three
+// vertices of a face the face's own direction, so the face stays flat and its
+// edges stay sharp.
+
+static const float __nexa_g3_lx = -0.400f;   // already unit length
+static const float __nexa_g3_ly =  0.821f;
+static const float __nexa_g3_lz =  0.408f;
+static const float __nexa_g3_ambient = 0.34f;
+
+// How lit a surface pointing this way is, from 0.34 (facing away) to 1.
+static float __nexa_g3_shade(float nx, float ny, float nz) {
+    float len = std::sqrt(nx * nx + ny * ny + nz * nz);
+    if (len < 1e-8f) return 1.0f;
+    float d = (nx * __nexa_g3_lx + ny * __nexa_g3_ly + nz * __nexa_g3_lz) / len;
+    // A two-sided shape is lit from either face; a solid one has its back
+    // faces culled before they are ever seen, so the clamp costs it nothing.
+    if (__nexa_g3_two_sided) { if (d < 0.0f) d = -d; }
+    else if (d < 0.0f) d = 0.0f;
+    return __nexa_g3_ambient + (1.0f - __nexa_g3_ambient) * d;
+}
+
+// One vertex, shaded by the direction the surface points THERE. Curved
+// surfaces pass the true normal at the point and come out smooth.
+static void __nexa_g3_vert_n(float x, float y, float z,
+                             float nx, float ny, float nz,
+                             float r, float g, float b) {
+    float k = __nexa_g3_shade(nx, ny, nz);
+    __nexa_g3_batch_vert(x, y, z, r * k, g * k, b * k);
+}
+
+// One flat triangle: the normal is the face's own, so all three corners get
+// the same brightness and the edge to the next face stays visible.
+static void __nexa_g3_face(float ax, float ay, float az,
+                           float bx, float by, float bz,
+                           float cx, float cy, float cz,
+                           float r, float g, float b) {
+    float ux = bx - ax, uy = by - ay, uz = bz - az;
+    float vx = cx - ax, vy = cy - ay, vz = cz - az;
+    float nx = uy * vz - uz * vy;
+    float ny = uz * vx - ux * vz;
+    float nz = ux * vy - uy * vx;
+    float k = __nexa_g3_shade(nx, ny, nz);
+    __nexa_g3_batch_vert(ax, ay, az, r * k, g * k, b * k);
+    __nexa_g3_batch_vert(bx, by, bz, r * k, g * k, b * k);
+    __nexa_g3_batch_vert(cx, cy, cz, r * k, g * k, b * k);
+}
+
+// --- shape geometry ---------------------------------------------------------
+//
+// How round a round thing is. Every curved shape below is this many segments
+// around its axis, and half as many rings along it, which is the trade a
+// module with no level of detail has to pick once.
+#define NEXA_G3_SEG 24
+
+// Two unit vectors perpendicular to d and to each other. Any pair will do --
+// a surface of revolution has no preferred seam -- so this takes the axis
+// least aligned with d and works from there, which avoids the degenerate case
+// of crossing d with something parallel to it.
+static void __nexa_g3_basis(const float* d, float* u, float* v) {
+    float ax = std::fabs(d[0]), ay = std::fabs(d[1]), az = std::fabs(d[2]);
+    float t[3] = {0.0f, 0.0f, 0.0f};
+    if (ax <= ay && ax <= az) t[0] = 1.0f;
+    else if (ay <= az) t[1] = 1.0f;
+    else t[2] = 1.0f;
+    u[0] = t[1] * d[2] - t[2] * d[1];
+    u[1] = t[2] * d[0] - t[0] * d[2];
+    u[2] = t[0] * d[1] - t[1] * d[0];
+    float ul = std::sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
+    if (ul < 1e-8f) ul = 1.0f;
+    u[0] /= ul; u[1] /= ul; u[2] /= ul;
+    v[0] = d[1] * u[2] - d[2] * u[1];
+    v[1] = d[2] * u[0] - d[0] * u[2];
+    v[2] = d[0] * u[1] - d[1] * u[0];
+}
+
+// The axis from a to b, as a unit vector and a length. A zero-length axis has
+// no direction to pick, so +Y stands in and the caller draws something
+// degenerate rather than nothing -- the same spirit as gfx.fill_circle with a
+// radius of 0 drawing one pixel.
+static float __nexa_g3_axis(const float* a, const float* b, float* d) {
+    d[0] = b[0] - a[0]; d[1] = b[1] - a[1]; d[2] = b[2] - a[2];
+    float len = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    if (len < 1e-8f) { d[0] = 0.0f; d[1] = 1.0f; d[2] = 0.0f; return 0.0f; }
+    d[0] /= len; d[1] /= len; d[2] /= len;
+    return len;
+}
+
+// One band of a surface of revolution, between two rings that share an axis.
+// Each ring has its own centre and radius, so this one function is the side of
+// a cylinder (equal radii), of a cone (one of them zero) and every slice of a
+// sphere or a capsule cap (both varying).
+//
+// The normal at a vertex leans along the axis by however fast the radius is
+// changing, which is what keeps a cone's side lit like a cone rather than like
+// a cylinder that happens to be pointy.
+static void __nexa_g3_band(const float* c0, float r0, const float* c1, float r1,
+                           const float* u, const float* v, const float* d,
+                           float nlean0, float nlean1,
+                           float r, float g, float b) {
+    const float twopi = 6.28318530717958647692f;
+    for (int i = 0; i < NEXA_G3_SEG; i++) {
+        float a0 = twopi * (float)i / (float)NEXA_G3_SEG;
+        float a1 = twopi * (float)(i + 1) / (float)NEXA_G3_SEG;
+        float ca0 = std::cos(a0), sa0 = std::sin(a0);
+        float ca1 = std::cos(a1), sa1 = std::sin(a1);
+
+        float ra0[3] = {u[0] * ca0 + v[0] * sa0, u[1] * ca0 + v[1] * sa0, u[2] * ca0 + v[2] * sa0};
+        float ra1[3] = {u[0] * ca1 + v[0] * sa1, u[1] * ca1 + v[1] * sa1, u[2] * ca1 + v[2] * sa1};
+
+        float p00[3] = {c0[0] + ra0[0] * r0, c0[1] + ra0[1] * r0, c0[2] + ra0[2] * r0};
+        float p01[3] = {c0[0] + ra1[0] * r0, c0[1] + ra1[1] * r0, c0[2] + ra1[2] * r0};
+        float p10[3] = {c1[0] + ra0[0] * r1, c1[1] + ra0[1] * r1, c1[2] + ra0[2] * r1};
+        float p11[3] = {c1[0] + ra1[0] * r1, c1[1] + ra1[1] * r1, c1[2] + ra1[2] * r1};
+
+        float n00[3] = {ra0[0] + d[0] * nlean0, ra0[1] + d[1] * nlean0, ra0[2] + d[2] * nlean0};
+        float n01[3] = {ra1[0] + d[0] * nlean0, ra1[1] + d[1] * nlean0, ra1[2] + d[2] * nlean0};
+        float n10[3] = {ra0[0] + d[0] * nlean1, ra0[1] + d[1] * nlean1, ra0[2] + d[2] * nlean1};
+        float n11[3] = {ra1[0] + d[0] * nlean1, ra1[1] + d[1] * nlean1, ra1[2] + d[2] * nlean1};
+
+        // Wound counter-clockwise seen from OUTSIDE, so back-face culling
+        // keeps the outside and drops the inside, as it does for gfx3d.box.
+        // With (u, v, d) right-handed, the order that faces outward is the
+        // one that walks the ring backwards: ring0-angle0, ring1-angle1,
+        // ring1-angle0. Taken the other way round every curved shape here is
+        // built inside-out, and looks it -- a sphere shows the inside of its
+        // own far wall through the near one.
+        __nexa_g3_vert_n(p00[0], p00[1], p00[2], n00[0], n00[1], n00[2], r, g, b);
+        __nexa_g3_vert_n(p11[0], p11[1], p11[2], n11[0], n11[1], n11[2], r, g, b);
+        __nexa_g3_vert_n(p10[0], p10[1], p10[2], n10[0], n10[1], n10[2], r, g, b);
+
+        __nexa_g3_vert_n(p00[0], p00[1], p00[2], n00[0], n00[1], n00[2], r, g, b);
+        __nexa_g3_vert_n(p01[0], p01[1], p01[2], n01[0], n01[1], n01[2], r, g, b);
+        __nexa_g3_vert_n(p11[0], p11[1], p11[2], n11[0], n11[1], n11[2], r, g, b);
+    }
+}
+
+// A flat disc closing off an axis, facing `sign` along it.
+static void __nexa_g3_disc(const float* c, float rad,
+                           const float* u, const float* v, const float* d, float sign,
+                           float r, float g, float b) {
+    const float twopi = 6.28318530717958647692f;
+    float n[3] = {d[0] * sign, d[1] * sign, d[2] * sign};
+    for (int i = 0; i < NEXA_G3_SEG; i++) {
+        float a0 = twopi * (float)i / (float)NEXA_G3_SEG;
+        float a1 = twopi * (float)(i + 1) / (float)NEXA_G3_SEG;
+        float ca0 = std::cos(a0), sa0 = std::sin(a0);
+        float ca1 = std::cos(a1), sa1 = std::sin(a1);
+        float p0[3], p1[3];
+        for (int k = 0; k < 3; k++) {
+            p0[k] = c[k] + (u[k] * ca0 + v[k] * sa0) * rad;
+            p1[k] = c[k] + (u[k] * ca1 + v[k] * sa1) * rad;
+        }
+        // The winding flips with the facing, so both ends of a cylinder are
+        // outward-facing and neither is culled from outside.
+        __nexa_g3_vert_n(c[0], c[1], c[2], n[0], n[1], n[2], r, g, b);
+        if (sign > 0.0f) {
+            __nexa_g3_vert_n(p0[0], p0[1], p0[2], n[0], n[1], n[2], r, g, b);
+            __nexa_g3_vert_n(p1[0], p1[1], p1[2], n[0], n[1], n[2], r, g, b);
+        } else {
+            __nexa_g3_vert_n(p1[0], p1[1], p1[2], n[0], n[1], n[2], r, g, b);
+            __nexa_g3_vert_n(p0[0], p0[1], p0[2], n[0], n[1], n[2], r, g, b);
+        }
+    }
+}
+
+// A hemisphere cap on the end of an axis, bulging along `sign`.
+static void __nexa_g3_cap(const float* c, float rad,
+                          const float* u, const float* v, const float* d, float sign,
+                          float r, float g, float b) {
+    const int rings = NEXA_G3_SEG / 2;
+    const float halfpi = 1.57079632679489661923f;
+    float dd[3] = {d[0] * sign, d[1] * sign, d[2] * sign};
+    // (u, v, d) is right-handed, so (u, v, -d) is not: a cap bulging the
+    // other way has to swap the two ring vectors to stay wound outward.
+    // Without this the far hemisphere of every sphere and capsule is built
+    // inside-out, which shows up as a gash around the equator where the two
+    // halves disagree about which side they are.
+    const float* cu = (sign > 0.0f) ? u : v;
+    const float* cv = (sign > 0.0f) ? v : u;
+    for (int j = 0; j < rings; j++) {
+        float t0 = halfpi * (float)j / (float)rings;
+        float t1 = halfpi * (float)(j + 1) / (float)rings;
+        float r0 = rad * std::cos(t0), r1 = rad * std::cos(t1);
+        float h0 = rad * std::sin(t0), h1 = rad * std::sin(t1);
+        float c0[3] = {c[0] + dd[0] * h0, c[1] + dd[1] * h0, c[2] + dd[2] * h0};
+        float c1[3] = {c[0] + dd[0] * h1, c[1] + dd[1] * h1, c[2] + dd[2] * h1};
+        // On a sphere the normal is the direction from the centre, which is
+        // the ring direction leaned along the axis by tan of the latitude.
+        float l0 = (r0 > 1e-6f) ? (h0 / r0) : 1e6f;
+        float l1 = (r1 > 1e-6f) ? (h1 / r1) : 1e6f;
+        __nexa_g3_band(c0, r0, c1, r1, cu, cv, dd, l0, l1, r, g, b);
+    }
+}
+
 // --- submitting the batch ---------------------------------------------------
 //
 // The two halves of the split this module is built around. Above this line,
@@ -1365,7 +1600,7 @@ static void __nexa_g3_batch_submit(void) {
         glVertexAttribPointer((__nexa_GLuint)__nexa_g3_a_col, 3, NEXA_GL_FLOAT, 0, stride,
                               (const void*)(3 * sizeof(float)));
     }
-    glDrawArrays(NEXA_GL_TRIANGLES, 0, __nexa_g3_vn);
+    glDrawArrays(__nexa_g3_prim ? NEXA_GL_LINES : NEXA_GL_TRIANGLES, 0, __nexa_g3_vn);
 
     if (__nexa_g3_two_sided) glEnable(NEXA_GL_CULL_FACE);
 }
@@ -1386,7 +1621,7 @@ static void __nexa_g3_platform_camera(void) {
 static void __nexa_g3_batch_submit(void) {
     if (!__nexa_gl.loaded) return;
     if (__nexa_g3_two_sided) __nexa_gl.Disable(NEXA_GL_CULL_FACE);
-    __nexa_gl.Begin(NEXA_GL_TRIANGLES);
+    __nexa_gl.Begin(__nexa_g3_prim ? NEXA_GL_LINES : NEXA_GL_TRIANGLES);
     for (int i = 0; i < __nexa_g3_vn; i++) {
         const float* v = &__nexa_g3_vb[i * 6];
         __nexa_gl.Color3ub((__nexa_GLubyte)(v[3] * 255.0f + 0.5f),
@@ -1516,32 +1751,25 @@ static void __nexa_gfx3d_tri(double x1, double y1, double z1,
     __nexa_g3_batch_end();
 }
 
-// A cube of six faces, each two triangles, wound counter-clockwise seen from
-// outside so that back-face culling keeps the outside and drops the inside.
-//
-// There is no light in this module yet, and a cube drawn in one flat colour
-// reads as a hexagon rather than a box -- every face the same, no edge
-// anywhere. So each face is drawn at a fixed fraction of the colour asked
-// for. It is not lighting and does not move with the camera; it is a constant
-// per face, chosen so that the three faces a viewer can see at once are three
-// different shades and the shape reads as solid.
-static void __nexa_gfx3d_cube(double cx, double cy, double cz, double size,
-                              int r, int g, int b) {
+// An axis-aligned box, w by h by d, centred on x,y,z. gfx3d.cube is this with
+// one size for all three, and is kept because a cube is what most programs
+// actually want to say.
+static void __nexa_gfx3d_box(double cx, double cy, double cz,
+                             double w, double h, double d,
+                             int r, int g, int b) {
     if (!__nexa_g3.ready) return;
     if (r < 0) r = 0; if (r > 255) r = 255;
     if (g < 0) g = 0; if (g > 255) g = 255;
     if (b < 0) b = 0; if (b > 255) b = 255;
-    if (size < 0.0) size = -size;
-    float h = (float)size * 0.5f;
+    if (w < 0.0) w = -w;
+    if (h < 0.0) h = -h;
+    if (d < 0.0) d = -d;
+    float hx = (float)w * 0.5f, hy = (float)h * 0.5f, hz = (float)d * 0.5f;
     float x = (float)cx, y = (float)cy, z = (float)cz;
 
-    // The eight corners, as (x, y, z) offsets of +/- h.
     const float sx[8] = {-1, 1, 1, -1, -1, 1, 1, -1};
     const float sy[8] = {-1, -1, 1, 1, -1, -1, 1, 1};
     const float sz[8] = { 1, 1, 1,  1, -1, -1, -1, -1};
-
-    // Six faces as two triangles each, corners listed counter-clockwise from
-    // outside: front, right, back, left, top, bottom.
     static const int face[6][6] = {
         {0, 1, 2, 0, 2, 3},
         {1, 5, 6, 1, 6, 2},
@@ -1550,16 +1778,169 @@ static void __nexa_gfx3d_cube(double cx, double cy, double cz, double size,
         {3, 2, 6, 3, 6, 7},
         {4, 5, 1, 4, 1, 0},
     };
-    static const float shade[6] = {1.00f, 0.72f, 0.55f, 0.72f, 0.88f, 0.45f};
-
+    float p[8][3];
+    for (int i = 0; i < 8; i++) {
+        p[i][0] = x + sx[i] * hx;
+        p[i][1] = y + sy[i] * hy;
+        p[i][2] = z + sz[i] * hz;
+    }
     __nexa_g3_batch_begin(0);
     for (int f = 0; f < 6; f++) {
-        float k = shade[f];
-        for (int i = 0; i < 6; i++) {
-            int c = face[f][i];
-            __nexa_g3_batch_vert(x + sx[c] * h, y + sy[c] * h, z + sz[c] * h,
-                                 (float)r * k, (float)g * k, (float)b * k);
+        for (int t = 0; t < 2; t++) {
+            const int* q = &face[f][t * 3];
+            __nexa_g3_face(p[q[0]][0], p[q[0]][1], p[q[0]][2],
+                           p[q[1]][0], p[q[1]][1], p[q[1]][2],
+                           p[q[2]][0], p[q[2]][1], p[q[2]][2],
+                           (float)r, (float)g, (float)b);
         }
+    }
+    __nexa_g3_batch_end();
+}
+
+static void __nexa_gfx3d_cube(double cx, double cy, double cz, double size,
+                              int r, int g, int b) {
+    __nexa_gfx3d_box(cx, cy, cz, size, size, size, r, g, b);
+}
+
+// A sphere, centred and smooth: every vertex hands over the direction from the
+// centre, which is exactly the surface normal there, and the colour that
+// direction earns is interpolated across each triangle.
+static void __nexa_gfx3d_sphere(double cx, double cy, double cz, double rad,
+                                int r, int g, int b) {
+    if (!__nexa_g3.ready) return;
+    if (r < 0) r = 0; if (r > 255) r = 255;
+    if (g < 0) g = 0; if (g > 255) g = 255;
+    if (b < 0) b = 0; if (b > 255) b = 255;
+    if (rad < 0.0) rad = -rad;
+    float c[3] = {(float)cx, (float)cy, (float)cz};
+    float d[3] = {0.0f, 1.0f, 0.0f};
+    float u[3], v[3];
+    __nexa_g3_basis(d, u, v);
+    __nexa_g3_batch_begin(0);
+    // Two hemispheres back to back is the same rings the capsule caps use.
+    __nexa_g3_cap(c, (float)rad, u, v, d,  1.0f, (float)r, (float)g, (float)b);
+    __nexa_g3_cap(c, (float)rad, u, v, d, -1.0f, (float)r, (float)g, (float)b);
+    __nexa_g3_batch_end();
+}
+
+// A cylinder between two points, with flat ends.
+static void __nexa_gfx3d_cylinder(double ax, double ay, double az,
+                                  double bx, double by, double bz,
+                                  double rad, int r, int g, int b) {
+    if (!__nexa_g3.ready) return;
+    if (r < 0) r = 0; if (r > 255) r = 255;
+    if (g < 0) g = 0; if (g > 255) g = 255;
+    if (b < 0) b = 0; if (b > 255) b = 255;
+    if (rad < 0.0) rad = -rad;
+    float a[3] = {(float)ax, (float)ay, (float)az};
+    float bb[3] = {(float)bx, (float)by, (float)bz};
+    float d[3], u[3], v[3];
+    __nexa_g3_axis(a, bb, d);
+    __nexa_g3_basis(d, u, v);
+    __nexa_g3_batch_begin(0);
+    __nexa_g3_band(a, (float)rad, bb, (float)rad, u, v, d, 0.0f, 0.0f,
+                   (float)r, (float)g, (float)b);
+    __nexa_g3_disc(bb, (float)rad, u, v, d,  1.0f, (float)r, (float)g, (float)b);
+    __nexa_g3_disc(a,  (float)rad, u, v, d, -1.0f, (float)r, (float)g, (float)b);
+    __nexa_g3_batch_end();
+}
+
+// A capsule between two points: the same side as a cylinder, with a hemisphere
+// on each end instead of a flat disc. The two points are the ends of the LINE
+// the capsule is swept along, so the shape reaches rad beyond each of them --
+// a capsule from a to b is every point within rad of that segment, which is
+// what makes it the shape collision code and character controllers want.
+static void __nexa_gfx3d_capsule(double ax, double ay, double az,
+                                 double bx, double by, double bz,
+                                 double rad, int r, int g, int b) {
+    if (!__nexa_g3.ready) return;
+    if (r < 0) r = 0; if (r > 255) r = 255;
+    if (g < 0) g = 0; if (g > 255) g = 255;
+    if (b < 0) b = 0; if (b > 255) b = 255;
+    if (rad < 0.0) rad = -rad;
+    float a[3] = {(float)ax, (float)ay, (float)az};
+    float bb[3] = {(float)bx, (float)by, (float)bz};
+    float d[3], u[3], v[3];
+    float len = __nexa_g3_axis(a, bb, d);
+    __nexa_g3_basis(d, u, v);
+    __nexa_g3_batch_begin(0);
+    // A capsule whose ends meet is a sphere, and falls out of this without a
+    // special case: the side has no length and the two caps are the halves.
+    if (len > 1e-6f) {
+        __nexa_g3_band(a, (float)rad, bb, (float)rad, u, v, d, 0.0f, 0.0f,
+                       (float)r, (float)g, (float)b);
+    }
+    __nexa_g3_cap(bb, (float)rad, u, v, d,  1.0f, (float)r, (float)g, (float)b);
+    __nexa_g3_cap(a,  (float)rad, u, v, d, -1.0f, (float)r, (float)g, (float)b);
+    __nexa_g3_batch_end();
+}
+
+// A cone: a circle of radius rad at the first point, narrowing to the second.
+static void __nexa_gfx3d_cone(double ax, double ay, double az,
+                              double bx, double by, double bz,
+                              double rad, int r, int g, int b) {
+    if (!__nexa_g3.ready) return;
+    if (r < 0) r = 0; if (r > 255) r = 255;
+    if (g < 0) g = 0; if (g > 255) g = 255;
+    if (b < 0) b = 0; if (b > 255) b = 255;
+    if (rad < 0.0) rad = -rad;
+    float a[3] = {(float)ax, (float)ay, (float)az};
+    float bb[3] = {(float)bx, (float)by, (float)bz};
+    float d[3], u[3], v[3];
+    float len = __nexa_g3_axis(a, bb, d);
+    __nexa_g3_basis(d, u, v);
+    // The side leans away from the axis by the slope of the slant, which is
+    // what stops a squat cone being shaded like a tall one.
+    float lean = (len > 1e-6f) ? ((float)rad / len) : 0.0f;
+    __nexa_g3_batch_begin(0);
+    __nexa_g3_band(a, (float)rad, bb, 0.0f, u, v, d, lean, lean,
+                   (float)r, (float)g, (float)b);
+    __nexa_g3_disc(a, (float)rad, u, v, d, -1.0f, (float)r, (float)g, (float)b);
+    __nexa_g3_batch_end();
+}
+
+// A line in space, one pixel wide. Unlike gfx.line there is no thickness here:
+// a thick line in three dimensions is a shape rather than a stroke, and
+// gfx3d.capsule already is that shape.
+static void __nexa_gfx3d_line3(double ax, double ay, double az,
+                               double bx, double by, double bz,
+                               int r, int g, int b) {
+    if (!__nexa_g3.ready) return;
+    if (r < 0) r = 0; if (r > 255) r = 255;
+    if (g < 0) g = 0; if (g > 255) g = 255;
+    if (b < 0) b = 0; if (b > 255) b = 255;
+    __nexa_g3_batch_begin_lines();
+    // A line has no surface to catch the light, so it is drawn at the colour
+    // asked for rather than a shaded fraction of it.
+    __nexa_g3_batch_vert((float)ax, (float)ay, (float)az, (float)r, (float)g, (float)b);
+    __nexa_g3_batch_vert((float)bx, (float)by, (float)bz, (float)r, (float)g, (float)b);
+    __nexa_g3_batch_end();
+}
+
+// A reference grid on the y = 0 plane, `size` across and a line every `step`.
+// Nothing else in the module tells you where the ground is or how big anything
+// is; this is the one call whose whole job is to be looked at rather than
+// drawn to a design.
+static void __nexa_gfx3d_grid(double size, double step, int r, int g, int b) {
+    if (!__nexa_g3.ready) return;
+    if (r < 0) r = 0; if (r > 255) r = 255;
+    if (g < 0) g = 0; if (g > 255) g = 255;
+    if (b < 0) b = 0; if (b > 255) b = 255;
+    if (size < 0.0) size = -size;
+    if (step <= 0.0) step = 1.0;
+    // A grid finer than this is a solid sheet at any useful distance, and the
+    // clamp is what stops a step of 0.001 asking for a million lines.
+    int n = (int)(size / step);
+    if (n < 1) n = 1;
+    if (n > 200) n = 200;
+    float half = (float)(n * step) * 0.5f;
+    __nexa_g3_batch_begin_lines();
+    for (int i = 0; i <= n; i++) {
+        float t = -half + (float)i * (float)step;
+        __nexa_g3_batch_vert(t, 0.0f, -half, (float)r, (float)g, (float)b);
+        __nexa_g3_batch_vert(t, 0.0f,  half, (float)r, (float)g, (float)b);
+        __nexa_g3_batch_vert(-half, 0.0f, t, (float)r, (float)g, (float)b);
+        __nexa_g3_batch_vert( half, 0.0f, t, (float)r, (float)g, (float)b);
     }
     __nexa_g3_batch_end();
 }

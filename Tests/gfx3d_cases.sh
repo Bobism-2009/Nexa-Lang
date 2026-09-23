@@ -36,6 +36,17 @@
 # Tests/Lang/errors/gfx3d_*.nxa, where run_tests.sh already checks that NexaC
 # does the complaining and clang never gets to speak.
 #
+# NOT covered here, and worth saying so plainly: which way a triangle faces.
+# The curved shapes were first written wound inside-out, and every one of
+# these layers passed on them -- the call emitted, the runtime was present,
+# the program ran. What it looked like was a sphere with a gash through its
+# equator, because back-face culling dropped the near surface and left the
+# inside of the far one showing. Catching that needs a rendered frame and a
+# look at it, which this suite has no way to do: gfx3d draws through the GPU
+# and has no gfx3d.get to read a pixel back with. Change the winding in
+# __nexa_g3_band or the basis swap in __nexa_g3_cap and run
+# Examples/shapes3d_demo.nxa; the suite will not tell you.
+#
 # Skips are reported but do not fail the run. run_tests.sh only prints a
 # suite's output when it fails, so run this directly to see what a machine
 # actually ran:
@@ -96,6 +107,13 @@ expect_emit "clear"       '__nexa_gfx3d_clear\(1, 2, 3\)'               '    gfx
 expect_emit "camera"      '__nexa_gfx3d_camera\(1, 2, 3, 4, 5, 6\)'     '    gfx3d.camera(1, 2, 3, 4, 5, 6);'
 expect_emit "perspective" '__nexa_gfx3d_perspective\(60, 1, 99\)'       '    gfx3d.perspective(60, 1, 99);'
 expect_emit "cube"        '__nexa_gfx3d_cube\(1, 2, 3, 4, 5, 6, 7\)'    '    gfx3d.cube(1, 2, 3, 4, 5, 6, 7);'
+expect_emit "box"         '__nexa_gfx3d_box\(1, 2, 3, 4, 5, 6, 7, 8, 9\)' '    gfx3d.box(1, 2, 3, 4, 5, 6, 7, 8, 9);'
+expect_emit "sphere"      '__nexa_gfx3d_sphere\(1, 2, 3, 4, 5, 6, 7\)'  '    gfx3d.sphere(1, 2, 3, 4, 5, 6, 7);'
+expect_emit "capsule"     '__nexa_gfx3d_capsule\(1, 2, 3, 4, 5, 6, 7, 8, 9, 10\)' '    gfx3d.capsule(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);'
+expect_emit "cylinder"    '__nexa_gfx3d_cylinder\(1, 2, 3, 4, 5, 6, 7, 8, 9, 10\)' '    gfx3d.cylinder(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);'
+expect_emit "cone"        '__nexa_gfx3d_cone\(1, 2, 3, 4, 5, 6, 7, 8, 9, 10\)' '    gfx3d.cone(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);'
+expect_emit "line3"       '__nexa_gfx3d_line3\(1, 2, 3, 4, 5, 6, 7, 8, 9\)' '    gfx3d.line3(1, 2, 3, 4, 5, 6, 7, 8, 9);'
+expect_emit "grid"        '__nexa_gfx3d_grid\(20, 1, 5, 6, 7\)'         '    gfx3d.grid(20, 1, 5, 6, 7);'
 expect_emit "tri"         '__nexa_gfx3d_tri\(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12\)' \
                           '    gfx3d.tri(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);'
 expect_emit "renderer"    '__nexa_gfx3d_renderer\("vulkan"\)'           '    gfx3d.renderer("vulkan");'
@@ -160,7 +178,7 @@ if "$NEXAC" "$WORK/one.nxa" --source "$WORK/one.cpp" > /dev/null 2>&1; then
         grep -nE '#include[ ]*<GL/|#include[ ]*<OpenGL/|#include[ ]*<GLES' "$WORK/one.cpp" | sed 's/^/  /'
         fails=$((fails + 1))
     fi
-    for sym in __nexa_g3_load_gl __nexa_g3_perspective __nexa_g3_look_at __nexa_g3_platform_open; do
+    for sym in __nexa_g3_load_gl __nexa_g3_perspective __nexa_g3_look_at __nexa_g3_platform_open \n               __nexa_g3_shade __nexa_g3_basis __nexa_g3_band __nexa_g3_cap __nexa_g3_disc; do
         if ! grep -q "$sym" "$WORK/one.cpp"; then
             echo "FAIL emit: $sym missing from the generated runtime"
             fails=$((fails + 1))

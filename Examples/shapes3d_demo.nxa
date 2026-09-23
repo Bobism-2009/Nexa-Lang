@@ -1,0 +1,74 @@
+// Every std/gfx3d shape, on one screen.
+//
+//   build: NexaC Examples/shapes3d_demo.nxa -o shapes3d_demo && ./shapes3d_demo
+//   drive: arrows orbit, W/S raise and lower, wheel zooms, escape quits
+//
+// Also the quickest way to see whether a change to the geometry broke
+// anything: a sphere wound inside-out shows a gash through its equator, a
+// capsule loses an end cap, a cone's base scoops inward. None of that is
+// visible to the test suite, which cannot render a frame and look at it.
+#include <std/gfx3d>
+#include <std/io>
+#include <std/math>
+
+fn main() {
+    if (gfx3d.open("Nexa 3D shapes", 900, 620) != 1) {
+        io.println("no 3D window: this platform has no backend yet");
+        return;
+    }
+    gfx3d.perspective(55.0, 0.1, 200.0);
+    gfx3d.maxfps(60);
+
+    let angle = 0.55;
+    let height = 6.0;
+    let dist = 16.0;
+    let spinning = 1;
+
+    while (gfx3d.closed() != 1) {
+        gfx3d.poll();
+
+        if (gfx3d.key("left"))  { angle = angle - 0.02; spinning = 0; }
+        if (gfx3d.key("right")) { angle = angle + 0.02; spinning = 0; }
+        if (gfx3d.key("w"))     { height = height + 0.1; }
+        if (gfx3d.key("s"))     { height = height - 0.1; }
+        dist = dist - gfx3d.wheel() * 0.8;
+        if (dist < 5.0) { dist = 5.0; }
+        if (dist > 60.0) { dist = 60.0; }
+        if (gfx3d.pressed("space")) { spinning = 1 - spinning; }
+        if (gfx3d.pressed("escape")) { gfx3d.close(); }
+        if (spinning == 1) { angle = angle + 0.004; }
+
+        gfx3d.camera(math.sin(angle) * dist, height, math.cos(angle) * dist,
+                     0.0, 1.0, 0.0);
+        gfx3d.clear(16, 16, 24);
+
+        // The ground, so everything else has somewhere to stand.
+        gfx3d.grid(28.0, 1.5, 52, 52, 70);
+
+        // Curved shapes shade smoothly: each corner hands over the direction
+        // the surface really points there.
+        gfx3d.sphere(-7.0, 1.6, 0.0, 1.6, 220, 90, 70);
+        gfx3d.capsule(-3.2, 0.9, 0.0, -3.2, 3.0, 0.0, 0.9, 90, 200, 120);
+        gfx3d.cylinder(0.6, 0.0, 0.0, 0.6, 3.2, 0.0, 1.0, 90, 140, 230);
+        gfx3d.cone(4.6, 0.0, 0.0, 4.6, 3.8, 0.0, 1.3, 240, 190, 80);
+
+        // Flat-sided ones take the direction of the face, so their edges stay
+        // sharp instead of being smoothed away.
+        gfx3d.box(8.6, 1.0, 0.0, 2.2, 2.0, 1.2, 200, 120, 210);
+        gfx3d.cube(12.0, 0.9, 0.0, 1.8, 120, 210, 210);
+
+        // A capsule lying down is the shape a character controller uses: every
+        // point within its radius of the line between its two ends.
+        gfx3d.capsule(-7.0, 0.5, -5.5, 1.0, 0.5, -5.5, 0.5, 230, 160, 90);
+
+        // A lone triangle is drawn from both sides, so it never disappears.
+        gfx3d.tri(-2.0, 0.1, 5.0,  2.0, 0.1, 5.0,  0.0, 3.0, 5.0,  240, 210, 90);
+
+        // Lines are not shaded -- there is no surface to catch anything.
+        gfx3d.line3(-9.0, 5.2, -5.5, 13.0, 5.2, -5.5, 255, 255, 255);
+
+        gfx3d.present();
+    }
+
+    gfx3d.close();
+}

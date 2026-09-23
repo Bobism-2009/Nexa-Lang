@@ -1000,12 +1000,48 @@ ARGUMENT TYPES
                                    vanish when the camera passes behind it
   gfx3d.cube(x, y, z, size, r, g, b)
                                  - an axis-aligned cube CENTRED on x,y,z with edge
-                                   length size. A negative size is its absolute value.
-                                   Each of the six faces is drawn at a fixed fraction
-                                   of the colour asked for, so that the shape reads as
-                                   solid: with no light in the module yet, a cube in
-                                   one flat colour is a hexagon. It is a constant per
-                                   face and does not move with the camera
+                                   length size. A negative size is its absolute value
+  gfx3d.box(x, y, z, w, h, d, r, g, b)
+                                 - the same, with the three sides given separately.
+                                   gfx3d.cube is this with one size for all three
+  gfx3d.sphere(x, y, z, radius, r, g, b)
+                                 - a sphere centred on x,y,z
+  gfx3d.capsule(x1, y1, z1, x2, y2, z2, radius, r, g, b)
+                                 - every point within radius of the LINE from the first
+                                   point to the second: a cylinder with a hemisphere on
+                                   each end. The shape therefore reaches radius BEYOND
+                                   each point rather than stopping at it, which is what
+                                   makes it the shape collision code and character
+                                   controllers use. Two points in the same place give a
+                                   sphere, with no special case anywhere
+  gfx3d.cylinder(x1, y1, z1, x2, y2, z2, radius, r, g, b)
+                                 - the same axis with flat ends instead of round ones;
+                                   this one stops exactly at its two points
+  gfx3d.cone(x1, y1, z1, x2, y2, z2, radius, r, g, b)
+                                 - a circle of that radius at the FIRST point,
+                                   narrowing to nothing at the second
+  gfx3d.line3(x1, y1, z1, x2, y2, z2, r, g, b)
+                                 - a line in space, one pixel wide. There is no
+                                   thickness here as there is on gfx.line: a thick line
+                                   in three dimensions is a shape rather than a stroke,
+                                   and gfx3d.capsule already is that shape
+  gfx3d.grid(size, step, r, g, b)
+                                 - lines on the y = 0 plane, size across and one every
+                                   step, centred on the origin. step is at least the
+                                   size divided by 200, because a finer grid than that
+                                   is a solid sheet at any useful distance
+  SHADING. There is no gfx3d.light, and a shape still has to be shape-shaped:
+  a sphere in one flat colour comes out as a circle. So brightness is worked
+  out from the direction a surface faces against one fixed direction that
+  never moves and that a program cannot place. Flat-sided shapes -- cube, box,
+  tri -- take the direction of the face, so their faces stay flat and their
+  edges stay sharp. Curved ones -- sphere, capsule, cylinder, cone -- take the
+  direction the surface really points at each corner, so they come out smooth
+  rather than faceted. It costs nothing either way: the colour of a vertex is
+  already carried and already interpolated, so shading is only a matter of
+  which colour a vertex is given.
+  gfx3d.line3 and gfx3d.grid are not shaded -- a line has no surface to catch
+  anything -- and are drawn at the colour asked for.
   gfx3d.key(name)                - 1 if that key is down. The same names std/gfx uses
                                    ("w", "1", "escape", "space", "up", "shift", "ctrl",
                                    "alt", "tab", "backspace", "delete", "f11", ...),

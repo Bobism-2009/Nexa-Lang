@@ -582,6 +582,13 @@ no array of pixels to read back.
   draw      gfx3d.clear(r, g, b)
             gfx3d.tri(x1,y1,z1, x2,y2,z2, x3,y3,z3, r,g,b)
             gfx3d.cube(x, y, z, size, r, g, b)       centred on x,y,z
+            gfx3d.box(x, y, z, w, h, d, r, g, b)
+            gfx3d.sphere(x, y, z, radius, r, g, b)
+            gfx3d.capsule(x1,y1,z1, x2,y2,z2, radius, r,g,b)
+            gfx3d.cylinder(...)  same axis, flat ends
+            gfx3d.cone(...)      radius at the first point, a tip at the second
+            gfx3d.line3(x1,y1,z1, x2,y2,z2, r,g,b)
+            gfx3d.grid(size, step, r, g, b)          the y = 0 plane
   input     gfx3d.key(name)  gfx3d.pressed(name)  gfx3d.released(name)
             gfx3d.typed()    gfx3d.wheel()        gfx3d.wheel_x()
             gfx3d.mouse(button)  gfx3d.mouse_x()  gfx3d.mouse_y()
@@ -604,8 +611,10 @@ no array of pixels to read back.
 Two renderers are named and one is built: asking for vulkan quietly gives you
 opengl, and backend() reports the truth. Depth test and back-face culling are
 on from the start, though a lone gfx3d.tri is drawn from both sides. A cube's
-six faces are shaded by a fixed fraction each, so the shape reads as solid
-while the module has no light in it.
+flat sides take the direction of the face and stay sharp-edged; curved ones
+take the direction the surface really points and come out smooth. There is no
+gfx3d.light -- the direction is fixed -- but without any shading at all a
+sphere would just be a circle.
 
 Windows, macOS, Linux and the browser. The first three are OpenGL 1.1 with
 three different windows under it; --wasm is a second renderer, because WebGL

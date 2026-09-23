@@ -4571,6 +4571,13 @@ private:
         if (m == "clear") return "gfx3d.clear(r, g, b) paints the whole window";
         if (m == "tri") return "gfx3d.tri(x1, y1, z1, x2, y2, z2, x3, y3, z3, r, g, b) draws to the window";
         if (m == "cube") return "gfx3d.cube(x, y, z, size, r, g, b) draws to the window";
+        if (m == "box") return "gfx3d.box(x, y, z, w, h, d, r, g, b) draws to the window";
+        if (m == "sphere") return "gfx3d.sphere(x, y, z, radius, r, g, b) draws to the window";
+        if (m == "capsule") return "gfx3d.capsule(x1, y1, z1, x2, y2, z2, radius, r, g, b) draws to the window";
+        if (m == "cylinder") return "gfx3d.cylinder(x1, y1, z1, x2, y2, z2, radius, r, g, b) draws to the window";
+        if (m == "cone") return "gfx3d.cone(x1, y1, z1, x2, y2, z2, radius, r, g, b) draws to the window";
+        if (m == "line3") return "gfx3d.line3(x1, y1, z1, x2, y2, z2, r, g, b) draws to the window";
+        if (m == "grid") return "gfx3d.grid(size, step, r, g, b) draws to the window";
         if (m == "camera") return "gfx3d.camera(ex, ey, ez, tx, ty, tz) moves the camera";
         if (m == "perspective") return "gfx3d.perspective(fov, near, far) sets the lens";
         if (m == "present") return "gfx3d.present() shows what you drew";
@@ -4609,13 +4616,18 @@ private:
         else if (method == "clear") argc = 3;
         else if (method == "perspective") argc = 3;
         else if (method == "camera") argc = 6;
-        else if (method == "cube") argc = 7;
+        else if (method == "cube" || method == "sphere") argc = 7;
+        else if (method == "box") argc = 9;
+        else if (method == "line3") argc = 9;
+        else if (method == "grid") argc = 5;
+        else if (method == "capsule" || method == "cylinder" || method == "cone") argc = 10;
         else if (method == "tri") argc = 12;
         else {
             throw std::runtime_error("Unknown gfx3d method 'gfx3d." + method +
                 "' at line " + std::to_string(methodTok.line) +
                 " (use open, close, poll, closed, present, width, height, clear, camera,"
-                " perspective, tri, cube, maxfps, renderer, backend, key, pressed,"
+                " perspective, tri, cube, box, sphere, capsule, cylinder, cone,"
+                " line3, grid, maxfps, renderer, backend, key, pressed,"
                 " released, typed, wheel, wheel_x, mouse, mouse_x, mouse_y)");
         }
         if (!match(TokenType::LParen)) {
@@ -4641,6 +4653,13 @@ private:
             else if (method == "camera") sig = "gfx3d.camera(ex, ey, ez, tx, ty, tz)";
             else if (method == "perspective") sig = "gfx3d.perspective(fov, near, far)";
             else if (method == "cube") sig = "gfx3d.cube(x, y, z, size, r, g, b)";
+            else if (method == "box") sig = "gfx3d.box(x, y, z, w, h, d, r, g, b)";
+            else if (method == "sphere") sig = "gfx3d.sphere(x, y, z, radius, r, g, b)";
+            else if (method == "capsule") sig = "gfx3d.capsule(x1, y1, z1, x2, y2, z2, radius, r, g, b)";
+            else if (method == "cylinder") sig = "gfx3d.cylinder(x1, y1, z1, x2, y2, z2, radius, r, g, b)";
+            else if (method == "cone") sig = "gfx3d.cone(x1, y1, z1, x2, y2, z2, radius, r, g, b)";
+            else if (method == "line3") sig = "gfx3d.line3(x1, y1, z1, x2, y2, z2, r, g, b)";
+            else if (method == "grid") sig = "gfx3d.grid(size, step, r, g, b)";
             else if (method == "tri") sig = "gfx3d.tri(x1, y1, z1, x2, y2, z2, x3, y3, z3, r, g, b)";
             else if (method == "maxfps") sig = "gfx3d.maxfps(fps)";
             else if (method == "renderer") sig = "gfx3d.renderer(name)";
