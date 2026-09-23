@@ -1548,12 +1548,37 @@ static std::string nexaStaticLibCmd(
     return cmd;
 }
 
+// Is this binary being run as the package manager? NexaC and nexapkg are the
+// same executable under two names -- a symlink on Unix, a second copy on
+// Windows -- and which one it is is decided by the name it was invoked by.
+//
+// This used to require twelve characters before it would consider the .exe
+// form. "nexapkg.exe" is eleven. So on Windows the alias never dispatched
+// once: typing nexapkg ran the compiler, which answered every package
+// command by printing its own help, and `NexaC nexapkg <cmd>` was the only
+// route that worked. Unix was unaffected -- the symlink has no extension and
+// matched the first test.
+static bool nexaInvokedAsNexapkg(std::string name) {
+#ifdef _WIN32
+    // Windows resolves a path case-insensitively, so the spelling that
+    // reaches argv[0] is whatever the user typed: NEXAPKG.EXE is this
+    // program too.
+    for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const std::string ext = ".exe";
+    if (name.size() > ext.size() &&
+            name.compare(name.size() - ext.size(), ext.size(), ext) == 0) {
+        name.resize(name.size() - ext.size());
+    }
+#endif
+    return name == "nexapkg";
+}
+
 int main(int argc, char* argv[]) {
     // nexapkg: invoked as "nexapkg" or "nexapkg.exe" or "NexaC nexapkg <cmd>"
     std::string exe = argc >= 1 ? argv[0] : "";
     size_t lastSlash = exe.find_last_of("/\\");
     std::string exeName = (lastSlash != std::string::npos) ? exe.substr(lastSlash + 1) : exe;
-    bool exeIsNexapkg = (exeName == "nexapkg" || (exeName.size() >= 12 && exeName.substr(0, 7) == "nexapkg" && exeName.substr(exeName.size() - 4) == ".exe"));
+    bool exeIsNexapkg = nexaInvokedAsNexapkg(exeName);
     bool argIsNexapkg = (argc >= 2 && std::string(argv[1]) == "nexapkg");
     if (exeIsNexapkg) {
         return nexa::pkg::run(argc, argv);
