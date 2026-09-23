@@ -1006,6 +1006,37 @@ ARGUMENT TYPES
                                    solid: with no light in the module yet, a cube in
                                    one flat colour is a hexagon. It is a constant per
                                    face and does not move with the camera
+  gfx3d.key(name)                - 1 if that key is down. The same names std/gfx uses
+                                   ("w", "1", "escape", "space", "up", "shift", "ctrl",
+                                   "alt", "tab", "backspace", "delete", "f11", ...),
+                                   case-insensitive, with the same aliases: "return",
+                                   "control", "bksp" and "del" name the same keys as
+                                   "enter", "ctrl", "backspace" and "delete"
+  gfx3d.pressed(name)            - 1 if it went down since the last gfx3d.poll()
+  gfx3d.released(name)           - 1 if it went up since the last gfx3d.poll()
+  gfx3d.typed()                  - text typed since the last poll, as UTF-8. Characters,
+                                   not key names: shift and the layout are already
+                                   applied. Printable only -- Enter, Tab, Esc and
+                                   Backspace are keys, so read those with pressed().
+                                   Consumes the queue: empty on a second call in the
+                                   same frame. At most 1024 bytes a frame
+  gfx3d.wheel()                  - notches of vertical scrolling since the last poll;
+                                   positive is away from you, 0 if it did not move.
+                                   Not sticky -- the next poll replaces it. A trackpad
+                                   scrolls a fraction of a notch and the remainder
+                                   carries over rather than rounding away to nothing
+  gfx3d.wheel_x()                - the same for horizontal scrolling; positive is right
+  gfx3d.mouse(button)            - 1 if that button is down: "left", "right", "middle",
+                                   also "l"/"lmb", "r"/"rmb", "m"/"mmb". A name none of
+                                   these recognises is 0, not an error
+  gfx3d.mouse_x() / mouse_y()    - the cursor in WINDOW pixels, top-left 0,0. This is
+                                   where gfx and gfx3d differ: gfx.mouse_x is a
+                                   framebuffer pixel because gfx scales its buffer up,
+                                   and gfx3d has no buffer and no scale to divide by
+  Input is read only while the window is focused, exactly as std/gfx reads it.
+  Input that arrives while it is not focused is dropped rather than saved up to
+  arrive the moment it is. Before the first gfx3d.open, and after gfx3d.close,
+  every reader answers 0 and typed() answers "".
   gfx3d.renderer(name)           - ask for a renderer before gfx3d.open. "opengl" and
                                    "vulkan" are accepted and answer 1; any other name
                                    answers 0 and changes nothing

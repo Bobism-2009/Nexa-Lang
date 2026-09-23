@@ -99,6 +99,26 @@ expect_emit "cube"        '__nexa_gfx3d_cube\(1, 2, 3, 4, 5, 6, 7\)'    '    gfx
 expect_emit "tri"         '__nexa_gfx3d_tri\(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12\)' \
                           '    gfx3d.tri(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);'
 expect_emit "renderer"    '__nexa_gfx3d_renderer\("vulkan"\)'           '    gfx3d.renderer("vulkan");'
+expect_emit "key"         '__nexa_gfx3d_key\("w"\)'                     '    let k = gfx3d.key("w");'
+expect_emit "pressed"     '__nexa_gfx3d_pressed\("space"\)'             '    let k = gfx3d.pressed("space");'
+expect_emit "released"    '__nexa_gfx3d_released\("space"\)'            '    let k = gfx3d.released("space");'
+expect_emit "typed"       '__nexa_gfx3d_typed\(\)'                      '    let t = gfx3d.typed();'
+expect_emit "wheel"       '__nexa_gfx3d_wheel\(\)'                      '    let w = gfx3d.wheel();'
+expect_emit "wheel_x"     '__nexa_gfx3d_wheel_x\(\)'                    '    let w = gfx3d.wheel_x();'
+expect_emit "mouse"       '__nexa_gfx3d_mouse\("left"\)'                '    let m = gfx3d.mouse("left");'
+expect_emit "mouse_x"     '__nexa_gfx3d_mouse_x\(\)'                    '    let m = gfx3d.mouse_x();'
+expect_emit "mouse_y"     '__nexa_gfx3d_mouse_y\(\)'                    '    let m = gfx3d.mouse_y();'
+
+# An input call is nearly always written as a condition, and a condition is
+# emitted by a different path from an expression -- one with an allow-list of
+# node types and `return "false"` for everything else. gfx3d.key was not on
+# that list, so `if (gfx3d.key("w"))` compiled to `if (false)`: the whole
+# input family read as never-happening, in a program that built and ran
+# without a word. Worth a test of its own, because nothing else would catch
+# it -- the call emits perfectly well everywhere except where it is used.
+expect_emit "key in a condition"      'if \(__nexa_gfx3d_key\("w"\)\)'       '    if (gfx3d.key("w")) { gfx3d.close(); }'
+expect_emit "mouse in a condition"    'if \(__nexa_gfx3d_mouse\("left"\)\)'  '    if (gfx3d.mouse("left")) { gfx3d.close(); }'
+expect_emit "typed in a condition"    'if \(!\(__nexa_gfx3d_typed\(\)\).empty\(\)\)' '    if (gfx3d.typed()) { gfx3d.close(); }'
 expect_emit "backend"     '__nexa_gfx3d_backend\(\)'                    '    let b = gfx3d.backend();'
 expect_emit "width"       '__nexa_gfx3d_width\(\)'                      '    let w = gfx3d.width();'
 expect_emit "closed"      '__nexa_gfx3d_closed\(\)'                     '    let c = gfx3d.closed();'

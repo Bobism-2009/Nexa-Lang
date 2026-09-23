@@ -2392,7 +2392,7 @@ private:
             case AstNode::Type::Gfx3dCall:
                 // backend() is the only one that answers with text; the rest
                 // are 1/0 or a size, and the draws are statements.
-                if (e.value == "backend") return "string";
+                if (e.value == "backend" || e.value == "typed") return "string";
                 return "int";
             case AstNode::Type::GfxCall:
                 if (e.value == "title") return e.children.empty() ? "string" : "int";
@@ -3481,6 +3481,10 @@ private:
             {"cube",        "gfx3d.cube(x, y, z, size, r, g, b)",                     "nnnnnnn"},
             {"maxfps",      "gfx3d.maxfps(fps)",                                      "n"},
             {"renderer",    "gfx3d.renderer(name)",                                   "t"},
+            {"key",         "gfx3d.key(name)",                                        "t"},
+            {"pressed",     "gfx3d.pressed(name)",                                    "t"},
+            {"released",    "gfx3d.released(name)",                                   "t"},
+            {"mouse",       "gfx3d.mouse(button)",                                    "t"},
             {"", nullptr, nullptr},
         };
         return rows;
@@ -4550,7 +4554,7 @@ private:
         if (e.type == AstNode::Type::JsonCall && e.value == "stringify") return true;
         // gfx3d.backend() is the one call in the module that answers with
         // text, so it is the one that concatenates instead of being counted.
-        if (e.type == AstNode::Type::Gfx3dCall) return e.value == "backend";
+        if (e.type == AstNode::Type::Gfx3dCall) return e.value == "backend" || e.value == "typed";
         if (e.type == AstNode::Type::ExprCast && e.value == "string") return true;
         if (e.type == AstNode::Type::FileCall) {
             const std::string& m = e.value;

@@ -1,11 +1,12 @@
 // std/gfx3d: the loop std/gfx uses, with a depth buffer under it.
 //
 //   build: NexaC Examples/cube3d_demo.nxa -o cube3d_demo && ./cube3d_demo
-//   quit:  close the window
+//   drive: arrow keys orbit, W/S raise and lower, mouse wheel dollies,
+//          space re-centres, escape quits
 //
-// The camera orbits the origin, so the three cubes and the triangle pass in
-// front of and behind each other without the program sorting anything: what
-// is nearer wins because the depth buffer says so.
+// Nothing in the scene moves. The camera does, and the depth buffer decides
+// what is in front, so the cubes and the triangle pass through each other's
+// silhouettes without the program sorting anything.
 #include <std/gfx3d>
 #include <std/io>
 #include <std/math>
@@ -16,23 +17,50 @@ fn main() {
         return;
     }
     io.println("renderer: " + gfx3d.backend());
+    io.println("arrows orbit, W/S height, wheel zoom, space re-centres, escape quits");
 
-    // 60 degrees of vertical field of view, and a far plane well past the
-    // scene. Both have defaults; this is only to show where the lens lives.
     gfx3d.perspective(60.0, 0.1, 100.0);
     gfx3d.maxfps(60);
 
     let angle = 0.0;
+    let height = 3.0;
+    let dist = 7.0;
+    let spinning = 1;
+
     while (gfx3d.closed() != 1) {
         gfx3d.poll();
+
+        // Held keys steer; gfx3d.key is "is it down now".
+        if (gfx3d.key("left"))  { angle = angle - 0.03; spinning = 0; }
+        if (gfx3d.key("right")) { angle = angle + 0.03; spinning = 0; }
+        if (gfx3d.key("w"))     { height = height + 0.08; }
+        if (gfx3d.key("s"))     { height = height - 0.08; }
+
+        // The wheel is notches since the last poll, so it adds straight in.
+        dist = dist - gfx3d.wheel() * 0.5;
+        if (dist < 3.0) { dist = 3.0; }
+        if (dist > 30.0) { dist = 30.0; }
+
+        // gfx3d.pressed is the edge: once per press, however long it is held.
+        if (gfx3d.pressed("space")) {
+            height = 3.0;
+            dist = 7.0;
+            spinning = 1;
+        }
+        if (gfx3d.pressed("escape")) { gfx3d.close(); }
+
+        // Left-drag nudges the orbit, which is what mouse_x is for.
+        if (gfx3d.mouse("left")) {
+            angle = angle + (gfx3d.mouse_x() - gfx3d.width() / 2) * 0.00005;
+            spinning = 0;
+        }
+
+        if (spinning == 1) { angle = angle + 0.01; }
+
+        gfx3d.camera(math.sin(angle) * dist, height, math.cos(angle) * dist,
+                     0.0, 0.0, 0.0);
+
         gfx3d.clear(18, 18, 28);
-
-        // Orbit the eye around the origin at a fixed height, always looking
-        // back at it. Nothing in the scene moves -- the camera does.
-        let ex = math.sin(angle) * 7.0;
-        let ez = math.cos(angle) * 7.0;
-        gfx3d.camera(ex, 3.0, ez, 0.0, 0.0, 0.0);
-
         gfx3d.cube(0.0, 0.0, 0.0, 2.0, 220, 90, 70);
         gfx3d.cube(3.5, 0.0, 0.0, 1.0, 90, 200, 120);
         gfx3d.cube(-3.5, 0.0, 0.0, 1.0, 90, 140, 230);
@@ -42,7 +70,6 @@ fn main() {
         gfx3d.tri(-2.0, -1.5, 2.5,  2.0, -1.5, 2.5,  0.0, 1.8, 2.5,  240, 210, 90);
 
         gfx3d.present();
-        angle = angle + 0.01;
     }
 
     gfx3d.close();

@@ -582,6 +582,10 @@ no array of pixels to read back.
   draw      gfx3d.clear(r, g, b)
             gfx3d.tri(x1,y1,z1, x2,y2,z2, x3,y3,z3, r,g,b)
             gfx3d.cube(x, y, z, size, r, g, b)       centred on x,y,z
+  input     gfx3d.key(name)  gfx3d.pressed(name)  gfx3d.released(name)
+            gfx3d.typed()    gfx3d.wheel()        gfx3d.wheel_x()
+            gfx3d.mouse(button)  gfx3d.mouse_x()  gfx3d.mouse_y()
+                                      the names std/gfx uses, read while focused
   renderer  gfx3d.renderer(name)      ask, before open; "opengl" or "vulkan"
             gfx3d.backend()           what the window actually opened with
 

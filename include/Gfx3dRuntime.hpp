@@ -217,6 +217,19 @@ struct __nexa_G3State {
     double frame_ms = 0.0;
     double next_deadline = 0.0;
 
+    // --- input ---------------------------------------------------------
+    // Two snapshots of every nameable key, taken once per gfx3d.poll. key()
+    // asks the backend on the spot and keeps nothing; pressed() and
+    // released() are the difference between these two rows.
+    unsigned char k_now[64] = {0};
+    unsigned char k_prev[64] = {0};
+    int mx = 0, my = 0;            // cursor, in window pixels
+    int wheel_y = 0, wheel_x = 0;  // whole notches since the last poll
+    float wrem_y = 0.0f;           // a trackpad scrolls a fraction of a
+    float wrem_x = 0.0f;           // notch; the remainder carries over
+    std::string typed;             // text since the last poll, consumed on read
+    int mb[3] = {0, 0, 0};         // left, right, middle
+
 #if defined(_WIN32)
     HWND hwnd = nullptr;
     HDC hdc = nullptr;
@@ -232,6 +245,15 @@ struct __nexa_G3State {
 #endif
 };
 static __nexa_G3State __nexa_g3;
+
+// The two backends that cannot be asked whether a key is down keep a table
+// their handlers write. Indexed by browser keyCode and by macOS virtual
+// keycode respectively, which is why they are different sizes.
+#if defined(NEXA_WASM)
+static unsigned char __nexa_g3_wkeys[512] = {0};
+#elif defined(__APPLE__)
+static unsigned char __nexa_g3_mkeys[256] = {0};
+#endif
 
 // --- matrix maths, written out ----------------------------------------------
 //
@@ -318,6 +340,10 @@ static int   __nexa_g3_two_sided = 0;
 // Declared here, defined by whichever backend is compiled in.
 static void __nexa_g3_platform_camera(void);
 static void __nexa_g3_batch_submit(void);
+// Defined with the rest of the input below, but the event collectors up in
+// the platform block need it: text is gated on focus like every other
+// reading, and those collectors run before this file gets to input.
+static int __nexa_g3_focused(void);
 
 static void __nexa_g3_batch_begin(int twoSided) {
     __nexa_g3_vn = 0;
@@ -479,6 +505,37 @@ static LRESULT CALLBACK __nexa_g3_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM
             // and the aspect ratio are both computed from.
             __nexa_g3.w = (int)LOWORD(lp);
             __nexa_g3.h = (int)HIWORD(lp);
+            return 0;
+        case WM_MOUSEWHEEL:
+        case WM_MOUSEHWHEEL: {
+            // A wheel reports whole notches of WHEEL_DELTA; a trackpad sends
+            // fractions of one, so the remainder is carried rather than
+            // rounded away to nothing.
+            float d = (float)GET_WHEEL_DELTA_WPARAM(wp) / (float)WHEEL_DELTA;
+            if (msg == WM_MOUSEWHEEL) {
+                __nexa_g3.wrem_y += d;
+                int whole = (int)__nexa_g3.wrem_y;
+                __nexa_g3.wheel_y += whole;
+                __nexa_g3.wrem_y -= (float)whole;
+            } else {
+                __nexa_g3.wrem_x += d;
+                int whole = (int)__nexa_g3.wrem_x;
+                __nexa_g3.wheel_x += whole;
+                __nexa_g3.wrem_x -= (float)whole;
+            }
+            return 0;
+        }
+        case WM_CHAR:
+            // Printable text only: Enter, Tab, Escape and Backspace are keys,
+            // and gfx3d.pressed is how a program reads those.
+            // Gated like every other reading. Windows delivers WM_CHAR to the
+            // focused window anyway, but "anyway" is the OS's promise rather
+            // than this module's, and the other four backends collect text
+            // from queues that are not so careful.
+            if (!__nexa_g3_focused()) return 0;
+            if (wp >= 32 && wp != 127 && __nexa_g3.typed.size() < 1024) {
+                __nexa_g3.typed.push_back((char)wp);
+            }
             return 0;
         default:
             break;
@@ -659,7 +716,43 @@ static void __nexa_g3_platform_poll(void) {
                                              untilDate:[NSDate distantPast]
                                                 inMode:NSDefaultRunLoopMode
                                                dequeue:YES];
-            if (!ev) break;
+            NSEventType et = [ev type];
+            if ((et == NSEventTypeKeyDown || et == NSEventTypeKeyUp) && __nexa_g3_focused()) {
+                unsigned short kc = [ev keyCode];
+                if (kc < 256) __nexa_g3_mkeys[kc] = (et == NSEventTypeKeyDown) ? 1 : 0;
+                if (et == NSEventTypeKeyDown) {
+                    NSString* chars = [ev characters];
+                    const char* u = [chars UTF8String];
+                    if (u) {
+                        for (const char* q = u; *q; q++) {
+                            unsigned char c = (unsigned char)*q;
+                            if (c >= 32 && c != 127 && __nexa_g3.typed.size() < 1024) {
+                                __nexa_g3.typed.push_back((char)c);
+                            }
+                        }
+                    }
+                }
+            } else if (et == NSEventTypeFlagsChanged) {
+                // Modifiers do not arrive as key events; the whole set is
+                // re-read from the flags each time one of them changes.
+                NSEventModifierFlags f = [ev modifierFlags];
+                unsigned char sh = (f & NSEventModifierFlagShift) ? 1 : 0;
+                unsigned char ct = (f & NSEventModifierFlagControl) ? 1 : 0;
+                unsigned char al = (f & NSEventModifierFlagOption) ? 1 : 0;
+                __nexa_g3_mkeys[56] = sh; __nexa_g3_mkeys[60] = sh;
+                __nexa_g3_mkeys[59] = ct; __nexa_g3_mkeys[62] = ct;
+                __nexa_g3_mkeys[58] = al; __nexa_g3_mkeys[61] = al;
+            } else if (et == NSEventTypeScrollWheel) {
+                // A trackpad reports pixels and a wheel reports lines; the
+                // remainder carries over either way.
+                float dy = (float)[ev scrollingDeltaY];
+                float dx = (float)[ev scrollingDeltaX];
+                if ([ev hasPreciseScrollingDeltas]) { dy /= 30.0f; dx /= 30.0f; }
+                __nexa_g3.wrem_y += dy;
+                __nexa_g3.wrem_x += dx;
+                int wy = (int)__nexa_g3.wrem_y; __nexa_g3.wheel_y += wy; __nexa_g3.wrem_y -= (float)wy;
+                int wx = (int)__nexa_g3.wrem_x; __nexa_g3.wheel_x += wx; __nexa_g3.wrem_x -= (float)wx;
+            }
             [NSApp sendEvent:ev];
         }
         // A context whose view has been resized has to be told, or it keeps
@@ -757,6 +850,52 @@ static int __nexa_g3_build_program(void) {
     return __nexa_g3_vbo != 0;
 }
 
+// A browser pushes input rather than answering questions about it, so these
+// five listeners are the whole of the wasm half: they write the same table
+// and counters the other backends fill from their own event queues.
+static EM_BOOL __nexa_g3_on_key(int type, const EmscriptenKeyboardEvent* e, void* user) {
+    (void)user;
+    if (e->keyCode < 512) {
+        __nexa_g3_wkeys[e->keyCode] = (type == EMSCRIPTEN_EVENT_KEYDOWN) ? 1 : 0;
+    }
+    if (type == EMSCRIPTEN_EVENT_KEYPRESS && __nexa_g3_focused()
+            && __nexa_g3.typed.size() < 1024) {
+        // key is the character the layout produced, which is what typed()
+        // is for; keyCode above is the position, which is what key() is for.
+        for (const char* q = e->key; *q; q++) {
+            unsigned char c = (unsigned char)*q;
+            if (c >= 32 && c != 127) __nexa_g3.typed.push_back((char)c);
+        }
+    }
+    return EM_TRUE;
+}
+
+static EM_BOOL __nexa_g3_on_mouse(int type, const EmscriptenMouseEvent* e, void* user) {
+    (void)user;
+    __nexa_g3.mx = e->targetX;
+    __nexa_g3.my = e->targetY;
+    if (type == EMSCRIPTEN_EVENT_MOUSEDOWN || type == EMSCRIPTEN_EVENT_MOUSEUP) {
+        int v = (type == EMSCRIPTEN_EVENT_MOUSEDOWN) ? 1 : 0;
+        if (e->button == 0) __nexa_g3.mb[0] = v;
+        else if (e->button == 2) __nexa_g3.mb[1] = v;
+        else if (e->button == 1) __nexa_g3.mb[2] = v;
+    }
+    return EM_TRUE;
+}
+
+static EM_BOOL __nexa_g3_on_wheel(int type, const EmscriptenWheelEvent* e, void* user) {
+    (void)type; (void)user;
+    // deltaMode 0 is pixels, 1 is lines, 2 is pages; only the first needs
+    // scaling into the notch the other backends report.
+    double sy = e->deltaY, sx = e->deltaX;
+    if (e->deltaMode == 0) { sy /= 100.0; sx /= 100.0; }
+    __nexa_g3.wrem_y += (float)(-sy);
+    __nexa_g3.wrem_x += (float)(sx);
+    int wy = (int)__nexa_g3.wrem_y; __nexa_g3.wheel_y += wy; __nexa_g3.wrem_y -= (float)wy;
+    int wx = (int)__nexa_g3.wrem_x; __nexa_g3.wheel_x += wx; __nexa_g3.wrem_x -= (float)wx;
+    return EM_TRUE;
+}
+
 static int __nexa_g3_platform_open(const std::string& title, int w, int h) {
     (void)title;  // a page has a <title>; the canvas has no name of its own
     EmscriptenWebGLContextAttributes attrs;
@@ -773,6 +912,15 @@ static int __nexa_g3_platform_open(const std::string& title, int w, int h) {
     emscripten_set_canvas_element_size("#canvas", w, h);
     if (!__nexa_g3_load_gl()) return 0;
     if (!__nexa_g3_build_program()) return 0;
+    // The window is where keys land once the canvas has focus; the canvas is
+    // where the pointer lands, so its coordinates are already canvas-relative.
+    emscripten_set_keydown_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, __nexa_g3_on_key);
+    emscripten_set_keyup_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, __nexa_g3_on_key);
+    emscripten_set_keypress_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, __nexa_g3_on_key);
+    emscripten_set_mousemove_callback("#canvas", nullptr, EM_TRUE, __nexa_g3_on_mouse);
+    emscripten_set_mousedown_callback("#canvas", nullptr, EM_TRUE, __nexa_g3_on_mouse);
+    emscripten_set_mouseup_callback("#canvas", nullptr, EM_TRUE, __nexa_g3_on_mouse);
+    emscripten_set_wheel_callback("#canvas", nullptr, EM_TRUE, __nexa_g3_on_wheel);
     return 1;
 }
 
@@ -830,7 +978,10 @@ static int __nexa_g3_platform_open(const std::string& title, int w, int h) {
     XSetWindowAttributes swa;
     std::memset(&swa, 0, sizeof(swa));
     swa.colormap = XCreateColormap(__nexa_g3.dpy, root, vi->visual, AllocNone);
-    swa.event_mask = StructureNotifyMask | ExposureMask;
+    // Without asking, none of these ever arrive: the event mask is the
+    // subscription, the way DragAcceptFiles is on Windows.
+    swa.event_mask = StructureNotifyMask | ExposureMask |
+                     KeyPressMask | KeyReleaseMask | ButtonPressMask | ButtonReleaseMask;
     __nexa_g3.win = XCreateWindow(__nexa_g3.dpy, root, 0, 0, (unsigned)w, (unsigned)h, 0,
         vi->depth, InputOutput, vi->visual, CWColormap | CWEventMask, &swa);
     if (!__nexa_g3.win) return 0;
@@ -856,6 +1007,24 @@ static void __nexa_g3_platform_poll(void) {
         if (ev.type == ConfigureNotify) {
             __nexa_g3.w = ev.xconfigure.width;
             __nexa_g3.h = ev.xconfigure.height;
+        } else if (ev.type == ButtonPress) {
+            // X11 has no wheel: it reports one as a button press. 4 and 5
+            // are up and down, 6 and 7 are left and right.
+            unsigned int b = ev.xbutton.button;
+            if (b == 4) __nexa_g3.wheel_y += 1;
+            else if (b == 5) __nexa_g3.wheel_y -= 1;
+            else if (b == 6) __nexa_g3.wheel_x -= 1;
+            else if (b == 7) __nexa_g3.wheel_x += 1;
+        } else if (ev.type == KeyPress && __nexa_g3_focused()) {
+            char buf[32];
+            KeySym ks = 0;
+            int n = XLookupString(&ev.xkey, buf, (int)sizeof(buf), &ks, nullptr);
+            for (int i = 0; i < n; i++) {
+                unsigned char c = (unsigned char)buf[i];
+                if (c >= 32 && c != 127 && __nexa_g3.typed.size() < 1024) {
+                    __nexa_g3.typed.push_back((char)c);
+                }
+            }
         } else if (ev.type == ClientMessage) {
             if ((Atom)ev.xclient.data.l[0] == __nexa_g3.wm_delete) __nexa_g3.closed = 1;
         } else if (ev.type == DestroyNotify) {
@@ -902,6 +1071,261 @@ static void __nexa_g3_platform_close(void) {}
 
 
 #endif
+
+
+// --- input ------------------------------------------------------------------
+//
+// The same names std/gfx uses, answering the same questions, so that what a
+// program knows about input in two dimensions is true in three. What differs
+// is only what a coordinate means: gfx.mouse_x is a framebuffer pixel, because
+// gfx has a framebuffer and scales it up; gfx3d has neither, so gfx3d.mouse_x
+// is a window pixel. The top-left is 0,0 either way.
+//
+// This is gfx's design rather than gfx's code. The two modules keep separate
+// window state -- gfx's reader reaches into __nexa_g for an X11 display and a
+// browser key table -- so sharing the implementation would mean parameterising
+// all of it over both. What IS shared is the part a program can see: every
+// name below is a name gfx accepts, with the same aliases.
+//
+// Reading is gated on focus, exactly as gfx gates it: input that arrives while
+// the window is not focused is dropped rather than saved up to arrive the
+// moment it is.
+//
+// Two platforms answer "is this key down" on the spot -- GetAsyncKeyState on
+// Windows, XQueryKeymap on X11 -- and two keep a table their event handlers
+// write, because a browser has no such question to ask and macOS's own answer
+// is session-wide rather than window-scoped.
+
+static int __nexa_g3_focused(void) {
+#if defined(_WIN32)
+    return (__nexa_g3.hwnd && GetForegroundWindow() == __nexa_g3.hwnd) ? 1 : 0;
+#elif defined(NEXA_WASM)
+    // A browser has no "is my canvas focused" call; the page is what it
+    // tracks, and a Nexa program is one canvas on one page.
+    return EM_ASM_INT({ return document.hasFocus() ? 1 : 0; });
+#elif defined(__APPLE__)
+    return (__nexa_g3_nswin && [__nexa_g3_nswin isKeyWindow]) ? 1 : 0;
+#elif defined(__linux__)
+    if (!__nexa_g3.dpy) return 0;
+    Window f = 0;
+    int revert = 0;
+    XGetInputFocus(__nexa_g3.dpy, &f, &revert);
+    return (f == __nexa_g3.win) ? 1 : 0;
+#else
+    return 0;
+#endif
+}
+
+static int __nexa_g3_key_down(const std::string& name) {
+    if (name.empty() || !__nexa_g3.ready) return 0;
+    if (!__nexa_g3_focused()) return 0;
+    std::string s = name;
+    for (char& c : s) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    if (s == "return") s = "enter";
+    if (s == "control") s = "ctrl";
+    if (s == "bksp") s = "backspace";
+    if (s == "del") s = "delete";
+
+#if defined(_WIN32)
+    auto k = [](int code) -> int { return (GetAsyncKeyState(code) & 0x8000) ? 1 : 0; };
+    if (s.size() == 1) {
+        char c = s[0];
+        if (c >= '0' && c <= '9') return k((int)c);
+        if (c >= 'a' && c <= 'z') return k((int)(c - 'a' + 'A'));
+    }
+    if (s == "escape") return k(VK_ESCAPE);
+    if (s == "space") return k(VK_SPACE);
+    if (s == "enter") return k(VK_RETURN);
+    if (s == "up") return k(VK_UP);
+    if (s == "down") return k(VK_DOWN);
+    if (s == "left") return k(VK_LEFT);
+    if (s == "right") return k(VK_RIGHT);
+    if (s == "shift") return k(VK_SHIFT);
+    if (s == "ctrl") return k(VK_CONTROL);
+    if (s == "alt") return k(VK_MENU);
+    if (s == "tab") return k(VK_TAB);
+    if (s == "backspace") return k(VK_BACK);
+    if (s == "delete") return k(VK_DELETE);
+    if (s == "f11") return k(VK_F11);
+
+#elif defined(NEXA_WASM)
+    // Browser keyCode values, which is what the listeners record.
+    auto k = [](int code) -> int {
+        return (code >= 0 && code < 512 && __nexa_g3_wkeys[code]) ? 1 : 0;
+    };
+    if (s.size() == 1) {
+        char c = s[0];
+        if (c >= '0' && c <= '9') return k(48 + (c - '0'));
+        if (c >= 'a' && c <= 'z') return k(65 + (c - 'a'));
+    }
+    if (s == "escape") return k(27);
+    if (s == "space") return k(32);
+    if (s == "enter") return k(13);
+    if (s == "up") return k(38);
+    if (s == "down") return k(40);
+    if (s == "left") return k(37);
+    if (s == "right") return k(39);
+    if (s == "shift") return k(16);
+    if (s == "ctrl") return k(17);
+    if (s == "alt") return k(18);
+    if (s == "tab") return k(9);
+    if (s == "backspace") return k(8);
+    if (s == "delete") return k(46);
+    if (s == "f11") return k(122);
+
+#elif defined(__APPLE__)
+    // macOS virtual keycodes are positional; these are the ANSI layout's. The
+    // table is written by the key events this window's own poll drains, which
+    // is why CoreGraphics is not needed here: CGEventSourceKeyState would
+    // answer for the whole session rather than for this window, and would pull
+    // in a framework to do it.
+    auto k = [](int code) -> int {
+        return (code >= 0 && code < 256 && __nexa_g3_mkeys[code]) ? 1 : 0;
+    };
+    static const int letters[26] = {
+        0, 11, 8, 2, 14, 3, 5, 4, 34, 38, 40, 37, 46,
+        45, 31, 35, 12, 15, 1, 17, 32, 9, 13, 7, 16, 6
+    };
+    static const int digits[10] = {29, 18, 19, 20, 21, 23, 22, 26, 28, 25};
+    if (s.size() == 1) {
+        char c = s[0];
+        if (c >= '0' && c <= '9') return k(digits[c - '0']);
+        if (c >= 'a' && c <= 'z') return k(letters[c - 'a']);
+    }
+    if (s == "escape") return k(53);
+    if (s == "space") return k(49);
+    if (s == "enter") return k(36);
+    if (s == "up") return k(126);
+    if (s == "down") return k(125);
+    if (s == "left") return k(123);
+    if (s == "right") return k(124);
+    if (s == "shift") return (k(56) || k(60)) ? 1 : 0;
+    if (s == "ctrl") return (k(59) || k(62)) ? 1 : 0;
+    if (s == "alt") return (k(58) || k(61)) ? 1 : 0;
+    if (s == "tab") return k(48);
+    if (s == "backspace") return k(51);
+    if (s == "delete") return k(117);
+    if (s == "f11") return k(103);
+
+#elif defined(__linux__)
+    if (!__nexa_g3.dpy) return 0;
+    char km[32];
+    XQueryKeymap(__nexa_g3.dpy, km);
+    auto held = [&](KeySym sym) -> int {
+        KeyCode kc = XKeysymToKeycode(__nexa_g3.dpy, sym);
+        if (!kc) return 0;
+        return (km[kc >> 3] & (1 << (kc & 7))) ? 1 : 0;
+    };
+    if (s.size() == 1) {
+        char c = s[0];
+        if (c >= '0' && c <= '9') return held((KeySym)c);
+        if (c >= 'a' && c <= 'z') return (held((KeySym)c) || held((KeySym)(c - 'a' + 'A'))) ? 1 : 0;
+    }
+    if (s == "escape") return held(XK_Escape);
+    if (s == "space") return held(XK_space);
+    if (s == "enter") return held(XK_Return);
+    if (s == "up") return held(XK_Up);
+    if (s == "down") return held(XK_Down);
+    if (s == "left") return held(XK_Left);
+    if (s == "right") return held(XK_Right);
+    if (s == "shift") return (held(XK_Shift_L) || held(XK_Shift_R)) ? 1 : 0;
+    if (s == "ctrl") return (held(XK_Control_L) || held(XK_Control_R)) ? 1 : 0;
+    if (s == "alt") return (held(XK_Alt_L) || held(XK_Alt_R)) ? 1 : 0;
+    if (s == "tab") return held(XK_Tab);
+    if (s == "backspace") return held(XK_BackSpace);
+    if (s == "delete") return held(XK_Delete);
+    if (s == "f11") return held(XK_F11);
+#endif
+    return 0;
+}
+
+// Every name an edge can be asked about. gfx3d.key() needs no table -- it
+// forwards a name straight to the backend -- but pressed() and released() ask
+// "did this change since the last poll", and a change needs a row to compare
+// against, which needs a fixed set of names to be a row of.
+static const char* const __nexa_g3_key_names[] = {
+    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+    "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+    "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+    "escape", "space", "enter", "up", "down", "left", "right",
+    "shift", "ctrl", "alt", "tab", "backspace", "delete", "f11"
+};
+#define NEXA_G3_NKEYS ((int)(sizeof(__nexa_g3_key_names) / sizeof(__nexa_g3_key_names[0])))
+
+static int __nexa_g3_key_slot(const std::string& name) {
+    std::string s = name;
+    for (char& c : s) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    if (s == "return") s = "enter";
+    if (s == "control") s = "ctrl";
+    if (s == "bksp") s = "backspace";
+    if (s == "del") s = "delete";
+    for (int i = 0; i < NEXA_G3_NKEYS; i++) {
+        if (s == __nexa_g3_key_names[i]) return i;
+    }
+    return -1;
+}
+
+static void __nexa_g3_key_snapshot(void) {
+    for (int i = 0; i < NEXA_G3_NKEYS; i++) {
+        __nexa_g3.k_prev[i] = __nexa_g3.k_now[i];
+        __nexa_g3.k_now[i] = (unsigned char)__nexa_g3_key_down(__nexa_g3_key_names[i]);
+    }
+}
+
+// The mouse-button names gfx answers to. A name none of them recognises is 0
+// rather than an error, which is gfx's rule too.
+static int __nexa_g3_mouse_index(const std::string& name) {
+    std::string s = name;
+    for (char& c : s) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    if (s == "left" || s == "l" || s == "lmb") return 0;
+    if (s == "right" || s == "r" || s == "rmb") return 1;
+    if (s == "middle" || s == "m" || s == "mmb") return 2;
+    return -1;
+}
+
+// Where the cursor is, in window pixels, and which buttons are down. Both are
+// asked of the backend rather than tracked, wherever the backend can answer.
+static void __nexa_g3_read_mouse(void) {
+    if (!__nexa_g3.ready) return;
+#if defined(_WIN32)
+    POINT p;
+    if (GetCursorPos(&p) && ScreenToClient(__nexa_g3.hwnd, &p)) {
+        __nexa_g3.mx = p.x;
+        __nexa_g3.my = p.y;
+    }
+#elif defined(__linux__) && !defined(NEXA_WASM)
+    if (!__nexa_g3.dpy) return;
+    Window root = 0, child = 0;
+    int rx = 0, ry = 0, wx = 0, wy = 0;
+    unsigned int mask = 0;
+    if (XQueryPointer(__nexa_g3.dpy, __nexa_g3.win, &root, &child, &rx, &ry, &wx, &wy, &mask)) {
+        __nexa_g3.mx = wx;
+        __nexa_g3.my = wy;
+        __nexa_g3.mb[0] = (mask & Button1Mask) ? 1 : 0;
+        __nexa_g3.mb[1] = (mask & Button3Mask) ? 1 : 0;
+        __nexa_g3.mb[2] = (mask & Button2Mask) ? 1 : 0;
+    }
+#elif defined(__APPLE__) && !defined(NEXA_WASM)
+    if (!__nexa_g3_nswin || !__nexa_g3_nsview) return;
+    NSPoint p = [__nexa_g3_nswin mouseLocationOutsideOfEventStream];
+    NSPoint v = [__nexa_g3_nsview convertPoint:p fromView:nil];
+    NSRect b = [__nexa_g3_nsview bounds];
+    // Cocoa's origin is bottom-left and every other backend's is top-left.
+    __nexa_g3.mx = (int)v.x;
+    __nexa_g3.my = (int)(b.size.height - v.y);
+    NSUInteger held = [NSEvent pressedMouseButtons];
+    __nexa_g3.mb[0] = (held & (1 << 0)) ? 1 : 0;
+    __nexa_g3.mb[1] = (held & (1 << 1)) ? 1 : 0;
+    __nexa_g3.mb[2] = (held & (1 << 2)) ? 1 : 0;
+#endif
+    // Windows reads its buttons where it reads its keys, and wasm has them
+    // from the listeners; neither needs a line here.
+#if defined(_WIN32)
+    __nexa_g3.mb[0] = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) ? 1 : 0;
+    __nexa_g3.mb[1] = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) ? 1 : 0;
+    __nexa_g3.mb[2] = (GetAsyncKeyState(VK_MBUTTON) & 0x8000) ? 1 : 0;
+#endif
+}
 
 // --- submitting the batch ---------------------------------------------------
 //
@@ -1019,7 +1443,13 @@ static void __nexa_gfx3d_close(void) {
 
 static void __nexa_gfx3d_poll(void) {
     if (!__nexa_g3.ready) return;
+    // The wheel reports one frame and the next poll replaces it, so it is
+    // cleared before the events that fill it are drained rather than after.
+    __nexa_g3.wheel_y = 0;
+    __nexa_g3.wheel_x = 0;
     __nexa_g3_platform_poll();
+    __nexa_g3_read_mouse();
+    __nexa_g3_key_snapshot();
 }
 
 static int __nexa_gfx3d_closed(void) {
@@ -1169,6 +1599,50 @@ static void __nexa_gfx3d_present(void) {
     } else {
         __nexa_g3.next_deadline += __nexa_g3.frame_ms;
     }
+}
+
+// --- the input calls --------------------------------------------------------
+
+static int __nexa_gfx3d_key(const std::string& name) {
+    return __nexa_g3_key_down(name);
+}
+
+// Went down between the last two polls. A name outside the table above has
+// no row to compare and answers 0, the way an unrecognised mouse button does.
+static int __nexa_gfx3d_pressed(const std::string& name) {
+    if (!__nexa_g3.ready) return 0;
+    int i = __nexa_g3_key_slot(name);
+    if (i < 0) return 0;
+    return (__nexa_g3.k_now[i] && !__nexa_g3.k_prev[i]) ? 1 : 0;
+}
+
+static int __nexa_gfx3d_released(const std::string& name) {
+    if (!__nexa_g3.ready) return 0;
+    int i = __nexa_g3_key_slot(name);
+    if (i < 0) return 0;
+    return (!__nexa_g3.k_now[i] && __nexa_g3.k_prev[i]) ? 1 : 0;
+}
+
+static int __nexa_gfx3d_mouse(const std::string& name) {
+    if (!__nexa_g3.ready || !__nexa_g3_focused()) return 0;
+    int i = __nexa_g3_mouse_index(name);
+    if (i < 0) return 0;
+    return __nexa_g3.mb[i] ? 1 : 0;
+}
+
+static int __nexa_gfx3d_mouse_x(void) { return __nexa_g3.ready ? __nexa_g3.mx : 0; }
+static int __nexa_gfx3d_mouse_y(void) { return __nexa_g3.ready ? __nexa_g3.my : 0; }
+
+static int __nexa_gfx3d_wheel(void)   { return __nexa_g3.ready ? __nexa_g3.wheel_y : 0; }
+static int __nexa_gfx3d_wheel_x(void) { return __nexa_g3.ready ? __nexa_g3.wheel_x : 0; }
+
+// Consumes what it returns, like gfx.typed: empty when nothing was typed,
+// and empty again on a second call in the same frame.
+static std::string __nexa_gfx3d_typed(void) {
+    if (!__nexa_g3.ready) return std::string("");
+    std::string out;
+    out.swap(__nexa_g3.typed);
+    return out;
 }
 
 // What the program asked for. A renderer that is not built yet is accepted

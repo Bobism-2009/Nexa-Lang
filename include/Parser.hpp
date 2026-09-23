@@ -4600,8 +4600,12 @@ private:
         int argc = -1;
         if (method == "open") argc = 3;
         else if (method == "close" || method == "poll" || method == "present" || method == "closed"
-                 || method == "width" || method == "height" || method == "backend") argc = 0;
-        else if (method == "maxfps" || method == "renderer") argc = 1;
+                 || method == "width" || method == "height" || method == "backend"
+                 || method == "mouse_x" || method == "mouse_y"
+                 || method == "wheel" || method == "wheel_x" || method == "typed") argc = 0;
+        else if (method == "maxfps" || method == "renderer"
+                 || method == "key" || method == "pressed" || method == "released"
+                 || method == "mouse") argc = 1;
         else if (method == "clear") argc = 3;
         else if (method == "perspective") argc = 3;
         else if (method == "camera") argc = 6;
@@ -4611,7 +4615,8 @@ private:
             throw std::runtime_error("Unknown gfx3d method 'gfx3d." + method +
                 "' at line " + std::to_string(methodTok.line) +
                 " (use open, close, poll, closed, present, width, height, clear, camera,"
-                " perspective, tri, cube, maxfps, renderer, backend)");
+                " perspective, tri, cube, maxfps, renderer, backend, key, pressed,"
+                " released, typed, wheel, wheel_x, mouse, mouse_x, mouse_y)");
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after gfx3d." + method + " at line " + std::to_string(peek().line));
@@ -4639,6 +4644,10 @@ private:
             else if (method == "tri") sig = "gfx3d.tri(x1, y1, z1, x2, y2, z2, x3, y3, z3, r, g, b)";
             else if (method == "maxfps") sig = "gfx3d.maxfps(fps)";
             else if (method == "renderer") sig = "gfx3d.renderer(name)";
+            else if (method == "key") sig = "gfx3d.key(name)";
+            else if (method == "pressed") sig = "gfx3d.pressed(name)";
+            else if (method == "released") sig = "gfx3d.released(name)";
+            else if (method == "mouse") sig = "gfx3d.mouse(button)";
             else sig = "gfx3d." + method + "()";
             throw std::runtime_error(sig + " at line " + std::to_string(line));
         }
