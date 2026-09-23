@@ -1,0 +1,112 @@
+// What counts as true (SYNTAX/ControlFlow.txt, WHAT COUNTS AS TRUE).
+//
+// A plain value written where a condition goes: numbers are true when not
+// zero, strings when not empty, pointers when not null. These used to be
+// decided by a switch over node types that answered "false" for anything
+// nobody had added to it -- so if (a + b) and if (len(s)) compiled, ran, and
+// never took the branch. A behavioural test is what catches that; the call
+// emits perfectly well everywhere except where it is used.
+#include <std/io>
+#include <std/math>
+
+fn took(label: string, hit: int) {
+    io.println(label + "=" + hit);
+}
+
+fn main() {
+    let a = 2;
+    let b = 3;
+    let z = 0;
+
+    // arithmetic
+    let hit = 0;
+    if (a + b) { hit = 1; }
+    took("add_nonzero", hit);
+
+    hit = 0;
+    if (a - a) { hit = 1; }
+    took("add_zero", hit);
+
+    hit = 0;
+    if (a * b) { hit = 1; }
+    took("mul_nonzero", hit);
+
+    hit = 0;
+    if (b & 1) { hit = 1; }
+    took("bitand_nonzero", hit);
+
+    hit = 0;
+    if (a & 1) { hit = 1; }
+    took("bitand_zero", hit);
+
+    // len(), which is a builtin rather than a method
+    let s = "hi";
+    let empty: string = "";
+    hit = 0;
+    if (len(s)) { hit = 1; }
+    took("len_nonzero", hit);
+
+    hit = 0;
+    if (len(empty)) { hit = 1; }
+    took("len_zero", hit);
+
+    // strings: true when not empty
+    hit = 0;
+    if (s) { hit = 1; }
+    took("string_full", hit);
+
+    hit = 0;
+    if (empty) { hit = 1; }
+    took("string_empty", hit);
+
+    // plain numbers and bools
+    hit = 0;
+    if (a) { hit = 1; }
+    took("int_nonzero", hit);
+
+    hit = 0;
+    if (z) { hit = 1; }
+    took("int_zero", hit);
+
+    let yes = true;
+    hit = 0;
+    if (yes) { hit = 1; }
+    took("bool_true", hit);
+
+    // a module call that answers with a number
+    hit = 0;
+    if (math.abs(0.0 - 2.5)) { hit = 1; }
+    took("math_nonzero", hit);
+
+    // pointers: true when not null
+    let p: *int = &a;
+    let q: *int = null;
+    hit = 0;
+    if (p) { hit = 1; }
+    took("ptr_set", hit);
+
+    hit = 0;
+    if (q) { hit = 1; }
+    took("ptr_null", hit);
+
+    // the same rules inside && || ! and a ternary
+    hit = 0;
+    if (a && s) { hit = 1; }
+    took("and_mixed", hit);
+
+    hit = 0;
+    if (z || empty) { hit = 1; }
+    took("or_both_false", hit);
+
+    hit = 0;
+    if (!z) { hit = 1; }
+    took("not_zero", hit);
+
+    io.println("ternary_full=" + (s ? "yes" : "no"));
+    io.println("ternary_empty=" + (empty ? "yes" : "no"));
+
+    // and in a while, which ends when the count reaches zero
+    let n = 0;
+    while (len(s) - n) { n = n + 1; }
+    took("while_counted", n);
+}

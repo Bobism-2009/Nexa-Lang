@@ -15,6 +15,27 @@ CONDITIONALS
     for (j, 3) io.println(j);
   Use braces { } when the body has more than one statement.
 
+WHAT COUNTS AS TRUE
+  A condition is usually a comparison, and then there is nothing to decide.
+  A plain value can be written instead, and these are the rules:
+    numbers   true when not zero -- int and the other widths, float, char
+    bool      itself
+    string    true when not empty, so if (s) is if (len(s) > 0)
+    pointer   true when not null
+  This is the same wherever a condition goes: if, while, the middle of a
+  ternary, and the operands of && || !.
+    if (len(parts)) { ... }        a count
+    if (os.getenv("HOME")) { ... } text, so: is it set
+    if (tcp.connect(h, p)) { ... } a handle, so: did it connect
+    if (gfx.key("w")) { ... }      1 or 0
+
+  What is NOT a condition is refused by name, because there is no one
+  reading of it worth guessing at:
+    Result[T]   use r.ok()
+    Json        use v.ok(), v.is_null(), or a comparison
+    []T         use len(xs) > 0
+    map[K]V     use len(m) > 0
+
 COMPARISONS
   ==  !=  <  <=  >  >=
   Relational (< <= > >=) binds tighter than equality (== !=); both chain

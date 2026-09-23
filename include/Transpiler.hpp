@@ -6105,6 +6105,46 @@ private:
         return lhs + " " + op + " " + rhs;
     }
 
+    // A value written where a condition goes.
+    //
+    // Nexa's truthiness rules are not written down anywhere else, so they are
+    // here: text is true when it is not empty, a number when it is not zero, a
+    // pointer when it is not null. That is the whole list, and it is decided
+    // from the expression's Nexa type rather than from which node it happens
+    // to be -- which is why this replaced a switch that had to name every node
+    // type and silently answered "false" for the ones nobody had added yet.
+    //
+    // `if (a + b)`, `if (len(xs))`, `if (os.getenv("HOME"))`, `if (math.abs(x))`
+    // and every gfx.key in every program were all that default. They compiled,
+    // they ran, and the branch never happened.
+    //
+    // What has no reading as a condition is refused by name instead. A Result
+    // is the long-standing one; a json value, a slice and a map are the same
+    // mistake wearing different clothes, and each is one call away from the
+    // thing the program meant.
+    std::string emitCondValue(const AstNode& c, const std::map<std::string, std::string>& varMap,
+                              const std::map<std::string, bool>* varIsString,
+                              const std::map<std::string, bool>* varIsFloat,
+                              const std::map<std::string, bool>* varIsChar,
+                              const std::map<std::string, bool>* varIsBool) {
+        const std::string t = inferExprNexaType(c);
+        if (nexaIsResultType(t)) {
+            throw std::runtime_error("Result is not a condition; use .ok()");
+        }
+        if (t == "json") {
+            throw std::runtime_error("a json value is not a condition; use .ok(), .is_null() or a comparison");
+        }
+        if (t.size() >= 2 && t[0] == '[' && t[1] == ']') {
+            throw std::runtime_error("a slice is not a condition; use len(x) > 0");
+        }
+        if (t.size() >= 4 && t.compare(0, 4, "map[") == 0) {
+            throw std::runtime_error("a map is not a condition; use len(x) > 0");
+        }
+        std::string v = emitExpr(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+        if (t == "string") return "!(" + v + ").empty()";
+        return v;
+    }
+
     std::string emitCond(const AstNode& c, const std::map<std::string, std::string>& varMap,
                          const std::map<std::string, bool>* varIsString = nullptr,
                          const std::map<std::string, bool>* varIsFloat = nullptr,
@@ -6149,7 +6189,11 @@ private:
             case AstNode::Type::ExprFloatLiteral:
             case AstNode::Type::ExprCharLiteral:
             case AstNode::Type::ExprVarRef:
-                return emitExpr(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                // A bare name goes through the same rules as anything else:
+                // a string variable in an `if` is "not empty" rather than a
+                // C++ error about std::string, and a Result or a slice is
+                // told what to use instead.
+                return emitCondValue(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::FileExists: {
                 return "__nexa_file_exists(" + emitFilePathCStr(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             }
@@ -6161,7 +6205,7 @@ private:
             case AstNode::Type::ExprSlice:
             case AstNode::Type::ExprMember:
             case AstNode::Type::JsonCall:
-                return emitExpr(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                return emitCondValue(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             // Every tcp.* call but recv is an int, and a handle or a byte count
             // is true exactly when it is not 0 -- so `if (tcp.connect(...))`
             // reads the way the failure value was chosen to read. recv is the
@@ -6207,7 +6251,10 @@ private:
             case AstNode::Type::ResultMake:
                 throw std::runtime_error("Result is not a condition; use .ok()");
             default:
-                return "false";
+                // Everything else is a value, and a value is a condition by
+                // the rules above -- not by whether anyone remembered to add
+                // it to this switch.
+                return emitCondValue(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
         }
     }
 
