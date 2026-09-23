@@ -1030,6 +1030,37 @@ ARGUMENT TYPES
                                    step, centred on the origin. step is at least the
                                    size divided by 200, because a finer grid than that
                                    is a solid sheet at any useful distance
+  gfx3d.translate(x, y, z)       - move what is drawn next
+  gfx3d.rotate(rx, ry, rz)       - turn it. DEGREES, by the right-hand rule:
+                                   looking back down an axis towards the origin,
+                                   a positive angle turns counter-clockwise. This
+                                   is deliberately not gfx.arc's convention --
+                                   there angles are clockwise because a screen's y
+                                   runs downwards. The three are applied X first,
+                                   then Y, then Z
+  gfx3d.scale(s)                 - resize it. Uniform only: a normal under a
+                                   non-uniform scale needs the inverse transpose to
+                                   stay perpendicular to its surface, and without
+                                   that a squashed sphere would be lit as though it
+                                   were still round. gfx3d.box is where a shape
+                                   with three different sides comes from
+  gfx3d.reset()                  - back to world space
+  THE TRANSFORM is one matrix, not a stack, and it applies to every shape
+  drawn after it until it is reset. The calls compose in the order written,
+  each relative to the ones before it, so
+       gfx3d.translate(5, 0, 0);
+       gfx3d.rotate(0, 45, 0);
+       gfx3d.cube(0, 0, 0, 1, 220, 90, 70);
+  reads as "put it at x = 5 and turn it where it stands". Written the other
+  way round it swings around the origin on a five-unit arm instead, which is
+  why both orders are worth having.
+  gfx3d.clear puts the transform back as well as the frame, so a forgotten
+  gfx3d.reset costs the rest of one frame rather than compounding into a
+  shape that spirals off screen over the next few hundred. That happens
+  whether or not a window is open: the transform is the program's own state
+  rather than the window's.
+  A transform turns the light with the shape -- a rotated face is lit as the
+  direction it now points, not the one it was written as.
   SHADING. There is no gfx3d.light, and a shape still has to be shape-shaped:
   a sphere in one flat colour comes out as a circle. So brightness is worked
   out from the direction a surface faces against one fixed direction that

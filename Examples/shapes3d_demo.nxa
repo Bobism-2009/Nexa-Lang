@@ -1,7 +1,12 @@
 // Every std/gfx3d shape, on one screen.
 //
 //   build: NexaC Examples/shapes3d_demo.nxa -o shapes3d_demo && ./shapes3d_demo
-//   drive: arrows orbit, W/S raise and lower, wheel zooms, escape quits
+//   drive: arrows orbit, W/S raise and lower, wheel zooms, space stops the
+//          camera drifting, escape quits
+//
+// The cyan cube and the small pale sphere are turned by gfx3d.translate and
+// gfx3d.rotate rather than by moving the camera, and show the two orders:
+// move-then-turn tumbles in place, turn-then-move swings around the origin.
 //
 // Also the quickest way to see whether a change to the geometry broke
 // anything: a sphere wound inside-out shows a gash through its equator, a
@@ -20,6 +25,7 @@ fn main() {
     gfx3d.maxfps(60);
 
     let angle = 0.55;
+    let spin = 0.0;
     let height = 6.0;
     let dist = 16.0;
     let spinning = 1;
@@ -37,6 +43,7 @@ fn main() {
         if (gfx3d.pressed("space")) { spinning = 1 - spinning; }
         if (gfx3d.pressed("escape")) { gfx3d.close(); }
         if (spinning == 1) { angle = angle + 0.004; }
+        spin = spin + 0.8;
 
         gfx3d.camera(math.sin(angle) * dist, height, math.cos(angle) * dist,
                      0.0, 1.0, 0.0);
@@ -55,7 +62,23 @@ fn main() {
         // Flat-sided ones take the direction of the face, so their edges stay
         // sharp instead of being smoothed away.
         gfx3d.box(8.6, 1.0, 0.0, 2.2, 2.0, 1.2, 200, 120, 210);
-        gfx3d.cube(12.0, 0.9, 0.0, 1.8, 120, 210, 210);
+
+        // The transform: this cube is written at the origin and put where it
+        // belongs, tumbling where it stands. The camera is doing none of it.
+        gfx3d.translate(12.0, 1.2, 0.0);
+        gfx3d.rotate(spin, spin * 0.7, 0.0);
+        gfx3d.cube(0.0, 0.0, 0.0, 1.8, 120, 210, 210);
+        gfx3d.reset();
+
+        // Turn first and move second, and the shape swings around the origin
+        // instead of turning in place -- the same two calls, the other way up.
+        // The offset has to be across the axis being turned about, or the
+        // shape just spins where it is: translating along Y after a Y
+        // rotation moves it along the very line it is turning around.
+        gfx3d.rotate(0.0, spin * 1.6, 0.0);
+        gfx3d.translate(5.5, 4.6, 0.0);
+        gfx3d.sphere(0.0, 0.0, 0.0, 0.45, 240, 240, 200);
+        gfx3d.reset();
 
         // A capsule lying down is the shape a character controller uses: every
         // point within its radius of the line between its two ends.

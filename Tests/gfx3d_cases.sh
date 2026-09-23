@@ -64,6 +64,8 @@ if [ ! -x "$NEXAC" ]; then
 fi
 NEXAC=$(cd "$(dirname "$NEXAC")" && pwd)/$(basename "$NEXAC")
 
+SUITE=$(cd "$(dirname "$0")" && pwd)
+
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
@@ -114,6 +116,10 @@ expect_emit "cylinder"    '__nexa_gfx3d_cylinder\(1, 2, 3, 4, 5, 6, 7, 8, 9, 10\
 expect_emit "cone"        '__nexa_gfx3d_cone\(1, 2, 3, 4, 5, 6, 7, 8, 9, 10\)' '    gfx3d.cone(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);'
 expect_emit "line3"       '__nexa_gfx3d_line3\(1, 2, 3, 4, 5, 6, 7, 8, 9\)' '    gfx3d.line3(1, 2, 3, 4, 5, 6, 7, 8, 9);'
 expect_emit "grid"        '__nexa_gfx3d_grid\(20, 1, 5, 6, 7\)'         '    gfx3d.grid(20, 1, 5, 6, 7);'
+expect_emit "translate"   '__nexa_gfx3d_translate\(1, 2, 3\)'           '    gfx3d.translate(1, 2, 3);'
+expect_emit "rotate"      '__nexa_gfx3d_rotate\(0, 90, 0\)'             '    gfx3d.rotate(0, 90, 0);'
+expect_emit "scale"       '__nexa_gfx3d_scale\(2\)'                     '    gfx3d.scale(2);'
+expect_emit "reset"       '__nexa_gfx3d_reset\(\)'                      '    gfx3d.reset();'
 expect_emit "tri"         '__nexa_gfx3d_tri\(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12\)' \
                           '    gfx3d.tri(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);'
 expect_emit "renderer"    '__nexa_gfx3d_renderer\("vulkan"\)'           '    gfx3d.renderer("vulkan");'
@@ -251,6 +257,58 @@ else
     skips=$((skips + 1))
 fi
 
+
+# --- transform layer --------------------------------------------------------
+
+# Where a point lands is arithmetic, so unlike every other shape in this module
+# it can be checked without a window, a driver or a display. It is also the
+# part most worth checking: a rotation with its handedness backwards still
+# spins, and a composition in the wrong order still moves things -- both look
+# busy and both are wrong.
+
+printf '#include <std/gfx3d>
+fn main() {
+    gfx3d.open("t", 8, 8);
+    gfx3d.translate(1, 2, 3);
+    gfx3d.rotate(0, 90, 0);
+    gfx3d.scale(2);
+    gfx3d.reset();
+    gfx3d.clear(0, 0, 0);
+}
+' > "$WORK/xf.nxa"
+if "$NEXAC" "$WORK/xf.nxa" --source "$WORK/xf.cpp" > "$WORK/xf.log" 2>&1; then
+    CXX=${NEXA_CXX:-}
+    [ -n "$CXX" ] || { command -v clang++ >/dev/null 2>&1 && CXX=clang++; }
+    [ -n "$CXX" ] || { command -v g++ >/dev/null 2>&1 && CXX=g++; }
+    # The generated file carries this platform's window code whether or not a
+    # window is ever opened, so the driver has to link what that code calls.
+    XFLANG=""
+    case "$(uname -s 2>/dev/null)" in
+        MINGW*|MSYS*|CYGWIN*) XFLINK="-luser32 -lgdi32" ;;
+        Darwin)               XFLINK="-framework Cocoa"; XFLANG="-x objective-c++" ;;
+        *)                    XFLINK="-lX11 -ldl" ;;
+    esac
+    if [ -z "$CXX" ]; then
+        echo "skip transform: no C++ compiler"
+        skips=$((skips + 1))
+    elif "$CXX" -std=c++17 -O1 -DNEXA_GEN="\"$WORK/xf.cpp\"" $XFLANG "$SUITE/gfx3d_transform_semantics.cpp" $XFLINK -o "$WORK/xf_sem" > "$WORK/xf_build.log" 2>&1; then
+        xfbin="$WORK/xf_sem"
+        [ -x "$xfbin" ] || xfbin="$WORK/xf_sem.exe"
+        if ! "$xfbin" > "$WORK/xf.out" 2>&1; then
+            echo "FAIL transform semantics:"
+            sed 's/^/  /' "$WORK/xf.out" | head -8
+            fails=$((fails + 1))
+        fi
+    else
+        echo "skip transform: the driver would not build on this machine"
+        sed 's/^/  /' "$WORK/xf_build.log" | tail -3
+        skips=$((skips + 1))
+    fi
+else
+    echo "FAIL transform: NexaC could not transpile the transform program"
+    sed 's/^/  /' "$WORK/xf.log" | tail -3
+    fails=$((fails + 1))
+fi
 
 # --- wasm layer -------------------------------------------------------------
 

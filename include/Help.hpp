@@ -589,6 +589,10 @@ no array of pixels to read back.
             gfx3d.cone(...)      radius at the first point, a tip at the second
             gfx3d.line3(x1,y1,z1, x2,y2,z2, r,g,b)
             gfx3d.grid(size, step, r, g, b)          the y = 0 plane
+  place     gfx3d.translate(x, y, z)   moves what is drawn next
+            gfx3d.rotate(rx, ry, rz)   degrees, right-hand rule, X then Y then Z
+            gfx3d.scale(s)             uniform
+            gfx3d.reset()              back to world space; gfx3d.clear does too
   input     gfx3d.key(name)  gfx3d.pressed(name)  gfx3d.released(name)
             gfx3d.typed()    gfx3d.wheel()        gfx3d.wheel_x()
             gfx3d.mouse(button)  gfx3d.mouse_x()  gfx3d.mouse_y()

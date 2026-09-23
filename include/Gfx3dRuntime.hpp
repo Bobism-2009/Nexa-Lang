@@ -210,6 +210,11 @@ struct __nexa_G3State {
     float proj[16] = {0};
     float view[16] = {0};
 
+    // The model transform every vertex goes through. xf_id is the fast path:
+    // a program that never asks for one pays nothing for it.
+    float xf[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+    int xf_id = 1;
+
     // What the program asked for, and what it got. They differ only while
     // there is a renderer that is not built yet.
     std::string requested = "opengl";
@@ -317,6 +322,63 @@ static void __nexa_g3_mul4(float* out, const float* a, const float* b) {
     }
 }
 
+// --- the transform ----------------------------------------------------------
+//
+// One matrix that every vertex passes through on its way into the batch, so a
+// shape can be put somewhere and turned without the program doing the
+// arithmetic itself. Until this existed the only thing in the module that
+// could move was the camera, which is why every demo orbited the eye to make
+// anything appear to spin.
+//
+// It is one matrix and not a stack. gfx3d.reset puts it back to nothing, and
+// gfx3d.clear does too, which makes the transform a per-frame thing: forget a
+// reset and the rest of that frame is wrong, rather than every frame after it
+// drifting further from where it started. A stack is what a scene graph wants
+// and this module has no scene graph.
+//
+// The calls compose in the order they are written, each relative to the ones
+// before it, which is what makes
+//
+//     gfx3d.translate(5, 0, 0);
+//     gfx3d.rotate(0, 45, 0);
+//     gfx3d.cube(0, 0, 0, 1, ...);
+//
+// read as "put it at x = 5, and turn it 45 degrees where it stands" rather
+// than swinging it around the origin on a 5-unit arm.
+
+static void __nexa_g3_ident(float* m) {
+    for (int i = 0; i < 16; i++) m[i] = 0.0f;
+    m[0] = 1.0f; m[5] = 1.0f; m[10] = 1.0f; m[15] = 1.0f;
+}
+
+// M = M * T, so the newest call is the one applied to a vertex first.
+static void __nexa_g3_post(const float* t) {
+    float out[16];
+    __nexa_g3_mul4(out, __nexa_g3.xf, t);
+    for (int i = 0; i < 16; i++) __nexa_g3.xf[i] = out[i];
+    __nexa_g3.xf_id = 0;
+}
+
+// A point carries the translation column; a direction does not, which is the
+// whole difference between moving a corner and turning the surface it is on.
+static void __nexa_g3_xf_point(float* x, float* y, float* z) {
+    if (__nexa_g3.xf_id) return;
+    const float* m = __nexa_g3.xf;
+    float px = *x, py = *y, pz = *z;
+    *x = m[0] * px + m[4] * py + m[8]  * pz + m[12];
+    *y = m[1] * px + m[5] * py + m[9]  * pz + m[13];
+    *z = m[2] * px + m[6] * py + m[10] * pz + m[14];
+}
+
+static void __nexa_g3_xf_dir(float* x, float* y, float* z) {
+    if (__nexa_g3.xf_id) return;
+    const float* m = __nexa_g3.xf;
+    float px = *x, py = *y, pz = *z;
+    *x = m[0] * px + m[4] * py + m[8]  * pz;
+    *y = m[1] * px + m[5] * py + m[9]  * pz;
+    *z = m[2] * px + m[6] * py + m[10] * pz;
+}
+
 // --- the vertex batch -------------------------------------------------------
 //
 // Every shape in this module is triangles with a colour per vertex. They are
@@ -352,6 +414,9 @@ static void __nexa_g3_batch_submit(void);
 // the platform block need it: text is gated on focus like every other
 // reading, and those collectors run before this file gets to input.
 static int __nexa_g3_focused(void);
+// gfx3d.open and gfx3d.clear both put the model transform back, and both
+// run before the transform calls are defined further down.
+static void __nexa_gfx3d_reset(void);
 
 static int __nexa_g3_prim_size(void) { return __nexa_g3_prim ? 2 : 3; }
 
@@ -370,6 +435,9 @@ static void __nexa_g3_batch_begin_lines(void) {
 // Colours arrive 0..255 as they do everywhere in gfx; the batch keeps them
 // 0..1, which is what both backends want in the end.
 static void __nexa_g3_batch_vert(float x, float y, float z, float r, float g, float b) {
+    // Every position in the module arrives here, which is why the model
+    // transform is applied here and nowhere else: one place to be right.
+    __nexa_g3_xf_point(&x, &y, &z);
     // Full, and on a whole primitive: send what there is and carry on.
     if (__nexa_g3_vn >= NEXA_G3_MAXVERTS - __nexa_g3_prim_size()
             && __nexa_g3_vn % __nexa_g3_prim_size() == 0) {
@@ -1351,6 +1419,7 @@ static void __nexa_g3_read_mouse(void) {
 }
 
 
+
 // --- shading ----------------------------------------------------------------
 //
 // There is no gfx3d.light, and these shapes still have to be shape-shaped. A
@@ -1394,6 +1463,10 @@ static float __nexa_g3_shade(float nx, float ny, float nz) {
 static void __nexa_g3_vert_n(float x, float y, float z,
                              float nx, float ny, float nz,
                              float r, float g, float b) {
+    // The position is transformed inside batch_vert; the normal has to be
+    // turned here, before it decides how lit this corner is. Scaling is
+    // uniform, so the length it picks up washes out in the normalise.
+    __nexa_g3_xf_dir(&nx, &ny, &nz);
     float k = __nexa_g3_shade(nx, ny, nz);
     __nexa_g3_batch_vert(x, y, z, r * k, g * k, b * k);
 }
@@ -1409,6 +1482,9 @@ static void __nexa_g3_face(float ax, float ay, float az,
     float nx = uy * vz - uz * vy;
     float ny = uz * vx - ux * vz;
     float nz = ux * vy - uy * vx;
+    // Worked out from the corners as written, so it is turned the same way
+    // they are about to be.
+    __nexa_g3_xf_dir(&nx, &ny, &nz);
     float k = __nexa_g3_shade(nx, ny, nz);
     __nexa_g3_batch_vert(ax, ay, az, r * k, g * k, b * k);
     __nexa_g3_batch_vert(bx, by, bz, r * k, g * k, b * k);
@@ -1665,6 +1741,7 @@ static int __nexa_gfx3d_open(const std::string& title, int w, int h) {
     __nexa_gl.Enable(NEXA_GL_CULL_FACE);
     __nexa_gl.CullFace(NEXA_GL_BACK);
     __nexa_gl.FrontFace(NEXA_GL_CCW);
+    __nexa_gfx3d_reset();
     __nexa_g3.ready = 1;
     return 1;
 }
@@ -1701,6 +1778,10 @@ static int __nexa_gfx3d_height(void) {
 
 // Colours arrive 0..255 like every colour in gfx; GL wants them 0..1.
 static void __nexa_gfx3d_clear(int r, int g, int b) {
+    // The model transform is the program's own state rather than the
+    // window's, so a frame starts clean whether or not there is a window to
+    // draw it in. Everything below this line needs a GL context and stops.
+    __nexa_gfx3d_reset();
     if (!__nexa_g3.ready) return;
     if (r < 0) r = 0; if (r > 255) r = 255;
     if (g < 0) g = 0; if (g > 255) g = 255;
@@ -1980,6 +2061,62 @@ static void __nexa_gfx3d_present(void) {
     } else {
         __nexa_g3.next_deadline += __nexa_g3.frame_ms;
     }
+}
+
+
+// --- the transform calls ----------------------------------------------------
+
+// Back to world space: the next shape is drawn where its own numbers say.
+static void __nexa_gfx3d_reset(void) {
+    __nexa_g3_ident(__nexa_g3.xf);
+    __nexa_g3.xf_id = 1;
+}
+
+static void __nexa_gfx3d_translate(double x, double y, double z) {
+    float t[16];
+    __nexa_g3_ident(t);
+    t[12] = (float)x; t[13] = (float)y; t[14] = (float)z;
+    __nexa_g3_post(t);
+}
+
+// Degrees, and by the right-hand rule: looking back down an axis towards the
+// origin, a positive angle turns counter-clockwise. That is the convention
+// every 3D system uses, and it is deliberately NOT gfx.arc's -- there, angles
+// are clockwise because a screen's y runs downwards and a clock is what a
+// reader pictures. Here the axes are the thing being turned about.
+//
+// The three are applied X first, then Y, then Z, which is the order that makes
+// rotate(pitch, yaw, 0) read the way a camera or an aircraft does.
+static void __nexa_gfx3d_rotate(double rx, double ry, double rz) {
+    const float d2r = 0.01745329251994329577f;
+    float cx = std::cos((float)rx * d2r), sx = std::sin((float)rx * d2r);
+    float cy = std::cos((float)ry * d2r), sy = std::sin((float)ry * d2r);
+    float cz = std::cos((float)rz * d2r), sz = std::sin((float)rz * d2r);
+
+    float mx[16], my[16], mz[16], a[16], r[16];
+    __nexa_g3_ident(mx);
+    mx[5] = cx;  mx[9]  = -sx; mx[6]  = sx; mx[10] = cx;
+    __nexa_g3_ident(my);
+    my[0] = cy;  my[8]  = sy;  my[2]  = -sy; my[10] = cy;
+    __nexa_g3_ident(mz);
+    mz[0] = cz;  mz[4]  = -sz; mz[1]  = sz;  mz[5]  = cz;
+
+    // Rz * Ry * Rx, so a vertex meets Rx first.
+    __nexa_g3_mul4(a, mz, my);
+    __nexa_g3_mul4(r, a, mx);
+    __nexa_g3_post(r);
+}
+
+// Uniform only, and on purpose. A normal under a non-uniform scale needs the
+// inverse transpose to stay perpendicular to its surface, and without that a
+// squashed sphere is lit as though it were still round. Uniform scaling picks
+// up a length that the shading normalise throws away, so it is free and it is
+// right. gfx3d.box is where a shape with three different sides comes from.
+static void __nexa_gfx3d_scale(double s) {
+    float t[16];
+    __nexa_g3_ident(t);
+    t[0] = (float)s; t[5] = (float)s; t[10] = (float)s;
+    __nexa_g3_post(t);
 }
 
 // --- the input calls --------------------------------------------------------

@@ -4578,6 +4578,10 @@ private:
         if (m == "cone") return "gfx3d.cone(x1, y1, z1, x2, y2, z2, radius, r, g, b) draws to the window";
         if (m == "line3") return "gfx3d.line3(x1, y1, z1, x2, y2, z2, r, g, b) draws to the window";
         if (m == "grid") return "gfx3d.grid(size, step, r, g, b) draws to the window";
+        if (m == "translate") return "gfx3d.translate(x, y, z) moves what you draw next";
+        if (m == "rotate") return "gfx3d.rotate(rx, ry, rz) turns what you draw next";
+        if (m == "scale") return "gfx3d.scale(s) resizes what you draw next";
+        if (m == "reset") return "gfx3d.reset() puts the transform back";
         if (m == "camera") return "gfx3d.camera(ex, ey, ez, tx, ty, tz) moves the camera";
         if (m == "perspective") return "gfx3d.perspective(fov, near, far) sets the lens";
         if (m == "present") return "gfx3d.present() shows what you drew";
@@ -4608,8 +4612,11 @@ private:
         if (method == "open") argc = 3;
         else if (method == "close" || method == "poll" || method == "present" || method == "closed"
                  || method == "width" || method == "height" || method == "backend"
+                 || method == "reset"
                  || method == "mouse_x" || method == "mouse_y"
                  || method == "wheel" || method == "wheel_x" || method == "typed") argc = 0;
+        else if (method == "scale") argc = 1;
+        else if (method == "translate" || method == "rotate") argc = 3;
         else if (method == "maxfps" || method == "renderer"
                  || method == "key" || method == "pressed" || method == "released"
                  || method == "mouse") argc = 1;
@@ -4627,7 +4634,8 @@ private:
                 "' at line " + std::to_string(methodTok.line) +
                 " (use open, close, poll, closed, present, width, height, clear, camera,"
                 " perspective, tri, cube, box, sphere, capsule, cylinder, cone,"
-                " line3, grid, maxfps, renderer, backend, key, pressed,"
+                " line3, grid, translate, rotate, scale, reset,"
+                " maxfps, renderer, backend, key, pressed,"
                 " released, typed, wheel, wheel_x, mouse, mouse_x, mouse_y)");
         }
         if (!match(TokenType::LParen)) {
@@ -4660,6 +4668,9 @@ private:
             else if (method == "cone") sig = "gfx3d.cone(x1, y1, z1, x2, y2, z2, radius, r, g, b)";
             else if (method == "line3") sig = "gfx3d.line3(x1, y1, z1, x2, y2, z2, r, g, b)";
             else if (method == "grid") sig = "gfx3d.grid(size, step, r, g, b)";
+            else if (method == "translate") sig = "gfx3d.translate(x, y, z)";
+            else if (method == "rotate") sig = "gfx3d.rotate(rx, ry, rz)";
+            else if (method == "scale") sig = "gfx3d.scale(s)";
             else if (method == "tri") sig = "gfx3d.tri(x1, y1, z1, x2, y2, z2, x3, y3, z3, r, g, b)";
             else if (method == "maxfps") sig = "gfx3d.maxfps(fps)";
             else if (method == "renderer") sig = "gfx3d.renderer(name)";
