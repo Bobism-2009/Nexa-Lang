@@ -1014,6 +1014,66 @@ static bool nexaEnsureWasmTool(WasmTool& tool) {
     return true;
 }
 
+// The page that loads an Emscripten build.
+//
+// Every --wasm build gets one, because a .js loader on its own is not
+// something a person can open -- it is something a page includes. Two shells,
+// picked by what the program draws with: a gfx program wants a canvas and
+// nothing else in the way, and a console program wants somewhere for
+// io.println to land, since a browser has no stdout.
+//
+// `jsName` is the loader's file name, not its path: the page and the loader
+// are written side by side, so a relative src is what keeps the pair movable.
+static bool nexaWriteWasmHtml(const std::filesystem::path& htmlPath,
+                              const std::string& jsName,
+                              bool canvas) {
+    std::ofstream html(htmlPath);
+    if (!html) return false;
+
+    html << "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>Nexa</title>\n";
+    if (canvas) {
+        html << "<style>html,body{margin:0;height:100%;background:#111;color:#ccc;";
+        html << "display:flex;flex-direction:column;align-items:center;justify-content:center;";
+        html << "font:14px sans-serif}</style>\n";
+        html << "</head><body>\n<canvas id=\"canvas\" oncontextmenu=\"event.preventDefault()\"></canvas>\n";
+        html << "<div id=\"nexa-status\">Loading\xE2\x80\xA6</div>\n";
+        html << "<script>\n";
+        html << "var nexaStatus=document.getElementById('nexa-status');\n";
+        html << "var Module={\n";
+        html << "  canvas:document.getElementById('canvas'),\n";
+        html << "  printErr:function(t){if(nexaStatus)nexaStatus.textContent=t;},\n";
+        html << "  onAbort:function(r){if(nexaStatus)nexaStatus.textContent=String(r);},\n";
+        html << "  onRuntimeInitialized:function(){if(nexaStatus)nexaStatus.remove();}\n";
+        html << "};\n";
+        html << "</script>\n";
+    } else {
+        // No canvas, so the page is the terminal the program does not have.
+        // print and printErr both land in the same block, in the order they
+        // were written, which is what a console program's output looks like.
+        html << "<style>html,body{margin:0;min-height:100%;background:#111;color:#ccc;";
+        html << "font:14px ui-monospace,SFMono-Regular,Consolas,monospace}";
+        html << "#nexa-out{margin:0;padding:16px;white-space:pre-wrap;word-break:break-word}";
+        html << "#nexa-out.waiting{color:#777}</style>\n";
+        html << "</head><body>\n<pre id=\"nexa-out\" class=\"waiting\">Loading\xE2\x80\xA6</pre>\n";
+        html << "<script>\n";
+        html << "var nexaOut=document.getElementById('nexa-out');\n";
+        html << "var nexaStarted=false;\n";
+        html << "function nexaWrite(t){\n";
+        html << "  if(!nexaStarted){nexaOut.textContent='';nexaOut.className='';nexaStarted=true;}\n";
+        html << "  nexaOut.textContent+=t+'\\n';\n";
+        html << "}\n";
+        html << "var Module={\n";
+        html << "  print:nexaWrite,\n";
+        html << "  printErr:nexaWrite,\n";
+        html << "  onAbort:function(r){nexaWrite(String(r));}\n";
+        html << "};\n";
+        html << "</script>\n";
+    }
+    html << "<script src=\"" << jsName << "\"></script>\n</body></html>\n";
+    html.close();
+    return true;
+}
+
 // Emscripten treats bare `-s` as a settings flag (not strip). Never reuse the native link line.
 static std::string nexaWasmCompileCmd(
     const WasmTool& tool,
@@ -1025,6 +1085,7 @@ static std::string nexaWasmCompileCmd(
     bool linkHttp,
     bool linkThread,
     bool linkGfx,
+    bool singleFile,
     const std::vector<std::string>& linkInputs
 ) {
 #ifdef _WIN32
@@ -1046,7 +1107,15 @@ static std::string nexaWasmCompileCmd(
         if (linkHttp) cmd += " -sFETCH=1";
         if (linkHttp || linkGfx) cmd += " -sASYNCIFY";
         if (linkThread) cmd += " -pthread -sPTHREAD_POOL_SIZE=4";
-        if (linkGfx) cmd += " -sFORCE_FILESYSTEM=1 -sSINGLE_FILE=1";
+        // FORCE_FILESYSTEM is gfx's: the file picker and the drop path need it.
+        if (linkGfx) cmd += " -sFORCE_FILESYSTEM=1";
+        // Baking the .wasm into the .js is the default because a separate
+        // .wasm cannot be fetched over file:// -- a browser refuses the
+        // cross-origin request for it, so a three-file build only runs off a
+        // server. One file opens by double-clicking the page. --wasm-split
+        // is for when you are serving it anyway and want the .wasm cacheable
+        // on its own.
+        if (singleFile) cmd += " -sSINGLE_FILE=1";
     } else {
         cmd += " --target=wasm32-wasi";
         if (!tool.sysroot.empty()) {
@@ -1507,6 +1576,7 @@ int main(int argc, char* argv[]) {
     bool buildStaticLib = false;  // -> .a (Linux) / .lib (Windows) static archive
     bool buildWin = false;   // mingw -> .exe (cross-compile from Linux)
     bool buildWasm = false;  // em++ / WASI -> .js+.wasm or .wasm
+    bool wasmSplit = false;  // --wasm-split: .html + .js + .wasm, not one baked .js
     bool noConsole = false;  // Windows GUI subsystem
     bool runAfterBuild = false;
     bool pendingSourceOut = false;
@@ -1563,6 +1633,8 @@ int main(int argc, char* argv[]) {
             buildWin = true;
         } else if (arg == "--wasm" || arg == "--wasm32") {
             buildWasm = true;
+        } else if (arg == "--wasm-split" || arg == "--split") {
+            wasmSplit = true;
         } else if (arg == "--no-console") {
             noConsole = true;
         } else if (arg == "--run" || arg == "-r") {
@@ -1633,6 +1705,10 @@ int main(int argc, char* argv[]) {
         std::cerr << "[Nexa] Error: --debug is not supported with --wasm (NexaC debug builds target native gdb/lldb)\n";
         std::cerr << "[Nexa] Tip: debug the same program natively (NexaC file.nxa --debug --run), then build --wasm to ship.\n";
         std::cerr << "[Nexa] Tip: for browser-side DWARF (em++ builds only), pass it through: NEXA_CXXFLAGS=\"-g\" NexaC file.nxa --wasm --p\n";
+        return 1;
+    }
+    if (wasmSplit && !buildWasm) {
+        std::cerr << "[Nexa] Error: --wasm-split only means anything with --wasm (it splits the WebAssembly output into .html + .js + .wasm)\n";
         return 1;
     }
     if (buildWasm && noConsole) {
@@ -2015,9 +2091,18 @@ int main(int argc, char* argv[]) {
         const bool linkGfx3d = modules.hasGfx3d() && usage.gfx3d;
 
         if (buildWasm) {
+            // WASI has no .js loader and no page: it emits a bare module for a
+            // wasmtime-style host. There is nothing there to split, so asking
+            // is a mistake worth naming rather than a flag to ignore.
+            if (wasmSplit && wasmTool.kind != WasmKind::Emscripten) {
+                std::cerr << "[Nexa] Error: --wasm-split needs Emscripten; the WASI toolchain emits a bare .wasm with no .js loader to split\n";
+                std::cerr << "[Nexa] Tip: install Emscripten (NexaC offers to), or set NEXA_WASM_CXX to an em++.\n";
+                return 1;
+            }
+            const bool singleFile = (wasmTool.kind == WasmKind::Emscripten) && !wasmSplit;
             std::string cmd = nexaWasmCompileCmd(wasmTool, cppPath, wasmOut, opt, noExceptions, noRtti,
                 modules.hasHttp() && usage.http, modules.hasThread() && usage.thread,
-                modules.hasGfx() && usage.gfx, linkInputs);
+                modules.hasGfx() && usage.gfx, singleFile, linkInputs);
             int ret = std::system(cmd.c_str());
             std::remove(cppPath.c_str());
             if (ret != 0) {
@@ -2025,38 +2110,30 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
             std::cout << "[Nexa] Build successful!\n";
+            std::filesystem::path wasmHtmlPath;
             if (wasmTool.kind == WasmKind::Emscripten) {
-                std::cout << "[Nexa] Loader: " << wasmOut << "\n";
-                if (modules.hasGfx() && usage.gfx) {
-                    std::filesystem::path jsPath(wasmOut);
-                    std::filesystem::path htmlPath = jsPath;
-                    htmlPath.replace_extension(".html");
-                    std::string jsName = jsPath.filename().string();
-                    std::ofstream html(htmlPath);
-                    html << "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>Nexa</title>\n";
-                    html << "<style>html,body{margin:0;height:100%;background:#111;color:#ccc;";
-                    html << "display:flex;flex-direction:column;align-items:center;justify-content:center;";
-                    html << "font:14px sans-serif}</style>\n";
-                    html << "</head><body>\n<canvas id=\"canvas\" oncontextmenu=\"event.preventDefault()\"></canvas>\n";
-                    html << "<div id=\"nexa-status\">Loading…</div>\n";
-                    html << "<script>\n";
-                    html << "var nexaStatus=document.getElementById('nexa-status');\n";
-                    html << "var Module={\n";
-                    html << "  canvas:document.getElementById('canvas'),\n";
-                    html << "  printErr:function(t){if(nexaStatus)nexaStatus.textContent=t;},\n";
-                    html << "  onAbort:function(r){if(nexaStatus)nexaStatus.textContent=String(r);},\n";
-                    html << "  onRuntimeInitialized:function(){if(nexaStatus)nexaStatus.remove();}\n";
-                    html << "};\n";
-                    html << "</script>\n";
-                    html << "<script src=\"" << jsName << "\"></script>\n</body></html>\n";
-                    html.close();
-                    std::cout << "[Nexa] Page: " << htmlPath.string() << "\n";
-                    std::cout << "[Nexa] Open the .html in a browser (the .js embeds the .wasm).\n";
-                } else {
-                    std::string side = std::filesystem::path(wasmOut).replace_extension(".wasm").string();
-                    std::cout << "[Nexa] Module: " << side << "\n";
-                    std::cout << "[Nexa] Run: node \"" << wasmOut << "\"  (or include the .js from a page)\n";
+                // A .js loader is something a page includes, not something a
+                // person opens, so every Emscripten build gets a page. Which
+                // shell depends on what the program draws with.
+                std::filesystem::path jsPath(wasmOut);
+                wasmHtmlPath = jsPath;
+                wasmHtmlPath.replace_extension(".html");
+                const bool wantsCanvas = modules.hasGfx() && usage.gfx;
+                if (!nexaWriteWasmHtml(wasmHtmlPath, jsPath.filename().string(), wantsCanvas)) {
+                    std::cerr << "[Nexa] Error: Cannot write " << wasmHtmlPath.string() << "\n";
+                    return 1;
                 }
+                std::cout << "[Nexa] Page: " << wasmHtmlPath.string() << "\n";
+                std::cout << "[Nexa] Loader: " << wasmOut << "\n";
+                if (singleFile) {
+                    std::cout << "[Nexa] Open the .html in a browser (the .js embeds the .wasm, so file:// works).\n";
+                } else {
+                    std::cout << "[Nexa] Module: "
+                              << std::filesystem::path(wasmOut).replace_extension(".wasm").string() << "\n";
+                    std::cout << "[Nexa] Serve all three from one directory: a separate .wasm is fetched, and a\n";
+                    std::cout << "[Nexa] browser will not fetch it over file:// -- use http:// (python -m http.server).\n";
+                }
+                std::cout << "[Nexa] Or run the loader directly: node \"" << wasmOut << "\"\n";
             } else {
                 std::cout << "[Nexa] Module: " << wasmOut << "\n";
                 std::cout << "[Nexa] Run: wasmtime \"" << wasmOut << "\"\n";
@@ -2066,6 +2143,10 @@ int main(int argc, char* argv[]) {
                 int runRet = runWasmOutput(wasmOut, wasmTool.kind);
                 std::remove(wasmOut.c_str());
                 if (wasmTool.kind == WasmKind::Emscripten) {
+                    // The page always exists; the sibling .wasm only when the
+                    // build was split. Removing one that is not there is a
+                    // no-op, so both are named unconditionally.
+                    if (!wasmHtmlPath.empty()) std::remove(wasmHtmlPath.string().c_str());
                     std::remove(std::filesystem::path(wasmOut).replace_extension(".wasm").string().c_str());
                 }
 #ifdef _WIN32

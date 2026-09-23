@@ -137,7 +137,8 @@ Full detail: [`SYNTAX/CLI.txt`](SYNTAX/CLI.txt) or `NexaC --help`.
 | `NexaC --static-lib` | Build a static archive (`.a` Linux / `.lib` Windows) from a `.nxa` |
 | `NexaC file.nxa --link lib.a` | Statically link an archive/object into the executable (repeatable) |
 | `NexaC --no-console` | Windows subsystem without console (executables only) |
-| `NexaC file.nxa --wasm` | WebAssembly via **em++** (`.js` + `.wasm`) or WASI-SDK (`.wasm`). With `std/gfx`, also writes a `.html` (`.js` embeds the `.wasm`) |
+| `NexaC file.nxa --wasm` | WebAssembly via **em++**: a `.js` loader with the `.wasm` baked in, plus a `.html` that loads it — so the page opens over `file://`. WASI-SDK emits a bare `.wasm` |
+| `NexaC file.nxa --wasm --wasm-split` | The same, as three separate files (`.html`, `.js`, `.wasm`). Needs a server: a browser will not fetch a separate `.wasm` over `file://` |
 | `nexapkg <cmd>` / `NexaC nexapkg <cmd>` | Package manager (see [Packages](#packages-nexapkg)) |
 
 ---

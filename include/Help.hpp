@@ -146,12 +146,21 @@ OUTPUT
 
 TARGETS
   --win              Windows .exe (mingw-w64 when cross-compiling from Linux)
-  --wasm             WebAssembly: em++ writes .js + .wasm, WASI-SDK writes
-                     .wasm. With std/gfx, em++ also writes a sibling .html and
-                     the .js embeds the .wasm, so file:// works. If the
-                     toolchain is missing, NexaC offers to install Emscripten
-                     into ~/emsdk and reuses anything already there.
+  --wasm             WebAssembly. em++ writes a <out>.js loader with the
+                     .wasm baked into it, and a <out>.html that loads it --
+                     a canvas page for a std/gfx program, a text console
+                     otherwise. Embedding is the default because a browser
+                     will not fetch a separate .wasm over file://, so the
+                     page opens by double-clicking. WASI-SDK writes a bare
+                     .wasm with no loader and no page. If the toolchain is
+                     missing, NexaC offers to install Emscripten into
+                     ~/emsdk and reuses anything already there.
                      Set NEXA_WASM_CXX to force a compiler.
+  --wasm-split       Write .html, .js and .wasm as three files instead of
+                     baking the .wasm in. Serve them together over http://;
+                     file:// will not load the .wasm. Alias: --split. Needs
+                     em++ and --wasm. (Useful when you are serving the page
+                     anyway and want the .wasm cached on its own.)
 
 BUILD
   -r, --run          run it after building. Without --debug the binary goes to

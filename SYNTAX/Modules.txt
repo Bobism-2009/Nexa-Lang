@@ -928,7 +928,9 @@ ARGUMENT TYPES
   Note that the two pieces of draw state differ on purpose: gfx.open() puts the
   alpha back to 255, so setting it before opening a window buys nothing, while
   the text size is carried across and lasts until changed.
-  --wasm + gfx writes a sibling .html (the .js embeds the .wasm, so file:// works).
+  --wasm writes a sibling .html with a canvas on it, and bakes the .wasm into
+  the .js, so the page opens over file://. --wasm-split writes the .wasm
+  separately instead, which then needs a server.
   The page stays blank/gray until the runtime yields: call gfx.present() and
   time.sleep(...) in your loop. NexaC links those builds with -sASYNCIFY.
 

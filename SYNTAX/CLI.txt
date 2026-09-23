@@ -50,10 +50,24 @@ OPTIONS
   --dll     Build Windows .dll (default: -Os; link with strip for size)
   --shared  Build .dylib (macOS) or .so (Linux)
   --win     Build Windows .exe (mingw-w64 from Linux)
-  --wasm    Build WebAssembly (em++ → .js+.wasm, or WASI-SDK → .wasm).
+  --wasm    Build WebAssembly (em++, or WASI-SDK when em++ is absent).
             If the WASM toolchain is missing, a popup asks to install Emscripten.
-            With std/gfx, em++ also writes a sibling .html; the .js embeds the
-            .wasm so you can open the page without a local server.
+            em++ writes two files and one of them is a page you can open:
+              <out>.js    the loader, with the .wasm baked into it
+              <out>.html  a page that loads it
+            The .wasm is embedded because a separate one cannot be fetched
+            over file:// -- a browser refuses the request, so a split build
+            only runs off a server. One file opens by double-clicking.
+            The page is a canvas for a std/gfx program and a text console
+            otherwise, so io.println has somewhere to land.
+            WASI-SDK emits a bare .wasm with no loader and no page.
+  --wasm-split   Write the three files separately instead: <out>.html, the
+            <out>.js loader, and <out>.wasm beside it. Serve them from one
+            directory over http:// -- file:// will not load the .wasm.
+            Use it when you are serving the page anyway and want the .wasm
+            cached on its own. Alias: --split. Needs em++, and is an error
+            without --wasm or with the WASI toolchain, which has no loader
+            to split.
   --no-console    Build Windows GUI .exe with no console window
   fn __init__() in a DLL/SO/dylib is auto-executed when the library is loaded
   --run, -r       Compile to temp file and run
