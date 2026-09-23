@@ -264,6 +264,17 @@ expect_emit "audio_queued" '__nexa_gfx_audio_queued\(\)' \
 expect_emit "audio_flush is usable as an expression" \
     '__nexa_gfx_audio_flush\(\), 0' '    let n: int = gfx.audio_flush();'
 
+# A condition is emitted by a different path from an expression -- one with an
+# allow-list of node types and `return "false"` for everything not on it. gfx
+# calls were not on that list, so `if (gfx.key("w"))` compiled to `if (false)`
+# and the whole input family read as never-happening, in a program that built
+# and ran without a word. The call emits correctly everywhere except where it
+# is actually used, so only a test that puts one in an `if` catches it.
+expect_emit "key in a condition"     'if \(__nexa_gfx_key\("w"\)\)'           '    if (gfx.key("w")) { gfx.clear(1, 2, 3); }'
+expect_emit "mouse in a condition"   'if \(__nexa_gfx_mouse\("left"\)\)'      '    if (gfx.mouse("left")) { gfx.clear(1, 2, 3); }'
+expect_emit "pressed in a condition" 'if \(__nexa_gfx_pressed\("space"\)\)'   '    if (gfx.pressed("space")) { gfx.clear(1, 2, 3); }'
+expect_emit "drop in a condition"    'if \(!\(__nexa_gfx_drop\(\)\).empty\(\)\)' '    if (gfx.drop()) { gfx.clear(1, 2, 3); }'
+
 # --- behavioural layers -----------------------------------------------------
 
 pick_cxx() {

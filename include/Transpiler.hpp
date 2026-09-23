@@ -6167,6 +6167,31 @@ private:
                 return (c.value == "recv" || c.value == "sender")
                     ? "!(" + call + ").empty()" : call;
             }
+            // gfx.* and gfx3d.* answer 1/0, a handle or a count, and any of
+            // those is true when it is not zero. The few that answer text are
+            // true when there is text, which is the rule tcp.recv already
+            // follows two cases up.
+            //
+            // Without these, `if (gfx.key("w"))` fell through to the default
+            // below and became `if (false)`: the whole input family of both
+            // modules read as never-happening, silently, in a program that
+            // compiled and ran.
+            case AstNode::Type::GfxCall: {
+                std::string call = emitExpr(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                const std::string& m = c.value;
+                if (m == "drop" || m == "typed" || m == "opendialog" || m == "openfile"
+                        || (m == "title" && c.children.empty())) {
+                    return "!(" + call + ").empty()";
+                }
+                return call;
+            }
+            case AstNode::Type::Gfx3dCall: {
+                std::string call = emitExpr(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                if (c.value == "backend" || c.value == "typed") {
+                    return "!(" + call + ").empty()";
+                }
+                return call;
+            }
             case AstNode::Type::HttpCall:
             case AstNode::Type::ResultMake:
                 throw std::runtime_error("Result is not a condition; use .ok()");
