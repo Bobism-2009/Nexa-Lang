@@ -7,6 +7,7 @@
 #include "FileRuntime.hpp"
 #include "HttpRuntime.hpp"
 #include "GfxRuntime.hpp"
+#include "Gfx3dRuntime.hpp"
 #include "JsonRuntime.hpp"
 #include "PlatformEmit.hpp"
 #include "ResultRuntime.hpp"
@@ -147,6 +148,10 @@ public:
         bool gfxBorderless = false;
         bool gfxOntop = false;
         bool gfxTransparent = false;
+        // std/gfx3d. One flag, not a family of them: the 3D runtime is a
+        // single block, because at fifteen calls there is nothing worth
+        // slicing apart the way GfxNeed slices gfx.
+        bool gfx3d = false;
         bool json = false;
         bool result = false;
     };
@@ -224,6 +229,13 @@ public:
 
     bool hasGfx() const {
         return enabled_.count("std/gfx") > 0;
+    }
+
+    // The 3D window. A separate include from std/gfx rather than a corner of
+    // it: a program wants one or the other, and a gfx program should not
+    // carry a GL loader it never calls.
+    bool hasGfx3d() const {
+        return enabled_.count("std/gfx3d") > 0;
     }
 
     bool hasJson() const {
@@ -1553,6 +1565,9 @@ public:
             // so the edge readers need the whole of gfx.key() underneath them.
             if (need.keyEdge) need.keys = true;
             out += gfxRuntimeCpp(need);
+        }
+        if (hasGfx3d() && usage.gfx3d) {
+            out += gfx3dRuntimeCpp();
         }
         if (hasJson() && usage.json) {
             out += jsonRuntimeCpp();

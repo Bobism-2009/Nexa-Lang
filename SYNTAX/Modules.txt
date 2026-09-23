@@ -932,6 +932,96 @@ ARGUMENT TYPES
   The page stays blank/gray until the runtime yields: call gfx.present() and
   time.sleep(...) in your loop. NexaC links those builds with -sASYNCIFY.
 
+#include <std/gfx3d>
+  A 3D window, shaped like std/gfx. The loop is gfx's loop -- open, then poll,
+  clear, draw, present, until closed() -- and what changes is what a draw
+  means. gfx owns a framebuffer and writes pixels into it; gfx3d hands
+  triangles to the GPU and lets a depth buffer decide what is in front. There
+  is no gfx3d.get and no gfx3d.save for that reason: there is no array of
+  pixels here to read back.
+  Windows (Win32 + WGL) and Linux (X11 + GLX). No library to install on
+  either: the OpenGL entry points are declared in the runtime and fetched by
+  name at run time, so no GL development package is needed to build and no
+  loader library is linked. macOS and wasm have no backend yet -- there
+  gfx3d.open returns 0 and the rest of the module does nothing, exactly as
+  every gfx call does before the first gfx.open.
+  gfx3d.open(title, w, h)        - create a w*h window; 1 on success, 0 on failure
+                                   w and h clamp into 1..8192 rather than failing.
+                                   Depth testing and back-face culling are on from
+                                   the start; there is no call to turn them off
+  gfx3d.close()                  - destroy the window and its GL context
+  gfx3d.poll()                   - process events (call each frame)
+  gfx3d.closed()                 - 1 if the user closed the window; 0 before the
+                                   first gfx3d.open()
+  gfx3d.present()                - show the frame (swap buffers), then wait out
+                                   whatever the frame did not use of its gfx3d.maxfps
+                                   budget
+  gfx3d.width() / height()       - current drawable size in pixels (0 if closed).
+                                   These follow the window: a resize changes them,
+                                   and the projection follows with no call needed
+  gfx3d.maxfps(n)                - cap the loop at n frames a second. gfx3d.maxfps(0),
+                                   or any n below it, removes the cap; no cap is the
+                                   default. Deadline-based, exactly as gfx.maxfps is
+  gfx3d.clear(r, g, b)           - fill the window and reset the depth buffer, then
+                                   apply the camera for this frame. Colours are
+                                   0..255, as everywhere in gfx
+  gfx3d.camera(ex, ey, ez, tx, ty, tz)
+                                 - put the eye at ex,ey,ez looking at tx,ty,tz. Up is
+                                   +Y; when the view is straight up or down, where +Y
+                                   is no use, the up vector leans aside rather than
+                                   collapsing. The default eye is 0,0,5 looking at the
+                                   origin, so a program that never calls this still
+                                   sees what it draws there
+  gfx3d.perspective(fov, near, far)
+                                 - vertical field of view in DEGREES, and the two
+                                   clipping distances. fov clamps into 1..179, near to
+                                   at least 0.0001, and far to more than near -- a lens
+                                   with no picture in it is clamped, not refused.
+                                   Defaults are 60, 0.1 and 500
+  gfx3d.tri(x1, y1, z1, x2, y2, z2, x3, y3, z3, r, g, b)
+                                 - one triangle, flat-coloured, drawn from BOTH sides.
+                                   Culling is what a closed shape wants and a lone
+                                   triangle has no inside, so a triangle does not
+                                   vanish when the camera passes behind it
+  gfx3d.cube(x, y, z, size, r, g, b)
+                                 - an axis-aligned cube CENTRED on x,y,z with edge
+                                   length size. A negative size is its absolute value.
+                                   Each of the six faces is drawn at a fixed fraction
+                                   of the colour asked for, so that the shape reads as
+                                   solid: with no light in the module yet, a cube in
+                                   one flat colour is a hexagon. It is a constant per
+                                   face and does not move with the camera
+  gfx3d.renderer(name)           - ask for a renderer before gfx3d.open. "opengl" and
+                                   "vulkan" are accepted and answer 1; any other name
+                                   answers 0 and changes nothing
+  gfx3d.backend()                - the renderer the window actually opened with, as
+                                   text. "" before the first successful gfx3d.open
+  Two renderers are named and one is built. gfx3d.renderer("vulkan") is
+  accepted and quietly gives you OpenGL -- nothing is printed and nothing
+  fails -- and gfx3d.backend() then answers "opengl", which is what the window
+  really is rather than what was asked for. A program that cares reads
+  backend(); one that does not is not interrupted. The switch is where
+  programs will expect it when a Vulkan backend exists.
+  The drawing and window calls hand nothing back, and so are statements only:
+  clear, camera, perspective, tri, cube, present, poll, close and maxfps. Writing let C = gfx3d.cube(...); is an
+  error naming the call, exactly as it is in gfx. The ones that answer are
+  open, closed, width, height, renderer and backend.
+  Colours are r, g, b in 0..255 and are clamped. Coordinates and sizes are
+  floats; angles, where they appear, are degrees, the same convention gfx.arc
+  uses.
+  Use: #include <std/gfx3d>
+       fn main() {
+           gfx3d.open("cube", 800, 600);
+           gfx3d.camera(4.0, 3.0, 5.0, 0.0, 0.0, 0.0);
+           while (gfx3d.closed() != 1) {
+               gfx3d.poll();
+               gfx3d.clear(18, 18, 28);
+               gfx3d.cube(0.0, 0.0, 0.0, 2.0, 220, 90, 70);
+               gfx3d.present();
+           }
+           gfx3d.close();
+       }
+
 #include <std/inline>
   Enables inline_cpp! { ... } — paste C++ into the generated file. Lines starting with #include are hoisted to the top of the generated .cpp (no automatic iostream).
   Use only when Nexa has no API for this; body is not parsed by Nexa (brace matching only; } in strings can break).

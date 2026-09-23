@@ -286,6 +286,7 @@ public:
                     cppUsage.gfx = true;
                     noteGfxUsage(n, cppUsage);
                     break;
+                case AstNode::Type::Gfx3dCall: cppUsage.gfx3d = true; break;
                 case AstNode::Type::JsonCall: cppUsage.json = true; break;
                 case AstNode::Type::ResultMake: cppUsage.result = true; break;
                 case AstNode::Type::StrMethod:
@@ -2388,6 +2389,11 @@ private:
             case AstNode::Type::JsonCall:
                 if (e.value == "stringify") return "string";
                 return "json";
+            case AstNode::Type::Gfx3dCall:
+                // backend() is the only one that answers with text; the rest
+                // are 1/0 or a size, and the draws are statements.
+                if (e.value == "backend") return "string";
+                return "int";
             case AstNode::Type::GfxCall:
                 if (e.value == "title") return e.children.empty() ? "string" : "int";
                 if (e.value == "drop" || e.value == "opendialog" || e.value == "openfile"
@@ -3378,6 +3384,10 @@ private:
                 semCheckGfxPoly(e);
                 semCheckBuiltinArgTypes(e);
                 break;
+            case AstNode::Type::Gfx3dCall:
+                for (const AstNode& c : e.children) semExpr(c);
+                semCheckBuiltinArgTypes(e);
+                break;
             case AstNode::Type::FnCall:
             case AstNode::Type::ExprCall:
                 for (const AstNode& c : e.children) semExpr(c);
@@ -3459,6 +3469,23 @@ private:
     // std/gfx. Zero-argument builtins (close, poll, present, closed, width,
     // height, scale, wheel, wheel_x, typed, mouse_x, mouse_y, drop,
     // audio_queued, audio_flush) need no row.
+    // std/gfx3d. Zero-argument builtins (close, poll, present, closed, width,
+    // height, backend) need no row.
+    static const BuiltinArgRow* gfx3dArgRows() {
+        static const BuiltinArgRow rows[] = {
+            {"open",        "gfx3d.open(title, w, h)",                                "tnn"},
+            {"clear",       "gfx3d.clear(r, g, b)",                                   "nnn"},
+            {"camera",      "gfx3d.camera(ex, ey, ez, tx, ty, tz)",                   "nnnnnn"},
+            {"perspective", "gfx3d.perspective(fov, near, far)",                      "nnn"},
+            {"tri",         "gfx3d.tri(x1, y1, z1, x2, y2, z2, x3, y3, z3, r, g, b)", "nnnnnnnnnnnn"},
+            {"cube",        "gfx3d.cube(x, y, z, size, r, g, b)",                     "nnnnnnn"},
+            {"maxfps",      "gfx3d.maxfps(fps)",                                      "n"},
+            {"renderer",    "gfx3d.renderer(name)",                                   "t"},
+            {"", nullptr, nullptr},
+        };
+        return rows;
+    }
+
     static const BuiltinArgRow* gfxArgRows() {
         static const BuiltinArgRow rows[] = {
             {"open",            "gfx.open(title, w, h[, scale])",                  "tnnn"},
@@ -3860,6 +3887,9 @@ private:
         switch (e.type) {
             case AstNode::Type::GfxCall:
                 semCheckBuiltinArgRow(e, findBuiltinArgRow(gfxArgRows(), e.value, e.children.size()));
+                break;
+            case AstNode::Type::Gfx3dCall:
+                semCheckBuiltinArgRow(e, findBuiltinArgRow(gfx3dArgRows(), e.value, e.children.size()));
                 break;
             case AstNode::Type::MathCall:
                 semCheckBuiltinArgRow(e, findBuiltinArgRow(mathArgRows(), e.value, e.children.size()));
@@ -4518,6 +4548,9 @@ private:
         // udp.recv the same, and udp.sender is the address the bytes came from.
         if (e.type == AstNode::Type::UdpCall) return e.value == "recv" || e.value == "sender";
         if (e.type == AstNode::Type::JsonCall && e.value == "stringify") return true;
+        // gfx3d.backend() is the one call in the module that answers with
+        // text, so it is the one that concatenates instead of being counted.
+        if (e.type == AstNode::Type::Gfx3dCall) return e.value == "backend";
         if (e.type == AstNode::Type::ExprCast && e.value == "string") return true;
         if (e.type == AstNode::Type::FileCall) {
             const std::string& m = e.value;
@@ -5153,6 +5186,8 @@ private:
             } else if (child.type == AstNode::Type::FileCall) {
                 out << indent << "(void)(" << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ");\n";
             } else if (child.type == AstNode::Type::GfxCall) {
+                out << indent << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
+            } else if (child.type == AstNode::Type::Gfx3dCall) {
                 out << indent << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::JsonCall) {
                 out << indent << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
@@ -6704,6 +6739,22 @@ private:
                 if (fn == "array") return "__nexa_json::arr()";
                 if (fn == "object") return "__nexa_json::obj()";
                 throw std::runtime_error("Internal: unknown json method '" + fn + "'");
+            }
+            case AstNode::Type::Gfx3dCall: {
+                const std::string& fn = e.value;
+                auto a = [&](size_t i) {
+                    return emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                };
+                // Every gfx3d builtin takes its arguments straight through in
+                // the order they were written, so unlike gfx -- where open
+                // fills in a scale and line picks between two helpers -- one
+                // loop covers the lot.
+                std::string args;
+                for (size_t i = 0; i < e.children.size(); i++) {
+                    if (i) args += ", ";
+                    args += a(i);
+                }
+                return "__nexa_gfx3d_" + fn + "(" + args + ")";
             }
             case AstNode::Type::GfxCall: {
                 const std::string& fn = e.value;

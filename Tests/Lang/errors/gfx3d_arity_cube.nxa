@@ -1,0 +1,7 @@
+// Seven arguments: the centre, the edge length, and a colour.
+#include <std/gfx3d>
+
+fn main() {
+    gfx3d.open("t", 8, 8);
+    gfx3d.cube(0.0, 0.0, 0.0, 1.0);
+}

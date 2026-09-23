@@ -1,0 +1,6 @@
+// gfx3d.* without its include is named, not left to clang.
+#include <std/io>
+
+fn main() {
+    gfx3d.open("t", 8, 8);
+}

@@ -1,0 +1,6 @@
+// Text where a number goes, and a number where text goes.
+#include <std/gfx3d>
+
+fn main() {
+    gfx3d.open(100, 100, "t");
+}

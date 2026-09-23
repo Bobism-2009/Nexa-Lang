@@ -110,6 +110,7 @@ exports.STD_INCLUDES = [
     "std/time",
     "std/thread",
     "std/gfx",
+    "std/gfx3d",
     "std/inline",
 ];
 /** module prefix -> member completions */
@@ -272,6 +273,23 @@ exports.MODULE_MEMBERS = {
     dll: [
         { name: "load", detail: "dll.load(path)" },
         { name: "call", detail: "dll.call(handle, name, args...)" },
+    ],
+    gfx3d: [
+        { name: "open", detail: "gfx3d.open(title, w, h) — 3D window; 1/0" },
+        { name: "close", detail: "gfx3d.close() — destroy the window" },
+        { name: "poll", detail: "gfx3d.poll() — process events (call each frame)" },
+        { name: "closed", detail: "gfx3d.closed() — 1 if the user closed it" },
+        { name: "present", detail: "gfx3d.present() — show the frame" },
+        { name: "width", detail: "gfx3d.width() — drawable width" },
+        { name: "height", detail: "gfx3d.height() — drawable height" },
+        { name: "maxfps", detail: "gfx3d.maxfps(n) — cap the frame rate; 0 removes it" },
+        { name: "clear", detail: "gfx3d.clear(r, g, b) — fill and reset the depth buffer" },
+        { name: "camera", detail: "gfx3d.camera(ex, ey, ez, tx, ty, tz) — eye and target" },
+        { name: "perspective", detail: "gfx3d.perspective(fov, near, far) — fov in degrees" },
+        { name: "tri", detail: "gfx3d.tri(x1,y1,z1, x2,y2,z2, x3,y3,z3, r,g,b) — two-sided" },
+        { name: "cube", detail: "gfx3d.cube(x, y, z, size, r, g, b) — centred on x,y,z" },
+        { name: "renderer", detail: "gfx3d.renderer(name) — ask before open; opengl or vulkan" },
+        { name: "backend", detail: "gfx3d.backend() — what the window opened with" },
     ],
     gfx: [
         { name: "open", detail: "gfx.open(title, w, h[, scale]) — pixel window" },

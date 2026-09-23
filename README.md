@@ -230,5 +230,5 @@ re-copied on every install so edits propagate during development.
 
 1. **Entry & types:** [`SYNTAX/Core.txt`](SYNTAX/Core.txt) — functions, `let`, structs, enums, `fn main()`, `fn main(args: []string)`, core string methods (`s.upper()`, `s.split(",")`, `s.contains(...)`, …).
 2. **Control flow:** [`SYNTAX/ControlFlow.txt`](SYNTAX/ControlFlow.txt).
-3. **Standard modules:** [`SYNTAX/Modules.txt`](SYNTAX/Modules.txt) — `#include <std/io>`, `std/os`, `std/file`, `std/math`, `std/random`, `std/time`, `std/thread`, `std/gfx` (window, fullscreen, PCM audio), etc.
+3. **Standard modules:** [`SYNTAX/Modules.txt`](SYNTAX/Modules.txt) — `#include <std/io>`, `std/os`, `std/file`, `std/math`, `std/random`, `std/time`, `std/thread`, `std/gfx` (window, fullscreen, PCM audio), `std/gfx3d` (3D window on OpenGL), etc.
 4. **Includes & packages:** [`SYNTAX/Includes.txt`](SYNTAX/Includes.txt), **nexapkg** for third-party deps.

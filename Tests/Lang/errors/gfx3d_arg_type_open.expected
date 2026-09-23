@@ -1,0 +1,4 @@
+gfx3d.open(title, w, h)
+expects text for title
+but got a number
+at line 5

@@ -1,0 +1,49 @@
+// std/gfx3d: the loop std/gfx uses, with a depth buffer under it.
+//
+//   build: NexaC Examples/cube3d_demo.nxa -o cube3d_demo && ./cube3d_demo
+//   quit:  close the window
+//
+// The camera orbits the origin, so the three cubes and the triangle pass in
+// front of and behind each other without the program sorting anything: what
+// is nearer wins because the depth buffer says so.
+#include <std/gfx3d>
+#include <std/io>
+#include <std/math>
+
+fn main() {
+    if (gfx3d.open("Nexa 3D", 800, 600) != 1) {
+        io.println("no 3D window: this platform has no backend yet");
+        return;
+    }
+    io.println("renderer: " + gfx3d.backend());
+
+    // 60 degrees of vertical field of view, and a far plane well past the
+    // scene. Both have defaults; this is only to show where the lens lives.
+    gfx3d.perspective(60.0, 0.1, 100.0);
+    gfx3d.maxfps(60);
+
+    let angle = 0.0;
+    while (gfx3d.closed() != 1) {
+        gfx3d.poll();
+        gfx3d.clear(18, 18, 28);
+
+        // Orbit the eye around the origin at a fixed height, always looking
+        // back at it. Nothing in the scene moves -- the camera does.
+        let ex = math.sin(angle) * 7.0;
+        let ez = math.cos(angle) * 7.0;
+        gfx3d.camera(ex, 3.0, ez, 0.0, 0.0, 0.0);
+
+        gfx3d.cube(0.0, 0.0, 0.0, 2.0, 220, 90, 70);
+        gfx3d.cube(3.5, 0.0, 0.0, 1.0, 90, 200, 120);
+        gfx3d.cube(-3.5, 0.0, 0.0, 1.0, 90, 140, 230);
+
+        // A lone triangle is drawn from both sides, so it stays visible all
+        // the way round the orbit.
+        gfx3d.tri(-2.0, -1.5, 2.5,  2.0, -1.5, 2.5,  0.0, 1.8, 2.5,  240, 210, 90);
+
+        gfx3d.present();
+        angle = angle + 0.01;
+    }
+
+    gfx3d.close();
+}

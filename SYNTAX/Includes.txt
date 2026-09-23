@@ -22,6 +22,10 @@ MODULE INCLUDES (angle brackets)
                             plus gfx.fullscreen, gfx.audio/sample/audio_queued/audio_flush
                             sound: gfx.sound(path) then gfx.play/loop/stop/volume
                             and input: gfx.key/pressed/released, gfx.wheel/wheel_x, gfx.typed
+  #include <std/gfx3d>    - 3D window: gfx3d.open/poll/clear/present/closed
+                            camera: gfx3d.camera/perspective
+                            shapes: gfx3d.tri, gfx3d.cube
+                            renderer: gfx3d.renderer/backend (OpenGL today)
   #include <std/inline>   - Enables inline_cpp! { ... } (raw C++ pasted into generated code; use sparingly)
   - Standard library modules
 

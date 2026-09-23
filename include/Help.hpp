@@ -555,6 +555,49 @@ clockwise. With no window open nothing is an error: drawing does nothing and
 the readers answer 0. The drawing calls hand nothing back and are statements
 only, so `let R = gfx.rect(...);` is an error naming the call.)HELP" },
 
+{ "std/gfx3d", "gfx3d 3d three opengl vulkan gl cube mesh camera render", Group::Module,
+  "3D window: camera, triangles and cubes, on OpenGL",
+  R"HELP(std/gfx3d - a 3D window
+  #include <std/gfx3d>
+  Full reference: SYNTAX/Modules.txt (std/gfx3d)
+
+std/gfx's loop with a depth buffer under it. Triangles go to the GPU and the
+depth buffer decides what is in front, so there is no get and no save here --
+no array of pixels to read back.
+
+  window    gfx3d.open(title, w, h)   gfx3d.close()   gfx3d.poll()
+            gfx3d.closed()            gfx3d.present() gfx3d.maxfps(n)
+            gfx3d.width()             gfx3d.height()
+  camera    gfx3d.camera(ex, ey, ez, tx, ty, tz)     eye, then what it looks at
+            gfx3d.perspective(fov, near, far)        fov in degrees
+  draw      gfx3d.clear(r, g, b)
+            gfx3d.tri(x1,y1,z1, x2,y2,z2, x3,y3,z3, r,g,b)
+            gfx3d.cube(x, y, z, size, r, g, b)       centred on x,y,z
+  renderer  gfx3d.renderer(name)      ask, before open; "opengl" or "vulkan"
+            gfx3d.backend()           what the window actually opened with
+
+  fn main() {
+      gfx3d.open("cube", 800, 600);
+      gfx3d.camera(4.0, 3.0, 5.0, 0.0, 0.0, 0.0);
+      while (gfx3d.closed() != 1) {
+          gfx3d.poll();
+          gfx3d.clear(18, 18, 28);
+          gfx3d.cube(0.0, 0.0, 0.0, 2.0, 220, 90, 70);
+          gfx3d.present();
+      }
+      gfx3d.close();
+  }
+
+Two renderers are named and one is built: asking for vulkan quietly gives you
+opengl, and backend() reports the truth. Depth test and back-face culling are
+on from the start, though a lone gfx3d.tri is drawn from both sides. A cube's
+six faces are shaded by a fixed fraction each, so the shape reads as solid
+while the module has no light in it. Windows and Linux; on macOS and wasm
+gfx3d.open answers 0 and the rest does nothing.
+
+Colours are 0..255. The draws hand nothing back and are statements only, so
+`let C = gfx3d.cube(...);` is an error naming the call -- as in std/gfx.)HELP" },
+
 { "std/dll", "dll so dylib shared library plugin", Group::Module,
   "load a .dll / .so / .dylib and call into it",
   R"HELP(std/dll - dynamic libraries

@@ -31,7 +31,7 @@ struct AstNode {
                       DllLoad, DllCall,
                       FileRead, FileWrite, FileAppend, FileExists, FileMkdir, FileCall,
                       RandomInt, RandomSeed,
-                      MathCall, CryptoCall, HttpCall, TcpCall, UdpCall, GfxCall, JsonCall,
+                      MathCall, CryptoCall, HttpCall, TcpCall, UdpCall, GfxCall, Gfx3dCall, JsonCall,
                       ResultMake,
                       StrMethod,
                       TimeSleep, TimeSeconds, TimeMilliseconds, TimeNowMs,
@@ -944,7 +944,7 @@ private:
         static const std::vector<std::string> mods = {
             "std/io", "std/os", "std/file", "std/dll", "std/random", "std/math",
             "std/crypto", "std/network", "std/json", "std/time", "std/thread",
-            "std/gfx", "std/inline",
+            "std/gfx", "std/gfx3d", "std/inline",
         };
         return mods;
     }
@@ -1352,6 +1352,8 @@ private:
                 stmts.push_back(parseRandomCall());
             } else if (t.type == TokenType::Identifier && t.value == "gfx") {
                 stmts.push_back(parseGfxCall(true));
+            } else if (t.type == TokenType::Identifier && t.value == "gfx3d") {
+                stmts.push_back(parseGfx3dCall(true));
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
                        (tokens_[pos_ + 1].type == TokenType::Dot || tokens_[pos_ + 1].type == TokenType::Arrow)) {
                 const Token& id2 = tokens_[pos_ + 2];
@@ -2219,6 +2221,8 @@ private:
                 stmts.push_back(parseRandomCall());
             } else if (t.type == TokenType::Identifier && t.value == "gfx") {
                 stmts.push_back(parseGfxCall(true));
+            } else if (t.type == TokenType::Identifier && t.value == "gfx3d") {
+                stmts.push_back(parseGfx3dCall(true));
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
                        (tokens_[pos_ + 1].type == TokenType::Dot || tokens_[pos_ + 1].type == TokenType::Arrow)) {
                 const Token& id2 = tokens_[pos_ + 2];
@@ -2765,6 +2769,10 @@ private:
         if (peek().type == TokenType::Identifier && peek().value == "gfx" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
             return parseGfxCall(false, true);
+        }
+        if (peek().type == TokenType::Identifier && peek().value == "gfx3d" && pos_ + 2 < tokens_.size() &&
+            tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
+            return parseGfx3dCall(false, true);
         }
         if (peek().type == TokenType::Identifier && peek().value == "http" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot &&
@@ -4544,6 +4552,98 @@ private:
         // still gets told its shape first.
         if (valuePosition) {
             if (const char* hint = gfxVoidCallHint(method)) {
+                throw std::runtime_error(std::string(hint) +
+                    "; you aren't allowed to turn it into a variable at line " + std::to_string(line));
+            }
+        }
+        if (requireSemicolon && !match(TokenType::Semicolon)) {
+            throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
+        }
+        return node;
+    }
+
+    // gfx3d's drawing calls are `static void` in include/Gfx3dRuntime.hpp for
+    // the same reason gfx's are, and are refused in value position for the
+    // same reason: `let x = gfx3d.cube(...)` would otherwise reach clang as an
+    // error about a generated variable. The split is the runtime signatures --
+    // gfx3d.backend and gfx3d.renderer hand something back, the draws do not.
+    static const char* gfx3dVoidCallHint(const std::string& m) {
+        if (m == "clear") return "gfx3d.clear(r, g, b) paints the whole window";
+        if (m == "tri") return "gfx3d.tri(x1, y1, z1, x2, y2, z2, x3, y3, z3, r, g, b) draws to the window";
+        if (m == "cube") return "gfx3d.cube(x, y, z, size, r, g, b) draws to the window";
+        if (m == "camera") return "gfx3d.camera(ex, ey, ez, tx, ty, tz) moves the camera";
+        if (m == "perspective") return "gfx3d.perspective(fov, near, far) sets the lens";
+        if (m == "present") return "gfx3d.present() shows what you drew";
+        if (m == "poll") return "gfx3d.poll() takes in the window's input";
+        if (m == "close") return "gfx3d.close() closes the window";
+        if (m == "maxfps") return "gfx3d.maxfps(fps) sets the frame cap";
+        return nullptr;
+    }
+
+    AstNode parseGfx3dCall(bool requireSemicolon, bool valuePosition = false) {
+        size_t line = peek().line;
+        if (!modules_.hasGfx3d()) {
+            throw std::runtime_error("gfx3d.* requires #include <std/gfx3d> at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "gfx3d") {
+            throw std::runtime_error("Expected 'gfx3d' at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        const Token& methodTok = peek();
+        if (methodTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected gfx3d method at line " + std::to_string(methodTok.line));
+        }
+        std::string method = methodTok.value;
+        advance();
+        int argc = -1;
+        if (method == "open") argc = 3;
+        else if (method == "close" || method == "poll" || method == "present" || method == "closed"
+                 || method == "width" || method == "height" || method == "backend") argc = 0;
+        else if (method == "maxfps" || method == "renderer") argc = 1;
+        else if (method == "clear") argc = 3;
+        else if (method == "perspective") argc = 3;
+        else if (method == "camera") argc = 6;
+        else if (method == "cube") argc = 7;
+        else if (method == "tri") argc = 12;
+        else {
+            throw std::runtime_error("Unknown gfx3d method 'gfx3d." + method +
+                "' at line " + std::to_string(methodTok.line) +
+                " (use open, close, poll, closed, present, width, height, clear, camera,"
+                " perspective, tri, cube, maxfps, renderer, backend)");
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after gfx3d." + method + " at line " + std::to_string(peek().line));
+        }
+        AstNode node{AstNode::Type::Gfx3dCall, method, {}};
+        if (peek().type != TokenType::RParen) {
+            node.children.push_back(parseExpression());
+            while (match(TokenType::Comma)) {
+                node.children.push_back(parseExpression());
+            }
+        }
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' after gfx3d." + method + "(...) at line " + std::to_string(peek().line));
+        }
+        if ((int)node.children.size() != argc) {
+            // The shape, not the count: a wrong count here is nearly always a
+            // dropped coordinate, and twelve numbers in a row is exactly where
+            // that happens.
+            std::string sig;
+            if (method == "open") sig = "gfx3d.open(title, w, h)";
+            else if (method == "clear") sig = "gfx3d.clear(r, g, b)";
+            else if (method == "camera") sig = "gfx3d.camera(ex, ey, ez, tx, ty, tz)";
+            else if (method == "perspective") sig = "gfx3d.perspective(fov, near, far)";
+            else if (method == "cube") sig = "gfx3d.cube(x, y, z, size, r, g, b)";
+            else if (method == "tri") sig = "gfx3d.tri(x1, y1, z1, x2, y2, z2, x3, y3, z3, r, g, b)";
+            else if (method == "maxfps") sig = "gfx3d.maxfps(fps)";
+            else if (method == "renderer") sig = "gfx3d.renderer(name)";
+            else sig = "gfx3d." + method + "()";
+            throw std::runtime_error(sig + " at line " + std::to_string(line));
+        }
+        if (valuePosition) {
+            if (const char* hint = gfx3dVoidCallHint(method)) {
                 throw std::runtime_error(std::string(hint) +
                     "; you aren't allowed to turn it into a variable at line " + std::to_string(line));
             }

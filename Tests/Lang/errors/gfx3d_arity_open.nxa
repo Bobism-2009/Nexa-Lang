@@ -1,0 +1,6 @@
+// gfx3d.open takes a title and two sizes; a dropped one is the shape, not a count.
+#include <std/gfx3d>
+
+fn main() {
+    gfx3d.open("t", 100);
+}

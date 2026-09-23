@@ -1,0 +1,6 @@
+// The method list is the diagnosis; gfx3d has no sphere.
+#include <std/gfx3d>
+
+fn main() {
+    gfx3d.sphere(1.0);
+}

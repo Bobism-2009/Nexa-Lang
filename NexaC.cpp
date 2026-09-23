@@ -1202,6 +1202,7 @@ static std::string nexaBuildCompileCmd(
     bool linkHttp,
     bool linkSockets,
     bool linkGfx,
+    bool linkGfx3d,
     bool noExceptions,
     bool noRtti,
     bool debugBuild,
@@ -1343,6 +1344,13 @@ static std::string nexaBuildCompileCmd(
         // std/os open uses ShellExecuteA.
         cmd += " -lshell32";
     }
+    if (linkGfx3d) {
+        // The window is Win32 and the pixel format and buffer swap are GDI.
+        // opengl32 is not linked: the runtime LoadLibrary's it, so a build
+        // needs no import library and no SDK.
+        cmd += " -luser32";
+        cmd += " -lgdi32";
+    }
     if (linkGfx) {
         cmd += " -lgdi32";
         cmd += " -lwindowscodecs";
@@ -1372,8 +1380,15 @@ static std::string nexaBuildCompileCmd(
     // http.* HTTPS dlopens system libssl and std/gfx audio dlopens libasound;
     // dlopen lives in libdl (a stub in glibc 2.34 and later, still needed by
     // older ones and by musl).
-    if (linkHttp || linkGfx) {
+    if (linkHttp || linkGfx || linkGfx3d) {
         cmd += " -ldl";
+    }
+    if (linkGfx3d && !linkGfx) {
+        // Same X11 as std/gfx, for the same reason: the window. GLX and GL
+        // itself are dlopened, so libGL is never a build dependency.
+        const bool elfExe = !buildWin && !buildDll && !buildShared;
+        if (elfExe) cmd += nexaLinuxGfxEmbedFlags();
+        else cmd += " -lX11";
     }
     if (linkGfx) {
         const bool elfExe = !buildWin && !buildDll && !buildShared;
@@ -1997,6 +2012,7 @@ int main(int argc, char* argv[]) {
         const bool linkHttp = modules.hasHttp() && usage.http;
         const bool linkSockets = (modules.hasTcp() && usage.tcp) || (modules.hasUdp() && usage.udp);
         const bool linkGfx = modules.hasGfx() && usage.gfx;
+        const bool linkGfx3d = modules.hasGfx3d() && usage.gfx3d;
 
         if (buildWasm) {
             std::string cmd = nexaWasmCompileCmd(wasmTool, cppPath, wasmOut, opt, noExceptions, noRtti,
@@ -2077,7 +2093,7 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 
-        std::string cmd = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, noExceptions, noRtti, debugBuild, linkInputs);
+        std::string cmd = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, linkGfx3d, noExceptions, noRtti, debugBuild, linkInputs);
         int ret = std::system(cmd.c_str());
 
         if (ret != 0 && sanitizeThisBuild && sanitizer != NexaSanitizer::None) {
@@ -2089,7 +2105,7 @@ int main(int argc, char* argv[]) {
             std::cout.flush();
             sanitizer = NexaSanitizer::None;
             opt = "-g -O0";
-            std::string cmdNoSan = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, noExceptions, noRtti, debugBuild, linkInputs);
+            std::string cmdNoSan = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, linkGfx3d, noExceptions, noRtti, debugBuild, linkInputs);
             ret = std::system(cmdNoSan.c_str());
         }
 
@@ -2119,7 +2135,7 @@ int main(int argc, char* argv[]) {
                 cxx = fallback;
                 targetFlags = "";
                 std::cout.flush();
-                std::string cmd2 = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, noExceptions, noRtti, debugBuild, linkInputs);
+                std::string cmd2 = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, linkGfx3d, noExceptions, noRtti, debugBuild, linkInputs);
                 ret = std::system(cmd2.c_str());
             }
         }

@@ -1,0 +1,7 @@
+// A draw hands nothing back, so it cannot become a variable.
+#include <std/gfx3d>
+
+fn main() {
+    gfx3d.open("t", 8, 8);
+    let c = gfx3d.cube(0.0, 0.0, 0.0, 1.0, 1, 2, 3);
+}
