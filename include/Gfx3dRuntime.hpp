@@ -824,6 +824,14 @@ static void __nexa_g3_platform_poll(void) {
                                              untilDate:[NSDate distantPast]
                                                 inMode:NSDefaultRunLoopMode
                                                dequeue:YES];
+            // An empty queue answers nil, and that is the only thing that ends
+            // this loop. Without it the drain never finishes: messaging nil in
+            // Objective-C is legal and answers zero, so [ev type] would come
+            // back 0, match none of the cases below, and go round to ask for
+            // another event that is not there -- a silent spin inside poll,
+            // with the frame after it never drawn. std/gfx writes the same
+            // drain as `while ((ev = ...))`, which is why it never had this.
+            if (!ev) break;
             NSEventType et = [ev type];
             if ((et == NSEventTypeKeyDown || et == NSEventTypeKeyUp) && __nexa_g3_focused()) {
                 unsigned short kc = [ev keyCode];
