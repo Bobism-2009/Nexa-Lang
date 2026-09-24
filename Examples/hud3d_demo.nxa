@@ -1,0 +1,95 @@
+// std/gfx drawn over a std/gfx3d window: a HUD on a 3D scene.
+//
+//   build: NexaC Examples/hud3d_demo.nxa -o hud3d_demo && ./hud3d_demo
+//   drive: hover and click the button, space pauses the spin, escape quits
+//
+// There is no gfx.open anywhere in this file. Including std/gfx alongside
+// std/gfx3d is enough: once the 3D window is open, every gfx drawing call
+// draws on it, laid over the scene at gfx3d.present.
+//
+// The input is gfx3d's. gfx.mouse_x reads gfx's own window, and there is none,
+// so the button below is a gfx.rect tested against gfx3d.mouse_x() -- the two
+// agree to the pixel, since one layer pixel is one window pixel.
+#include <std/gfx>
+#include <std/gfx3d>
+#include <std/io>
+
+fn main() {
+    if (gfx3d.open("Nexa HUD over 3D", 900, 600) != 1) {
+        io.println("no 3D window: this platform has no backend yet");
+        return;
+    }
+    gfx3d.perspective(55.0, 0.1, 100.0);
+    gfx3d.maxfps(60);
+    gfx3d.camera(0.0, 2.5, 7.0, 0.0, 0.0, 0.0);
+
+    let spin = 0.0;
+    let spinning = 1;
+    let clicks = 0;
+    let health = 100;
+    // gfx3d.mouse says whether the button is down now; a click is the frame it
+    // goes down, so the last frame's answer is kept to compare against.
+    let wasDown = 0;
+
+    while (gfx3d.closed() != 1) {
+        gfx3d.poll();
+        if (gfx3d.pressed("escape")) { gfx3d.close(); }
+        if (gfx3d.pressed("space")) { spinning = 1 - spinning; }
+        if (spinning == 1) { spin = spin + 0.9; }
+
+        // --- the scene ---------------------------------------------------
+        // gfx3d.clear also empties the 2D layer, so the HUD below is drawn
+        // fresh every frame and nothing that moves leaves a trail.
+        gfx3d.clear(16, 16, 24);
+        gfx3d.grid(20.0, 1.0, 45, 45, 60);
+        gfx3d.rotate(0.0, spin, 0.0);
+        gfx3d.cube(0.0, 0.8, 0.0, 1.8, 220, 90, 70);
+        gfx3d.reset();
+
+        // --- the HUD, in std/gfx -----------------------------------------
+        let w = gfx.width();
+        let h = gfx.height();
+
+        // A translucent panel: the cube and grid show through it.
+        gfx.alpha(150);
+        gfx.fill(12, 12, 250, 92, 0, 0, 0);
+        gfx.alpha(255);
+        gfx.rect(12, 12, 250, 92, 120, 120, 140);
+
+        gfx.text(24, 22, "HEALTH", 230, 230, 240, 2);
+        health = 100 - (clicks * 10) % 100;
+        gfx.fill(24, 46, 200, 14, 60, 20, 20);
+        gfx.fill(24, 46, health * 2, 14, 210, 50, 50);
+        gfx.rect(24, 46, 200, 14, 240, 240, 240);
+        gfx.text(24, 72, "clicks " + clicks, 200, 200, 210, 2);
+
+        // Right-aligned, which needs gfx.width() to be the window's width.
+        gfx.text(w - 150, 22, "SPIN " + spinning, 180, 220, 180, 2);
+
+        // A crosshair in the middle of the window.
+        gfx.line(w / 2 - 10, h / 2, w / 2 + 10, h / 2, 255, 255, 255);
+        gfx.line(w / 2, h / 2 - 10, w / 2, h / 2 + 10, 255, 255, 255);
+
+        // A button: drawn with gfx, clicked through gfx3d.
+        let bx = w / 2 - 80;
+        let by = h - 70;
+        let mx = gfx3d.mouse_x();
+        let my = gfx3d.mouse_y();
+        let over = 0;
+        if (mx >= bx && mx < bx + 160 && my >= by && my < by + 44) { over = 1; }
+        let down = gfx3d.mouse("left");
+        if (over == 1 && down == 1 && wasDown == 0) { clicks = clicks + 1; }
+        wasDown = down;
+        if (over == 1) {
+            gfx.fill(bx, by, 160, 44, 70, 110, 200);
+        } else {
+            gfx.fill(bx, by, 160, 44, 40, 60, 110);
+        }
+        gfx.rect(bx, by, 160, 44, 220, 230, 255);
+        gfx.text(bx + 30, by + 14, "CLICK ME", 255, 255, 255, 2);
+
+        gfx3d.present();
+    }
+
+    gfx3d.close();
+}
