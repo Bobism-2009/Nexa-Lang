@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <cstdlib>
 #include <cstdio>
+#include <algorithm>
 
 namespace nexa {
 namespace pkg {
@@ -619,6 +620,189 @@ static int cmdList(const std::string& dir) {
 }
 
 // ----------------------------------------------------------------------------
+// Targets: platforms installed for NexaC --target
+// ----------------------------------------------------------------------------
+//
+// A target package is a directory holding target.json and the source it names,
+// and it is installed whole into ~/.nexa/targets/<name>/. They come out of one
+// repository with a directory per platform, and a sparse checkout fetches only
+// the one being installed -- so a repository that grows more platforms does not
+// make installing any one of them slower.
+
+static const char* kDefaultTargetRepo = "Bobism-2009/Nexa-Targets";
+
+static fs::path getTargetsDir() {
+    return fs::path(getHome()) / ".nexa" / "targets";
+}
+
+static fs::path getTargetCacheDir(const std::string& name) {
+    return fs::path(getHome()) / ".nexa" / "cache" / "targets" / name;
+}
+
+static const char* quiet() {
+#ifdef _WIN32
+    return " >NUL 2>NUL";
+#else
+    return " >/dev/null 2>/dev/null";
+#endif
+}
+
+static std::string readTargetField(const fs::path& dir, const std::string& key) {
+    std::ifstream in(dir / "target.json", std::ios::binary);
+    if (!in) return std::string();
+    std::stringstream ss;
+    ss << in.rdbuf();
+    return findStringField(ss.str(), key);
+}
+
+// Replaces whatever is installed under this name with src. The compiled
+// runtime in the cache goes too: it was built from the sources being replaced.
+static bool placeTarget(const fs::path& src, const std::string& name) {
+    std::error_code ec;
+    fs::path dest = getTargetsDir() / name;
+    fs::remove_all(dest, ec);
+    fs::remove_all(getTargetCacheDir(name), ec);
+    fs::create_directories(dest.parent_path(), ec);
+    fs::copy(src, dest, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+    if (ec || !fs::exists(dest / "target.json")) {
+        std::cerr << "[nexapkg] Could not install into " << dest.string()
+                  << (ec ? (": " + ec.message()) : std::string()) << "\n";
+        return false;
+    }
+    std::string ver = readTargetField(dest, "version");
+    std::string desc = readTargetField(dest, "description");
+    std::cout << "[nexapkg] Installed target " << name << (ver.empty() ? "" : (" " + ver)) << "\n";
+    if (!desc.empty()) std::cout << "[nexapkg]   " << desc << "\n";
+    std::cout << "[nexapkg]   Build with: NexaC file.nxa --target " << name << "\n";
+    std::cout << "[nexapkg]   The first build compiles the target's runtime from source, once.\n";
+    return true;
+}
+
+static int cmdTargetInstall(const std::string& name, const std::string& from, bool force) {
+    if (name.empty() || name.find_first_of("/\\.") != std::string::npos) {
+        std::cerr << "[nexapkg] target install: '" << name << "' is not a target name\n";
+        return 1;
+    }
+    if (fs::exists(getTargetsDir() / name / "target.json") && !force) {
+        std::cout << "[nexapkg] Target " << name << " is already installed (use 'nexapkg target update "
+                  << name << "' or --force)\n";
+        return 0;
+    }
+
+    // A directory on disk: for working on a package before it is published.
+    // Either the target's own directory, or a repository holding it.
+    if (!from.empty() && fs::is_directory(from)) {
+        fs::path base = fs::absolute(from);
+        fs::path src = fs::exists(base / "target.json") ? base : base / name;
+        if (!fs::exists(src / "target.json")) {
+            std::cerr << "[nexapkg] No target.json in " << src.string() << "\n";
+            return 1;
+        }
+        return placeTarget(src, name) ? 0 : 1;
+    }
+
+    std::string repo = from.empty() ? kDefaultTargetRepo : from;
+    std::string url, ref;
+    splitSourceRef(repo, url, ref);
+    if (url.find("http") != 0) url = "https://github.com/" + url;
+    if (!gitAvailable()) {
+        std::cerr << "[nexapkg] git not found; cannot fetch targets from " << url << "\n";
+        return 1;
+    }
+
+    fs::path tmp = fs::temp_directory_path() / ("nexapkg_target_" + name);
+    std::error_code ec;
+    fs::remove_all(tmp, ec);
+    std::string branch = ref.empty() ? "" : (" --branch \"" + ref + "\"");
+    std::cout << "[nexapkg] Fetching target " << name << " from " << url << (ref.empty() ? "" : ("@" + ref)) << "...\n";
+    // Only this target's directory is checked out. git older than 2.25 has no
+    // sparse checkout, and gets the whole repository instead.
+    bool sparse = std::system(("git clone --depth 1 --filter=blob:none --sparse" + branch + " \"" + url +
+                               "\" \"" + tmp.string() + "\"" + quiet()).c_str()) == 0;
+    if (sparse) {
+        sparse = std::system(("git -C \"" + tmp.string() + "\" sparse-checkout set \"" + name + "\"" +
+                              quiet()).c_str()) == 0;
+    }
+    if (!sparse) {
+        fs::remove_all(tmp, ec);
+        if (std::system(("git clone --depth 1" + branch + " \"" + url + "\" \"" + tmp.string() + "\"" +
+                         quiet()).c_str()) != 0) {
+            std::cerr << "[nexapkg] Failed to fetch " << url << "\n";
+            return 1;
+        }
+    }
+
+    fs::path src = tmp / name;
+    if (!fs::exists(src / "target.json")) {
+        std::cerr << "[nexapkg] " << url << " has no target named '" << name << "'\n";
+        // The tree is known even where its files were not checked out.
+        std::string all = runCapture("git -C \"" + tmp.string() + "\" ls-tree --name-only HEAD");
+        std::stringstream ls(all);
+        std::string line, avail;
+        while (std::getline(ls, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (runCapture("git -C \"" + tmp.string() + "\" ls-tree --name-only HEAD \"" + line + "/target.json\"").empty()) continue;
+            avail += " " + line;
+        }
+        if (!avail.empty()) std::cerr << "[nexapkg] Available:" << avail << "\n";
+        fs::remove_all(tmp, ec);
+        return 1;
+    }
+    bool ok = placeTarget(src, name);
+    fs::remove_all(tmp, ec);
+    return ok ? 0 : 1;
+}
+
+static int cmdTargetList() {
+    std::error_code ec;
+    std::vector<std::string> names;
+    if (fs::exists(getTargetsDir(), ec)) {
+        for (const auto& e : fs::directory_iterator(getTargetsDir(), ec)) {
+            if (e.is_directory() && fs::exists(e.path() / "target.json")) names.push_back(e.path().filename().string());
+        }
+    }
+    if (names.empty()) {
+        std::cout << "[nexapkg] No targets installed. Windows, Linux, macOS and --wasm are built in;\n"
+                     "[nexapkg] others install with: nexapkg target install <name>   (e.g. arm64-linux)\n";
+        return 0;
+    }
+    std::sort(names.begin(), names.end());
+    for (const std::string& n : names) {
+        fs::path d = getTargetsDir() / n;
+        std::string ver = readTargetField(d, "version");
+        std::string desc = readTargetField(d, "description");
+        bool built = fs::exists(getTargetCacheDir(n), ec);
+        std::cout << "  " << n << (ver.empty() ? "" : ("  " + ver)) << (built ? "" : "  (runtime not built yet)") << "\n";
+        if (!desc.empty()) std::cout << "      " << desc << "\n";
+    }
+    return 0;
+}
+
+static int cmdTargetRemove(const std::string& name) {
+    std::error_code ec;
+    fs::path d = getTargetsDir() / name;
+    if (name.empty() || !fs::exists(d / "target.json")) {
+        std::cerr << "[nexapkg] No target named '" << name << "' is installed\n";
+        return 1;
+    }
+    fs::remove_all(d, ec);
+    fs::remove_all(getTargetCacheDir(name), ec);
+    std::cout << "[nexapkg] Removed target " << name << " and its compiled runtime\n";
+    return 0;
+}
+
+static int cmdTarget(const std::vector<std::string>& pos, bool force, const std::string& from) {
+    if (pos.empty() || pos[0] == "list" || pos[0] == "ls") return cmdTargetList();
+    const std::string& sub = pos[0];
+    std::string name = pos.size() >= 2 ? pos[1] : "";
+    if (sub == "install" || sub == "add") return cmdTargetInstall(name, from, force);
+    if (sub == "update") return cmdTargetInstall(name, from, true);
+    if (sub == "remove" || sub == "rm" || sub == "uninstall") return cmdTargetRemove(name);
+    std::cerr << "[nexapkg] Unknown target command: " << sub << " (install, update, list, remove)\n";
+    return 1;
+}
+
+// ----------------------------------------------------------------------------
 // Argument dispatch
 // ----------------------------------------------------------------------------
 static void printHelp() {
@@ -636,6 +820,13 @@ static void printHelp() {
         "  nexapkg update [name] [dir]        Re-fetch git dependencies, refresh lock\n"
         "  nexapkg list [dir]                 Show dependencies and lock state\n"
         "\n"
+        "Targets (platforms for NexaC --target; Windows, Linux, macOS and --wasm are built in):\n"
+        "  nexapkg target install <name>      Install one, e.g. arm64-linux\n"
+        "  nexapkg target update <name>       Re-fetch it (its runtime is rebuilt on next use)\n"
+        "  nexapkg target list                Show installed targets\n"
+        "  nexapkg target remove <name>       Remove it and its compiled runtime\n"
+        "    --from <owner/repo | ./dir>      Somewhere other than Bobism-2009/Nexa-Targets\n"
+        "\n"
         "Specs:\n"
         "  owner/repo            GitHub repo (default branch)\n"
         "  owner/repo@v1.2.0     pin to a tag or branch\n"
@@ -650,6 +841,7 @@ struct Args {
     std::vector<std::string> pos;
     bool global = false;
     bool force = false;
+    std::string from;  // nexapkg target install --from <repo | dir>
 };
 
 static Args parseArgs(int argc, char* argv[], int start) {
@@ -658,6 +850,7 @@ static Args parseArgs(int argc, char* argv[], int start) {
         std::string s = argv[i];
         if (s == "--global") a.global = true;
         else if (s == "--force" || s == "-f") a.force = true;
+        else if (s == "--from" && i + 1 < argc) a.from = argv[++i];
         else a.pos.push_back(s);
     }
     return a;
@@ -729,6 +922,9 @@ static int run(int argc, char* argv[]) {
             else if (name.empty()) name = p;
         }
         return installAll(dir, a.global, true, true, name);
+    }
+    if (cmd == "target" || cmd == "targets") {
+        return cmdTarget(a.pos, a.force, a.from);
     }
     if (cmd == "list" || cmd == "ls") {
         return cmdList(a.pos.empty() ? "" : a.pos[0]);

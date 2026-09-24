@@ -174,6 +174,12 @@ public:
         hasCppHeader_ = true;
     }
 
+    // Every module the program included, by path. --target checks the std/
+    // ones against what the target package says it can support.
+    const std::set<std::string>& enabledModules() const {
+        return enabled_;
+    }
+
     bool hasCppHeader() const {
         return hasCppHeader_;
     }

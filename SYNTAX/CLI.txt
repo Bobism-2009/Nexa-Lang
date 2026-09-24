@@ -68,6 +68,24 @@ OPTIONS
             cached on its own. Alias: --split. Needs em++, and is an error
             without --wasm or with the WASI toolchain, which has no loader
             to split.
+  --target <name>  Build for a platform installed with nexapkg rather than
+            built in: NexaC file.nxa --target arm64-linux. Windows, Linux,
+            macOS and --wasm need no --target and it refuses their names.
+            Install one first:  nexapkg target install arm64-linux
+            A target is source only -- a C library, a C++ library and what
+            else the platform needs, compiled after the NexaC call by the
+            clang already installed (clang can build for any CPU LLVM
+            supports). The first build for a target compiles that runtime,
+            about half a minute, into ~/.nexa/cache/targets/; every build
+            after it is one compile and one link.
+            The target lists the std modules it supports, and a program
+            using any other is refused by name before anything is compiled.
+            The output is named without .exe, since it is not a Windows
+            program. Cannot be combined with --run (this machine cannot run
+            it), --wasm, --win, --dll, --shared, --static-lib, --no-console
+            or --link. --source works, and writes the C++ for that platform.
+            Needs clang (LLVM): set NEXA_TARGET_CLANG to use a particular one.
+            Targets live at github.com/Bobism-2009/Nexa-Targets.
   --no-console    Build Windows GUI .exe with no console window
   fn __init__() in a DLL/SO/dylib is auto-executed when the library is loaded
   --run, -r       Compile to temp file and run

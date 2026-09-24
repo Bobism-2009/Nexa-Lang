@@ -161,6 +161,10 @@ TARGETS
                      file:// will not load the .wasm. Alias: --split. Needs
                      em++ and --wasm. (Useful when you are serving the page
                      anyway and want the .wasm cached on its own.)
+  --target <name>    build for a platform installed with nexapkg, e.g.
+                     arm64-linux (nexapkg target install arm64-linux). The
+                     four above need no --target. Its runtime is compiled
+                     from source on the first build and cached after that.
 
 BUILD
   -r, --run          run it after building. Without --debug the binary goes to

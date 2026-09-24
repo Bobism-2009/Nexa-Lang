@@ -139,6 +139,7 @@ Full detail: [`SYNTAX/CLI.txt`](SYNTAX/CLI.txt) or `NexaC --help`.
 | `NexaC --no-console` | Windows subsystem without console (executables only) |
 | `NexaC file.nxa --wasm` | WebAssembly via **em++**: a `.js` loader with the `.wasm` baked in, plus a `.html` that loads it — so the page opens over `file://`. WASI-SDK emits a bare `.wasm` |
 | `NexaC file.nxa --wasm --wasm-split` | The same, as three separate files (`.html`, `.js`, `.wasm`). Needs a server: a browser will not fetch a separate `.wasm` over `file://` |
+| `NexaC file.nxa --target arm64-linux` | Build for a platform installed with `nexapkg target install <name>` rather than built in — see [Nexa-Targets](https://github.com/Bobism-2009/Nexa-Targets). Source only, compiled by your clang; the first build compiles the platform's runtime and caches it |
 | `nexapkg <cmd>` / `NexaC nexapkg <cmd>` | Package manager (see [Packages](#packages-nexapkg)) |
 
 ---

@@ -28,7 +28,7 @@ install-deps:
 		exit 1; \
 	fi
 
-NexaC: NexaC.cpp include/Lexer.hpp include/Parser.hpp include/Transpiler.hpp include/Modules.hpp include/nexapkg.hpp include/PlatformEmit.hpp
+NexaC: NexaC.cpp include/Lexer.hpp include/Parser.hpp include/Transpiler.hpp include/Modules.hpp include/nexapkg.hpp include/PlatformEmit.hpp include/Target.hpp
 	$(CXX) $(CXXFLAGS) NexaC.cpp -o NexaC
 
 install: NexaC

@@ -5,6 +5,7 @@
 #include "include/nexapkg.hpp"
 #include "include/NexaUpgrade.hpp"
 #include "include/Help.hpp"
+#include "include/Target.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -1623,6 +1624,7 @@ int main(int argc, char* argv[]) {
     bool noConsole = false;  // Windows GUI subsystem
     bool runAfterBuild = false;
     bool pendingSourceOut = false;
+    std::string targetName;  // --target <name>: a platform installed with nexapkg
     std::vector<std::string> linkInputs;  // extra objects/archives/libs to link into the exe (--link)
 
     for (int i = 1; i < argc; i++) {
@@ -1682,6 +1684,16 @@ int main(int argc, char* argv[]) {
             noConsole = true;
         } else if (arg == "--run" || arg == "-r") {
             runAfterBuild = true;
+        } else if (arg == "--target" || arg.rfind("--target=", 0) == 0) {
+            if (arg == "--target") {
+                if (i + 1 >= argc) {
+                    std::cerr << "[Nexa] Error: --target needs a platform name (see: nexapkg target list)\n";
+                    return 1;
+                }
+                targetName = argv[++i];
+            } else {
+                targetName = arg.substr(9);
+            }
         } else if (arg[0] != '-') {
             if (pendingSourceOut) {
                 sourceCpp = arg;
@@ -1793,6 +1805,57 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // --target is for platforms installed as packages. Everything about it that
+    // can be wrong is found here, before a line of the program is read.
+    const bool buildTarget = !targetName.empty();
+    nexa::target::Spec targetSpec;
+    if (buildTarget) {
+        if (nexa::target::isBuiltinName(targetName)) {
+            const bool web = targetName.rfind("wasm", 0) == 0 || targetName == "web" || targetName == "browser";
+            std::cerr << "[Nexa] Error: " << targetName << " is built into NexaC, so it needs no --target\n";
+            std::cerr << "[Nexa] Tip: --target is only for platforms installed with nexapkg (nexapkg target list)."
+                      << (web ? " For the browser, use --wasm." : "") << "\n";
+            return 1;
+        }
+        if (!nexa::target::isInstalled(targetName)) {
+            std::cerr << "[Nexa] Error: no target named '" << targetName << "' is installed\n";
+            std::cerr << "[Nexa] Tip: nexapkg target install " << targetName << "\n";
+            std::vector<std::string> have = nexa::target::installedNames();
+            if (!have.empty()) {
+                std::cerr << "[Nexa] Installed:";
+                for (const std::string& n : have) std::cerr << " " << n;
+                std::cerr << "\n";
+            }
+            return 1;
+        }
+        try {
+            targetSpec = nexa::target::load(targetName);
+        } catch (const std::exception& e) {
+            std::cerr << "[Nexa] Error: the " << targetName << " target is damaged: " << e.what() << "\n";
+            std::cerr << "[Nexa] Tip: reinstall it with: nexapkg target install " << targetName << " --force\n";
+            return 1;
+        }
+        if (buildWasm || buildWin || buildDll || buildShared || buildStaticLib || noConsole || !linkInputs.empty()) {
+            std::cerr << "[Nexa] Error: --target builds a program for " << targetName
+                      << " and cannot be combined with --wasm, --win, --dll, --shared, --static-lib, --no-console or --link\n";
+            return 1;
+        }
+        if (runAfterBuild) {
+            std::cerr << "[Nexa] Error: --run cannot run a program built for " << targetName << " on this machine\n";
+            std::cerr << "[Nexa] Tip: build it (NexaC file.nxa --target " << targetName
+                      << "), then copy the result to the machine it is for\n";
+            return 1;
+        }
+        // Linux is the only platform slice a target can ask for today. A
+        // target for some other kind of OS needs this NexaC to learn to emit
+        // one, which is a compiler change and not a package.
+        if (targetSpec.os != "linux") {
+            std::cerr << "[Nexa] Error: the " << targetName << " target wants code for '" << targetSpec.os
+                      << "', and this NexaC can only build targets for 'linux'\n";
+            return 1;
+        }
+    }
+
     WasmTool wasmTool;
     if (buildWasm && !sourceOnly) {
         if (!nexaEnsureWasmTool(wasmTool)) return 1;
@@ -1873,7 +1936,7 @@ int main(int argc, char* argv[]) {
                 exePath += ".exe";
             }
 #ifdef _WIN32
-            else if (!buildDll && !buildShared && !buildWasm && (exePath.size() < 4 || exePath.substr(exePath.size() - 4) != ".exe")) {
+            else if (!buildDll && !buildShared && !buildWasm && !buildTarget && (exePath.size() < 4 || exePath.substr(exePath.size() - 4) != ".exe")) {
                 exePath += ".exe";
             }
 #endif
@@ -1941,6 +2004,7 @@ int main(int argc, char* argv[]) {
         nexa::CppTarget cppTarget = nexa::hostCppTarget();
         if (buildWasm) cppTarget = nexa::CppTarget::Wasm;
         else if (buildWin) cppTarget = nexa::CppTarget::Windows;
+        else if (buildTarget) cppTarget = nexa::CppTarget::Linux;
         // Debug builds map the generated C++ back to the .nxa source with `#line` directives, so a
         // debugger steps through what the user wrote. The generated file is named absolutely in the
         // snap-back directives for the same reason absInputPath is: a debugger launched from another
@@ -1972,6 +2036,30 @@ int main(int argc, char* argv[]) {
         const bool noExceptions = !usage.exceptions && !usage.result && !usage.ioToInt && !modules.hasInlineCpp();
         const bool noRtti = !modules.hasInlineCpp();
 
+        // What the target can and cannot do is the package's to say, and a
+        // program that asks for more is refused by name here -- not left to
+        // fail at link time against a library that was never built.
+        if (buildTarget) {
+            std::string missing;
+            for (const std::string& m : modules.enabledModules()) {
+                if (m.rfind("std/", 0) != 0) continue;
+                if (std::find(targetSpec.modules.begin(), targetSpec.modules.end(), m) == targetSpec.modules.end()) {
+                    missing += (missing.empty() ? "" : ", ") + m;
+                }
+            }
+            if (!missing.empty()) {
+                std::string have;
+                for (const std::string& m : targetSpec.modules) have += (have.empty() ? "" : ", ") + m;
+                throw std::runtime_error(absInputPath + ": the " + targetSpec.name + " target does not support " +
+                                         missing + " (it supports: " + (have.empty() ? "no std modules" : have) + ")");
+            }
+            if (!noExceptions && !targetSpec.exceptions) {
+                throw std::runtime_error(absInputPath + ": this program needs C++ exceptions -- io.to_int, Result, "
+                                         "try/catch and inline_cpp all use them -- and the " + targetSpec.name +
+                                         " target is built without them");
+            }
+        }
+
         std::ofstream out(cppPath);
         if (!out) {
             std::cerr << "[Nexa] Error: Cannot write " << cppPath << "\n";
@@ -1982,6 +2070,24 @@ int main(int argc, char* argv[]) {
 
         if (sourceOnly) {
             std::cout << "[Nexa] Source written to " << cppPath << "\n";
+            return 0;
+        }
+
+        if (buildTarget) {
+            std::cout << "[Nexa] Compiling for " << targetSpec.name << " with clang...\n";
+            nexa::target::BuildOptions bo;
+            bo.opt = debugBuild ? "-O0" : (optimizeSize ? "-Os" : "-O2");
+            bo.debug = debugBuild;
+            bo.exceptions = !noExceptions;
+            bo.rtti = !noRtti;
+            try {
+                nexa::target::buildProgram(targetSpec, cppPath, exePath, bo);
+            } catch (...) {
+                if (!debugBuild) std::remove(cppPath.c_str());
+                throw;
+            }
+            if (!debugBuild) std::remove(cppPath.c_str());
+            std::cout << "[Nexa] Build successful! " << exePath << " (for " << targetSpec.name << ")\n";
             return 0;
         }
 
