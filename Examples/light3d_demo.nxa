@@ -1,165 +1,71 @@
-// std/gfx3d lighting: one sphere, one light, going round.
+// std/gfx3d lighting: one sphere, one light, standing still.
 //
 //   build: NexaC Examples/light3d_demo.nxa -o light3d_demo && ./light3d_demo
-//   drive: arrows steer the light, space stops it circling,
-//          1/2/3/4 light colour, A/Z ambient down/up,
-//          Q/E turn the camera, R resets, escape quits
+//   drive: escape quits. Nothing else moves -- that is the point of it
 //
-// One shape, and it is a sphere because a sphere faces every direction at
-// once: whatever angle the light comes from, some part of it is square-on and
-// some part is edge-on, so the whole range of the shading is on screen in one
-// object at all times. The terminator -- the line between lit and unlit --
-// sweeps across it as the light goes round, and that sweep is the feature.
+// The smallest thing that shows what gfx3d.light is for. A sphere in one flat
+// colour is a circle; the same sphere with a light on it is round. That is the
+// whole feature, and it is easier to see standing still than sweeping about.
 //
-// Nothing else moves. The camera holds still unless you turn it, so the only
-// thing changing is where the light is coming from.
+// The light comes from the left and above, and far enough round towards the
+// front to still read as facing us: about two thirds of the visible face is
+// lit and the remaining third falls away into shadow down the right side.
 //
-// The dim ring is the path the light is travelling, drawn out of line3
-// segments, and the yellow bead is the light's place on it. Both are a polite
-// lie and the demo would be honest without them: gfx3d.light takes a
-// DIRECTION, a sun rather than a lamp, with no position in the scene and no
-// falloff. Move the bead twice as far away and nothing about the shading
-// changes. They are here because a direction is invisible and hard to steer
-// blind, not because the light is really out there.
+// How far round it sits is the one number here worth choosing carefully. Put
+// the light square behind the camera and the whole visible face is lit and the
+// sphere is a flat disc again; swing it out to the side and half goes dark.
+// The lit fraction is (1 + cos t) / 2, for t the angle between the light and
+// the way the camera is looking -- so t near 70 degrees, as here, is where a
+// shadow is a real part of the picture rather than a rim around the edge.
+//
+// Ambient is turned well down from its default of 87, and that is what makes
+// it dark: ambient is how lit a surface facing AWAY from the light still is,
+// so lowering it deepens the shadow without touching the lit side at all. The
+// bright edge reads 215 either way; only the dark side moves, down to 25 here.
+//
+// Two things this does not have, deliberately. There is no marker showing
+// where the light is, because gfx3d.light takes a DIRECTION and not a place --
+// a sun, with nowhere it actually is and no falloff with distance. And there
+// is no second shape, because one sphere already faces every direction at
+// once: whatever angle the light arrives from, some of the surface is
+// square-on to it and some is edge-on, so the entire range of the shading is
+// on screen in a single object.
 #include <std/gfx3d>
 #include <std/io>
-#include <std/math>
 
 fn main() {
     if (gfx3d.open("Nexa 3D lighting", 900, 620) != 1) {
         io.println("no 3D window: this platform has no backend yet");
         return;
     }
-    gfx3d.perspective(55.0, 0.1, 200.0);
+    gfx3d.perspective(55.0, 0.1, 100.0);
     gfx3d.maxfps(60);
 
-    io.println("arrows steer the light, space stops it circling");
-    io.println("1/2/3/4 colour, A/Z ambient, Q/E camera, R reset, escape quits");
-    io.println("default ambient: " + gfx3d.ambient());
+    // Set once, outside the loop. The light is state the module keeps, not
+    // something a frame is drawn with: gfx3d.clear puts the model transform
+    // back but deliberately leaves the light alone, so a scene lit the same
+    // way every frame says so once. (Place it inside the loop when it moves --
+    // there is nothing to create or destroy, it is a direction and a level.)
+    gfx3d.light(-0.80, 0.48, 0.35);
+    gfx3d.ambient(30);
+    io.println("ambient: " + gfx3d.ambient() + " (default is 87)");
 
-    // The light as two angles, which is the only comfortable way to aim a
-    // direction by hand. Azimuth goes round, elevation goes up.
-    let az = 0.0;
-    let el = 0.35;
-    let circling = 1;
-
-    let mode = 0;
-    let amb = 87;
-    let camAngle = 0.0;
-
-    // How far out to draw the bead and its ring. Scenery: the shading does
-    // not know this number exists.
-    let ringR = 7.0;
+    // Set once as well: nothing in the scene moves, so nothing about the view
+    // has to be worked out again every frame. Slightly above the middle, which
+    // puts the lit side up and across rather than flat on.
+    gfx3d.camera(0.0, 1.2, 8.5,  0.0, 0.0, 0.0);
 
     while (gfx3d.closed() != 1) {
         gfx3d.poll();
-
-        // Held keys, so the terminator sweeps instead of stepping.
-        if (gfx3d.key("left"))  { az = az - 0.02; circling = 0; }
-        if (gfx3d.key("right")) { az = az + 0.02; circling = 0; }
-        if (gfx3d.key("up"))    { el = el + 0.015; circling = 0; }
-        if (gfx3d.key("down"))  { el = el - 0.015; circling = 0; }
-        // Stopping short of the poles, where the azimuth stops meaning
-        // anything and steering by hand gets strange.
-        if (el > 1.45)  { el = 1.45; }
-        if (el < -1.45) { el = -1.45; }
-
-        if (gfx3d.key("q")) { camAngle = camAngle - 0.02; }
-        if (gfx3d.key("e")) { camAngle = camAngle + 0.02; }
-
-        if (gfx3d.pressed("space")) { circling = 1 - circling; }
-
-        if (gfx3d.pressed("1")) { mode = 0; io.println("light: white"); }
-        if (gfx3d.pressed("2")) { mode = 1; io.println("light: warm"); }
-        if (gfx3d.pressed("3")) { mode = 2; io.println("light: cold"); }
-        if (gfx3d.pressed("4")) { mode = 3; io.println("light: sodium"); }
-
-        // Ambient is 0..255 like every other colour in gfx, and it raises the
-        // floor rather than the ceiling: the lit face of the sphere barely
-        // moves as this changes, while the far side goes from black to nearly
-        // the same brightness as the front. At 255 the sphere is a flat disc
-        // again, which is the whole argument for shading in one picture.
-        //
-        // These are gfx3d.pressed while the steering above is gfx3d.key: one
-        // step per press against "is it down now" sixty times a second.
-        // Written the other way it crosses the whole range in half a second.
-        if (gfx3d.pressed("a")) {
-            amb = amb - 16;
-            if (amb < 0) { amb = 0; }
-            gfx3d.ambient(amb);
-            io.println("ambient: " + gfx3d.ambient());
-        }
-        if (gfx3d.pressed("z")) {
-            amb = amb + 16;
-            if (amb > 255) { amb = 255; }
-            gfx3d.ambient(amb);
-            io.println("ambient: " + gfx3d.ambient());
-        }
-
-        if (gfx3d.pressed("r")) {
-            az = 0.0;
-            el = 0.35;
-            circling = 1;
-            mode = 0;
-            camAngle = 0.0;
-            // The runtime has to be told, not just the variable: putting amb
-            // back on its own would leave the scene lit the way it was while
-            // this program believed otherwise. Read it back rather than
-            // printing what was sent, so the number is the one in force.
-            amb = 87;
-            gfx3d.ambient(amb);
-            io.println("reset; ambient back to " + gfx3d.ambient());
-        }
         if (gfx3d.pressed("escape")) { gfx3d.close(); }
 
-        if (circling == 1) { az = az + 0.012; }
+        gfx3d.clear(10, 10, 14);
 
-        // Two angles to a direction. gfx3d.light normalises what it is given,
-        // so these only have to point the right way, not be unit length.
-        let lx = math.cos(el) * math.sin(az);
-        let ly = math.sin(el);
-        let lz = math.cos(el) * math.cos(az);
-
-        gfx3d.camera(math.sin(camAngle) * 16.0, 4.5, math.cos(camAngle) * 16.0,
-                     0.0, 0.0, 0.0);
-
-        // Placed every frame, because the arrows move it while the scene runs.
-        // There is nothing to create or destroy: it is a direction and a level.
-        if (mode == 0) {
-            // No colour is the same as a white one, and leaves the arithmetic
-            // exactly as it was before gfx3d.light existed -- which is why a
-            // program that never mentions the light sees no change from it.
-            gfx3d.light(lx, ly, lz);
-        }
-        if (mode == 1) { gfx3d.light(lx, ly, lz, 255, 176, 110); }
-        if (mode == 2) { gfx3d.light(lx, ly, lz, 140, 190, 255); }
-        if (mode == 3) { gfx3d.light(lx, ly, lz, 255, 150, 30); }
-
-        gfx3d.clear(12, 12, 18);
-
-        // The ring the bead travels, at the light's current elevation, so
-        // raising the light lifts its whole path. Lines take no light at all
-        // -- there is no surface facing anywhere -- so it stays the same dim
-        // grey however the sphere is lit, which makes it a fair reference.
-        let step = 0.1309;
-        for (i, 48) {
-            let a0 = i * step;
-            let a1 = a0 + step;
-            gfx3d.line3(math.cos(el) * math.sin(a0) * ringR,
-                        math.sin(el) * ringR,
-                        math.cos(el) * math.cos(a0) * ringR,
-                        math.cos(el) * math.sin(a1) * ringR,
-                        math.sin(el) * ringR,
-                        math.cos(el) * math.cos(a1) * ringR,
-                        70, 70, 86);
-        }
-
-        // The subject. Near-white, because a strong colour of its own would
-        // hide what the light is doing to it.
-        gfx3d.sphere(0.0, 0.0, 0.0, 2.6, 210, 210, 215);
-
-        // The bead, on the ring, at the angle the light is coming from.
-        gfx3d.sphere(lx * ringR, ly * ringR, lz * ringR, 0.34, 250, 240, 140);
+        // Near-white on purpose: a strong colour of its own would compete with
+        // the shading for the same pixels. Curved shapes hand over the
+        // direction the surface really points at each corner, which is what
+        // makes this shade smoothly instead of in facets.
+        gfx3d.sphere(0.0, 0.0, 0.0, 2.6, 215, 215, 220);
 
         gfx3d.present();
     }
