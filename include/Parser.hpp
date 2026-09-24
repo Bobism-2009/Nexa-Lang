@@ -4582,6 +4582,7 @@ private:
         if (m == "rotate") return "gfx3d.rotate(rx, ry, rz) turns what you draw next";
         if (m == "scale") return "gfx3d.scale(s) resizes what you draw next";
         if (m == "reset") return "gfx3d.reset() puts the transform back";
+        if (m == "light") return "gfx3d.light(x, y, z[, r, g, b]) aims the light";
         if (m == "camera") return "gfx3d.camera(ex, ey, ez, tx, ty, tz) moves the camera";
         if (m == "perspective") return "gfx3d.perspective(fov, near, far) sets the lens";
         if (m == "present") return "gfx3d.present() shows what you drew";
@@ -4609,6 +4610,11 @@ private:
         std::string method = methodTok.value;
         advance();
         int argc = -1;
+        // argcMax > argc marks a call that takes an optional tail: only
+        // gfx3d.ambient (read or set) and gfx3d.light (with or without a
+        // colour) have one, and light's is all-or-nothing rather than a
+        // range, which is checked below.
+        int argcMax = -1;
         if (method == "open") argc = 3;
         else if (method == "close" || method == "poll" || method == "present" || method == "closed"
                  || method == "width" || method == "height" || method == "backend"
@@ -4616,6 +4622,8 @@ private:
                  || method == "mouse_x" || method == "mouse_y"
                  || method == "wheel" || method == "wheel_x" || method == "typed") argc = 0;
         else if (method == "scale") argc = 1;
+        else if (method == "ambient") { argc = 0; argcMax = 1; }
+        else if (method == "light") { argc = 3; argcMax = 6; }
         else if (method == "translate" || method == "rotate") argc = 3;
         else if (method == "maxfps" || method == "renderer"
                  || method == "key" || method == "pressed" || method == "released"
@@ -4634,7 +4642,7 @@ private:
                 "' at line " + std::to_string(methodTok.line) +
                 " (use open, close, poll, closed, present, width, height, clear, camera,"
                 " perspective, tri, cube, box, sphere, capsule, cylinder, cone,"
-                " line3, grid, translate, rotate, scale, reset,"
+                " line3, grid, translate, rotate, scale, reset, light, ambient,"
                 " maxfps, renderer, backend, key, pressed,"
                 " released, typed, wheel, wheel_x, mouse, mouse_x, mouse_y)");
         }
@@ -4651,7 +4659,18 @@ private:
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' after gfx3d." + method + "(...) at line " + std::to_string(peek().line));
         }
-        if ((int)node.children.size() != argc) {
+        const int got = (int)node.children.size();
+        bool arityOk;
+        if (method == "light") {
+            // A colour is three numbers or none of them; four or five is a
+            // half-written one rather than a form to guess at.
+            arityOk = (got == 3 || got == 6);
+        } else if (argcMax >= 0) {
+            arityOk = (got >= argc && got <= argcMax);
+        } else {
+            arityOk = (got == argc);
+        }
+        if (!arityOk) {
             // The shape, not the count: a wrong count here is nearly always a
             // dropped coordinate, and twelve numbers in a row is exactly where
             // that happens.
@@ -4671,6 +4690,8 @@ private:
             else if (method == "translate") sig = "gfx3d.translate(x, y, z)";
             else if (method == "rotate") sig = "gfx3d.rotate(rx, ry, rz)";
             else if (method == "scale") sig = "gfx3d.scale(s)";
+            else if (method == "ambient") sig = "gfx3d.ambient() or gfx3d.ambient(level)";
+            else if (method == "light") sig = "gfx3d.light(x, y, z) or gfx3d.light(x, y, z, r, g, b)";
             else if (method == "tri") sig = "gfx3d.tri(x1, y1, z1, x2, y2, z2, x3, y3, z3, r, g, b)";
             else if (method == "maxfps") sig = "gfx3d.maxfps(fps)";
             else if (method == "renderer") sig = "gfx3d.renderer(name)";

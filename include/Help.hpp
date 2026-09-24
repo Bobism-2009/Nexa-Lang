@@ -589,6 +589,8 @@ no array of pixels to read back.
             gfx3d.cone(...)      radius at the first point, a tip at the second
             gfx3d.line3(x1,y1,z1, x2,y2,z2, r,g,b)
             gfx3d.grid(size, step, r, g, b)          the y = 0 plane
+  light     gfx3d.light(x, y, z[, r, g, b])   direction it shines from
+            gfx3d.ambient([level])            0..255 facing away; default 87
   place     gfx3d.translate(x, y, z)   moves what is drawn next
             gfx3d.rotate(rx, ry, rz)   degrees, right-hand rule, X then Y then Z
             gfx3d.scale(s)             uniform
@@ -616,9 +618,9 @@ Two renderers are named and one is built: asking for vulkan quietly gives you
 opengl, and backend() reports the truth. Depth test and back-face culling are
 on from the start, though a lone gfx3d.tri is drawn from both sides. A cube's
 flat sides take the direction of the face and stay sharp-edged; curved ones
-take the direction the surface really points and come out smooth. There is no
-gfx3d.light -- the direction is fixed -- but without any shading at all a
-sphere would just be a circle.
+take the direction the surface really points and come out smooth. One
+directional light, in world space, with no shadows: nothing here knows that
+one shape is between another and the light.
 
 Windows, macOS, Linux and the browser. The first three are OpenGL 1.1 with
 three different windows under it; --wasm is a second renderer, because WebGL

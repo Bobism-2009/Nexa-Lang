@@ -2,7 +2,7 @@
 //
 //   build: NexaC Examples/shapes3d_demo.nxa -o shapes3d_demo && ./shapes3d_demo
 //   drive: arrows orbit, W/S raise and lower, wheel zooms, space stops the
-//          camera drifting, escape quits
+//          camera drifting, 1/2/3 move the light, escape quits
 //
 // The cyan cube and the small pale sphere are turned by gfx3d.translate and
 // gfx3d.rotate rather than by moving the camera, and show the two orders:
@@ -29,6 +29,7 @@ fn main() {
     let height = 6.0;
     let dist = 16.0;
     let spinning = 1;
+    let lightMode = 0;
 
     while (gfx3d.closed() != 1) {
         gfx3d.poll();
@@ -47,6 +48,16 @@ fn main() {
 
         gfx3d.camera(math.sin(angle) * dist, height, math.cos(angle) * dist,
                      0.0, 1.0, 0.0);
+        // The light is placed each frame, so 1/2/3 can move it while the
+        // scene runs. It is in world space: the tumbling cube below turns
+        // into and out of it rather than carrying its own lighting along.
+        if (gfx3d.pressed("1")) { lightMode = 0; }
+        if (gfx3d.pressed("2")) { lightMode = 1; }
+        if (gfx3d.pressed("3")) { lightMode = 2; }
+        if (lightMode == 0) { gfx3d.light(-0.4, 0.82, 0.41); gfx3d.ambient(87); }
+        if (lightMode == 1) { gfx3d.light(1.0, 0.25, 0.3); gfx3d.ambient(18); }
+        if (lightMode == 2) { gfx3d.light(-0.3, 0.9, 0.3, 255, 150, 70); gfx3d.ambient(50); }
+
         gfx3d.clear(16, 16, 24);
 
         // The ground, so everything else has somewhere to stand.

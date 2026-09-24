@@ -1061,10 +1061,30 @@ ARGUMENT TYPES
   rather than the window's.
   A transform turns the light with the shape -- a rotated face is lit as the
   direction it now points, not the one it was written as.
-  SHADING. There is no gfx3d.light, and a shape still has to be shape-shaped:
-  a sphere in one flat colour comes out as a circle. So brightness is worked
-  out from the direction a surface faces against one fixed direction that
-  never moves and that a program cannot place. Flat-sided shapes -- cube, box,
+  gfx3d.light(x, y, z)           - the direction the light shines FROM. This is a
+                                   sun and not a lamp: it has no place in the
+                                   scene and does not fall off with distance, so
+                                   (0, 1, 0) is lit from straight overhead. The
+                                   vector is normalised for you; one of no length
+                                   picks out no direction and is ignored
+  gfx3d.light(x, y, z, r, g, b)  - the same, with a colour 0..255. Only the part
+                                   of the shading that depends on a surface facing
+                                   the light is tinted, so a face turned away keeps
+                                   the colour it was given rather than being
+                                   stained by a lamp that is not reaching it.
+                                   A colour is three numbers or none: four or five
+                                   arguments is a half-written one and is refused
+  gfx3d.ambient() / ambient(n)   - how lit a surface facing AWAY from the light
+                                   still is, 0..255, read or set. 0 is a hard black
+                                   shadow; 255 is no shading at all, every face its
+                                   own flat colour. The default is 87
+  The light is in WORLD space, so a shape turned by gfx3d.rotate turns into
+  and out of it rather than carrying its own lighting around with it. There
+  is one light; it is directional, and there are no shadows -- nothing here
+  knows that one shape is between another and the light.
+  SHADING. A shape has to be shape-shaped: a sphere in one flat colour comes
+  out as a circle. So brightness is worked out from the direction a surface
+  faces against the light above. Flat-sided shapes -- cube, box,
   tri -- take the direction of the face, so their faces stay flat and their
   edges stay sharp. Curved ones -- sphere, capsule, cylinder, cone -- take the
   direction the surface really points at each corner, so they come out smooth

@@ -1441,21 +1441,39 @@ static void __nexa_g3_read_mouse(void) {
 // vertices of a face the face's own direction, so the face stays flat and its
 // edges stay sharp.
 
-static const float __nexa_g3_lx = -0.400f;   // already unit length
-static const float __nexa_g3_ly =  0.821f;
-static const float __nexa_g3_lz =  0.408f;
-static const float __nexa_g3_ambient = 0.34f;
+// The light. These were constants until a program could place one, which is
+// why every gfx3d scene ever written was lit from exactly the same corner.
+// The direction is kept unit length so the dot product below is a cosine,
+// and it lives in WORLD space: a shape turned by gfx3d.rotate turns into and
+// out of the light, rather than carrying its own lighting around with it.
+static float __nexa_g3_lx = -0.400f;
+static float __nexa_g3_ly =  0.821f;
+static float __nexa_g3_lz =  0.408f;
+static float __nexa_g3_lr = 1.0f, __nexa_g3_lg = 1.0f, __nexa_g3_lb = 1.0f;
+static float __nexa_g3_ambient = 0.34f;
 
-// How lit a surface pointing this way is, from 0.34 (facing away) to 1.
-static float __nexa_g3_shade(float nx, float ny, float nz) {
+// How lit a surface pointing this way is, per channel, from the ambient
+// floor to full. Three numbers rather than one because a light has a colour:
+// only the part that depends on the surface facing the light is tinted, so
+// a shadowed face keeps the colour it was given rather than being stained by
+// a lamp that is not reaching it.
+//
+// With a white light this is exactly what it always was, which is the point:
+// a program that never mentions the light sees no change.
+static void __nexa_g3_shade_rgb(float nx, float ny, float nz,
+                                float* kr, float* kg, float* kb) {
     float len = std::sqrt(nx * nx + ny * ny + nz * nz);
-    if (len < 1e-8f) return 1.0f;
+    if (len < 1e-8f) { *kr = 1.0f; *kg = 1.0f; *kb = 1.0f; return; }
     float d = (nx * __nexa_g3_lx + ny * __nexa_g3_ly + nz * __nexa_g3_lz) / len;
     // A two-sided shape is lit from either face; a solid one has its back
     // faces culled before they are ever seen, so the clamp costs it nothing.
     if (__nexa_g3_two_sided) { if (d < 0.0f) d = -d; }
     else if (d < 0.0f) d = 0.0f;
-    return __nexa_g3_ambient + (1.0f - __nexa_g3_ambient) * d;
+    const float a = __nexa_g3_ambient;
+    const float lit = (1.0f - a) * d;
+    *kr = a + lit * __nexa_g3_lr;
+    *kg = a + lit * __nexa_g3_lg;
+    *kb = a + lit * __nexa_g3_lb;
 }
 
 // One vertex, shaded by the direction the surface points THERE. Curved
@@ -1467,8 +1485,9 @@ static void __nexa_g3_vert_n(float x, float y, float z,
     // turned here, before it decides how lit this corner is. Scaling is
     // uniform, so the length it picks up washes out in the normalise.
     __nexa_g3_xf_dir(&nx, &ny, &nz);
-    float k = __nexa_g3_shade(nx, ny, nz);
-    __nexa_g3_batch_vert(x, y, z, r * k, g * k, b * k);
+    float kr, kg, kb;
+    __nexa_g3_shade_rgb(nx, ny, nz, &kr, &kg, &kb);
+    __nexa_g3_batch_vert(x, y, z, r * kr, g * kg, b * kb);
 }
 
 // One flat triangle: the normal is the face's own, so all three corners get
@@ -1485,10 +1504,11 @@ static void __nexa_g3_face(float ax, float ay, float az,
     // Worked out from the corners as written, so it is turned the same way
     // they are about to be.
     __nexa_g3_xf_dir(&nx, &ny, &nz);
-    float k = __nexa_g3_shade(nx, ny, nz);
-    __nexa_g3_batch_vert(ax, ay, az, r * k, g * k, b * k);
-    __nexa_g3_batch_vert(bx, by, bz, r * k, g * k, b * k);
-    __nexa_g3_batch_vert(cx, cy, cz, r * k, g * k, b * k);
+    float kr, kg, kb;
+    __nexa_g3_shade_rgb(nx, ny, nz, &kr, &kg, &kb);
+    __nexa_g3_batch_vert(ax, ay, az, r * kr, g * kg, b * kb);
+    __nexa_g3_batch_vert(bx, by, bz, r * kr, g * kg, b * kb);
+    __nexa_g3_batch_vert(cx, cy, cz, r * kr, g * kg, b * kb);
 }
 
 // --- shape geometry ---------------------------------------------------------
@@ -2063,6 +2083,48 @@ static void __nexa_gfx3d_present(void) {
     }
 }
 
+
+// --- the light --------------------------------------------------------------
+
+// Where the light shines FROM, as a direction rather than a position: this is
+// a sun and not a lamp, so it has no place in the scene and does not fall off
+// with distance. (0, 1, 0) is straight down from above.
+//
+// The colour defaults to white, which makes the three-argument form exactly
+// the light this module had when it had no light call at all.
+static void __nexa_gfx3d_light(double x, double y, double z,
+                               int r = 255, int g = 255, int b = 255) {
+    float lx = (float)x, ly = (float)y, lz = (float)z;
+    float len = std::sqrt(lx * lx + ly * ly + lz * lz);
+    // A direction of no length picks out no direction, so it is ignored rather
+    // than turned into a divide by zero or a scene that goes suddenly flat.
+    if (len < 1e-8f) return;
+    __nexa_g3_lx = lx / len;
+    __nexa_g3_ly = ly / len;
+    __nexa_g3_lz = lz / len;
+    if (r < 0) r = 0; if (r > 255) r = 255;
+    if (g < 0) g = 0; if (g > 255) g = 255;
+    if (b < 0) b = 0; if (b > 255) b = 255;
+    __nexa_g3_lr = (float)r / 255.0f;
+    __nexa_g3_lg = (float)g / 255.0f;
+    __nexa_g3_lb = (float)b / 255.0f;
+}
+
+// How lit a surface facing away from the light still is, 0..255 like every
+// other colour here. 0 is a hard black shadow, 255 is no shading at all --
+// every face its own flat colour, which is what this module looked like before
+// it had normals. The default is 87, which is the 0.34 the shading used to be
+// written with.
+static int __nexa_gfx3d_ambient(int level) {
+    if (level < 0) level = 0;
+    if (level > 255) level = 255;
+    __nexa_g3_ambient = (float)level / 255.0f;
+    return level;
+}
+
+static int __nexa_gfx3d_ambient_get(void) {
+    return (int)(__nexa_g3_ambient * 255.0f + 0.5f);
+}
 
 // --- the transform calls ----------------------------------------------------
 

@@ -2393,7 +2393,7 @@ private:
                 // backend() is the only one that answers with text; the rest
                 // are 1/0 or a size, and the draws are statements.
                 if (e.value == "backend" || e.value == "typed") return "string";
-                return "int";
+                return "int";  // ambient reads back a level; the rest are 1/0 or a size
             case AstNode::Type::GfxCall:
                 if (e.value == "title") return e.children.empty() ? "string" : "int";
                 if (e.value == "drop" || e.value == "opendialog" || e.value == "openfile"
@@ -3486,6 +3486,8 @@ private:
             {"translate",   "gfx3d.translate(x, y, z)",                               "nnn"},
             {"rotate",      "gfx3d.rotate(rx, ry, rz)",                               "nnn"},
             {"scale",       "gfx3d.scale(s)",                                         "n"},
+            {"ambient",     "gfx3d.ambient([level])",                                 "n"},
+            {"light",       "gfx3d.light(x, y, z[, r, g, b])",                        "nnnnnn"},
             {"capsule",     "gfx3d.capsule(x1, y1, z1, x2, y2, z2, radius, r, g, b)", "nnnnnnnnnn"},
             {"cylinder",    "gfx3d.cylinder(x1, y1, z1, x2, y2, z2, radius, r, g, b)","nnnnnnnnnn"},
             {"cone",        "gfx3d.cone(x1, y1, z1, x2, y2, z2, radius, r, g, b)",    "nnnnnnnnnn"},
@@ -6839,6 +6841,12 @@ private:
                 for (size_t i = 0; i < e.children.size(); i++) {
                     if (i) args += ", ";
                     args += a(i);
+                }
+                // gfx3d.ambient reads with no argument and sets with one, so
+                // the two forms are two functions rather than a sentinel
+                // level that would collide with a real one.
+                if (fn == "ambient" && e.children.empty()) {
+                    return "__nexa_gfx3d_ambient_get()";
                 }
                 return "__nexa_gfx3d_" + fn + "(" + args + ")";
             }

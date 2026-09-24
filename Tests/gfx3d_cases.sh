@@ -120,6 +120,12 @@ expect_emit "translate"   '__nexa_gfx3d_translate\(1, 2, 3\)'           '    gfx
 expect_emit "rotate"      '__nexa_gfx3d_rotate\(0, 90, 0\)'             '    gfx3d.rotate(0, 90, 0);'
 expect_emit "scale"       '__nexa_gfx3d_scale\(2\)'                     '    gfx3d.scale(2);'
 expect_emit "reset"       '__nexa_gfx3d_reset\(\)'                      '    gfx3d.reset();'
+expect_emit "light"       '__nexa_gfx3d_light\(0, 1, 0\)'               '    gfx3d.light(0, 1, 0);'
+expect_emit "light colour" '__nexa_gfx3d_light\(0, 1, 0, 255, 200, 150\)' '    gfx3d.light(0, 1, 0, 255, 200, 150);'
+expect_emit "ambient set" '__nexa_gfx3d_ambient\(60\)'                  '    gfx3d.ambient(60);'
+# Reading and setting are two runtime calls, not one with a sentinel level:
+# every value 0..255 is a real one, so none is free to mean "tell me".
+expect_emit "ambient read" '__nexa_gfx3d_ambient_get\(\)'               '    let a = gfx3d.ambient();'
 expect_emit "tri"         '__nexa_gfx3d_tri\(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12\)' \
                           '    gfx3d.tri(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);'
 expect_emit "renderer"    '__nexa_gfx3d_renderer\("vulkan"\)'           '    gfx3d.renderer("vulkan");'
