@@ -585,6 +585,14 @@ struct __nexa_Gfx {
     // -- and all of those are core. A program that never asks finds a 0 here
     // and writes the 255 it has always written.
     int transparent;
+    // 1 while this framebuffer belongs to a std/gfx3d window rather than to a
+    // window of gfx's own: gfx has no window, and what it draws is laid over
+    // the 3D scene at each gfx3d.present. Set and cleared by the bridge in
+    // Gfx3dRuntime.hpp (gfx3dOverlayCpp), which is only emitted for a program
+    // that uses both modules. Core because the calls that ask "is there
+    // somewhere to draw" -- width, height, blit, get, save -- read it, and a
+    // program without gfx3d finds a 0 here and behaves exactly as it did.
+    int overlay;
     // 1 while the OS cursor is visible over the window, which is how a window
     // starts. Kept here rather than asked of the OS: X11 has no "is my cursor
     // hidden" query, and NSCursor's hide/unhide is a counter that only stays
@@ -1005,6 +1013,10 @@ static void __nexa_gfx_free() {
     __nexa_gfx_delegate = nil;
 #endif
     __nexa_g.ready = 0;
+    // The framebuffer just freed may have been a gfx3d overlay. Whatever it
+    // was, it is gone -- so gfx.open taking a window of its own, or gfx.close,
+    // ends the overlay, and gfx3d.present stops laying anything over its frame.
+    __nexa_g.overlay = 0;
 )NEXA_GFX";
     // A closed window reports no mouse buttons, no scrolling and no typed
     // text, the same way it reports no keys.
@@ -1847,15 +1859,15 @@ static int __nexa_gfx_resize(int w, int h, int scale) {
 )NEXA_GFX";
     out += R"NEXA_GFX(
 static int __nexa_gfx_width() {
-    return __nexa_g.ready ? __nexa_g.w : 0;
+    return (__nexa_g.ready || __nexa_g.overlay) ? __nexa_g.w : 0;
 }
 
 static int __nexa_gfx_height() {
-    return __nexa_g.ready ? __nexa_g.h : 0;
+    return (__nexa_g.ready || __nexa_g.overlay) ? __nexa_g.h : 0;
 }
 
 static int __nexa_gfx_scale() {
-    return __nexa_g.ready ? __nexa_g.scale : 0;
+    return (__nexa_g.ready || __nexa_g.overlay) ? __nexa_g.scale : 0;
 }
 )NEXA_GFX";
     out += R"NEXA_GFX(
@@ -2820,7 +2832,7 @@ static void __nexa_gfx_plot(int x, int y, int r, int g, int b) {
 )NEXA_GFX";  // [nexa:rasterizers-end]
     if (wantGet) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
 static int __nexa_gfx_get(int x, int y) {
-    if (!__nexa_g.fb || !__nexa_g.ready) return -1;
+    if (!__nexa_g.fb || !(__nexa_g.ready || __nexa_g.overlay)) return -1;
     if (x < 0 || y < 0 || x >= __nexa_g.w || y >= __nexa_g.h) return -1;
     const unsigned char* p = __nexa_g.fb + ((size_t)y * (size_t)__nexa_g.w + (size_t)x) * 4;
 #ifdef _WIN32
@@ -4366,7 +4378,7 @@ static int __nexa_gfx_image_h(int id) {
     if (need.blit) out += R"NEXA_GFX(
 // [nexa:blit-begin]
 static int __nexa_gfx_blit(int x, int y, int id, int dw, int dh, int sx, int sy, int sw, int sh) {
-    if (!__nexa_g.fb || !__nexa_g.ready) return 0;
+    if (!__nexa_g.fb || !(__nexa_g.ready || __nexa_g.overlay)) return 0;
     if (id < 1 || id >= (int)__nexa_imgs.size()) return 0;
     const __nexa_GfxImg& im = __nexa_imgs[(size_t)id];
     if (!im.px || im.w < 1 || im.h < 1) return 0;
@@ -4446,7 +4458,7 @@ static int __nexa_gfx_blit_path(int x, int y, const std::string& path, int dw, i
 // destination box and asks which source pixel it landed on. Nothing is drawn
 // twice and nothing is missed.
 static int __nexa_gfx_blit_rot(int x, int y, int id, double angle, int dw, int dh) {
-    if (!__nexa_g.fb || !__nexa_g.ready) return 0;
+    if (!__nexa_g.fb || !(__nexa_g.ready || __nexa_g.overlay)) return 0;
     if (id < 1 || id >= (int)__nexa_imgs.size()) return 0;
     const __nexa_GfxImg& im = __nexa_imgs[(size_t)id];
     if (!im.px || im.w < 1 || im.h < 1) return 0;
@@ -4738,7 +4750,7 @@ static void __nexa_gfx_le16(std::string& out, unsigned int v) {
 
 static int __nexa_gfx_save(const std::string& path) {
     if (path.empty()) return 0;
-    if (!__nexa_g.fb || !__nexa_g.ready) return 0;
+    if (!__nexa_g.fb || !(__nexa_g.ready || __nexa_g.overlay)) return 0;
     int w = __nexa_g.w;
     int h = __nexa_g.h;
     if (w < 1 || h < 1) return 0;

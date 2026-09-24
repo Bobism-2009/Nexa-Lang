@@ -16,6 +16,7 @@
 !Tests/gfx_overlay_semantics.cpp
 !Tests/gfx_transparent_semantics.cpp
 !Tests/gfx3d_transform_semantics.cpp
+!Tests/gfx3d_overlay_semantics.cpp
 !Tests/gfx_x11_stub/x11_stub.cpp
 
 # Packages

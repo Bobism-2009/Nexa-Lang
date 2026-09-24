@@ -131,6 +131,20 @@ typedef long          __nexa_GLsizeiptr;
 #define NEXA_GL_VERTEX_SHADER    0x8B31u
 #define NEXA_GL_COMPILE_STATUS   0x8B81u
 #define NEXA_GL_LINK_STATUS      0x8B82u
+// For laying std/gfx's framebuffer over the frame -- one textured quad, blended.
+// Also OpenGL 1.1, apart from BGRA: that is the byte order a Windows gfx
+// framebuffer is kept in, and every Windows GL implementation, down to the
+// software one in opengl32.dll itself, accepts it.
+#define NEXA_GL_TEXTURE_2D          0x0DE1u
+#define NEXA_GL_BLEND               0x0BE2u
+#define NEXA_GL_SRC_ALPHA           0x0302u
+#define NEXA_GL_ONE_MINUS_SRC_ALPHA 0x0303u
+#define NEXA_GL_RGBA                0x1908u
+#define NEXA_GL_BGRA                0x80E1u
+#define NEXA_GL_UNSIGNED_BYTE       0x1401u
+#define NEXA_GL_TEXTURE_MAG_FILTER  0x2800u
+#define NEXA_GL_TEXTURE_MIN_FILTER  0x2801u
+#define NEXA_GL_NEAREST             0x2600u
 
 #if defined(_WIN32)
   #define NEXA_GLAPI __stdcall
@@ -151,6 +165,18 @@ typedef void (NEXA_GLAPI *__nexa_pfn_glBegin)(__nexa_GLenum);
 typedef void (NEXA_GLAPI *__nexa_pfn_glEnd)(void);
 typedef void (NEXA_GLAPI *__nexa_pfn_glVertex3f)(__nexa_GLfloat, __nexa_GLfloat, __nexa_GLfloat);
 typedef void (NEXA_GLAPI *__nexa_pfn_glColor3ub)(__nexa_GLubyte, __nexa_GLubyte, __nexa_GLubyte);
+typedef void (NEXA_GLAPI *__nexa_pfn_glGenTextures)(__nexa_GLsizei, __nexa_GLuint*);
+typedef void (NEXA_GLAPI *__nexa_pfn_glDeleteTextures)(__nexa_GLsizei, const __nexa_GLuint*);
+typedef void (NEXA_GLAPI *__nexa_pfn_glBindTexture)(__nexa_GLenum, __nexa_GLuint);
+typedef void (NEXA_GLAPI *__nexa_pfn_glTexImage2D)(__nexa_GLenum, __nexa_GLint, __nexa_GLint,
+                                                    __nexa_GLsizei, __nexa_GLsizei, __nexa_GLint,
+                                                    __nexa_GLenum, __nexa_GLenum, const void*);
+typedef void (NEXA_GLAPI *__nexa_pfn_glTexSubImage2D)(__nexa_GLenum, __nexa_GLint, __nexa_GLint,
+                                                       __nexa_GLint, __nexa_GLsizei, __nexa_GLsizei,
+                                                       __nexa_GLenum, __nexa_GLenum, const void*);
+typedef void (NEXA_GLAPI *__nexa_pfn_glTexParameteri)(__nexa_GLenum, __nexa_GLenum, __nexa_GLint);
+typedef void (NEXA_GLAPI *__nexa_pfn_glBlendFunc)(__nexa_GLenum, __nexa_GLenum);
+typedef void (NEXA_GLAPI *__nexa_pfn_glTexCoord2f)(__nexa_GLfloat, __nexa_GLfloat);
 
 // The GLES2 entry points the WebGL backend calls. Emscripten links these in
 // itself, so unlike the desktop table they are ordinary symbols rather than
@@ -187,6 +213,20 @@ void glDisable(__nexa_GLenum);
 void glCullFace(__nexa_GLenum);
 void glFrontFace(__nexa_GLenum);
 void glViewport(__nexa_GLint, __nexa_GLint, __nexa_GLsizei, __nexa_GLsizei);
+// The std/gfx overlay: a texture and a second, textured program. Declared for
+// every wasm build and linked only into one that draws an overlay, since an
+// extern nothing calls costs nothing.
+void glGenTextures(__nexa_GLsizei, __nexa_GLuint*);
+void glDeleteTextures(__nexa_GLsizei, const __nexa_GLuint*);
+void glBindTexture(__nexa_GLenum, __nexa_GLuint);
+void glTexImage2D(__nexa_GLenum, __nexa_GLint, __nexa_GLint, __nexa_GLsizei, __nexa_GLsizei,
+                  __nexa_GLint, __nexa_GLenum, __nexa_GLenum, const void*);
+void glTexSubImage2D(__nexa_GLenum, __nexa_GLint, __nexa_GLint, __nexa_GLint, __nexa_GLsizei,
+                     __nexa_GLsizei, __nexa_GLenum, __nexa_GLenum, const void*);
+void glTexParameteri(__nexa_GLenum, __nexa_GLenum, __nexa_GLint);
+void glBlendFunc(__nexa_GLenum, __nexa_GLenum);
+void glUniform1i(__nexa_GLint, __nexa_GLint);
+void glDisableVertexAttribArray(__nexa_GLuint);
 }
 #endif
 
@@ -204,6 +244,16 @@ struct __nexa_GL {
     __nexa_pfn_glEnd         End         = nullptr;
     __nexa_pfn_glVertex3f    Vertex3f    = nullptr;
     __nexa_pfn_glColor3ub    Color3ub    = nullptr;
+    // The overlay's. Bound softly -- see __nexa_g3_load_gl -- so these may be
+    // null where the thirteen above are not, and whatever uses them checks.
+    __nexa_pfn_glGenTextures    GenTextures    = nullptr;
+    __nexa_pfn_glDeleteTextures DeleteTextures = nullptr;
+    __nexa_pfn_glBindTexture    BindTexture    = nullptr;
+    __nexa_pfn_glTexImage2D     TexImage2D     = nullptr;
+    __nexa_pfn_glTexSubImage2D  TexSubImage2D  = nullptr;
+    __nexa_pfn_glTexParameteri  TexParameteri  = nullptr;
+    __nexa_pfn_glBlendFunc      BlendFunc      = nullptr;
+    __nexa_pfn_glTexCoord2f     TexCoord2f     = nullptr;
     int loaded = 0;
 };
 static __nexa_GL __nexa_gl;
@@ -590,6 +640,18 @@ static int __nexa_g3_load_gl(void) {
     NEXA_GL_BIND(End,         "glEnd")
     NEXA_GL_BIND(Vertex3f,    "glVertex3f")
     NEXA_GL_BIND(Color3ub,    "glColor3ub")
+    // The std/gfx overlay's entry points, bound without the early return the
+    // thirteen above have. They are OpenGL 1.1 too and every driver has them,
+    // but they are not what a 3D window needs in order to draw, and a machine
+    // somehow missing one should lose the 2D layer rather than the window.
+    __nexa_gl.GenTextures    = (__nexa_pfn_glGenTextures)__nexa_g3_sym("glGenTextures");
+    __nexa_gl.DeleteTextures = (__nexa_pfn_glDeleteTextures)__nexa_g3_sym("glDeleteTextures");
+    __nexa_gl.BindTexture    = (__nexa_pfn_glBindTexture)__nexa_g3_sym("glBindTexture");
+    __nexa_gl.TexImage2D     = (__nexa_pfn_glTexImage2D)__nexa_g3_sym("glTexImage2D");
+    __nexa_gl.TexSubImage2D  = (__nexa_pfn_glTexSubImage2D)__nexa_g3_sym("glTexSubImage2D");
+    __nexa_gl.TexParameteri  = (__nexa_pfn_glTexParameteri)__nexa_g3_sym("glTexParameteri");
+    __nexa_gl.BlendFunc      = (__nexa_pfn_glBlendFunc)__nexa_g3_sym("glBlendFunc");
+    __nexa_gl.TexCoord2f     = (__nexa_pfn_glTexCoord2f)__nexa_g3_sym("glTexCoord2f");
     __nexa_gl.loaded = 1;
     return 1;
 }
@@ -1763,6 +1825,16 @@ inline std::string gfx3dApiCpp() {
     return R"NEXA_GFX3D(
 // --- the module -------------------------------------------------------------
 
+// Where a std/gfx framebuffer is laid over this window. Always named, always
+// answered: by gfx3dOverlayCpp in a program that draws with both modules, and
+// by empty bodies otherwise, so the four calls below cost nothing in a program
+// with no 2D layer. Declared here because the answers are emitted after this
+// block -- the real ones need both runtimes in front of them.
+static void __nexa_g3_overlay_open(int w, int h);
+static void __nexa_g3_overlay_frame(int w, int h);
+static void __nexa_g3_overlay_present(void);
+static void __nexa_g3_overlay_close(void);
+
 static int __nexa_gfx3d_open(const std::string& title, int w, int h) {
     if (__nexa_g3.ready) return 1;
     // Clamped rather than refused, the way gfx.open clamps its framebuffer.
@@ -1788,6 +1860,7 @@ static int __nexa_gfx3d_open(const std::string& title, int w, int h) {
     __nexa_gl.FrontFace(NEXA_GL_CCW);
     __nexa_gfx3d_reset();
     __nexa_g3.ready = 1;
+    __nexa_g3_overlay_open(__nexa_g3.w, __nexa_g3.h);
     return 1;
 }
 
@@ -1799,6 +1872,7 @@ static void __nexa_gfx3d_close(void) {
     __nexa_gfx_sound_reset();
     __nexa_gfx_audio_close();
     if (!__nexa_g3.ready) return;
+    __nexa_g3_overlay_close();
     __nexa_g3_platform_close();
     __nexa_g3.ready = 0;
     __nexa_g3.closed = 1;
@@ -1848,6 +1922,12 @@ static void __nexa_gfx3d_clear(int r, int g, int b) {
     // one call a frame is guaranteed to start with, and by this point the
     // window size that the aspect ratio depends on has settled for the frame.
     __nexa_g3_apply_camera();
+    // The 2D layer starts the frame empty too, and at the window's size as of
+    // now. It is cleared here rather than left to the program for the reason
+    // the transform is reset here: a HUD redrawn every frame is what a HUD is,
+    // and one that quietly kept last frame's pixels would smear anything that
+    // moved -- a counter would print over itself.
+    __nexa_g3_overlay_frame(__nexa_g3.w, __nexa_g3.h);
 }
 
 static void __nexa_gfx3d_camera(double ex, double ey, double ez,
@@ -2089,6 +2169,8 @@ static void __nexa_gfx3d_maxfps(int fps) {
 
 static void __nexa_gfx3d_present(void) {
     if (!__nexa_g3.ready) return;
+    // Last thing before the swap, so it is over everything the frame drew.
+    __nexa_g3_overlay_present();
     __nexa_g3_platform_swap();
     if (__nexa_g3.frame_ms <= 0.0) return;
 
@@ -2546,6 +2628,295 @@ static void __nexa_gfx3d_draw(int id, double x, double y, double z, double scale
     }
     __nexa_g3_batch_end();
 }
+)NEXA_GFX3D";
+}
+
+
+// std/gfx drawn over a std/gfx3d window: the 2D layer.
+//
+// A program that includes both modules and opens a gfx3d window can draw on it
+// with gfx's own calls -- gfx.rect, gfx.text, gfx.line, gfx.blit, gfx.alpha,
+// all of it -- and never call gfx.open. That is the whole of the feature: a
+// HUD, a menu, a health bar, a crosshair, written with the 2D library that
+// already exists instead of a second one inside gfx3d.
+//
+// Very little of it is new, because gfx was most of the way there already.
+// Its framebuffer carries a real alpha byte, which gfx.transparent uses to let
+// the desktop show through wherever nothing has been drawn; and its drawing
+// calls only ever needed that framebuffer, never the window. So gfx is handed
+// a framebuffer the size of the 3D window, set transparent, with no window of
+// its own -- and at each gfx3d.present that framebuffer is laid over the frame
+// as one textured quad, blended, so that where gfx drew nothing the 3D scene
+// shows through exactly as the desktop would through a see-through gfx window.
+// Every rule gfx.transparent already documents holds here unchanged: gfx.clear
+// makes the whole layer see-through again, gfx.alpha draws translucently over
+// the scene, and an opaque gfx.fill over the whole of it hides the scene.
+//
+// Only when gfx has no window of its own. A program that called gfx.open has
+// somewhere else for its drawing to go and keeps sending it there; the layer
+// attaches at gfx3d.open only if gfx is windowless then, and gfx.open called
+// afterwards takes gfx back to a window of its own (freeing the framebuffer
+// ends the layer -- see __nexa_gfx_free).
+//
+// One overlay pixel is one window pixel. gfx's integer scale is 1 here, so
+// gfx.width() and gfx.height() are the window's own size and gfx3d.mouse_x()
+// lands on the same pixel gfx.rect would draw at.
+//
+// Emitted only for a program that uses both modules AND draws with gfx: one
+// that only reaches gfx for, say, gfx.play would otherwise pay for uploading a
+// full-window texture every frame to show nothing. Such a program gets the
+// empty hooks in gfx3dOverlayStubsCpp instead.
+inline std::string gfx3dOverlayCpp() {
+    return R"NEXA_GFX3D(
+// --- the std/gfx overlay ----------------------------------------------------
+
+static __nexa_GLuint __nexa_g3_ov_tex = 0;
+// The texture is a power of two on each side, because OpenGL 1.1 textures have
+// to be, and the framebuffer is uploaded into its top-left corner. The texture
+// coordinates then stop at w/tw and h/th rather than at 1.
+static int __nexa_g3_ov_tw = 0;
+static int __nexa_g3_ov_th = 0;
+
+static int __nexa_g3_ov_pow2(int n) {
+    int p = 1;
+    while (p < n && p < (1 << 14)) p <<= 1;
+    return p;
+}
+
+// gfx's framebuffer, sized for this window, with nothing drawn on it yet.
+static void __nexa_g3_ov_alloc(int w, int h) {
+    delete[] __nexa_g.fb;
+    __nexa_g.fb = new unsigned char[(size_t)w * (size_t)h * 4];
+    __nexa_g.w = w;
+    __nexa_g.h = h;
+}
+
+static void __nexa_g3_overlay_open(int w, int h) {
+    // gfx has a window of its own, so its drawing already has somewhere to go.
+    if (__nexa_g.ready) return;
+    __nexa_g3_ov_alloc(w, h);
+    __nexa_g.scale = 1;
+    __nexa_g.closed = 0;
+    __nexa_g.transparent = 1;
+    __nexa_g.overlay = 1;
+    if (__nexa_g.text_scale < 1) __nexa_g.text_scale = 1;
+    // The same fresh start gfx.open gives a new window: fully opaque draws.
+    __nexa_gfx_alpha_set(255);
+    __nexa_gfx_clear(0, 0, 0);
+}
+
+static void __nexa_g3_overlay_frame(int w, int h) {
+    if (!__nexa_g.overlay) return;
+    // The window can be resized under the program; the layer follows it at
+    // the start of the next frame rather than mid-way through one.
+    if (w != __nexa_g.w || h != __nexa_g.h) __nexa_g3_ov_alloc(w, h);
+    // With transparent set, a clear writes alpha 0: nothing drawn, scene shows.
+    __nexa_gfx_clear(0, 0, 0);
+}
+
+static void __nexa_g3_overlay_close(void) {
+#if defined(NEXA_WASM)
+    if (__nexa_g3_ov_tex) glDeleteTextures(1, &__nexa_g3_ov_tex);
+#else
+    if (__nexa_g3_ov_tex && __nexa_gl.DeleteTextures) __nexa_gl.DeleteTextures(1, &__nexa_g3_ov_tex);
+#endif
+    __nexa_g3_ov_tex = 0;
+    __nexa_g3_ov_tw = 0;
+    __nexa_g3_ov_th = 0;
+    // Only gfx's framebuffer if it was lent to this window. One belonging to a
+    // gfx window of its own is none of gfx3d's business.
+    if (__nexa_g.overlay) {
+        delete[] __nexa_g.fb;
+        __nexa_g.fb = nullptr;
+        __nexa_g.overlay = 0;
+        __nexa_g.w = 0;
+        __nexa_g.h = 0;
+    }
+}
+
+#if defined(NEXA_WASM)
+
+// WebGL has no fixed-function texturing, so the layer is drawn by a second,
+// four-line program: a position straight through, and a texture read.
+static __nexa_GLuint __nexa_g3_ov_prog = 0;
+static __nexa_GLuint __nexa_g3_ov_vbo = 0;
+static __nexa_GLint __nexa_g3_ov_a_pos = -1;
+static __nexa_GLint __nexa_g3_ov_a_uv = -1;
+static __nexa_GLint __nexa_g3_ov_u_tex = -1;
+static int __nexa_g3_ov_broken = 0;
+
+static int __nexa_g3_ov_build(void) {
+    if (__nexa_g3_ov_prog) return 1;
+    if (__nexa_g3_ov_broken) return 0;
+    static const char* vs =
+        "attribute vec2 aPos;\n"
+        "attribute vec2 aUV;\n"
+        "varying vec2 vUV;\n"
+        "void main() {\n"
+        "  vUV = aUV;\n"
+        "  gl_Position = vec4(aPos, 0.0, 1.0);\n"
+        "}\n";
+    static const char* fs =
+        "precision mediump float;\n"
+        "uniform sampler2D uTex;\n"
+        "varying vec2 vUV;\n"
+        "void main() {\n"
+        "  gl_FragColor = texture2D(uTex, vUV);\n"
+        "}\n";
+    __nexa_GLuint v = __nexa_g3_compile(NEXA_GL_VERTEX_SHADER, vs);
+    __nexa_GLuint f = __nexa_g3_compile(NEXA_GL_FRAGMENT_SHADER, fs);
+    // Built once, and given up on once: a browser that cannot compile this
+    // cannot compile it next frame either, and trying every frame would cost
+    // the 3D scene its frame rate for a layer that will never appear.
+    if (!v || !f) { __nexa_g3_ov_broken = 1; return 0; }
+    __nexa_GLuint p = glCreateProgram();
+    glAttachShader(p, v);
+    glAttachShader(p, f);
+    glLinkProgram(p);
+    __nexa_GLint ok = 0;
+    glGetProgramiv(p, NEXA_GL_LINK_STATUS, &ok);
+    glDeleteShader(v);
+    glDeleteShader(f);
+    if (!ok) { __nexa_g3_ov_broken = 1; return 0; }
+    __nexa_g3_ov_prog = p;
+    __nexa_g3_ov_a_pos = glGetAttribLocation(p, "aPos");
+    __nexa_g3_ov_a_uv = glGetAttribLocation(p, "aUV");
+    __nexa_g3_ov_u_tex = glGetUniformLocation(p, "uTex");
+    glGenBuffers(1, &__nexa_g3_ov_vbo);
+    return 1;
+}
+
+#endif
+
+static void __nexa_g3_overlay_present(void) {
+    if (!__nexa_g.overlay || !__nexa_g.fb) return;
+    const int w = __nexa_g.w;
+    const int h = __nexa_g.h;
+    if (w < 1 || h < 1) return;
+    const int tw = __nexa_g3_ov_pow2(w);
+    const int th = __nexa_g3_ov_pow2(h);
+    const float u = (float)w / (float)tw;
+    const float v = (float)h / (float)th;
+
+    // Row 0 of gfx's framebuffer is the top of the picture and is uploaded
+    // first, so it is texture row 0 -- which therefore belongs on the top edge
+    // of the quad. The quad is the whole viewport, corner to corner.
+#if defined(NEXA_WASM)
+    if (!__nexa_g3_ov_build()) return;
+    if (!__nexa_g3_ov_tex) glGenTextures(1, &__nexa_g3_ov_tex);
+    glBindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_ov_tex);
+    if (tw != __nexa_g3_ov_tw || th != __nexa_g3_ov_th) {
+        // NEAREST both ways, and not only because the layer is pixel-exact:
+        // the default minifying filter expects mipmaps, and a texture without
+        // them samples as black.
+        glTexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_MIN_FILTER, (__nexa_GLint)NEXA_GL_NEAREST);
+        glTexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_MAG_FILTER, (__nexa_GLint)NEXA_GL_NEAREST);
+        glTexImage2D(NEXA_GL_TEXTURE_2D, 0, (__nexa_GLint)NEXA_GL_RGBA, tw, th, 0,
+                     NEXA_GL_RGBA, NEXA_GL_UNSIGNED_BYTE, nullptr);
+        __nexa_g3_ov_tw = tw;
+        __nexa_g3_ov_th = th;
+    }
+    glTexSubImage2D(NEXA_GL_TEXTURE_2D, 0, 0, 0, w, h,
+                    NEXA_GL_RGBA, NEXA_GL_UNSIGNED_BYTE, __nexa_g.fb);
+
+    const float quad[24] = {
+        -1.0f,  1.0f, 0.0f, 0.0f,
+        -1.0f, -1.0f, 0.0f, v,
+         1.0f, -1.0f, u,    v,
+        -1.0f,  1.0f, 0.0f, 0.0f,
+         1.0f, -1.0f, u,    v,
+         1.0f,  1.0f, u,    0.0f,
+    };
+    glUseProgram(__nexa_g3_ov_prog);
+    glUniform1i(__nexa_g3_ov_u_tex, 0);
+    glBindBuffer(NEXA_GL_ARRAY_BUFFER, __nexa_g3_ov_vbo);
+    glBufferData(NEXA_GL_ARRAY_BUFFER, (__nexa_GLsizeiptr)sizeof(quad), quad, NEXA_GL_DYNAMIC_DRAW);
+    const __nexa_GLsizei stride = (__nexa_GLsizei)(4 * sizeof(float));
+    if (__nexa_g3_ov_a_pos >= 0) {
+        glEnableVertexAttribArray((__nexa_GLuint)__nexa_g3_ov_a_pos);
+        glVertexAttribPointer((__nexa_GLuint)__nexa_g3_ov_a_pos, 2, NEXA_GL_FLOAT, 0, stride, (const void*)0);
+    }
+    if (__nexa_g3_ov_a_uv >= 0) {
+        glEnableVertexAttribArray((__nexa_GLuint)__nexa_g3_ov_a_uv);
+        glVertexAttribPointer((__nexa_GLuint)__nexa_g3_ov_a_uv, 2, NEXA_GL_FLOAT, 0, stride,
+                              (const void*)(2 * sizeof(float)));
+    }
+    glDisable(NEXA_GL_DEPTH_TEST);
+    glDisable(NEXA_GL_CULL_FACE);
+    glEnable(NEXA_GL_BLEND);
+    glBlendFunc(NEXA_GL_SRC_ALPHA, NEXA_GL_ONE_MINUS_SRC_ALPHA);
+    glDrawArrays(NEXA_GL_TRIANGLES, 0, 6);
+    glDisable(NEXA_GL_BLEND);
+    glEnable(NEXA_GL_CULL_FACE);
+    glEnable(NEXA_GL_DEPTH_TEST);
+    // The next frame's batch enables its own attributes; these would otherwise
+    // be left pointing at a six-vertex buffer it knows nothing about.
+    if (__nexa_g3_ov_a_pos >= 0) glDisableVertexAttribArray((__nexa_GLuint)__nexa_g3_ov_a_pos);
+    if (__nexa_g3_ov_a_uv >= 0) glDisableVertexAttribArray((__nexa_GLuint)__nexa_g3_ov_a_uv);
+#else
+    if (!__nexa_gl.GenTextures || !__nexa_gl.BindTexture || !__nexa_gl.TexImage2D ||
+        !__nexa_gl.TexSubImage2D || !__nexa_gl.TexParameteri || !__nexa_gl.BlendFunc ||
+        !__nexa_gl.TexCoord2f) return;
+    // The byte order gfx keeps its pixels in, which is BGRA on Windows because
+    // that is what a DIB section wants, and RGBA everywhere else.
+#if defined(_WIN32)
+    const __nexa_GLenum fmt = NEXA_GL_BGRA;
+#else
+    const __nexa_GLenum fmt = NEXA_GL_RGBA;
+#endif
+    if (!__nexa_g3_ov_tex) __nexa_gl.GenTextures(1, &__nexa_g3_ov_tex);
+    __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_ov_tex);
+    if (tw != __nexa_g3_ov_tw || th != __nexa_g3_ov_th) {
+        // See the WebGL half: without these the texture samples as black.
+        __nexa_gl.TexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_MIN_FILTER, (__nexa_GLint)NEXA_GL_NEAREST);
+        __nexa_gl.TexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_MAG_FILTER, (__nexa_GLint)NEXA_GL_NEAREST);
+        __nexa_gl.TexImage2D(NEXA_GL_TEXTURE_2D, 0, (__nexa_GLint)NEXA_GL_RGBA, tw, th, 0,
+                             fmt, NEXA_GL_UNSIGNED_BYTE, nullptr);
+        __nexa_g3_ov_tw = tw;
+        __nexa_g3_ov_th = th;
+    }
+    __nexa_gl.TexSubImage2D(NEXA_GL_TEXTURE_2D, 0, 0, 0, w, h, fmt, NEXA_GL_UNSIGNED_BYTE, __nexa_g.fb);
+
+    // Straight into clip space: no camera, no perspective, the viewport's four
+    // corners. gfx3d.clear puts the camera back at the start of the next frame.
+    static const float I[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+    __nexa_gl.MatrixMode(NEXA_GL_PROJECTION);
+    __nexa_gl.LoadMatrixf(I);
+    __nexa_gl.MatrixMode(NEXA_GL_MODELVIEW);
+    __nexa_gl.LoadMatrixf(I);
+    __nexa_gl.Disable(NEXA_GL_DEPTH_TEST);
+    __nexa_gl.Disable(NEXA_GL_CULL_FACE);
+    __nexa_gl.Enable(NEXA_GL_TEXTURE_2D);
+    __nexa_gl.Enable(NEXA_GL_BLEND);
+    // gfx's pixels are straight colour, not premultiplied, so this is the
+    // blend that lays them down as they were drawn.
+    __nexa_gl.BlendFunc(NEXA_GL_SRC_ALPHA, NEXA_GL_ONE_MINUS_SRC_ALPHA);
+    // White, so the texture is multiplied by nothing.
+    __nexa_gl.Color3ub(255, 255, 255);
+    __nexa_gl.Begin(NEXA_GL_TRIANGLES);
+    __nexa_gl.TexCoord2f(0.0f, 0.0f); __nexa_gl.Vertex3f(-1.0f,  1.0f, 0.0f);
+    __nexa_gl.TexCoord2f(0.0f, v);    __nexa_gl.Vertex3f(-1.0f, -1.0f, 0.0f);
+    __nexa_gl.TexCoord2f(u,    v);    __nexa_gl.Vertex3f( 1.0f, -1.0f, 0.0f);
+    __nexa_gl.TexCoord2f(0.0f, 0.0f); __nexa_gl.Vertex3f(-1.0f,  1.0f, 0.0f);
+    __nexa_gl.TexCoord2f(u,    v);    __nexa_gl.Vertex3f( 1.0f, -1.0f, 0.0f);
+    __nexa_gl.TexCoord2f(u,    0.0f); __nexa_gl.Vertex3f( 1.0f,  1.0f, 0.0f);
+    __nexa_gl.End();
+    __nexa_gl.Disable(NEXA_GL_BLEND);
+    __nexa_gl.Disable(NEXA_GL_TEXTURE_2D);
+    __nexa_gl.Enable(NEXA_GL_CULL_FACE);
+    __nexa_gl.Enable(NEXA_GL_DEPTH_TEST);
+#endif
+}
+)NEXA_GFX3D";
+}
+
+// The same four hooks, for every gfx3d program that has no 2D layer.
+inline std::string gfx3dOverlayStubsCpp() {
+    return R"NEXA_GFX3D(
+static void __nexa_g3_overlay_open(int w, int h) { (void)w; (void)h; }
+static void __nexa_g3_overlay_frame(int w, int h) { (void)w; (void)h; }
+static void __nexa_g3_overlay_present(void) {}
+static void __nexa_g3_overlay_close(void) {}
 )NEXA_GFX3D";
 }
 

@@ -606,6 +606,9 @@ no array of pixels to read back.
             gfx3d.model_tris(id)      triangles it parsed to
                                       scale is world units whatever the file
                                       was authored at
+  2D layer  #include <std/gfx> too, and gfx.rect / gfx.text / gfx.fill / ...
+            draw over the 3D window -- no gfx.open. Cleared each gfx3d.clear;
+            read input with gfx3d.mouse / gfx3d.key
   sound     gfx3d.sound(path)     gfx3d.play(id[, vol])  gfx3d.loop(id[, vol])
             gfx3d.stop([voice])   gfx3d.volume([v])      0..255
             gfx3d.audio([rate])   gfx3d.sample(s)

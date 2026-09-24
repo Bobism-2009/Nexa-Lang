@@ -659,6 +659,86 @@ else
     fails=$((fails + 1))
 fi
 
+# --- overlay layer ----------------------------------------------------------
+#
+# std/gfx drawn over a gfx3d window. The bridge that does it is emitted only for
+# a program that draws with gfx, so first which programs get it; then the CPU
+# half, run. The GL half -- laying the framebuffer over the frame -- needs a
+# window and cannot be checked here.
+
+overlay_emit() {
+    label=$1
+    want=$2   # "bridge" or "stubs"
+    body=$3
+    printf '%s\n' "$body" > "$WORK/ov.nxa"
+    if ! "$NEXAC" "$WORK/ov.nxa" --source "$WORK/ov.cpp" > "$WORK/ov.log" 2>&1; then
+        echo "FAIL overlay $label: NexaC could not transpile"
+        fails=$((fails + 1))
+        return
+    fi
+    if grep -q 'static void __nexa_g3_overlay_present(void) {}' "$WORK/ov.cpp"; then got=stubs
+    elif grep -q 'static void __nexa_g3_overlay_present(void) {$' "$WORK/ov.cpp"; then got=bridge
+    else got=none; fi
+    if [ "$got" != "$want" ]; then
+        echo "FAIL overlay $label: got $got, want $want"
+        fails=$((fails + 1))
+    fi
+}
+
+overlay_emit "gfx draws on a 3D window" bridge '#include <std/gfx>
+#include <std/gfx3d>
+fn main() {
+    gfx3d.open("t", 8, 8);
+    gfx.fill(0, 0, 4, 4, 1, 2, 3);
+    gfx3d.present();
+}'
+# gfx reached for nothing but sound: a full-window upload every frame to show
+# nothing at all is exactly what the bridge is left out to avoid.
+overlay_emit "gfx only for sound" stubs '#include <std/gfx>
+#include <std/gfx3d>
+fn main() {
+    let s = gfx.sound("a.wav");
+    gfx3d.open("t", 8, 8);
+    gfx.play(s);
+}'
+overlay_emit "gfx3d alone" stubs '#include <std/gfx3d>
+fn main() {
+    gfx3d.open("t", 8, 8);
+}'
+
+printf '#include <std/gfx>\n#include <std/gfx3d>\nfn main() {\n    gfx3d.open("t", 8, 8);\n    gfx.fill(0, 0, 4, 4, 1, 2, 3);\n    gfx.alpha(128);\n    gfx3d.present();\n}\n' > "$WORK/ovs.nxa"
+if "$NEXAC" "$WORK/ovs.nxa" --source "$WORK/ovs.cpp" > "$WORK/ovs.log" 2>&1; then
+    CXX=${NEXA_CXX:-}
+    [ -n "$CXX" ] || { command -v clang++ >/dev/null 2>&1 && CXX=clang++; }
+    [ -n "$CXX" ] || { command -v g++ >/dev/null 2>&1 && CXX=g++; }
+    # Both runtimes' window code is in the generated file, opened or not.
+    OVLANG=""
+    case "$(uname -s 2>/dev/null)" in
+        MINGW*|MSYS*|CYGWIN*) OVLINK="-luser32 -lgdi32" ;;
+        Darwin)               OVLINK="-framework Cocoa -framework ApplicationServices"; OVLANG="-x objective-c++" ;;
+        *)                    OVLINK="-lX11 -ldl" ;;
+    esac
+    if [ -z "$CXX" ]; then
+        echo "skip overlay: no C++ compiler"
+        skips=$((skips + 1))
+    elif "$CXX" -std=c++17 -O1 -DNEXA_GEN="\"$WORK/ovs.cpp\"" $OVLANG "$SUITE/gfx3d_overlay_semantics.cpp" $OVLINK -o "$WORK/ov_sem" > "$WORK/ov_build.log" 2>&1; then
+        ovbin="$WORK/ov_sem"
+        [ -x "$ovbin" ] || ovbin="$WORK/ov_sem.exe"
+        if ! "$ovbin" > "$WORK/ov.out" 2>&1; then
+            echo "FAIL overlay semantics:"
+            sed 's/^/  /' "$WORK/ov.out" | head -12
+            fails=$((fails + 1))
+        fi
+    else
+        echo "skip overlay: the driver would not build on this machine"
+        sed 's/^/  /' "$WORK/ov_build.log" | tail -3
+        skips=$((skips + 1))
+    fi
+else
+    echo "FAIL overlay semantics: NexaC could not transpile"
+    fails=$((fails + 1))
+fi
+
 # --- wasm layer -------------------------------------------------------------
 
 # The browser is the one backend that is not OpenGL 1.1. WebGL has no glBegin,

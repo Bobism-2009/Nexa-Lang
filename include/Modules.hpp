@@ -1608,6 +1608,18 @@ public:
             // After the runtime, not before: the model block draws through
             // __nexa_g3_vert_n and the vertex batch, which are defined up there.
             if (usage.gfx3dModel) out += gfx3dModelCpp();
+            // std/gfx drawn over the 3D window. The bridge needs both runtimes
+            // in front of it -- gfx's framebuffer and gfx3d's GL table -- so it
+            // comes last. Only for a program that actually draws with gfx: one
+            // that reaches it for nothing but gfx.play would otherwise upload a
+            // full-window texture every frame to show nothing at all. Anything
+            // else gets the four hooks gfx3d names as empty bodies.
+            const bool gfxDraws = hasGfx() && usage.gfx &&
+                (usage.gfxPlot || usage.gfxShapesFill || usage.gfxShapesOutline ||
+                 usage.gfxArc || usage.gfxPie || usage.gfxRoundRect ||
+                 usage.gfxFillRoundRect || usage.gfxLine || usage.gfxLineThick ||
+                 usage.gfxText || usage.gfxBlit || usage.gfxBlitRot);
+            out += gfxDraws ? gfx3dOverlayCpp() : gfx3dOverlayStubsCpp();
         }
         if (hasJson() && usage.json) {
             out += jsonRuntimeCpp();

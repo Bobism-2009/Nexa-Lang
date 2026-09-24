@@ -1205,6 +1205,43 @@ ARGUMENT TYPES
   mixer, and this one sums to mono because that is what all four devices open.
   A call that took a position would have to either ignore it or pretend, and
   the same reasoning is why gfx3d.light is a direction rather than a lamp.
+  DRAWING IN 2D ON A 3D WINDOW. Include std/gfx as well, open a gfx3d window,
+  and every std/gfx drawing call draws on it -- gfx.rect, gfx.fill, gfx.text,
+  gfx.line, gfx.circle, gfx.blit, gfx.alpha and the rest -- with no gfx.open.
+  It is the way to put a HUD, a menu, a health bar or a crosshair over a 3D
+  scene with the 2D library that already exists:
+       gfx3d.clear(16, 16, 24);
+       gfx3d.cube(0.0, 0.0, 0.0, 2.0, 220, 90, 70);
+       gfx.text(20, 20, "HEALTH", 255, 255, 255, 2);
+       gfx.fill(20, 44, 150, 12, 200, 40, 40);
+       gfx3d.present();
+  What gfx draws is laid over the finished 3D frame at gfx3d.present, so it is
+  always in front of the scene. Where gfx drew nothing, the scene shows
+  through. One gfx pixel is one window pixel: gfx.width() and gfx.height() are
+  the window's own size, and gfx3d.mouse_x() lands on the pixel gfx.rect would
+  draw at.
+  The layer behaves exactly like a gfx.transparent window over the desktop,
+  with the 3D scene where the desktop would be:
+    - it starts every frame empty: gfx3d.clear clears it, the way it resets the
+      transform, so a HUD is redrawn each frame and anything that moves does
+      not leave a trail
+    - gfx.clear(r, g, b) makes it see-through again rather than painting it
+      that colour. To cover the scene -- a pause screen -- fill the whole
+      window with gfx.fill
+    - gfx.alpha draws translucently over the scene
+  Only while gfx has no window of its own. A program that called gfx.open has
+  somewhere else for its drawing to go and keeps sending it there, and gfx.open
+  called later takes gfx back to a window of its own. gfx.close ends the layer.
+  gfx's window calls -- gfx.title, gfx.resize, gfx.fullscreen, gfx.cursor,
+  gfx.present, gfx.poll's window half -- do nothing here: the window is
+  gfx3d's, so ask gfx3d.
+  INPUT comes from gfx3d: gfx3d.mouse_x(), gfx3d.mouse("left"), gfx3d.key(...).
+  gfx.mouse_x and gfx.key read gfx's own window, which there is none of, and
+  answer 0. The coordinates line up exactly, so a button is a gfx.rect tested
+  against gfx3d.mouse_x() and gfx3d.mouse_y().
+  The whole layer is sent to the GPU once a frame. That cost is only paid by a
+  program that draws with gfx: one that includes std/gfx just for gfx.play gets
+  no layer at all.
   The drawing and window calls hand nothing back, and so are statements only:
   clear, camera, perspective, tri, cube, draw, present, poll, close and maxfps. Writing let C = gfx3d.cube(...); is an
   error naming the call, exactly as it is in gfx. The ones that answer are
