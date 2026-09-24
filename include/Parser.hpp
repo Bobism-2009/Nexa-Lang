@@ -4582,6 +4582,7 @@ private:
         if (m == "rotate") return "gfx3d.rotate(rx, ry, rz) turns what you draw next";
         if (m == "scale") return "gfx3d.scale(s) resizes what you draw next";
         if (m == "reset") return "gfx3d.reset() puts the transform back";
+        if (m == "draw") return "gfx3d.draw(id, x, y, z, scale, r, g, b) draws to the window";
         if (m == "light") return "gfx3d.light(x, y, z[, r, g, b]) aims the light";
         if (m == "camera") return "gfx3d.camera(ex, ey, ez, tx, ty, tz) moves the camera";
         if (m == "perspective") return "gfx3d.perspective(fov, near, far) sets the lens";
@@ -4630,6 +4631,11 @@ private:
         // see soundStackCpp in GfxRuntime.hpp. A program that knows gfx.play
         // knows this one, and anything else would be a difference with no
         // reason behind it.
+        // Models. gfx3d.draw mirrors gfx3d.cube with a handle in front of it:
+        // where to put it, how big, what colour.
+        else if (method == "model") argc = 1;
+        else if (method == "model_tris") argc = 1;
+        else if (method == "draw") argc = 8;
         else if (method == "sound" || method == "sample") argc = 1;
         else if (method == "play" || method == "loop") { argc = 1; argcMax = 2; }
         else if (method == "stop" || method == "volume"
@@ -4656,6 +4662,7 @@ private:
                 " line3, grid, translate, rotate, scale, reset, light, ambient,"
                 " maxfps, renderer, backend, key, pressed,"
                 " released, typed, wheel, wheel_x, mouse, mouse_x, mouse_y,"
+                " model, draw, model_tris,"
                 " sound, play, loop, stop, volume,"
                 " audio, sample, audio_queued, audio_flush)");
         }
@@ -4712,6 +4719,9 @@ private:
             else if (method == "pressed") sig = "gfx3d.pressed(name)";
             else if (method == "released") sig = "gfx3d.released(name)";
             else if (method == "mouse") sig = "gfx3d.mouse(button)";
+            else if (method == "model") sig = "gfx3d.model(path)";
+            else if (method == "model_tris") sig = "gfx3d.model_tris(id)";
+            else if (method == "draw") sig = "gfx3d.draw(id, x, y, z, scale, r, g, b)";
             else if (method == "sound") sig = "gfx3d.sound(path)";
             else if (method == "play") sig = "gfx3d.play(snd) or gfx3d.play(snd, volume)";
             else if (method == "loop") sig = "gfx3d.loop(snd) or gfx3d.loop(snd, volume)";

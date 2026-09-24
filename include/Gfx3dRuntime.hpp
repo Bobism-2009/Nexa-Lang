@@ -67,6 +67,7 @@ namespace nexa {
 // Defined below; the runtime is assembled from these three pieces.
 inline std::string gfx3dPlatformCpp();
 inline std::string gfx3dApiCpp();
+inline std::string gfx3dModelCpp();
 
 inline std::string gfx3dRuntimeCpp() {
     return R"NEXA_GFX3D(
@@ -2270,6 +2271,272 @@ static int __nexa_gfx3d_renderer(const std::string& name) {
 static std::string __nexa_gfx3d_backend(void) {
     if (!__nexa_g3.ready) return std::string("");
     return std::string("opengl");
+}
+)NEXA_GFX3D";
+}
+
+
+// std/gfx3d model loading: Wavefront .obj, parsed here rather than linked.
+//
+// Emitted only for a program that calls gfx3d.model or gfx3d.draw, which is
+// why it is a block of its own rather than part of the runtime above. The rest
+// of gfx3d is one piece and is not sliced -- there is nothing in a renderer
+// worth taking apart -- but this brings <vector> and a file parser that
+// nothing else in the module needs, and a program drawing a spinning cube
+// should not carry a format reader for a format it never mentions.
+//
+// .obj because it is the one interchange format that is plain text and can be
+// read in a page of code. No library, for the reason there is no GL header
+// here: a -dev package between a user and a model on screen is the thing this
+// compiler exists to avoid.
+//
+// WHAT IS READ, and it is a short list: v, vn, and f. Positions, normals, and
+// which corners make a face. Everything else in the format -- vt, usemtl,
+// mtllib, o, g, s, and any line beginning with anything else -- is skipped
+// without complaint, because a model that names a material this renderer has
+// no way to honour is still a model whose shape can be drawn.
+//
+// Faces may have any number of corners and are fanned into triangles from the
+// first one. That is right for the convex faces an exporter emits and wrong
+// for a concave one, which is a trade the format itself encourages: almost
+// everything real is triangles or quads already.
+inline std::string gfx3dModelCpp() {
+    return R"NEXA_GFX3D(
+// --- models -----------------------------------------------------------------
+
+#include <vector>
+#include <cstdio>
+#include <cstdlib>
+
+// A loaded model is triangles and nothing else. Positions and normals are kept
+// nine floats to a triangle -- three corners of three -- rather than indexed,
+// because the batch below wants corners one at a time anyway and an index
+// would only be unwound again on the way there.
+//
+// centre and inv are worked out once at load. Every .obj is authored at
+// whatever scale its author felt like, so the model is centred on its bounding
+// box and divided by its longest side as it is drawn: gfx3d.draw's scale is
+// then a size in world units, and draw(id, 0,0,0, 2.0, ...) puts a model in
+// the same two-unit space gfx3d.cube(0,0,0, 2.0, ...) would fill, whatever the
+// file said. Dividing by one number keeps the proportions; it is the shape
+// that is preserved, not the numbers.
+struct __nexa_G3Model {
+    std::vector<float> p;
+    std::vector<float> n;
+    float cx, cy, cz;
+    float inv;
+};
+
+// Slot 0 is the reserved "no model" entry, so handles start at 1 and 0 is
+// never valid -- the same shape as the image and sound tables.
+static std::vector<__nexa_G3Model> __nexa_g3_models;
+static std::vector<std::string> __nexa_g3_model_paths;
+
+// One corner of a face: "12", "12/3", "12/3/4" or "12//4". Only the position
+// and the normal are wanted; the texture coordinate between them is stepped
+// over. Either index may be negative, which in .obj counts back from the end
+// of what has been read so far rather than forward from the start.
+static void __nexa_g3_obj_ref(const char* t, int* vi, int* ni) {
+    char* end;
+    *vi = (int)std::strtol(t, &end, 10);
+    *ni = 0;
+    if (*end != '/') return;
+    end++;
+    if (*end != '/') std::strtol(end, &end, 10);
+    if (*end != '/') return;
+    end++;
+    *ni = (int)std::strtol(end, &end, 10);
+}
+
+// Resolves an .obj index against a list that holds three floats per entry.
+// Returns the float offset, or -1 for an index that names nothing.
+static long __nexa_g3_obj_at(int idx, size_t have) {
+    long i;
+    if (idx > 0) i = idx - 1;
+    else if (idx < 0) i = (long)(have / 3) + idx;
+    else return -1;
+    if (i < 0) return -1;
+    if ((size_t)(i * 3 + 2) >= have) return -1;
+    return i * 3;
+}
+
+static int __nexa_g3_obj_load(const char* path, __nexa_G3Model* m) {
+    std::FILE* f = std::fopen(path, "rb");
+    if (!f) return 0;
+
+    std::vector<float> vs;
+    std::vector<float> vns;
+    char line[4096];
+
+    while (std::fgets(line, sizeof(line), f)) {
+        // A line longer than the buffer would otherwise be parsed as two, and
+        // its tail read as a fresh statement. Drop the remainder instead.
+        size_t len = std::strlen(line);
+        if (len > 0 && line[len - 1] != '\n' && !std::feof(f)) {
+            int c;
+            while ((c = std::fgetc(f)) != EOF && c != '\n') { }
+        }
+
+        const char* s = line;
+        while (*s == ' ' || *s == '\t') s++;
+
+        if (s[0] == 'v' && (s[1] == ' ' || s[1] == '\t')) {
+            char* end;
+            float x = std::strtof(s + 1, &end);
+            float y = std::strtof(end, &end);
+            float z = std::strtof(end, &end);
+            vs.push_back(x); vs.push_back(y); vs.push_back(z);
+            continue;
+        }
+        if (s[0] == 'v' && s[1] == 'n' && (s[2] == ' ' || s[2] == '\t')) {
+            char* end;
+            float x = std::strtof(s + 2, &end);
+            float y = std::strtof(end, &end);
+            float z = std::strtof(end, &end);
+            vns.push_back(x); vns.push_back(y); vns.push_back(z);
+            continue;
+        }
+        if (!(s[0] == 'f' && (s[1] == ' ' || s[1] == '\t'))) continue;
+
+        // The corners of this face, in the order written.
+        int fv[64];
+        int fn[64];
+        int nc = 0;
+        const char* t = s + 1;
+        while (*t && nc < 64) {
+            while (*t == ' ' || *t == '\t' || *t == '\r' || *t == '\n') t++;
+            if (!*t) break;
+            __nexa_g3_obj_ref(t, &fv[nc], &fn[nc]);
+            if (fv[nc] != 0) nc++;
+            while (*t && *t != ' ' && *t != '\t' && *t != '\r' && *t != '\n') t++;
+        }
+        if (nc < 3) continue;
+
+        // Fanned from the first corner.
+        for (int k = 1; k + 1 < nc; k++) {
+            const int idx[3] = { 0, k, k + 1 };
+            float px[3], py[3], pz[3];
+            int ok = 1;
+            for (int c = 0; c < 3; c++) {
+                const long at = __nexa_g3_obj_at(fv[idx[c]], vs.size());
+                if (at < 0) { ok = 0; break; }
+                px[c] = vs[(size_t)at];
+                py[c] = vs[(size_t)at + 1];
+                pz[c] = vs[(size_t)at + 2];
+            }
+            if (!ok) continue;
+
+            // The face's own normal, for any corner the file did not give one.
+            // Left at whatever length the cross product came out: the shading
+            // divides by it anyway, so normalising here would be a square root
+            // per triangle to arrive at the same colour. A degenerate triangle
+            // keeps the zero it produces, and the shading reads that as no
+            // direction rather than dividing by a length of nothing.
+            const float ux = px[1] - px[0], uy = py[1] - py[0], uz = pz[1] - pz[0];
+            const float vx = px[2] - px[0], vy = py[2] - py[0], vz = pz[2] - pz[0];
+            const float fnx = uy * vz - uz * vy;
+            const float fny = uz * vx - ux * vz;
+            const float fnz = ux * vy - uy * vx;
+
+            for (int c = 0; c < 3; c++) {
+                m->p.push_back(px[c]);
+                m->p.push_back(py[c]);
+                m->p.push_back(pz[c]);
+                const long at = __nexa_g3_obj_at(fn[idx[c]], vns.size());
+                if (at >= 0) {
+                    m->n.push_back(vns[(size_t)at]);
+                    m->n.push_back(vns[(size_t)at + 1]);
+                    m->n.push_back(vns[(size_t)at + 2]);
+                } else {
+                    m->n.push_back(fnx);
+                    m->n.push_back(fny);
+                    m->n.push_back(fnz);
+                }
+            }
+        }
+    }
+    std::fclose(f);
+    if (m->p.empty()) return 0;
+
+    // The bounding box, and the one number that turns any authored scale into
+    // world units.
+    float lo[3] = { m->p[0], m->p[1], m->p[2] };
+    float hi[3] = { m->p[0], m->p[1], m->p[2] };
+    for (size_t i = 0; i + 2 < m->p.size(); i += 3) {
+        for (int k = 0; k < 3; k++) {
+            if (m->p[i + k] < lo[k]) lo[k] = m->p[i + k];
+            if (m->p[i + k] > hi[k]) hi[k] = m->p[i + k];
+        }
+    }
+    m->cx = (lo[0] + hi[0]) * 0.5f;
+    m->cy = (lo[1] + hi[1]) * 0.5f;
+    m->cz = (lo[2] + hi[2]) * 0.5f;
+    float span = hi[0] - lo[0];
+    if (hi[1] - lo[1] > span) span = hi[1] - lo[1];
+    if (hi[2] - lo[2] > span) span = hi[2] - lo[2];
+    // A model with no extent at all -- every corner in the same place -- would
+    // divide by zero. It has nothing to show either way, so it is left alone.
+    m->inv = (span > 1e-9f) ? (1.0f / span) : 1.0f;
+    return 1;
+}
+
+// Loading needs no window: a program may want its models ready before it opens
+// one, exactly as gfx.sound can load before there is a device.
+static int __nexa_gfx3d_model(const std::string& path) {
+    if (path.empty()) return 0;
+    if (__nexa_g3_models.empty()) {
+        __nexa_G3Model zero;
+        zero.cx = 0.0f; zero.cy = 0.0f; zero.cz = 0.0f; zero.inv = 1.0f;
+        __nexa_g3_models.push_back(zero);
+        __nexa_g3_model_paths.push_back(std::string());
+    }
+    // Cached by path, the way gfx.image and gfx.sound are: the same file asked
+    // for twice is parsed once and answers with the same handle.
+    for (size_t i = 1; i < __nexa_g3_model_paths.size(); i++) {
+        if (__nexa_g3_model_paths[i] == path) return (int)i;
+    }
+    __nexa_G3Model m;
+    m.cx = 0.0f; m.cy = 0.0f; m.cz = 0.0f; m.inv = 1.0f;
+    if (!__nexa_g3_obj_load(path.c_str(), &m)) return 0;
+    __nexa_g3_models.push_back(m);
+    __nexa_g3_model_paths.push_back(path);
+    return (int)__nexa_g3_models.size() - 1;
+}
+
+// How many triangles came out of the file. Mostly a way to ask whether what
+// was loaded is the shape that was meant, since a handle only says that
+// something parsed.
+static int __nexa_gfx3d_model_tris(int id) {
+    if (id < 1 || (size_t)id >= __nexa_g3_models.size()) return 0;
+    return (int)(__nexa_g3_models[(size_t)id].p.size() / 9);
+}
+
+static void __nexa_gfx3d_draw(int id, double x, double y, double z, double scale,
+                              int r, int g, int b) {
+    if (!__nexa_g3.ready) return;
+    if (id < 1 || (size_t)id >= __nexa_g3_models.size()) return;
+    if (r < 0) r = 0; if (r > 255) r = 255;
+    if (g < 0) g = 0; if (g > 255) g = 255;
+    if (b < 0) b = 0; if (b > 255) b = 255;
+    const __nexa_G3Model& m = __nexa_g3_models[(size_t)id];
+    const float s = (float)scale * m.inv;
+    // Two-sided, for the reason gfx3d.tri is: which way a face is wound is the
+    // file's decision and plenty of exporters are inconsistent about it. Culled
+    // like the built-in shapes, a model wound the other way would come out
+    // full of holes and look like a bug in this renderer rather than in the
+    // model. A closed shape never shows its inside anyway.
+    __nexa_g3_batch_begin(1);
+    for (size_t i = 0; i + 8 < m.p.size(); i += 9) {
+        for (int c = 0; c < 3; c++) {
+            const size_t j = i + (size_t)c * 3;
+            __nexa_g3_vert_n((m.p[j] - m.cx) * s + (float)x,
+                             (m.p[j + 1] - m.cy) * s + (float)y,
+                             (m.p[j + 2] - m.cz) * s + (float)z,
+                             m.n[j], m.n[j + 1], m.n[j + 2],
+                             (float)r, (float)g, (float)b);
+        }
+    }
+    __nexa_g3_batch_end();
 }
 )NEXA_GFX3D";
 }

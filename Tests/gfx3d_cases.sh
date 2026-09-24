@@ -178,6 +178,156 @@ else
     fails=$((fails + 1))
 fi
 
+# --- model layer ------------------------------------------------------------
+#
+# gfx3d.model reads a file, which makes it the one part of the module whose
+# behaviour can be checked here without a window or a GPU: the .obj goes in and
+# a triangle count comes out. So this layer actually runs the parser over files
+# written for it, rather than only pinning what the calls emit.
+#
+# The format is forgiving by design -- a model that names a material this
+# renderer cannot honour still has a shape worth drawing -- so the cases below
+# are mostly about what is skipped, not what is read.
+
+expect_emit "model"      '__nexa_gfx3d_model\("a.obj"\)'   '    let m = gfx3d.model("a.obj");'
+expect_emit "model_tris" '__nexa_gfx3d_model_tris\(1\)'    '    let n = gfx3d.model_tris(1);'
+expect_emit "draw"       '__nexa_gfx3d_draw\(1, 2, 3, 4, 5, 6, 7, 8\)'                          '    gfx3d.draw(1, 2, 3, 4, 5, 6, 7, 8);'
+
+# The .obj reader is a block of its own, so a program that never mentions a
+# model must not carry it -- nor the <vector> and file parsing it brings in.
+printf '#include <std/gfx3d>
+fn main() {
+    gfx3d.cube(0.0, 0.0, 0.0, 1.0, 1, 2, 3);
+}
+' > "$WORK/nomodel.nxa"
+if "$NEXAC" "$WORK/nomodel.nxa" --source "$WORK/nomodel.cpp" > /dev/null 2>&1; then
+    if grep -qE '__nexa_g3_obj_load|__nexa_G3Model' "$WORK/nomodel.cpp"; then
+        echo "FAIL model slicing: the .obj reader is in a program that loads none"
+        fails=$((fails + 1))
+    fi
+else
+    echo "FAIL model slicing: NexaC could not transpile"
+    fails=$((fails + 1))
+fi
+
+# And a program that does mention one must carry it, since the codegen lines
+# above grep main and never compile: a usage flag that failed to switch the
+# block on would satisfy every one of them and then fail in the linker.
+printf '#include <std/gfx3d>
+fn main() {
+    let m = gfx3d.model("a.obj");
+    gfx3d.draw(m, 0.0, 0.0, 0.0, 1.0, 1, 2, 3);
+}
+' > "$WORK/yesmodel.nxa"
+if "$NEXAC" "$WORK/yesmodel.nxa" --source "$WORK/yesmodel.cpp" > /dev/null 2>&1; then
+    for sym in '__nexa_g3_obj_load' '__nexa_gfx3d_draw' '__nexa_gfx3d_model'; do
+        if ! grep -q "$sym" "$WORK/yesmodel.cpp"; then
+            echo "FAIL model slicing: no $sym in a program that loads a model"
+            fails=$((fails + 1))
+        fi
+    done
+else
+    echo "FAIL model slicing: NexaC could not transpile"
+    fails=$((fails + 1))
+fi
+
+# The parser, over files written for it. Needs a C++ compiler but no display:
+# loading a model opens no window, deliberately, so that a program can have its
+# models ready before it has somewhere to put them.
+mkdir -p "$WORK/obj"
+cat > "$WORK/obj/cube.obj" <<'OBJ'
+# quads, no normals: six faces fan to twelve triangles
+v -1.0 -1.0 -1.0
+v  1.0 -1.0 -1.0
+v  1.0  1.0 -1.0
+v -1.0  1.0 -1.0
+v -1.0 -1.0  1.0
+v  1.0 -1.0  1.0
+v  1.0  1.0  1.0
+v -1.0  1.0  1.0
+f 1 2 3 4
+f 5 6 7 8
+f 1 2 6 5
+f 2 3 7 6
+f 3 4 8 7
+f 4 1 5 8
+OBJ
+
+# Everything the format can throw at it that this renderer does not read, plus
+# the two index forms that are easy to get wrong: a full v/vt/vn reference and
+# a negative one counting back from the end.
+cat > "$WORK/obj/awkward.obj" <<'OBJ'
+mtllib nothing.mtl
+o thing
+g thing
+s off
+usemtl none
+v 0.0 0.0 0.0
+v 4.0 0.0 0.0
+v 0.0 4.0 0.0
+vt 0.0 0.0
+vn 0.0 0.0 1.0
+f 1/1/1 2/1/1 -1//-1
+OBJ
+
+cat > "$WORK/obj/notobj.obj" <<'OBJ'
+this file is not a model
+and neither is this line
+OBJ
+
+cat > "$WORK/obj/empty.obj" <<'OBJ'
+OBJ
+
+cat > "$WORK/model.nxa" <<'NXA'
+#include <std/gfx3d>
+#include <std/io>
+
+fn main() {
+    let cube: int = gfx3d.model("cube.obj");
+    io.println("cube=" + cube + " tris=" + gfx3d.model_tris(cube));
+    io.println("cached=" + gfx3d.model("cube.obj"));
+    let awk: int = gfx3d.model("awkward.obj");
+    io.println("awkward=" + awk + " tris=" + gfx3d.model_tris(awk));
+    io.println("missing=" + gfx3d.model("no_such.obj"));
+    io.println("notobj=" + gfx3d.model("notobj.obj"));
+    io.println("empty=" + gfx3d.model("empty.obj"));
+    io.println("tris0=" + gfx3d.model_tris(0));
+    io.println("tris99=" + gfx3d.model_tris(99));
+}
+NXA
+
+cat > "$WORK/obj/model.expected" <<'EXP'
+cube=1 tris=12
+cached=1
+awkward=2 tris=1
+missing=0
+notobj=0
+empty=0
+tris0=0
+tris99=0
+EXP
+
+if "$NEXAC" "$WORK/model.nxa" -o "$WORK/obj/model" > "$WORK/model.log" 2>&1; then
+    mbin="$WORK/obj/model"
+    [ -x "$mbin" ] || mbin="$WORK/obj/model.exe"
+    # Run from the directory holding the .obj files, since the paths are
+    # relative and the point is the parser, not path resolution.
+    if (cd "$WORK/obj" && "$mbin" > "$WORK/obj/model.raw" 2>&1); then
+        if ! diff -u --strip-trailing-cr "$WORK/obj/model.expected" "$WORK/obj/model.raw" > "$WORK/obj/model.diff" 2>&1; then
+            echo "FAIL model parse: output moved"
+            sed 's/^/  /' "$WORK/obj/model.diff"
+            fails=$((fails + 1))
+        fi
+    else
+        echo "FAIL model parse: the program did not run"
+        sed 's/^/  /' "$WORK/obj/model.raw"
+        fails=$((fails + 1))
+    fi
+else
+    echo "skip model parse: could not build (no C++ toolchain)"
+    skips=$((skips + 1))
+fi
+
 # --- sound layer ------------------------------------------------------------
 #
 # gfx3d's sound calls are the only ones in the module that do not emit a

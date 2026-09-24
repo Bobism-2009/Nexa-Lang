@@ -1135,6 +1135,46 @@ ARGUMENT TYPES
   really is rather than what was asked for. A program that cares reads
   backend(); one that does not is not interrupted. The switch is where
   programs will expect it when a Vulkan backend exists.
+  gfx3d.model(path)              - load a Wavefront .obj; handle, or 0
+                                   Reads v, vn and f: positions, normals, and
+                                   which corners make a face. Everything else --
+                                   vt, usemtl, mtllib, o, g, s -- is skipped
+                                   without complaint, so a model naming a
+                                   material this renderer cannot honour still
+                                   draws. Faces of any number of corners are
+                                   fanned into triangles from the first corner,
+                                   which is right for the convex faces an
+                                   exporter emits. Negative indices count back
+                                   from the end, as the format says. A file that
+                                   yields no triangles at all is 0, as is one
+                                   that will not open
+                                   the result is cached: the same path gives the
+                                   same handle, parsed once
+                                   No window is needed to load one
+  gfx3d.model_tris(id)           - how many triangles came out of the file; 0
+                                   for a handle that names nothing. A handle
+                                   only says something parsed, so this is the
+                                   way to ask whether it was the shape you meant
+  gfx3d.draw(id, x, y, z, scale, r, g, b)
+                                 - draw a loaded model, centred on x, y, z
+                                   The model is centred on its bounding box and
+                                   divided by its longest side as it is drawn,
+                                   so scale is a size in WORLD UNITS whatever
+                                   the file was authored at: draw(id, 0,0,0, 2)
+                                   fills the same two-unit space cube(0,0,0, 2)
+                                   does. One divisor, so proportions are kept --
+                                   a slab stays a slab. Composes with
+                                   gfx3d.translate / rotate / scale like any
+                                   other draw
+                                   Drawn from both sides, the way gfx3d.tri is:
+                                   which way a face is wound is the file's
+                                   decision and exporters disagree about it, and
+                                   a model wound the other way would otherwise
+                                   come out full of holes
+                                   Corners the file gave a normal for are shaded
+                                   with it, so an exporter's smoothing is
+                                   honoured; corners without one take the face's
+                                   normal and stay sharp
   gfx3d.sound(path)              - load a WAV file; handle, or 0
   gfx3d.play(id[, volume])       - play a sound once; voice id, or 0
   gfx3d.loop(id[, volume])       - the same, but repeating until stopped; voice id, or 0
@@ -1166,10 +1206,10 @@ ARGUMENT TYPES
   A call that took a position would have to either ignore it or pretend, and
   the same reasoning is why gfx3d.light is a direction rather than a lamp.
   The drawing and window calls hand nothing back, and so are statements only:
-  clear, camera, perspective, tri, cube, present, poll, close and maxfps. Writing let C = gfx3d.cube(...); is an
+  clear, camera, perspective, tri, cube, draw, present, poll, close and maxfps. Writing let C = gfx3d.cube(...); is an
   error naming the call, exactly as it is in gfx. The ones that answer are
-  open, closed, width, height, renderer, backend, the input readers, and every
-  sound call -- including gfx3d.audio_flush, which answers 0 so that it can be
+  open, closed, width, height, renderer, backend, model, model_tris, the input
+  readers, and every sound call -- including gfx3d.audio_flush, which answers 0 so that it can be
   written either way.
   Colours are r, g, b in 0..255 and are clamped. Coordinates and sizes are
   floats; angles, where they appear, are degrees, the same convention gfx.arc

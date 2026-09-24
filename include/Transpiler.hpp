@@ -3500,6 +3500,9 @@ private:
             {"pressed",     "gfx3d.pressed(name)",                                    "t"},
             {"released",    "gfx3d.released(name)",                                   "t"},
             {"mouse",       "gfx3d.mouse(button)",                                    "t"},
+            {"model",       "gfx3d.model(path)",                                      "t"},
+            {"model_tris",  "gfx3d.model_tris(id)",                                   "n"},
+            {"draw",        "gfx3d.draw(id, x, y, z, scale, r, g, b)",                "nnnnnnnn"},
             // Sound, spelled as std/gfx spells it because it is the same call.
             {"audio",       "gfx3d.audio([rate])",                                    "n"},
             {"sample",      "gfx3d.sample(s)",                                        "n"},
@@ -7596,7 +7599,9 @@ private:
     // -- Modules.hpp ors them with gfx's, because there is one mixer for both.
     static void noteGfx3dUsage(const AstNode& n, Modules::CppUsage& cppUsage) {
         const std::string& fn = n.value;
-        if (fn == "audio" || fn == "sample" || fn == "audio_queued" ||
+        if (fn == "model" || fn == "draw" || fn == "model_tris") {
+            cppUsage.gfx3dModel = true;
+        } else if (fn == "audio" || fn == "sample" || fn == "audio_queued" ||
             fn == "audio_flush") {
             cppUsage.gfx3dAudio = true;
         } else if (fn == "sound" || fn == "play" || fn == "loop" ||

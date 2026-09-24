@@ -157,6 +157,11 @@ public:
         bool gfx3d = false;
         bool gfx3dAudio = false;
         bool gfx3dSound = false;
+        // gfx3d.model / draw / model_tris. Gated for the same reason the sound
+        // flags are: the .obj reader is a block of its own, outside the
+        // renderer, and it brings <vector> and a file parser that nothing else
+        // in the module uses.
+        bool gfx3dModel = false;
         bool json = false;
         bool result = false;
     };
@@ -1600,6 +1605,9 @@ public:
         }
         if (hasGfx3d() && usage.gfx3d) {
             out += gfx3dRuntimeCpp();
+            // After the runtime, not before: the model block draws through
+            // __nexa_g3_vert_n and the vertex batch, which are defined up there.
+            if (usage.gfx3dModel) out += gfx3dModelCpp();
         }
         if (hasJson() && usage.json) {
             out += jsonRuntimeCpp();

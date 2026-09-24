@@ -564,7 +564,7 @@ clockwise. With no window open nothing is an error: drawing does nothing and
 the readers answer 0. The drawing calls hand nothing back and are statements
 only, so `let R = gfx.rect(...);` is an error naming the call.)HELP" },
 
-{ "std/gfx3d", "gfx3d 3d three opengl vulkan gl cube mesh camera render sound audio wav play", Group::Module,
+{ "std/gfx3d", "gfx3d 3d three opengl vulkan gl cube mesh model obj wavefront camera render sound audio wav play", Group::Module,
   "3D window: camera, triangles and cubes, on OpenGL",
   R"HELP(std/gfx3d - a 3D window
   #include <std/gfx3d>
@@ -601,6 +601,11 @@ no array of pixels to read back.
                                       the names std/gfx uses, read while focused
   renderer  gfx3d.renderer(name)      ask, before open; "opengl" or "vulkan"
             gfx3d.backend()           what the window actually opened with
+  model     gfx3d.model(path)         load a .obj; handle, or 0
+            gfx3d.draw(id, x, y, z, scale, r, g, b)
+            gfx3d.model_tris(id)      triangles it parsed to
+                                      scale is world units whatever the file
+                                      was authored at
   sound     gfx3d.sound(path)     gfx3d.play(id[, vol])  gfx3d.loop(id[, vol])
             gfx3d.stop([voice])   gfx3d.volume([v])      0..255
             gfx3d.audio([rate])   gfx3d.sample(s)
@@ -626,6 +631,12 @@ flat sides take the direction of the face and stay sharp-edged; curved ones
 take the direction the surface really points and come out smooth. One
 directional light, in world space, with no shadows: nothing here knows that
 one shape is between another and the light.
+
+Models are Wavefront .obj, read here rather than linked: v, vn and f, with
+everything else skipped. A model is centred and divided by its longest side as
+it is drawn, so scale means the same thing it does on a cube however the file
+was authored, and it is drawn from both sides because exporters disagree about
+which way a face is wound.
 
 Sound is std/gfx's sound, unchanged -- same names, same arguments, same WAV
 files. A program that includes both modules gets one mixer between them, not
