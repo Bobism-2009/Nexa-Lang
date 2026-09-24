@@ -1,0 +1,7 @@
+// A path is text. gfx3d.sound shares its checking with gfx.sound because it
+// shares the loader.
+#include <std/gfx3d>
+
+fn main() {
+    let s: int = gfx3d.sound(42);
+}

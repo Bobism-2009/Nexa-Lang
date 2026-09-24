@@ -286,7 +286,10 @@ public:
                     cppUsage.gfx = true;
                     noteGfxUsage(n, cppUsage);
                     break;
-                case AstNode::Type::Gfx3dCall: cppUsage.gfx3d = true; break;
+                case AstNode::Type::Gfx3dCall:
+                    cppUsage.gfx3d = true;
+                    noteGfx3dUsage(n, cppUsage);
+                    break;
                 case AstNode::Type::JsonCall: cppUsage.json = true; break;
                 case AstNode::Type::ResultMake: cppUsage.result = true; break;
                 case AstNode::Type::StrMethod:
@@ -3497,6 +3500,14 @@ private:
             {"pressed",     "gfx3d.pressed(name)",                                    "t"},
             {"released",    "gfx3d.released(name)",                                   "t"},
             {"mouse",       "gfx3d.mouse(button)",                                    "t"},
+            // Sound, spelled as std/gfx spells it because it is the same call.
+            {"audio",       "gfx3d.audio([rate])",                                    "n"},
+            {"sample",      "gfx3d.sample(s)",                                        "n"},
+            {"sound",       "gfx3d.sound(path)",                                      "t"},
+            {"play",        "gfx3d.play(sound[, volume])",                            "nn"},
+            {"loop",        "gfx3d.loop(sound[, volume])",                            "nn"},
+            {"stop",        "gfx3d.stop([voice])",                                    "n"},
+            {"volume",      "gfx3d.volume([v])",                                      "n"},
             {"", nullptr, nullptr},
         };
         return rows;
@@ -6848,6 +6859,40 @@ private:
                 if (fn == "ambient" && e.children.empty()) {
                     return "__nexa_gfx3d_ambient_get()";
                 }
+                // Sound goes to the shared mixer, so these are the only gfx3d
+                // calls that do not emit a __nexa_gfx3d_ name. There is one
+                // mixer for gfx and gfx3d -- see soundStackCpp in
+                // GfxRuntime.hpp -- and wrapping it in a set of gfx3d-named
+                // forwarders would only be a second name for the same
+                // function, since the argument defaults below have to be
+                // written here either way.
+                //
+                // Each default is the one gfx uses, because it is the same
+                // call: a play with no volume is full volume, a stop with no
+                // voice is every voice, and an audio with no rate is 44100.
+                if (fn == "sound") return "__nexa_gfx_sound(" + args + ")";
+                if (fn == "play" || fn == "loop") {
+                    std::string v = e.children.size() >= 2 ? a(1) : "255";
+                    return "__nexa_gfx_voice_start(" + a(0) + ", " + v + ", " +
+                        (fn == "loop" ? "1" : "0") + ")";
+                }
+                if (fn == "stop") {
+                    return "__nexa_gfx_stop(" + (e.children.empty() ? "0" : a(0)) + ")";
+                }
+                if (fn == "volume") {
+                    if (e.children.empty()) return "__nexa_gfx_volume_get()";
+                    return "__nexa_gfx_volume_set(" + args + ")";
+                }
+                if (fn == "audio") {
+                    return "__nexa_gfx_audio(" + (e.children.empty() ? "44100" : args) + ")";
+                }
+                if (fn == "sample") return "__nexa_gfx_sample(" + args + ")";
+                if (fn == "audio_queued") return "__nexa_gfx_audio_queued()";
+                // Flushing is "start playing what I have queued", so the mixer
+                // gets its turn first.
+                if (fn == "audio_flush") {
+                    return "(__nexa_gfx_mix_pump(), __nexa_gfx_audio_flush(), 0)";
+                }
                 return "__nexa_gfx3d_" + fn + "(" + args + ")";
             }
             case AstNode::Type::GfxCall: {
@@ -7545,6 +7590,24 @@ private:
     //
     // open/close/closed/poll/present/clear/fullscreen need no flag: they are always
     // emitted. Anything not listed below is a call that reaches only core.
+    // std/gfx3d's slicing, which is only ever about sound. The drawing half is
+    // one block that comes as it is; these two flags decide whether the shared
+    // sound stack is emitted at all, and they are the gfx3d half of the answer
+    // -- Modules.hpp ors them with gfx's, because there is one mixer for both.
+    static void noteGfx3dUsage(const AstNode& n, Modules::CppUsage& cppUsage) {
+        const std::string& fn = n.value;
+        if (fn == "audio" || fn == "sample" || fn == "audio_queued" ||
+            fn == "audio_flush") {
+            cppUsage.gfx3dAudio = true;
+        } else if (fn == "sound" || fn == "play" || fn == "loop" ||
+                   fn == "stop" || fn == "volume") {
+            // Both forms of gfx3d.volume pull the mixer in, for the reason
+            // gfx.volume does: a master volume with nothing to scale would be
+            // a reader of nothing.
+            cppUsage.gfx3dSound = true;
+        }
+    }
+
     static void noteGfxUsage(const AstNode& n, Modules::CppUsage& cppUsage) {
         const std::string& fn = n.value;
         // gfx.alpha(v) is the setter, which gfx.open calls itself; gfx.alpha() is the

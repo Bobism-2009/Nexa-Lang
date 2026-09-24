@@ -2,11 +2,17 @@
 //
 //   build: NexaC Examples/shapes3d_demo.nxa -o shapes3d_demo && ./shapes3d_demo
 //   drive: arrows orbit, W/S raise and lower, wheel zooms, space stops the
-//          camera drifting, 1/2/3 move the light, escape quits
+//          camera drifting, 1/2/3 move the light, B beeps, M holds a note,
+//          escape quits
 //
 // The cyan cube and the small pale sphere are turned by gfx3d.translate and
 // gfx3d.rotate rather than by moving the camera, and show the two orders:
 // move-then-turn tumbles in place, turn-then-move swings around the origin.
+//
+// B and M are std/gfx's mixer, reached through gfx3d: the same sound calls
+// with the same names, because it is the same mixer. Nothing here opens an
+// audio stream or tops it up -- gfx3d.play does the first and the gfx3d.poll()
+// this loop was already calling does the second.
 //
 // Also the quickest way to see whether a change to the geometry broke
 // anything: a sphere wound inside-out shows a gash through its equator, a
@@ -31,6 +37,12 @@ fn main() {
     let spinning = 1;
     let lightMode = 0;
 
+    // Any PCM WAV works; this is the 0.05 s sine the test suite ships. The
+    // fallback is for running the demo from the Tests directory.
+    let beep: int = gfx3d.sound("Tests/gfx_beep.wav");
+    if (beep == 0) { beep = gfx3d.sound("gfx_beep.wav"); }
+    let held: int = 0;
+
     while (gfx3d.closed() != 1) {
         gfx3d.poll();
 
@@ -43,6 +55,13 @@ fn main() {
         if (dist > 60.0) { dist = 60.0; }
         if (gfx3d.pressed("space")) { spinning = 1 - spinning; }
         if (gfx3d.pressed("escape")) { gfx3d.close(); }
+        // Fire and forget: press it repeatedly and the voices pile up, up to
+        // sixteen of them, rather than cutting each other off.
+        if (gfx3d.pressed("b")) { gfx3d.play(beep); }
+        if (gfx3d.pressed("m")) {
+            if (held == 0) { held = gfx3d.loop(beep, 150); }
+            else { gfx3d.stop(held); held = 0; }
+        }
         if (spinning == 1) { angle = angle + 0.004; }
         spin = spin + 0.8;
 

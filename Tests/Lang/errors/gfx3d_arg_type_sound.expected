@@ -1,0 +1,4 @@
+gfx3d.sound(path)
+expects text for path
+but got a number
+at line 6

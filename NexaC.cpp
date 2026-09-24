@@ -1423,6 +1423,11 @@ static std::string nexaBuildCompileCmd(
         // needs no import library and no SDK.
         cmd += " -luser32";
         cmd += " -lgdi32";
+        // gfx3d.play and gfx3d.sound reach the same waveOut mixer std/gfx uses,
+        // so the same library answers for it. Named unconditionally the way it
+        // is for gfx: an unreferenced import library contributes no import, so
+        // a program that draws a cube in silence pays nothing for it.
+        cmd += " -lwinmm";
     }
     if (linkGfx) {
         cmd += " -lgdi32";
@@ -1447,6 +1452,10 @@ static std::string nexaBuildCompileCmd(
         // The window, the view and NSOpenGLPixelFormat are all AppKit. The GL
         // itself is dlopened out of the framework, so it is not linked.
         cmd += " -framework Cocoa";
+        // And AudioQueue, for gfx3d.play -- the same mixer gfx.play uses. The
+        // !linkGfx guard above is what keeps this from being named twice: the
+        // gfx branch below already asks for it.
+        cmd += " -framework AudioToolbox";
     }
     if (linkGfx) {
         // AudioToolbox is gfx.audio (AudioQueue); the rest is the window, the

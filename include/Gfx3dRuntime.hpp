@@ -43,6 +43,22 @@
 // once either way -- see "the vertex batch" below, which is the seam.
 // Anywhere with no backend, gfx3d.open returns 0 and every other call does
 // nothing -- the same "no window open is not an error" rule gfx has.
+//
+// Sound is not in this file. gfx3d.sound / play / loop / stop / volume, and
+// the raw stream under them, are std/gfx's mixer -- see soundStackCpp in
+// GfxRuntime.hpp, which is emitted once for the program and ahead of this
+// runtime. There is one of it between the two modules and that is deliberate:
+// two would be two opens of the same device, which on waveOut gets you two
+// streams fighting over the speaker and on the Linux kernel PCM path fails
+// outright, so a program drawing in both 2D and 3D would have had audio that
+// neither module could account for. What this file contributes is the two
+// calls that reach it -- __nexa_gfx3d_poll tops the mixer up and
+// __nexa_gfx3d_close takes the stream down, both ahead of their window checks,
+// because the stream is not the window's.
+//
+// Nor is sound positional. There is no gfx3d.sound_at(x, y, z): panning a
+// voice by where it sits relative to the eye wants a stereo mixer, and this
+// one sums to mono because that is what all four devices open.
 
 #include <string>
 
@@ -1767,6 +1783,12 @@ static int __nexa_gfx3d_open(const std::string& title, int w, int h) {
 }
 
 static void __nexa_gfx3d_close(void) {
+    // The sound stack goes down first and outside the window check, because it
+    // is not the window's: a program can play a sound without ever opening one,
+    // and closing after a failed open still has to leave the device quiet.
+    // Both of these are empty bodies in a program that plays nothing.
+    __nexa_gfx_sound_reset();
+    __nexa_gfx_audio_close();
     if (!__nexa_g3.ready) return;
     __nexa_g3_platform_close();
     __nexa_g3.ready = 0;
@@ -1774,6 +1796,11 @@ static void __nexa_gfx3d_close(void) {
 }
 
 static void __nexa_gfx3d_poll(void) {
+    // Ahead of the window check for the same reason gfx.poll tops it up ahead
+    // of its own: the mixer has to be kept about a tenth of a second in front
+    // of the speaker, and a program that plays a sound while no window is open
+    // still reaches poll. Empty when there is no mixer.
+    __nexa_gfx_mix_pump();
     if (!__nexa_g3.ready) return;
     // The wheel reports one frame and the next poll replaces it, so it is
     // cleared before the events that fill it are drained rather than after.

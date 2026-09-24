@@ -1,0 +1,7 @@
+// gfx3d.volume takes one level or none -- read it, or set it. Two arguments is
+// neither form, and the parser names both rather than guessing at one.
+#include <std/gfx3d>
+
+fn main() {
+    gfx3d.volume(10, 20);
+}

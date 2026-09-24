@@ -371,6 +371,77 @@ static void __nexa_gfx_mix_pump() {
 )NEXA_GFX";
 }
 
+// The std headers a runtime block earned, chosen by reading back what the
+// slicing left rather than from a table of which group needs which. A table
+// would be a third place to keep in step with the first two -- the group flags
+// and the code they gate -- and the one that rots quietest, because a header
+// nothing needs breaks nothing and so is never noticed. What the emitted text
+// actually names cannot drift from what the emitted text actually needs.
+//
+// <string> is unconditional: every caller has one. Everything else is earned.
+// A miss here is a build break rather than a silent wrong answer, and
+// Tests/gfx_emit_cases.sh compiles a program per gfx builtin, so a symbol
+// added later without its trigger is caught by the suite rather than by a user.
+//
+// What is read back is all four backends, because which one survives is
+// decided later, in the transpiler, and this is written once for every target.
+// So a header one backend needs is written for all of them: <vector> rides
+// along on every slice because the Cocoa drawRect premultiplies through one.
+// That is a line, and knowing the target here would cost threading it through
+// every runtime block to save it.
+inline std::string gfxStdHeadersFor(const std::string& body) {
+    struct StdHeader {
+        const char* header;
+        const char* symbols[8];
+    };
+    static const StdHeader kStdHeaders[] = {
+        {"vector",    {"std::vector", nullptr}},
+        {"algorithm", {"std::min", "std::max", "std::sort", "std::swap", nullptr}},
+        {"cmath",     {"std::sin", "std::cos", "std::sqrt", "std::fabs", "std::floor",
+                       "std::ceil", "std::atan2", nullptr}},
+        {"cstdint",   {"int8_t", "int16_t", "int32_t", "int64_t", nullptr}},
+        {"cstring",   {"std::memset", "std::memcpy", "std::memmove", "std::strlen", nullptr}},
+        {"cstdlib",   {"std::malloc", "std::free", "std::abs", "std::strtol", nullptr}},
+        {"cstdio",    {"std::fopen", "std::fread", "std::fwrite", "std::fclose",
+                       "std::snprintf", nullptr}},
+    };
+    std::string head = "\n#include <string>\n";
+    for (const StdHeader& h : kStdHeaders) {
+        for (const char* const* sym = h.symbols; *sym; sym++) {
+            if (body.find(*sym) != std::string::npos) {
+                head += "#include <";
+                head += h.header;
+                head += ">\n";
+                break;
+            }
+        }
+    }
+    return head;
+}
+
+// The three hooks a window runtime reaches the sound stack through, for a
+// program that has no sound stack.
+//
+// gfx.close() and gfx.poll() -- and gfx3d's -- are core: they shut the audio
+// device down and top the mixer up whatever else the program does, so they name
+// these three unconditionally and something has to answer. When the stack is
+// emitted it answers them itself, and it is emitted ahead of every runtime so
+// its definitions already precede every caller. When it is not, these empty
+// bodies stand in and the calls cost nothing.
+//
+// Written once for the program rather than once per module, which is the whole
+// point: gfx and gfx3d both want them, and a second copy of a `static` body is
+// a redefinition. It is also why the flags passed in are the program's combined
+// ones -- a gfx window in a program whose only sounds are gfx3d's must not get
+// a stub for a mixer that exists.
+inline std::string soundHooksCpp(bool haveAudio, bool haveSound) {
+    std::string out;
+    if (!haveAudio) out += "\nstatic void __nexa_gfx_audio_close() {}\n";
+    if (!haveSound) out += "\nstatic void __nexa_gfx_mix_pump() {}\n"
+                           "static void __nexa_gfx_sound_reset() {}\n";
+    return out;
+}
+
 inline std::string gfxRuntimeCpp(const GfxNeed& need) {
     // Internal dependency closure: each of these is "some helper we are about
     // to emit calls it", worked out once here instead of at every use.
@@ -394,7 +465,7 @@ inline std::string gfxRuntimeCpp(const GfxNeed& need) {
                         need.lineThick || need.text || wantRound || wantSector;
     const bool wantGet = need.get || need.save;
     // Both the image decoder and the WAV loader start by slurping a file.
-    const bool wantReadFile = need.imageLoad || need.sound;
+    const bool wantReadFile = need.imageLoad;
     const bool wantDraw = need.plot || need.shapesFill || need.shapesOutline ||
                           need.line || need.lineThick || need.text || wantRound ||
                           wantSector;
@@ -416,8 +487,10 @@ inline std::string gfxRuntimeCpp(const GfxNeed& need) {
     // code that used it was sliced away is exactly the dead weight the rest of
     // this function exists to remove. So each platform header sits with the
     // flag that keeps its callers: nothing names a WIC interface unless
-    // gfx.image can decode one, nothing names waveOut unless there is audio to
-    // play, and a program that carries no such call carries no such header.
+    // gfx.image can decode one, and a program that carries no such call carries
+    // no such header. The audio headers used to be in this list and are not any
+    // more -- they went with the sound stack, which is emitted separately and
+    // names its own, because it is emitted for programs this function is not.
     //
     // <windows.h>, <Cocoa/Cocoa.h>, <CoreGraphics/CoreGraphics.h> and the three
     // X11 headers are the exception, and are unconditional because core is
@@ -442,8 +515,6 @@ inline std::string gfxRuntimeCpp(const GfxNeed& need) {
     // CoInitializeEx/CoCreateInstance, <wincodec.h> for the interfaces they
     // hand back. There is no other COM in the runtime.
     if (need.imageLoad) out += "#include <objbase.h>\n#include <wincodec.h>\n";
-    // waveOut, which is the whole Windows audio backend.
-    if (need.audio) out += "#include <mmsystem.h>\n";
     out += R"NEXA_GFX(#elif defined(__APPLE__)
 #import <Cocoa/Cocoa.h>
 #include <CoreGraphics/CoreGraphics.h>
@@ -2341,14 +2412,13 @@ static void __nexa_gfx_cursor_reset() {
     __nexa_g.cursor = 1;
 }
 )NEXA_GFX";
-    out += need.audio ? "\nstatic void __nexa_gfx_audio_close();\n"
-                      : "\nstatic void __nexa_gfx_audio_close() {}\n";
-    // gfx.close() and gfx.poll() are core, so they are emitted whether or not
-    // the program plays a sound. Both reach the mixer through a declaration
-    // that becomes an empty inline body when it is sliced out, the same way
-    // the audio shutdown above does.
-    out += need.sound ? "\nstatic void __nexa_gfx_mix_pump();\nstatic void __nexa_gfx_sound_reset();\n"
-                      : "\nstatic void __nexa_gfx_mix_pump() {}\nstatic void __nexa_gfx_sound_reset() {}\n";
+    // gfx.close() and gfx.poll() are core and reach the mixer and the audio
+    // shutdown whether or not this program plays a sound. Nothing is declared
+    // for them here: the sound stack is emitted ahead of this runtime, so when
+    // there is one its definitions already precede every caller, and when there
+    // is not, soundHooksCpp has written the empty stubs. Both of those are one
+    // decision for the whole program rather than one per module, which is what
+    // keeps a program that uses gfx and gfx3d together from getting two.
     out += R"NEXA_GFX(
 static void __nexa_gfx_close() {
     __nexa_gfx_sound_reset();
@@ -4214,7 +4284,12 @@ static int __nexa_gfx_decode_rgba(const unsigned char* data, int n, int* ow, int
 }
 
 )NEXA_GFX";
+    // The WAV loader in soundStackCpp slurps a file the same way, and either
+    // may be the only one present, so both emit this and the guard makes the
+    // second copy harmless.
     if (wantReadFile) out += R"NEXA_GFX(
+#ifndef NEXA_GFX_READ_FILE
+#define NEXA_GFX_READ_FILE
 static std::string __nexa_gfx_read_file(const std::string& path) {
     if (path.empty()) return std::string();
     FILE* f = std::fopen(path.c_str(), "rb");
@@ -4232,6 +4307,7 @@ static std::string __nexa_gfx_read_file(const std::string& path) {
     std::fclose(f);
     return out;
 }
+#endif
 )NEXA_GFX";
     if (need.imageLoad) out += R"NEXA_GFX(
 static int __nexa_gfx_store_img(int w, int h, unsigned char* px, const std::string& key) {
@@ -4807,29 +4883,103 @@ static std::string __nexa_gfx_opendialog(const std::string& spec) {
 #endif
 }
 )NEXA_GFX";
-    // gfx.audio / sample / audio_queued / audio_flush: one 16-bit mono PCM
-    // stream, four backends. Every one of them is the same shape -- a staging
-    // buffer of NEXA_PCM_LEN samples that gfx.sample fills and a submit that
-    // hands it to the device when it is full -- so the only thing that differs
-    // below the ladder is how a block of samples reaches a speaker.
+    return gfxStdHeadersFor(out) + out;
+}
+
+// The sound stack: one 16-bit mono PCM stream, four backends, and the mixer
+// that rides on top of it. Emitted on its own rather than as part of a window
+// runtime because it belongs to neither one.
+//
+// std/gfx and std/gfx3d both play sound, and there can only be one of this in
+// a program. Not for tidiness: a second copy would be a second mixer opening
+// the same device a second time, which on waveOut gets you two streams fighting
+// over the speaker and on /dev/dsp simply fails, so a program that drew in 2D
+// and 3D would have broken audio in a way neither module could explain. There
+// is nothing per-window in here either -- __nexa_gfx_poll tops the mixer up
+// ahead of its own window check, precisely because the stream is not owned by a
+// window and a program can play a sound without opening one. So this is emitted
+// once, before either runtime, and both reach the same mixer.
+//
+// Every backend is the same shape -- a staging buffer of NEXA_PCM_LEN samples
+// that gfx.sample fills and a submit that hands it to the device when it is
+// full -- so the only thing that differs below the ladder is how a block of
+// samples reaches a speaker.
+//
+// The whole backend is bracketed by [nexa:audio-*] markers that are emitted
+// into the generated program on purpose (unlike the [nexa:rasterizers-*] pairs
+// in gfxRuntimeCpp, which are lifted out of this header). No machine has all
+// four devices, and this one has none of them, so Tests/gfx_sound_cases.sh cuts
+// the marked range out of a generated file and drops in a speaker that simply
+// remembers -- which is how the mixer gets executed and checked here rather
+// than merely compiled. Keep the markers on their own comment lines and keep
+// everything a backend needs between them.
+//
+// An `#include` inside a branch below is safe to repeat: the dedup pass
+// (dedupUnconditionalIncludes in PlatformEmit.hpp) only drops a duplicate when
+// an unguarded copy is already in the file, so it can never leave a branch
+// without a header that slicing then needs. It did once -- <thread> in the
+// AudioQueue branch swallowed std/thread's copy and broke every non-Apple build
+// that mixed gfx.play with thread.spawn -- which is what that pass now exists
+// to prevent.
+//
+// wantAudio is the raw stream (gfx.audio/sample/audio_queued/audio_flush) and
+// wantSound the mixer above it (gfx.sound/play/loop/stop/volume). The mixer
+// sends its output through the stream and opens it itself, so wantSound implies
+// wantAudio; the caller is where that closure is worked out.
+inline std::string soundStackCpp(bool wantAudio, bool wantSound) {
+    std::string out;
+    // Both the WAV loader here and the image decoder in gfxRuntimeCpp start by
+    // slurping a file, and either may be the only one present -- so each emits
+    // the helper and the guard makes the second copy harmless. Cheaper than
+    // threading "did the other one already do it" between two runtimes that are
+    // otherwise independent.
+    if (wantSound) out += R"NEXA_GFX(
+#ifndef NEXA_GFX_READ_FILE
+#define NEXA_GFX_READ_FILE
+static std::string __nexa_gfx_read_file(const std::string& path) {
+    if (path.empty()) return std::string();
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return std::string();
+    std::string out;
+    char buf[4096];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) {
+        if (out.size() + n > (size_t)80 * 1024 * 1024) {
+            std::fclose(f);
+            return std::string();
+        }
+        out.append(buf, n);
+    }
+    std::fclose(f);
+    return out;
+}
+#endif
+)NEXA_GFX";
+    // The platform headers this block needs are named here rather than left to
+    // a window runtime: this is emitted whether or not either of them is, and
+    // ahead of both, so anything it borrowed would arrive too late. Every one is
+    // guarded, and the dedup pass leaves a guarded copy alone, so a program with
+    // a window names them twice and includes them once.
     //
-    // The whole block is bracketed by [nexa:audio-*] markers that are emitted
-    // into the generated program on purpose (unlike the [nexa:rasterizers-*]
-    // pairs above, which are lifted out of this header). No machine has all
-    // four devices, and this one has none of them, so Tests/gfx_sound_cases.sh
-    // cuts the marked range out of a generated file and drops in a speaker that
-    // simply remembers -- which is how the mixer above gets executed and
-    // checked here rather than merely compiled. Keep the markers on their own
-    // comment lines and keep everything a backend needs between them.
-    //
-    // An `#include` inside a branch below is safe to repeat: the dedup pass
-    // (dedupUnconditionalIncludes in PlatformEmit.hpp) only drops a duplicate
-    // when an unguarded copy is already in the file, so it can never leave a
-    // branch without a header that slicing then needs. It did once -- <thread>
-    // in the AudioQueue branch swallowed std/thread's copy and broke every
-    // non-Apple build that mixed gfx.play with thread.spawn -- which is what
-    // that pass now exists to prevent.
-    if (need.audio) out += R"NEXA_GFX(
+    // Outside the [nexa:audio-*] markers on purpose, and this is not a detail:
+    // Tests/gfx_sound_cases.sh cuts the marked range out and drops a fake
+    // speaker in its place, so a header inside it is a header that vanishes from
+    // the sliced file. <windows.h> is not the audio backend's alone -- the whole
+    // Win32 window is written against it -- and putting it between the markers
+    // took it away from gfx's own core, which is exactly the failure the markers
+    // warn about. What the slicer replaces is the device, not the headers.
+    if (wantAudio) out += R"NEXA_GFX(
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+// waveOut, which is the whole Windows audio backend.
+#include <mmsystem.h>
+#elif defined(__EMSCRIPTEN__)
+// EM_ASM, which is how a block of samples reaches a WebAudio node.
+#include <emscripten.h>
+#endif
 // [nexa:audio-backend-begin]
 #ifdef _WIN32
 #define NEXA_PCM_BUFS 4
@@ -5690,55 +5840,8 @@ static void __nexa_gfx_audio_flush() {}
 #endif
 // [nexa:audio-backend-end]
 )NEXA_GFX";
-    if (need.sound) out += soundRuntimeCpp();
-
-    // The std headers, chosen last and by reading back what the slicing left
-    // rather than by a second table of which group needs which. A table would
-    // be a third place to keep in step with the first two -- the group flags
-    // and the code they gate -- and the one that rots quietest, because a
-    // header nothing needs breaks nothing and so is never noticed. What the
-    // emitted text actually names cannot drift from what the emitted text
-    // actually needs.
-    //
-    // <string> is unconditional: the window title is a std::string and every
-    // program has a title. Everything else is earned. A miss here is a build
-    // break rather than a silent wrong answer, and Tests/gfx_emit_cases.sh
-    // compiles a program per gfx builtin, so a symbol added later without its
-    // trigger is caught by the suite rather than by a user.
-    //
-    // What is read back is all four backends, because which one survives is
-    // decided later, in the transpiler, and this function is written once for
-    // every target. So a header one backend needs is written for all of them:
-    // <vector> rides along on every slice because the Cocoa drawRect
-    // premultiplies through one. That is a line, and knowing the target here
-    // would cost threading it through every runtime block to save it.
-    struct StdHeader {
-        const char* header;
-        const char* symbols[8];
-    };
-    static const StdHeader kStdHeaders[] = {
-        {"vector",    {"std::vector", nullptr}},
-        {"algorithm", {"std::min", "std::max", "std::sort", "std::swap", nullptr}},
-        {"cmath",     {"std::sin", "std::cos", "std::sqrt", "std::fabs", "std::floor",
-                       "std::ceil", "std::atan2", nullptr}},
-        {"cstdint",   {"int8_t", "int16_t", "int32_t", "int64_t", nullptr}},
-        {"cstring",   {"std::memset", "std::memcpy", "std::memmove", "std::strlen", nullptr}},
-        {"cstdlib",   {"std::malloc", "std::free", "std::abs", "std::strtol", nullptr}},
-        {"cstdio",    {"std::fopen", "std::fread", "std::fwrite", "std::fclose",
-                       "std::snprintf", nullptr}},
-    };
-    std::string head = "\n#include <string>\n";
-    for (const StdHeader& h : kStdHeaders) {
-        for (const char* const* sym = h.symbols; *sym; sym++) {
-            if (out.find(*sym) != std::string::npos) {
-                head += "#include <";
-                head += h.header;
-                head += ">\n";
-                break;
-            }
-        }
-    }
-    return head + out;
+    if (wantSound) out += soundRuntimeCpp();
+    return gfxStdHeadersFor(out) + out;
 }
 
 }  // namespace nexa

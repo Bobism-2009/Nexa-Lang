@@ -26,6 +26,17 @@
 #             Skipped when the build fails, which on Linux means no X11
 #             development headers.
 #
+#   sound     gfx3d's sound calls go to the mixer std/gfx uses, and there is
+#             one of it for the program however many modules ask. So this layer
+#             checks the shared name is what emits, and then counts: a second
+#             mixer would link and then open the device twice. It also pins the
+#             two things that are easy to get subtly wrong -- that the platform
+#             headers sit OUTSIDE the [nexa:audio-*] markers, since
+#             Tests/gfx_sound_cases.sh cuts that range out and a header inside
+#             it vanishes with the device, and that gfx3d.poll pumps the mixer
+#             BEFORE its window check, so a program playing a sound without a
+#             window is not silent. Transpile only.
+#
 #   wasm      The browser backend is not OpenGL 1.1 -- WebGL has no glBegin,
 #             no matrix stack and no fixed-function anything -- so --wasm has
 #             to compile the shader path INSTEAD of the desktop one. Both
@@ -164,6 +175,188 @@ if "$NEXAC" "$WORK/cat.nxa" --source "$WORK/cat.cpp" > "$WORK/cat.log" 2>&1; the
     fi
 else
     echo "FAIL backend concat: NexaC could not transpile"
+    fails=$((fails + 1))
+fi
+
+# --- sound layer ------------------------------------------------------------
+#
+# gfx3d's sound calls are the only ones in the module that do not emit a
+# __nexa_gfx3d_ name: they go to the mixer std/gfx uses, because there is one
+# mixer for both modules. So what is checked here is not just "the call
+# emitted" but "it emitted the shared one, and there is exactly one of it".
+#
+# That last part is the whole reason this is not simply nine more codegen
+# lines. Two mixers in one program would compile and link perfectly and then
+# open the same device twice -- two streams fighting on waveOut, an outright
+# failure on the Linux kernel PCM path -- and only in a program that used both
+# std/gfx and std/gfx3d sound, which is the case nothing else here builds.
+
+expect_emit "sound"        '__nexa_gfx_sound\("a.wav"\)'              '    let s = gfx3d.sound("a.wav");'
+# The defaults are gfx's, because it is gfx's call: no volume is full volume,
+# and the third argument is the loop bit that separates play from loop.
+expect_emit "play default" '__nexa_gfx_voice_start\(__nexa_var_[0-9]+, 255, 0\)' \
+                           '    let s = gfx3d.sound("a.wav");
+    let v = gfx3d.play(s);'
+expect_emit "play volume"  '__nexa_gfx_voice_start\(__nexa_var_[0-9]+, 128, 0\)' \
+                           '    let s = gfx3d.sound("a.wav");
+    let v = gfx3d.play(s, 128);'
+expect_emit "loop bit"     '__nexa_gfx_voice_start\(__nexa_var_[0-9]+, 255, 1\)' \
+                           '    let s = gfx3d.sound("a.wav");
+    let v = gfx3d.loop(s);'
+# stop() with nothing is every voice, which the runtime spells as voice 0.
+expect_emit "stop all"     '__nexa_gfx_stop\(0\)'                     '    gfx3d.stop();'
+expect_emit "stop one"     '__nexa_gfx_stop\(7\)'                     '    gfx3d.stop(7);'
+# Read and set are two runtime calls for the reason gfx3d.ambient's are: every
+# level 0..255 is a real one, so none is free to mean "tell me".
+expect_emit "volume read"  '__nexa_gfx_volume_get\(\)'                '    let v = gfx3d.volume();'
+expect_emit "volume set"   '__nexa_gfx_volume_set\(90\)'              '    gfx3d.volume(90);'
+expect_emit "audio default" '__nexa_gfx_audio\(44100\)'               '    let a = gfx3d.audio();'
+expect_emit "audio rate"   '__nexa_gfx_audio\(22050\)'                '    let a = gfx3d.audio(22050);'
+expect_emit "sample"       '__nexa_gfx_sample\(1234\)'                '    gfx3d.sample(1234);'
+expect_emit "audio_queued" '__nexa_gfx_audio_queued\(\)'              '    let q = gfx3d.audio_queued();'
+# Flushing plays what play() started, so the mixer gets its turn first.
+expect_emit "audio_flush pumps first" '__nexa_gfx_mix_pump\(\), __nexa_gfx_audio_flush\(\)' \
+                                      '    gfx3d.audio_flush();'
+
+# One mixer, not two. Every one of these counts a *definition*, so a second
+# copy of the stack shows up as 2 and the emitted program would not have
+# compiled anyway -- which is the point: this fails at the count rather than
+# leaving someone to read a redefinition error out of clang.
+printf '#include <std/gfx>\n#include <std/gfx3d>\nfn main() {\n    let a = gfx.sound("a.wav");\n    let b = gfx3d.sound("b.wav");\n    gfx.play(a);\n    gfx3d.play(b);\n}\n' > "$WORK/both.nxa"
+if "$NEXAC" "$WORK/both.nxa" --source "$WORK/both.cpp" > "$WORK/both.log" 2>&1; then
+    for sym in '^static int __nexa_gfx_voice_start' \
+               '^static int __nexa_gfx_wav_decode' \
+               '^static int __nexa_gfx_sound' \
+               '^static void __nexa_gfx_mix_pump' \
+               '^static std::string __nexa_gfx_read_file' \
+               '^static int __nexa_gfx_audio\('; do
+        n=$(grep -cE "$sym" "$WORK/both.cpp")
+        if [ "$n" != "1" ]; then
+            echo "FAIL one mixer: $n definitions matching /$sym/, want 1"
+            fails=$((fails + 1))
+        fi
+    done
+    # The device backend is bracketed by a marker pair, so exactly one block
+    # means exactly two marker lines.
+    n=$(grep -c 'nexa:audio-backend' "$WORK/both.cpp")
+    if [ "$n" != "2" ]; then
+        echo "FAIL one mixer: $n audio-backend marker lines, want 2 (one block)"
+        fails=$((fails + 1))
+    fi
+else
+    echo "FAIL one mixer: NexaC could not transpile gfx + gfx3d together"
+    sed 's/^/  /' "$WORK/both.log"
+    fails=$((fails + 1))
+fi
+
+# And a gfx3d-only program that plays a sound must actually carry the mixer.
+# The codegen layer above greps main and never invokes a C++ compiler, so a
+# usage flag that failed to switch the shared stack on would satisfy every one
+# of those lines -- the call emits either way -- and then fail in the linker,
+# in somebody's build rather than here. This is the only thing that looks.
+printf '#include <std/gfx3d>\nfn main() {\n    let s = gfx3d.sound("a.wav");\n    gfx3d.play(s);\n}\n' > "$WORK/only3d.nxa"
+if "$NEXAC" "$WORK/only3d.nxa" --source "$WORK/only3d.cpp" > "$WORK/only3d.log" 2>&1; then
+    for sym in '^static int __nexa_gfx_voice_start' \
+               '^static int __nexa_gfx_sound' \
+               '^static void __nexa_gfx_mix_pump\(\) \{$'; do
+        if ! grep -qE "$sym" "$WORK/only3d.cpp"; then
+            echo "FAIL gfx3d-only sound: no definition matching /$sym/ (std/gfx is not included)"
+            fails=$((fails + 1))
+        fi
+    done
+else
+    echo "FAIL gfx3d-only sound: NexaC could not transpile"
+    sed 's/^/  /' "$WORK/only3d.log"
+    fails=$((fails + 1))
+fi
+
+# The markers bracket the device, not the headers. <windows.h> was moved inside
+# them once, which built here and broke Tests/gfx_sound_cases.sh -- that suite
+# cuts the marked range out to drop a fake speaker in, so a header between the
+# markers is a header that vanishes from the sliced file, and the Win32 window
+# is written against that one. Nothing else in this suite would notice.
+printf '#include <std/gfx3d>\nfn main() {\n    let s = gfx3d.sound("a.wav");\n    gfx3d.play(s);\n}\n' > "$WORK/hdr.nxa"
+if "$NEXAC" "$WORK/hdr.nxa" --source "$WORK/hdr.cpp" > /dev/null 2>&1; then
+    if awk '/nexa:audio-backend-begin/ { inb = 1 } inb { print } /nexa:audio-backend-end/ { exit }' \
+            "$WORK/hdr.cpp" | grep -qE '#include <(windows|emscripten)\.h>'; then
+        echo "FAIL audio markers: a platform header is inside them; slicing removes it"
+        fails=$((fails + 1))
+    fi
+else
+    echo "FAIL audio markers: NexaC could not transpile"
+    fails=$((fails + 1))
+fi
+
+# The browser gets WebAudio and nothing else. This is transpile-only -- no em++
+# needed, because choosing the platform happens before anything is compiled --
+# and it is worth its own line because gfx3d's own ladder is written against
+# NEXA_WASM while the audio backend's is written against __EMSCRIPTEN__. Those
+# are two different spellings of the same target, and a slice that got one
+# right and the other wrong would take waveOut to the browser.
+if "$NEXAC" "$WORK/hdr.nxa" --wasm --source "$WORK/hdrw.cpp" > "$WORK/hdrw.log" 2>&1; then
+    if grep -q 'waveOut' "$WORK/hdrw.cpp"; then
+        echo "FAIL wasm sound: waveOut survived into the browser slice"
+        fails=$((fails + 1))
+    fi
+    if grep -q 'mmsystem' "$WORK/hdrw.cpp"; then
+        echo "FAIL wasm sound: <mmsystem.h> survived into the browser slice"
+        fails=$((fails + 1))
+    fi
+    if ! grep -q 'nexaAC' "$WORK/hdrw.cpp"; then
+        echo "FAIL wasm sound: no WebAudio context in the browser slice"
+        fails=$((fails + 1))
+    fi
+else
+    echo "FAIL wasm sound: NexaC could not transpile for --wasm"
+    sed 's/^/  /' "$WORK/hdrw.log"
+    fails=$((fails + 1))
+fi
+
+# A gfx3d program that plays nothing must not carry the mixer -- and must still
+# have something for gfx3d.poll and gfx3d.close to call, because both name the
+# hooks unconditionally. Empty stubs, in exactly the program that needs them.
+printf '#include <std/gfx3d>\nfn main() {\n    gfx3d.poll();\n    gfx3d.close();\n}\n' > "$WORK/quiet.nxa"
+if "$NEXAC" "$WORK/quiet.nxa" --source "$WORK/quiet.cpp" > /dev/null 2>&1; then
+    if grep -qE '__nexa_gfx_voice_start|__nexa_wav_u32|waveOut' "$WORK/quiet.cpp"; then
+        echo "FAIL quiet gfx3d: the mixer is in a program that plays nothing"
+        fails=$((fails + 1))
+    fi
+    for stub in '__nexa_gfx_mix_pump\(\) \{\}' \
+                '__nexa_gfx_sound_reset\(\) \{\}' \
+                '__nexa_gfx_audio_close\(\) \{\}'; do
+        if ! grep -qE "$stub" "$WORK/quiet.cpp"; then
+            echo "FAIL quiet gfx3d: no stub matching /$stub/"
+            fails=$((fails + 1))
+        fi
+    done
+else
+    echo "FAIL quiet gfx3d: NexaC could not transpile"
+    fails=$((fails + 1))
+fi
+
+# gfx3d.poll() tops the mixer up, and does it before the window check, so a
+# program that plays a sound without opening a window still gets one. The
+# ordering is the assertion: mix_pump has to come before the `ready` return,
+# and a patch that tidied it below would leave a silent program that looks
+# right. gfx3d.close() takes the stream down for the same reason.
+printf '#include <std/gfx3d>\nfn main() {\n    let s = gfx3d.sound("a.wav");\n    gfx3d.play(s);\n    gfx3d.poll();\n}\n' > "$WORK/pump.nxa"
+if "$NEXAC" "$WORK/pump.nxa" --source "$WORK/pump.cpp" > /dev/null 2>&1; then
+    if ! awk '/^static void __nexa_gfx3d_poll/ { inp = 1 }
+              inp && /__nexa_gfx_mix_pump\(\)/ { found = 1 }
+              inp && /__nexa_g3\.ready/ { exit }
+              END { exit !found }' "$WORK/pump.cpp"; then
+        echo "FAIL poll pumps: __nexa_gfx_mix_pump is not ahead of the ready check in gfx3d.poll"
+        fails=$((fails + 1))
+    fi
+    if ! awk '/^static void __nexa_gfx3d_close/ { inc = 1 }
+              inc && /__nexa_gfx_sound_reset\(\)/ { found = 1 }
+              inc && /__nexa_g3\.ready/ { exit }
+              END { exit !found }' "$WORK/pump.cpp"; then
+        echo "FAIL close quiets: __nexa_gfx_sound_reset is not ahead of the ready check in gfx3d.close"
+        fails=$((fails + 1))
+    fi
+else
+    echo "FAIL poll pumps: NexaC could not transpile"
     fails=$((fails + 1))
 fi
 

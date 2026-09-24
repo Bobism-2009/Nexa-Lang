@@ -148,10 +148,15 @@ public:
         bool gfxBorderless = false;
         bool gfxOntop = false;
         bool gfxTransparent = false;
-        // std/gfx3d. One flag, not a family of them: the 3D runtime is a
-        // single block, because at fifteen calls there is nothing worth
-        // slicing apart the way GfxNeed slices gfx.
+        // std/gfx3d. The drawing half is one block and is not sliced the way
+        // GfxNeed slices gfx: it is one renderer, and there is nothing in it
+        // worth taking apart. The two sound flags are the exception, because
+        // what they gate is not in the gfx3d runtime at all -- it is the shared
+        // mixer, which is emitted for gfx and gfx3d together and has to be left
+        // out of a program that draws a cube and plays nothing.
         bool gfx3d = false;
+        bool gfx3dAudio = false;
+        bool gfx3dSound = false;
         bool json = false;
         bool result = false;
     };
@@ -1511,6 +1516,30 @@ public:
         if (hasUdp() && usage.udp) {
             out += udpRuntimeCpp(usage.udpSender);
         }
+        // std/gfx and std/gfx3d both play sound, and there is one mixer between
+        // them -- emitted once ahead of both, the same way socketPlatformCpp is
+        // emitted once ahead of tcp and udp. Not merely to save the lines: two
+        // copies would be two mixers opening the same device twice, which gets
+        // you two streams fighting over the speaker on waveOut and an outright
+        // failure on /dev/dsp, so a program that drew in both 2D and 3D would
+        // have had broken audio that neither module could explain.
+        //
+        // The mixer's output leaves through gfx.sample's enqueue path and it
+        // opens the stream itself, so a program that only says play still
+        // carries the platform audio block underneath it.
+        const bool wantSound = (hasGfx() && usage.gfx && usage.gfxSound) ||
+                               (hasGfx3d() && usage.gfx3d && usage.gfx3dSound);
+        const bool wantAudio = wantSound ||
+                               (hasGfx() && usage.gfx && usage.gfxAudio) ||
+                               (hasGfx3d() && usage.gfx3d && usage.gfx3dAudio);
+        if (wantAudio) {
+            out += soundStackCpp(wantAudio, wantSound);
+        }
+        // And the stubs for whichever half of it is absent, so that gfx.close,
+        // gfx.poll and gfx3d's own can name all three hooks unconditionally.
+        if ((hasGfx() && usage.gfx) || (hasGfx3d() && usage.gfx3d)) {
+            out += soundHooksCpp(wantAudio, wantSound);
+        }
         if (hasGfx() && usage.gfx) {
             GfxNeed need;
             need.alpha = usage.gfxAlpha;
@@ -1538,8 +1567,8 @@ public:
             need.save = usage.gfxSave;
             need.openDialog = usage.gfxOpenDialog;
             need.drop = usage.gfxDrop;
-            need.audio = usage.gfxAudio;
-            need.sound = usage.gfxSound;
+            need.audio = wantAudio;
+            need.sound = wantSound;
             need.cursor = usage.gfxCursor;
             need.window = usage.gfxWindow;
             need.maxfps = usage.gfxMaxfps;
@@ -1552,10 +1581,13 @@ public:
             // the usage scan counts every gfx.blit as one, because a path blit
             // decodes the file itself.)
             if (need.blit || need.blitRot || need.icon || need.imageLoad) need.imageStore = true;
-            // The mixer's output goes out through gfx.sample's enqueue path and
-            // it opens the stream itself, so a program that only says gfx.play
-            // still carries the platform audio block underneath it.
-            if (need.sound) need.audio = true;
+            // need.audio and need.sound are the combined flags worked out above
+            // rather than this module's own: what they gate here is no longer
+            // the stack itself but the declarations gfx.close() and gfx.poll()
+            // reach it through, and those have to match what was emitted for
+            // the program, not for gfx. A gfx window in a program whose only
+            // sounds are gfx3d's still has a real mixer to pump, and writing
+            // the empty stub instead would be a redefinition of it.
             // The browser has no file dialog that returns a path: gfx.open_dialog
             // clicks a hidden <input> and the file it picks arrives the same way
             // a dragged one does, through gfx.drop(). So a dialog needs the drop

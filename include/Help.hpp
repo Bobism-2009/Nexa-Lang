@@ -564,7 +564,7 @@ clockwise. With no window open nothing is an error: drawing does nothing and
 the readers answer 0. The drawing calls hand nothing back and are statements
 only, so `let R = gfx.rect(...);` is an error naming the call.)HELP" },
 
-{ "std/gfx3d", "gfx3d 3d three opengl vulkan gl cube mesh camera render", Group::Module,
+{ "std/gfx3d", "gfx3d 3d three opengl vulkan gl cube mesh camera render sound audio wav play", Group::Module,
   "3D window: camera, triangles and cubes, on OpenGL",
   R"HELP(std/gfx3d - a 3D window
   #include <std/gfx3d>
@@ -601,6 +601,11 @@ no array of pixels to read back.
                                       the names std/gfx uses, read while focused
   renderer  gfx3d.renderer(name)      ask, before open; "opengl" or "vulkan"
             gfx3d.backend()           what the window actually opened with
+  sound     gfx3d.sound(path)     gfx3d.play(id[, vol])  gfx3d.loop(id[, vol])
+            gfx3d.stop([voice])   gfx3d.volume([v])      0..255
+            gfx3d.audio([rate])   gfx3d.sample(s)
+            gfx3d.audio_queued()  gfx3d.audio_flush()
+                                      std/gfx's mixer, and only ever one of it
 
   fn main() {
       gfx3d.open("cube", 800, 600);
@@ -621,6 +626,11 @@ flat sides take the direction of the face and stay sharp-edged; curved ones
 take the direction the surface really points and come out smooth. One
 directional light, in world space, with no shadows: nothing here knows that
 one shape is between another and the light.
+
+Sound is std/gfx's sound, unchanged -- same names, same arguments, same WAV
+files. A program that includes both modules gets one mixer between them, not
+two: one master volume, one set of sixteen voices, one open device. It is not
+positioned by the camera; the mixer sums to mono, so a voice has nowhere to be.
 
 Windows, macOS, Linux and the browser. The first three are OpenGL 1.1 with
 three different windows under it; --wasm is a second renderer, because WebGL

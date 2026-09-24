@@ -1,0 +1,8 @@
+// gfx3d.play needs a sound to play. A bare gfx3d.play() has none, and the
+// transpiler indexes its argument list positionally, so an unchecked one reads
+// past the end of it -- the same reason gfx.play is checked by name.
+#include <std/gfx3d>
+
+fn main() {
+    let v: int = gfx3d.play();
+}

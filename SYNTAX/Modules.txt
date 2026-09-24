@@ -1135,10 +1135,42 @@ ARGUMENT TYPES
   really is rather than what was asked for. A program that cares reads
   backend(); one that does not is not interrupted. The switch is where
   programs will expect it when a Vulkan backend exists.
+  gfx3d.sound(path)              - load a WAV file; handle, or 0
+  gfx3d.play(id[, volume])       - play a sound once; voice id, or 0
+  gfx3d.loop(id[, volume])       - the same, but repeating until stopped; voice id, or 0
+  gfx3d.stop() / stop(voice)     - stop every voice, or one of them; 1 if it was playing
+  gfx3d.volume() / volume(v)     - master volume, 0..255 (255 to start with)
+  gfx3d.audio([rate])            - open 16-bit mono PCM output (default 44100 Hz); 1/0
+  gfx3d.sample(s)                - queue one signed 16-bit sample (-32768..32767); 1/0
+  gfx3d.audio_queued()           - samples still waiting to play
+  gfx3d.audio_flush()            - submit a partial buffer so playback starts sooner
+  Sound is the same sound std/gfx plays, down to the last detail: the same
+  names, the same arguments, the same defaults, the same WAV formats, the same
+  sixteen voices, the same per-platform devices. Everything written under
+  gfx.sound above describes these calls too, and is not repeated here.
+  It is the same sound because it is the same mixer. A program that includes
+  both std/gfx and std/gfx3d gets one of it, not two: one master volume, one
+  pool of sixteen voices, one open device. gfx3d.volume(120) is what gfx.volume()
+  then reads, and a handle from gfx.sound plays through gfx3d.play. That is not
+  a coincidence to rely on loosely -- it is the point. Two mixers would be two
+  programs opening the same speaker, which does not work on any of the four
+  backends.
+  The mixer is topped up by gfx3d.poll(), the way it is by gfx.poll(), so an
+  ordinary poll/clear/draw/present loop plays sound without doing anything else.
+  It is pumped before the window is looked at, so a program that plays a sound
+  without opening a window still gets one; gfx3d.close() closes the stream,
+  whether or not a window was ever open.
+  There is no gfx3d.sound_at(x, y, z), and sound is not positioned by the
+  camera. Panning a voice by where it sits relative to the eye needs a stereo
+  mixer, and this one sums to mono because that is what all four devices open.
+  A call that took a position would have to either ignore it or pretend, and
+  the same reasoning is why gfx3d.light is a direction rather than a lamp.
   The drawing and window calls hand nothing back, and so are statements only:
   clear, camera, perspective, tri, cube, present, poll, close and maxfps. Writing let C = gfx3d.cube(...); is an
   error naming the call, exactly as it is in gfx. The ones that answer are
-  open, closed, width, height, renderer and backend.
+  open, closed, width, height, renderer, backend, the input readers, and every
+  sound call -- including gfx3d.audio_flush, which answers 0 so that it can be
+  written either way.
   Colours are r, g, b in 0..255 and are clamped. Coordinates and sizes are
   floats; angles, where they appear, are degrees, the same convention gfx.arc
   uses.

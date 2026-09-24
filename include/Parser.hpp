@@ -4610,10 +4610,11 @@ private:
         std::string method = methodTok.value;
         advance();
         int argc = -1;
-        // argcMax > argc marks a call that takes an optional tail: only
-        // gfx3d.ambient (read or set) and gfx3d.light (with or without a
-        // colour) have one, and light's is all-or-nothing rather than a
-        // range, which is checked below.
+        // argcMax > argc marks a call that takes an optional tail: the reads
+        // that double as writes (gfx3d.ambient, gfx3d.volume), the ones with a
+        // defaulted argument (gfx3d.play, gfx3d.loop, gfx3d.stop, gfx3d.audio)
+        // and gfx3d.light, whose tail is all-or-nothing rather than a range and
+        // is checked separately below.
         int argcMax = -1;
         if (method == "open") argc = 3;
         else if (method == "close" || method == "poll" || method == "present" || method == "closed"
@@ -4624,6 +4625,16 @@ private:
         else if (method == "scale") argc = 1;
         else if (method == "ambient") { argc = 0; argcMax = 1; }
         else if (method == "light") { argc = 3; argcMax = 6; }
+        // Sound. The same names and the same arities as std/gfx, down to which
+        // argument may be left off, because it is the same mixer underneath --
+        // see soundStackCpp in GfxRuntime.hpp. A program that knows gfx.play
+        // knows this one, and anything else would be a difference with no
+        // reason behind it.
+        else if (method == "sound" || method == "sample") argc = 1;
+        else if (method == "play" || method == "loop") { argc = 1; argcMax = 2; }
+        else if (method == "stop" || method == "volume"
+                 || method == "audio") { argc = 0; argcMax = 1; }
+        else if (method == "audio_queued" || method == "audio_flush") argc = 0;
         else if (method == "translate" || method == "rotate") argc = 3;
         else if (method == "maxfps" || method == "renderer"
                  || method == "key" || method == "pressed" || method == "released"
@@ -4644,7 +4655,9 @@ private:
                 " perspective, tri, cube, box, sphere, capsule, cylinder, cone,"
                 " line3, grid, translate, rotate, scale, reset, light, ambient,"
                 " maxfps, renderer, backend, key, pressed,"
-                " released, typed, wheel, wheel_x, mouse, mouse_x, mouse_y)");
+                " released, typed, wheel, wheel_x, mouse, mouse_x, mouse_y,"
+                " sound, play, loop, stop, volume,"
+                " audio, sample, audio_queued, audio_flush)");
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after gfx3d." + method + " at line " + std::to_string(peek().line));
@@ -4699,6 +4712,13 @@ private:
             else if (method == "pressed") sig = "gfx3d.pressed(name)";
             else if (method == "released") sig = "gfx3d.released(name)";
             else if (method == "mouse") sig = "gfx3d.mouse(button)";
+            else if (method == "sound") sig = "gfx3d.sound(path)";
+            else if (method == "play") sig = "gfx3d.play(snd) or gfx3d.play(snd, volume)";
+            else if (method == "loop") sig = "gfx3d.loop(snd) or gfx3d.loop(snd, volume)";
+            else if (method == "stop") sig = "gfx3d.stop() or gfx3d.stop(voice)";
+            else if (method == "volume") sig = "gfx3d.volume() or gfx3d.volume(level)";
+            else if (method == "audio") sig = "gfx3d.audio() or gfx3d.audio(rate)";
+            else if (method == "sample") sig = "gfx3d.sample(value)";
             else sig = "gfx3d." + method + "()";
             throw std::runtime_error(sig + " at line " + std::to_string(line));
         }
