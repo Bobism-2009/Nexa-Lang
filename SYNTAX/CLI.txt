@@ -75,9 +75,12 @@ OPTIONS
             A target is source only -- a C library, a C++ library and what
             else the platform needs, compiled after the NexaC call by the
             clang already installed (clang can build for any CPU LLVM
-            supports). The first build for a target compiles that runtime,
-            about half a minute, into ~/.nexa/cache/targets/; every build
-            after it is one compile and one link.
+            supports). The first build for a target compiles that runtime
+            into ~/.nexa/cache/targets/ (arm64-linux: about 10 s on Linux,
+            under a minute on Windows); every build after it is one compile
+            and one link. A target can keep part of its runtime for programs
+            that need it -- arm64-linux builds most of libc++ only the first
+            time a program includes std/inline.
             The target lists the std modules it supports, and a program
             using any other is refused by name before anything is compiled.
             The output is named without .exe, since it is not a Windows

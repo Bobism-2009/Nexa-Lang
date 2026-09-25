@@ -2080,6 +2080,7 @@ int main(int argc, char* argv[]) {
             bo.debug = debugBuild;
             bo.exceptions = !noExceptions;
             bo.rtti = !noRtti;
+            for (const std::string& m : modules.enabledModules()) bo.modules.push_back(m);
             try {
                 nexa::target::buildProgram(targetSpec, cppPath, exePath, bo);
             } catch (...) {

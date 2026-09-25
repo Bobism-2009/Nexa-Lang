@@ -249,6 +249,11 @@ struct Library {
     fs::path root;                    // where its sources live, inside the package
     std::vector<std::string> files;   // relative to root, from the list file
     std::vector<std::string> flags;   // placeholders still in them
+    // Built and linked only for a program that includes one of these modules
+    // ("when": ["std/inline"]); empty means always. Lets a target keep the
+    // bulk of a library -- all of libc++, say -- off every other program's
+    // first build.
+    std::vector<std::string> when;
 };
 
 struct Spec {
@@ -354,6 +359,7 @@ inline Spec load(const std::string& name) {
             lib.root = dir / text(l, "root", true);
             lib.files = readList(dir / text(l, "files", true));
             lib.flags = strings(l.get("flags"), "library \"" + lib.name + "\" flags");
+            lib.when = strings(l.get("when"), "library \"" + lib.name + "\" when");
             s.libraries.push_back(lib);
         }
         if (const Json* st = root.get("startfiles")) {
@@ -371,7 +377,14 @@ inline Spec load(const std::string& name) {
     }
     if (!s.startLib.empty()) {
         bool found = false;
-        for (const Library& l : s.libraries) found = found || l.name == s.startLib;
+        for (const Library& l : s.libraries) {
+            if (l.name != s.startLib) continue;
+            found = true;
+            if (!l.when.empty()) {
+                throw std::runtime_error(file.string() + ": startfiles come from library \"" + s.startLib +
+                                         "\", which has a \"when\" -- every program needs its start files");
+            }
+        }
         if (!found) throw std::runtime_error(file.string() + ": startfiles name library \"" + s.startLib + "\", which is not listed");
     }
     return s;
@@ -642,68 +655,119 @@ inline std::vector<std::pair<std::string, std::string>> varsFor(const Spec& s, c
     return v;
 }
 
-// Compiles the target's libraries once, into the cache. A stamp file written
-// last is what says the runtime is whole; one interrupted half-way has no
-// stamp and is simply built again next time.
-inline fs::path ensureRuntime(const Spec& s, const Toolchain& tc) {
-    fs::path dir = runtimeDir(s, tc);
-    fs::path stamp = dir / "complete";
-    if (fs::exists(stamp)) return dir;
-
-    std::error_code ec;
-    fs::remove_all(dir, ec);
-    fs::create_directories(dir, ec);
-    size_t total = 0;
-    for (const Library& l : s.libraries) total += l.files.size();
-    std::cout << "[Nexa] " << s.name << ": first build for this target -- compiling its runtime from source ("
-              << total << " files). This happens once; later builds reuse it.\n";
-    auto t0 = std::chrono::steady_clock::now();
-
-    for (const Library& lib : s.libraries) {
-        auto vars = varsFor(s, tc, &lib);
-        fs::path objDir = dir / "obj" / lib.name;
-        fs::create_directories(objDir, ec);
-        std::vector<Job> jobs;
-        std::vector<fs::path> objs;
-        for (const std::string& rel : lib.files) {
-            fs::path o = objDir / objectName(rel);
-            jobs.push_back(compileJob(tc, s, lib, rel, o, vars));
-            objs.push_back(o);
-        }
-        std::cout << "[Nexa]   " << lib.name << ": " << lib.files.size() << " files\n";
-        runAll(jobs, dir / "logs", s.name + " runtime");
-
-        // An archive, so the linker takes only the objects a program uses. The
-        // object list goes in a response file: a thousand paths is far past the
-        // length Windows allows a command line.
-        fs::path rsp = dir / (lib.name + ".rsp");
-        {
-            std::ofstream r(rsp);
-            for (const fs::path& o : objs) r << '"' << o.generic_string() << "\"\n";
-        }
-        fs::path archive = dir / ("lib" + lib.name + ".a");
-        fs::path log = dir / "logs" / ("ar-" + lib.name + ".log");
-        if (run({tc.ar, "rcs", archive.generic_string(), "@" + rsp.generic_string()}, log) != 0) {
-            throw std::runtime_error(s.name + " runtime: could not archive " + lib.name + ":\n" + slurp(log));
+// Whether a program that includes `modules` needs this library.
+inline bool wanted(const Library& l, const std::vector<std::string>& modules) {
+    if (l.when.empty()) return true;
+    for (const std::string& w : l.when) {
+        for (const std::string& m : modules) {
+            if (m == w) return true;
         }
     }
+    return false;
+}
 
+// Compiles the target's libraries into the cache: those every program needs
+// on the first build, and a conditional one ("when") the first time a program
+// needs it. A stamp written last says each part is whole -- "complete" for the
+// libraries every program links and the start files, "complete-<name>" for a
+// conditional library -- so one interrupted half-way is simply built again.
+//
+// Every file still to compile goes into one queue, the biggest C++ sources
+// first. A C++ file takes many times longer than a C one; started last, one
+// core would still be on locale.cpp while the others sat idle, and one
+// library at a time did that at the end of every library.
+inline fs::path ensureRuntime(const Spec& s, const Toolchain& tc, const std::vector<std::string>& modules) {
+    fs::path dir = runtimeDir(s, tc);
+    fs::path core = dir / "complete";
+    auto stampFor = [&](const Library& l) { return l.when.empty() ? core : dir / ("complete-" + l.name); };
+
+    std::error_code ec;
+    const bool firstBuild = !fs::exists(core);
+    if (firstBuild) fs::remove_all(dir, ec);  // what an interrupted first build left
+    std::vector<const Library*> todo;
+    for (const Library& l : s.libraries) {
+        if (wanted(l, modules) && !fs::exists(stampFor(l))) todo.push_back(&l);
+    }
+    if (todo.empty()) return dir;
+    fs::create_directories(dir, ec);
+
+    struct Item {
+        Job job;
+        uintmax_t weight;
+    };
+    std::vector<Item> items;
+    auto add = [&](const Library& lib, const std::string& rel, const fs::path& out,
+                   const std::vector<std::pair<std::string, std::string>>& vars) {
+        uintmax_t size = fs::file_size(lib.root / rel, ec);
+        if (ec) size = 0;
+        items.push_back({compileJob(tc, s, lib, rel, out, vars), isCxxSource(rel) ? size * 16 : size});
+    };
+    size_t total = 0;
+    for (const Library* lib : todo) {
+        auto vars = varsFor(s, tc, lib);
+        fs::create_directories(dir / "obj" / lib->name, ec);
+        for (const std::string& rel : lib->files) add(*lib, rel, dir / "obj" / lib->name / objectName(rel), vars);
+        total += lib->files.size();
+    }
     // The start and end files are objects of their own rather than archive
     // members, because they have to be linked, and in a fixed place, whether
-    // or not anything refers to them.
-    if (!s.startLib.empty()) {
+    // or not anything refers to them. They are part of the first build.
+    if (firstBuild && !s.startLib.empty()) {
         const Library* lib = nullptr;
         for (const Library& l : s.libraries) if (l.name == s.startLib) lib = &l;
         auto vars = varsFor(s, tc, lib);
-        std::vector<Job> jobs;
         std::vector<std::string> all = s.startFiles;
         all.insert(all.end(), s.endFiles.begin(), s.endFiles.end());
-        for (const std::string& rel : all) jobs.push_back(compileJob(tc, s, *lib, rel, dir / objectName(rel), vars));
-        runAll(jobs, dir / "logs", s.name + " start files");
+        for (const std::string& rel : all) add(*lib, rel, dir / objectName(rel), vars);
+    }
+
+    if (firstBuild) {
+        std::cout << "[Nexa] " << s.name << ": first build for this target -- compiling its runtime from source ("
+                  << total << " files). This happens once; later builds reuse it.\n";
+    } else {
+        std::string why;
+        for (const Library* lib : todo) {
+            for (const std::string& w : lib->when) {
+                if (std::find(modules.begin(), modules.end(), w) != modules.end() &&
+                    why.find(w) == std::string::npos) {
+                    why += (why.empty() ? "" : ", ") + w;
+                }
+            }
+        }
+        std::cout << "[Nexa] " << s.name << ": first program with " << why
+                  << " -- compiling the part of the runtime it needs (" << total
+                  << " files). This happens once.\n";
+    }
+    for (const Library* lib : todo) std::cout << "[Nexa]   " << lib->name << ": " << lib->files.size() << " files\n";
+    auto t0 = std::chrono::steady_clock::now();
+
+    std::stable_sort(items.begin(), items.end(), [](const Item& a, const Item& b) { return a.weight > b.weight; });
+    std::vector<Job> jobs;
+    for (Item& it : items) jobs.push_back(std::move(it.job));
+    runAll(jobs, dir / "logs", s.name + " runtime");
+
+    // An archive per library, so the linker takes only the objects a program
+    // uses. The object list goes in a response file: a thousand paths is far
+    // past the length Windows allows a command line.
+    for (const Library* lib : todo) {
+        fs::path rsp = dir / (lib->name + ".rsp");
+        {
+            std::ofstream r(rsp);
+            for (const std::string& rel : lib->files) {
+                r << '"' << (dir / "obj" / lib->name / objectName(rel)).generic_string() << "\"\n";
+            }
+        }
+        fs::path archive = dir / ("lib" + lib->name + ".a");
+        fs::remove(archive, ec);
+        fs::path log = dir / "logs" / ("ar-" + lib->name + ".log");
+        if (run({tc.ar, "rcs", archive.generic_string(), "@" + rsp.generic_string()}, log) != 0) {
+            throw std::runtime_error(s.name + " runtime: could not archive " + lib->name + ":\n" + slurp(log));
+        }
+        if (!lib->when.empty()) std::ofstream(stampFor(*lib)) << lib->name << "\n";
     }
 
     auto secs = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - t0).count();
-    std::ofstream(stamp) << s.name << " " << s.version << " clang " << tc.major << "\n";
+    if (firstBuild) std::ofstream(core) << s.name << " " << s.version << " clang " << tc.major << "\n";
     std::cout << "[Nexa] " << s.name << ": runtime built in " << secs << "s\n";
     return dir;
 }
@@ -718,6 +782,9 @@ struct BuildOptions {
     // them, which is fine: code without exceptions links against code with.
     bool exceptions = false;
     bool rtti = false;
+    // The std modules the program includes: a library with a "when" is built
+    // and linked only if one of its modules is here.
+    std::vector<std::string> modules;
 };
 
 // The program: one compile against the target's headers, one static link
@@ -733,7 +800,7 @@ inline void buildProgram(const Spec& s, const std::string& cppPath, const std::s
                                  " or newer -- its C++ library is written for it -- and this is clang " +
                                  std::to_string(tc.major) + ". Update LLVM, or point NEXA_TARGET_CLANG at a newer one");
     }
-    fs::path rt = ensureRuntime(s, tc);
+    fs::path rt = ensureRuntime(s, tc, o.modules);
 
     auto vars = varsFor(s, tc, nullptr);
     fs::path obj = scratch / "program.o";
@@ -757,7 +824,9 @@ inline void buildProgram(const Spec& s, const std::string& cppPath, const std::s
     for (const std::string& f : s.startFiles) ld.push_back((rt / objectName(f)).generic_string());
     ld.push_back(obj.generic_string());
     ld.push_back("--start-group");
-    for (const Library& l : s.libraries) ld.push_back((rt / ("lib" + l.name + ".a")).generic_string());
+    for (const Library& l : s.libraries) {
+        if (wanted(l, o.modules)) ld.push_back((rt / ("lib" + l.name + ".a")).generic_string());
+    }
     ld.push_back("--end-group");
     for (const std::string& f : s.endFiles) ld.push_back((rt / objectName(f)).generic_string());
     for (const std::string& f : s.linkFlags) ld.push_back(expand(f, vars));

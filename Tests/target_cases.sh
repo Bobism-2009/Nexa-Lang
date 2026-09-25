@@ -121,6 +121,18 @@ expect "bad json: fix"      "nexapkg target install fixture --force" nexac "$WOR
 sed 's/"name": "fixture"/"name": "impostor"/' "$WORK/good.json" > "$T"
 expect "name mismatch"      "installed as \"fixture\""          nexac "$WORK/io.nxa" --target fixture --source "$WORK/m.cpp"
 
+# A library can be built only for programs that include a module ("when"),
+# but not the one the start files come from: every program needs those.
+cat > "$T" <<'EOF'
+{
+  "name": "fixture", "version": "0.0.1", "os": "linux", "triple": "aarch64-linux-musl",
+  "modules": ["std/io"],
+  "libraries": [ { "name": "c", "root": "src", "files": "lists/none.txt", "flags": [], "when": ["std/inline"] } ],
+  "startfiles": { "library": "c", "before": [], "after": [] }
+}
+EOF
+expect "conditional startfiles" "every program needs its start files" nexac "$WORK/io.nxa" --target fixture --source "$WORK/w.cpp"
+
 # A byte-order mark is not an error: Windows editors put one on everything.
 printf '\357\273\277' > "$T"
 cat "$WORK/good.json" >> "$T"
