@@ -141,6 +141,8 @@ public:
                 tokens.push_back(scanInclude());
             } else if (c == 'R' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '"') {
                 tokens.push_back(scanRawString());
+            } else if (c == 'f' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '"') {
+                scanFString(tokens);
             } else if (c == '"') {
                 tokens.push_back(scanString());
             } else if (c == '\'') {
@@ -474,6 +476,151 @@ private:
         if (pos_ >= source_.size()) fail("Unterminated string literal", startLine);
         pos_++;  // skip closing "
         return {TokenType::String, value, startLine};
+    }
+
+    // f"total {n} items, {price:.2} each" -- text with values in it, split here into
+    // the + chain it means: ("total " + (n) + " items, " + (price).__fmt(".2") + " each").
+    // A bare {value} is exactly `"..." + value`, so it converts the way + already does;
+    // a {value:spec} is formatted by the spec, which the transpiler checks against the
+    // value's type. {{ and }} are literal braces. The value is lexed as ordinary Nexa,
+    // so it may hold calls, indexing, strings and a ternary: a ':' outside brackets that
+    // does not close a ?: is where the spec starts.
+    void scanFString(std::vector<Token>& tokens) {
+        const size_t startLine = line_;
+        pos_ += 2;  // skip f"
+        std::vector<Token> out;
+        std::string text;
+        bool anyValue = false;
+        out.push_back({TokenType::LParen, "(", startLine});
+        auto flushText = [&](bool always) {
+            if (text.empty() && !always) return;
+            if (out.size() > 1) out.push_back({TokenType::Plus, "+", startLine});
+            out.push_back({TokenType::String, text, startLine});
+            text.clear();
+        };
+        const char* unterminatedValue = "Unterminated {value} in f-string (missing '}')";
+        while (pos_ < source_.size() && source_[pos_] != '"') {
+            const char c = source_[pos_];
+            if (c == '\n') fail("Unterminated string literal", startLine);
+            if (c == '\\') {
+                pos_++;
+                if (pos_ >= source_.size()) fail("Unterminated string literal", startLine);
+                char e = source_[pos_++];
+                char decoded;
+                if (decodeSimpleEscape(e, decoded)) {
+                    text += decoded;
+                } else if (e == 'x' || e == 'X') {
+                    text += scanHexEscape(startLine, "string literal");
+                } else {
+                    fail("Unknown escape sequence '" + describeEscape(e) + "' in string literal", startLine);
+                }
+                continue;
+            }
+            if (c == '}') {
+                if (pos_ + 1 < source_.size() && source_[pos_ + 1] == '}') {
+                    text += '}';
+                    pos_ += 2;
+                    continue;
+                }
+                fail("Single '}' in f-string -- write }} for a literal brace", startLine);
+            }
+            if (c != '{') {
+                text += c;
+                pos_++;
+                continue;
+            }
+            if (pos_ + 1 < source_.size() && source_[pos_ + 1] == '{') {
+                text += '{';
+                pos_ += 2;
+                continue;
+            }
+            // {value} or {value:spec}
+            pos_++;
+            const size_t exprStart = pos_;
+            int depth = 0;
+            int ternaries = 0;
+            while (pos_ < source_.size()) {
+                const char v = source_[pos_];
+                if (v == '\n') fail(unterminatedValue, startLine);
+                if (v == '"' || v == '\'') {
+                    // a string or char inside the value: its braces and quotes are its own
+                    pos_++;
+                    while (pos_ < source_.size() && source_[pos_] != v) {
+                        if (source_[pos_] == '\n') fail(unterminatedValue, startLine);
+                        if (source_[pos_] == '\\') pos_++;
+                        pos_++;
+                    }
+                    if (pos_ >= source_.size()) fail(unterminatedValue, startLine);
+                    pos_++;
+                    continue;
+                }
+                if (v == '(' || v == '[' || v == '{') {
+                    depth++;
+                } else if (v == ')' || v == ']') {
+                    if (depth > 0) depth--;
+                } else if (v == '}') {
+                    if (depth == 0) break;
+                    depth--;
+                } else if (depth == 0 && v == '?') {
+                    ternaries++;
+                } else if (depth == 0 && v == ':') {
+                    if (pos_ + 1 < source_.size() && source_[pos_ + 1] == ':') {
+                        pos_ += 2;
+                        continue;
+                    }
+                    if (ternaries == 0) break;
+                    ternaries--;
+                }
+                pos_++;
+            }
+            if (pos_ >= source_.size()) fail(unterminatedValue, startLine);
+            const std::string expr = source_.substr(exprStart, pos_ - exprStart);
+            std::string spec;
+            const bool hasSpec = source_[pos_] == ':';
+            if (hasSpec) {
+                pos_++;
+                while (pos_ < source_.size() && source_[pos_] != '}') {
+                    if (source_[pos_] == '\n' || source_[pos_] == '"') fail(unterminatedValue, startLine);
+                    spec += source_[pos_++];
+                }
+                if (pos_ >= source_.size()) fail(unterminatedValue, startLine);
+            }
+            pos_++;  // skip }
+            if (expr.find_first_not_of(" \t\r") == std::string::npos) {
+                fail("Empty {} in f-string -- put a value in it, or write {{ for a literal brace", startLine);
+            }
+            Lexer sub(expr, filePath_);
+            sub.line_ = startLine;
+            std::vector<Token> valueTokens = sub.tokenize();
+            while (!valueTokens.empty() && valueTokens.back().type == TokenType::Eof) valueTokens.pop_back();
+            // The leading text always goes out, even empty, so the chain starts with a
+            // string and f"{a}{b}" joins two numbers rather than adding them.
+            flushText(!anyValue);
+            anyValue = true;
+            out.push_back({TokenType::Plus, "+", startLine});
+            out.push_back({TokenType::LParen, "(", startLine});
+            for (Token& t : valueTokens) {
+                t.line = startLine;
+                out.push_back(std::move(t));
+            }
+            out.push_back({TokenType::RParen, ")", startLine});
+            if (hasSpec) {
+                out.push_back({TokenType::Dot, ".", startLine});
+                out.push_back({TokenType::Identifier, "__fmt", startLine});
+                out.push_back({TokenType::LParen, "(", startLine});
+                out.push_back({TokenType::String, spec, startLine});
+                out.push_back({TokenType::RParen, ")", startLine});
+            }
+        }
+        if (pos_ >= source_.size()) fail("Unterminated string literal", startLine);
+        pos_++;  // skip closing "
+        if (!anyValue) {
+            tokens.push_back({TokenType::String, text, startLine});
+            return;
+        }
+        flushText(false);
+        out.push_back({TokenType::RParen, ")", startLine});
+        for (Token& t : out) tokens.push_back(std::move(t));
     }
 
     Token scanRawString() {

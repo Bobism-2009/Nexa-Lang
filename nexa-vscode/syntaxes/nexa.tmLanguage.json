@@ -108,6 +108,36 @@
     "strings": {
       "patterns": [
         {
+          "name": "string.interpolated.nexa",
+          "begin": "\\bf\"",
+          "end": "\"",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.nexa" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.nexa" }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.nexa",
+              "match": "\\\\.|\\{\\{|\\}\\}"
+            },
+            {
+              "name": "meta.interpolation.nexa",
+              "begin": "\\{",
+              "end": "\\}",
+              "beginCaptures": {
+                "0": { "name": "punctuation.section.interpolation.begin.nexa" }
+              },
+              "endCaptures": {
+                "0": { "name": "punctuation.section.interpolation.end.nexa" }
+              },
+              "contentName": "source.nexa",
+              "patterns": [{ "include": "$self" }]
+            }
+          ]
+        },
+        {
           "name": "string.quoted.double.nexa",
           "begin": "\"",
           "end": "\"",

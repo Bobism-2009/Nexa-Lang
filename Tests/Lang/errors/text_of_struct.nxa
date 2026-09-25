@@ -1,0 +1,10 @@
+// A struct in text -- f"{p}" or "..." + p -- has no text form; the error says
+// so by line instead of clang reporting a to_string() with no overload.
+#include <std/io>
+
+struct Point { x: int; y: int; }
+
+fn main() {
+    let p = Point{x: 1, y: 2};
+    io.println(f"at {p}");
+}

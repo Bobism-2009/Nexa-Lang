@@ -150,6 +150,81 @@ inline std::string nexaLineFileLiteral(const std::string& path) {
 }
 
 // Converts Nexa AST to C++ source code
+// Formats an f-string's {value:spec}. The spec is read at compile time (Transpiler::
+// parseFmtSpec), so these take it already taken apart. Width counts characters, not
+// bytes: a UTF-8 sequence is one.
+static const char* const kFmtRuntime = R"NEXAFMT([[maybe_unused]] static std::string __nexa_fmt_pad(const std::string& __sign, const std::string& __body, const char* __fill, char __align, int __width) {
+    int __n = 0;
+    for (unsigned char __c : __sign) if ((__c & 0xC0) != 0x80) __n++;
+    for (unsigned char __c : __body) if ((__c & 0xC0) != 0x80) __n++;
+    if (__n >= __width) return __sign + __body;
+    const int __pad = __width - __n;
+    auto __rep = [&](int __k) { std::string __s; for (int __i = 0; __i < __k; __i++) __s += __fill; return __s; };
+    if (__align == '=') return __sign + __rep(__pad) + __body;
+    if (__align == '<') return __sign + __body + __rep(__pad);
+    if (__align == '^') return __rep(__pad / 2) + __sign + __body + __rep(__pad - __pad / 2);
+    return __rep(__pad) + __sign + __body;
+}
+[[maybe_unused]] static std::string __nexa_fmt_group(const std::string& __d) {
+    std::string __o;
+    const size_t __k = __d.size();
+    for (size_t __i = 0; __i < __k; __i++) {
+        if (__i != 0 && (__k - __i) % 3 == 0) __o += ',';
+        __o += __d[__i];
+    }
+    return __o;
+}
+[[maybe_unused]] static std::string __nexa_fmt_u(unsigned long long __m, bool __neg, const char* __fill, char __align, char __sign, int __width, bool __comma, char __type) {
+    std::string __d;
+    if (__type == 'x' || __type == 'X' || __type == 'o' || __type == 'b') {
+        const unsigned __base = __type == 'o' ? 8u : __type == 'b' ? 2u : 16u;
+        const char* __dig = __type == 'X' ? "0123456789ABCDEF" : "0123456789abcdef";
+        do { __d.insert(__d.begin(), __dig[__m % __base]); __m /= __base; } while (__m != 0);
+    } else {
+        __d = std::to_string(__m);
+        if (__comma) __d = __nexa_fmt_group(__d);
+    }
+    return __nexa_fmt_pad(__neg ? "-" : (__sign == '+' ? "+" : ""), __d, __fill, __align, __width);
+}
+[[maybe_unused]] static std::string __nexa_fmt_i(long long __v, const char* __fill, char __align, char __sign, int __width, bool __comma, char __type) {
+    const bool __neg = __v < 0;
+    const unsigned long long __m = __neg ? 0ULL - static_cast<unsigned long long>(__v) : static_cast<unsigned long long>(__v);
+    return __nexa_fmt_u(__m, __neg, __fill, __align, __sign, __width, __comma, __type);
+}
+[[maybe_unused]] static std::string __nexa_fmt_f(double __v, const char* __fill, char __align, char __sign, int __width, bool __comma, int __prec, char __type) {
+    const bool __neg = __v < 0;
+    double __a = __neg ? -__v : __v;
+    if (__type == '%') __a *= 100.0;
+    char __b[512];
+    if (__type == 'e') std::snprintf(__b, sizeof(__b), "%.*e", __prec < 0 ? 6 : __prec, __a);
+    else if (__prec >= 0 || __type == 'f' || __type == '%') std::snprintf(__b, sizeof(__b), "%.*f", __prec < 0 ? 6 : __prec, __a);
+    else std::snprintf(__b, sizeof(__b), "%g", __a);
+    std::string __d = __b;
+    if (__comma) {
+        size_t __k = 0;
+        while (__k < __d.size() && __d[__k] >= '0' && __d[__k] <= '9') __k++;
+        __d = __nexa_fmt_group(__d.substr(0, __k)) + __d.substr(__k);
+    }
+    if (__type == '%') __d += '%';
+    return __nexa_fmt_pad(__neg ? "-" : (__sign == '+' ? "+" : ""), __d, __fill, __align, __width);
+}
+[[maybe_unused]] static std::string __nexa_fmt_s(std::string __v, const char* __fill, char __align, int __width, int __prec) {
+    if (__prec >= 0) {
+        size_t __i = 0;
+        int __n = 0;
+        for (; __i < __v.size(); __i++) {
+            if ((static_cast<unsigned char>(__v[__i]) & 0xC0) != 0x80) {
+                if (__n == __prec) break;
+                __n++;
+            }
+        }
+        __v.resize(__i);
+    }
+    return __nexa_fmt_pad("", __v, __fill, __align, __width);
+}
+
+)NEXAFMT";
+
 class Transpiler {
 public:
     Transpiler(const std::vector<AstNode>& ast, const Modules& modules, bool preserveNames = false, bool buildDll = false,
@@ -540,6 +615,7 @@ public:
         }
         bool needsMap = false;
         bool needsFunctional = false;
+        bool needsFmt = false;
         std::function<void(const std::string&)> noteContainerType = [&](const std::string& t) {
             if (nexaIsSliceType(t)) {
                 needsVector = true;
@@ -597,6 +673,10 @@ public:
                 needsVector = true;
                 needsString = true;
             }
+            if (n.type == AstNode::Type::StrMethod && n.value == "__fmt") {
+                needsFmt = true;
+                needsString = true;
+            }
             // len()/slicing over a folded string literal promotes it with std::string(...).
             if (n.type == AstNode::Type::ExprLen || n.type == AstNode::Type::ExprSlice ||
                 (n.type == AstNode::Type::ExprAdd && exprProducesString(n))) {
@@ -628,6 +708,7 @@ public:
         if (needsCstddef && moduleCppIncludes.find("#include <cstddef>\n") == std::string::npos) out << "#include <cstddef>\n";
         if (!moduleCppIncludes.empty() || !inlineCppHoisted.empty() || needsString || needsVector || needsMap || needsFunctional || needsCstdlib || needsCstddef) out << "\n";
         if (needsString) out << "[[maybe_unused]] static std::string __nexa_f2s(double __v) { char __b[32]; std::snprintf(__b, sizeof(__b), \"%g\", __v); return std::string(__b); }\n\n";
+        if (needsFmt) out << kFmtRuntime;
         if (needsCstr) out << "[[maybe_unused]] static std::string __nexa_cstr(const char* __p) { return __p ? std::string(__p) : std::string(); }\n\n";
 
         bool wroteUserCppHeaders = false;
@@ -3420,6 +3501,7 @@ private:
         if (e.type == AstNode::Type::StrMethod) {
             semResolveStrMethod(e);
             if (e.type == AstNode::Type::StrMethod) semCheckStrMethodArity(e);
+            if (e.type == AstNode::Type::StrMethod && e.value == "__fmt") semCheckFmt(e);
         }
         switch (e.type) {
             case AstNode::Type::ExprVarRef:
@@ -3466,10 +3548,35 @@ private:
                 for (const AstNode& c : e.children) semExpr(c);
                 semCheckSliceAlgo(e);
                 break;
+            case AstNode::Type::ExprAdd:
+                for (const AstNode& c : e.children) semExpr(c);
+                semCheckConcatOperands(e);
+                break;
             default:
                 for (const AstNode& c : e.children) semExpr(c);
                 semCheckBuiltinArgTypes(e);
                 break;
+        }
+    }
+
+    // `"total: " + p` -- or f"{p}", which is the same + -- where p is a struct, a slice,
+    // a map or a Result: there is no text for it, and + used to hand it to C++ as a
+    // to_string() call with no overload to pick.
+    void semCheckConcatOperands(const AstNode& e) {
+        if (e.children.size() != 2) return;
+        const std::string a = inferExprNexaType(e.children[0]);
+        const std::string b = inferExprNexaType(e.children[1]);
+        if (a != "string" && b != "string") return;
+        for (size_t i = 0; i < 2; i++) {
+            const std::string& t = i ? b : a;
+            if (isStructDeclType(t)) {
+                semError(e.children[i], "a " + structNameFromDecl(t) +
+                                            " struct has no text form to join to a string -- use its fields");
+            }
+            if (nexaIsSliceType(t) || nexaIsMapType(t) || nexaIsResultType(t) || nexaIsFnType(t)) {
+                semError(e.children[i], "a " + t + " has no text form to join to a string -- use its elements" +
+                                            std::string(t == "[]string" ? ", or .join(\", \")" : ""));
+            }
         }
     }
 
@@ -4628,7 +4735,140 @@ private:
     // Core string-method return-type classification (value.method(...)).
     static bool strMethodReturnsString(const std::string& m) {
         return m == "upper" || m == "lower" || m == "trim" || m == "replace" ||
-               m == "substring" || m == "repeat";
+               m == "substring" || m == "repeat" || m == "__fmt";
+    }
+
+    // An f-string's {value:spec}, after the ':' --  [[fill]align][+][0][width][,][.digits][type]
+    struct FmtSpec {
+        std::string fill;  // one character (UTF-8 allowed); only written before an align
+        char align = 0;    // < > ^
+        char sign = 0;     // + shows a sign on positive numbers too
+        bool zero = false; // 0 pads numbers with zeros after the sign
+        int width = 0;
+        bool comma = false;
+        int prec = -1;     // digits after the point, or how many characters of text
+        char type = 0;     // x X o b (integers), e f % (floats)
+    };
+
+    // Reads a spec; returns what is wrong with it, or "".
+    static std::string parseFmtSpec(const std::string& s, FmtSpec& f) {
+        auto isAlign = [](char c) { return c == '<' || c == '>' || c == '^'; };
+        auto isDig = [](char c) { return c >= '0' && c <= '9'; };
+        size_t i = 0;
+        size_t lead = 1;
+        if (!s.empty()) {
+            const unsigned char c0 = static_cast<unsigned char>(s[0]);
+            lead = c0 >= 0xF0 ? 4 : c0 >= 0xE0 ? 3 : c0 >= 0xC0 ? 2 : 1;
+        }
+        if (s.size() > lead && isAlign(s[lead])) {
+            f.fill = s.substr(0, lead);
+            f.align = s[lead];
+            i = lead + 1;
+        } else if (!s.empty() && isAlign(s[0])) {
+            f.align = s[0];
+            i = 1;
+        }
+        if (i < s.size() && s[i] == '+') { f.sign = '+'; i++; }
+        if (i < s.size() && s[i] == '0') { f.zero = true; i++; }
+        const size_t w0 = i;
+        while (i < s.size() && isDig(s[i])) i++;
+        if (i > w0) {
+            if (i - w0 > 4) return "a width of at most 9999";
+            f.width = std::stoi(s.substr(w0, i - w0));
+        }
+        if (i < s.size() && s[i] == ',') { f.comma = true; i++; }
+        if (i < s.size() && s[i] == '.') {
+            const size_t p0 = ++i;
+            while (i < s.size() && isDig(s[i])) i++;
+            if (i == p0) return "'.' needs a number after it, like .2";
+            if (i - p0 > 3 || std::stoi(s.substr(p0, i - p0)) > 100) return "at most 100 digits after '.'";
+            f.prec = std::stoi(s.substr(p0, i - p0));
+        }
+        if (i < s.size() && std::string("xXobef%").find(s[i]) != std::string::npos) f.type = s[i++];
+        if (i != s.size()) return "'" + s.substr(i, 1) + "' is not part of a format here";
+        return "";
+    }
+
+    // How a value of Nexa type t is formatted: "text", "int", "uint", "float", or "" (not at all).
+    static std::string fmtKind(const std::string& t) {
+        if (t == "string" || t == "char" || t == "bool") return "text";
+        if (t == "float") return "float";
+        if (t == "unsigned int" || t == "unsigned short" || t == "unsigned long" ||
+            t == "unsigned char" || t == "size_t") return "uint";
+        if (nexaIsNumericIntType(t)) return "int";
+        return "";
+    }
+
+    void semCheckFmt(const AstNode& e) {
+        if (e.children.size() != 2 || e.children[1].type != AstNode::Type::ExprStringLiteral) return;
+        const std::string& spec = e.children[1].value;
+        const std::string what = "f-string format \":" + spec + "\"";
+        FmtSpec f;
+        const std::string bad = parseFmtSpec(spec, f);
+        if (!bad.empty()) {
+            semError(e, what + ": " + bad +
+                        " -- a format is [[fill]align][+][0][width][,][.digits][type], see SYNTAX/Core.txt (F-STRINGS)");
+        }
+        std::string t = inferExprNexaType(e.children[0]);
+        const std::string kind = fmtKind(t);
+        if (isStructDeclType(t)) t = structNameFromDecl(t);
+        if (kind.empty()) {
+            semError(e, what + " is for numbers, strings, chars and bools, not " + (t.empty() ? "this value" : t));
+        }
+        std::string wrong;
+        if (kind == "text") {
+            if (f.sign) wrong = "'+' is for numbers";
+            else if (f.zero) wrong = "'0' pads numbers -- pad text with a fill and align, like {s:0>5}";
+            else if (f.comma) wrong = "',' groups the digits of numbers";
+            else if (f.type) wrong = std::string("'") + f.type + "' is for numbers";
+        } else if (kind == "int" || kind == "uint") {
+            if (f.prec >= 0) wrong = "'." + std::to_string(f.prec) + "' is for floats and text -- (float)n formats an int as a float";
+            else if (f.type == 'e' || f.type == 'f' || f.type == '%') wrong = std::string("'") + f.type + "' is for floats -- (float)n formats an int as a float";
+            else if (f.comma && f.type) wrong = "',' groups decimal digits, not hex, octal or binary";
+        } else if (kind == "float") {
+            if (f.type == 'x' || f.type == 'X' || f.type == 'o' || f.type == 'b') {
+                wrong = std::string("'") + f.type + "' is for integers -- (int)x formats a float as one";
+            }
+        }
+        const bool vowel = !t.empty() && std::string("aeiou").find(t[0]) != std::string::npos;
+        if (!wrong.empty()) semError(e, what + (vowel ? " on an " : " on a ") + t + ": " + wrong);
+    }
+
+    // The call that formats an f-string's {value:spec}; R is the emitted value.
+    std::string emitFmtCall(const AstNode& e, const std::string& R) {
+        FmtSpec f;
+        parseFmtSpec(e.children[1].value, f);
+        const std::string t = inferExprNexaType(e.children[0]);
+        const std::string kind = fmtKind(t);
+        char align = f.align;
+        std::string fill = f.fill.empty() ? std::string(" ") : f.fill;
+        if (f.zero) {
+            if (!align) { align = '='; fill = "0"; }
+            else if (f.fill.empty()) fill = "0";
+        }
+        if (!align) align = kind == "text" ? '<' : '>';
+        auto ch = [](char c) { return c ? std::string("'") + c + "'" : std::string("0"); };
+        const std::string pad = emitCppStringValue(fill) + ", " + ch(align);
+        const std::string w = std::to_string(f.width);
+        const std::string sign = ch(f.sign);
+        const std::string comma = f.comma ? "true" : "false";
+        if (kind == "text") {
+            std::string v;
+            if (t == "char") v = "std::string(1, static_cast<char>(" + R + "))";
+            else if (t == "bool") v = "std::string((" + R + ") ? \"true\" : \"false\")";
+            else v = "std::string(" + R + ")";
+            return "__nexa_fmt_s(" + v + ", " + pad + ", " + w + ", " + std::to_string(f.prec) + ")";
+        }
+        if (kind == "float") {
+            return "__nexa_fmt_f(static_cast<double>(" + R + "), " + pad + ", " + sign + ", " + w + ", " + comma +
+                   ", " + std::to_string(f.prec) + ", " + ch(f.type) + ")";
+        }
+        if (kind == "uint") {
+            return "__nexa_fmt_u(static_cast<unsigned long long>(" + R + "), false, " + pad + ", " + sign + ", " + w +
+                   ", " + comma + ", " + ch(f.type) + ")";
+        }
+        return "__nexa_fmt_i(static_cast<long long>(" + R + "), " + pad + ", " + sign + ", " + w + ", " + comma +
+               ", " + ch(f.type) + ")";
     }
     static bool strMethodReturnsBool(const std::string& m) {
         return m == "contains" || m == "starts_with" || m == "ends_with";
@@ -7157,6 +7397,7 @@ private:
                 if (auto folded = tryFoldStrMethodToExpr(e, varIsString)) return *folded;
                 const std::string& m = e.value;
                 std::string R = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                if (m == "__fmt") return emitFmtCall(e, R);
                 std::string A0 = e.children.size() > 1 ? emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) : "";
                 std::string A1 = e.children.size() > 2 ? emitExpr(e.children[2], varMap, varIsString, varIsFloat, varIsChar, varIsBool) : "";
                 if (m == "upper")

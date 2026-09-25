@@ -43,6 +43,8 @@ ARGUMENT TYPES
        in order. If any + operand is string-typed or a string literal, + builds text:
        int/float/bool/char are converted (e.g. io.println("n=" + n);).
        Pure int/float + without string stays numeric (arithmetic).
+       f-strings put values in text and format them: io.println(f"{name}: {score:.1}");
+       see SYNTAX/Core.txt (F-STRINGS).
 
 #include <std/os>
   os.system(cmd)    - Run shell command, blocks until complete (statement)

@@ -1,0 +1,67 @@
+// Pins f-strings: values dropped into text with {value}, formatted with
+// {value:spec}, and {{ }} as literal braces. A bare {value} must read exactly
+// like `"..." + value`.
+// Reference: SYNTAX/Core.txt (F-STRINGS)
+#include <std/io>
+
+struct Item {
+    name: string;
+    price: float;
+    qty: int;
+}
+
+fn total(it: Item): float { return it.price * (float)it.qty; }
+
+fn main() {
+    let name = "Ada";
+    let n = 42;
+    let pi = 3.14159;
+    let ok = true;
+    let c = 'z';
+
+    // plain values, converted the way + converts them
+    io.println(f"hi {name}, n={n}, pi={pi}, ok={ok}, c={c}");
+    let same = f"{pi}|{n}|{ok}|{c}" == "" + pi + "|" + n + "|" + ok + "|" + c;
+    if (same) { io.println("same as +: yes"); } else { io.println("same as +: NO"); }
+    io.println(f"{n}{n}");                      // joined, not added
+    io.println(f"no values at all");
+    io.println(f"{{braces}} and {n} in {{ }}");
+
+    // expressions: arithmetic, calls, indexing, strings, a ternary
+    let xs = [10, 20, 30];
+    let it = Item{name: "pen", price: 1.25, qty: 4};
+    io.println(f"sum={xs[0] + xs[2]} len={len(xs)} upper={name.upper()}");
+    io.println(f"{it.name}: {total(it):.2}");
+    io.println(f"{n > 40 ? "big" : "small"} / {n > 50 ? 1 : 0:03}");
+    io.println(f"quote={"{" + name + "}"}");
+
+    // numbers
+    io.println(f"[{pi:.2}] [{pi:.0}] [{2.5:.3}] [{-pi:.1}]");
+    io.println(f"[{n:5}] [{n:<5}] [{n:^6}] [{n:05}] [{-n:05}] [{n:+}]");
+    io.println(f"[{1234567:,}] [{-9876543.216:,.2}] [{1000:,}] [{999:,}]");
+    io.println(f"[{255:x}] [{255:X}] [{8:o}] [{5:b}] [{255:08b}] [{-255:x}]");
+    io.println(f"[{0.25:%}] [{0.25:.0%}] [{0.123:.1%}]");
+    io.println(f"[{123456.0:e}] [{123456.0:.2e}] [{pi:f}]");
+    io.println(f"[{pi:8.3}] [{pi:<8.3}] [{pi:*^9.1}] [{pi:+.2}]");
+    let big: unsigned long = 18446744073709551615;
+    let small: long = -9223372036854775807;
+    io.println(f"[{big:,}] [{small:,}] [{(float)n:.1}]");
+
+    // text
+    io.println(f"[{name:6}] [{name:>6}] [{name:^7}] [{name:.2}] [{name:-^9}]");
+    io.println(f"[{ok:>6}] [{c:3}] [{c:>3}]");
+    io.println(f"[{"héllo":7}] [{"héllo":.2}] [{"ab":€>4}]");
+
+    // a table
+    let names = ["apple", "kiwi", "banana"];
+    let prices = [1.5, 0.25, 12.0];
+    for (i, len(names)) {
+        io.println(f"{names[i]:<8}|{prices[i]:>7.2}|");
+    }
+
+    // an f-string is a string like any other
+    let line = f"{name}={n}";
+    io.println(line.upper(), " ", len(line));
+    let s: string = f"{n:04}";
+    io.println(s + "!");
+}

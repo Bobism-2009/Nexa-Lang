@@ -367,6 +367,45 @@ STRING METHODS (core; no #include required)
 
   Indexing chains: grid[i][j], v["b"][1], xs[1:3][0], s.split(",")[0].
 
+F-STRINGS (text with values in it; core, no #include required)
+  An f before the quote puts values into the text, each in { }:
+
+    io.println(f"{name} is {age} years old");
+    let label = f"{count} of {len(items)} done";
+
+  {value} is any expression -- a variable, arithmetic, a call, xs[i], p.x, a ternary,
+  even a string: f"{n > 1 ? "items" : "item"}". It becomes text exactly as
+  "..." + value would: 3.5 -> 3.5, 12.0 -> 12, true -> true, 'z' -> z.
+  {{ and }} are literal braces. Escapes (\n, \t, ...) work as in any string.
+  An f-string is an ordinary string: assign it, pass it, call .upper() on it.
+
+  {value:format} controls how it looks. A format is, every part optional:
+
+    [[fill]align][+][0][width][,][.digits][type]
+
+    width     at least this many characters:       {n:5}      -> "   42"
+    align     < left, > right, ^ centre:            {name:<8}  -> "Ada     "
+              (numbers go right, text left, unless you say)
+    fill      a character before the align to pad with: {name:*^9} -> "***Ada***"
+    0         pad a number with zeros after its sign:  {n:05} -> "00042", {-n:05} -> "-0042"
+    +         show + on positive numbers too:       {n:+}      -> "+42"
+    ,         group thousands:                      {1234567:,} -> "1,234,567"
+    .digits   floats: digits after the point        {pi:.2}    -> "3.14"
+              text: keep at most this many characters  {name:.2} -> "Ad"
+    type      integers: x hex, X HEX, o octal, b binary   {255:x} -> "ff", {5:08b} -> "00000101"
+              floats:   f fixed (6 digits unless .digits), e scientific, % percent
+                        {0.256:.1%} -> "25.6%", {123456.0:.2e} -> "1.23e+05"
+
+  Width counts characters, so "héllo" is 5 wide. A format that does not fit the
+  value is a compile error that says why: {n:.2} on an int (write {(float)n:.2}),
+  {x:x} on a float (write {(int)x:x}), + or , or 0 on text. A struct, slice or map
+  has no text form, in an f-string or after "..." +; use its fields or elements.
+
+  A table:
+    for (i, len(names)) { io.println(f"{names[i]:<8}|{prices[i]:>7.2}|"); }
+    apple   |   1.50|
+    banana  |  12.00|
+
 SLICES ([]T)
   Growable arrays. Emitted as std::vector. Distinct from fixed `let buf: int[4]` (C array).
 

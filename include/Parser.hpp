@@ -380,7 +380,7 @@ private:
         if (e.type == AstNode::Type::StrMethod) {
             const std::string& m = e.value;
             return m == "upper" || m == "lower" || m == "trim" || m == "replace" ||
-                   m == "substring" || m == "repeat";
+                   m == "substring" || m == "repeat" || m == "__fmt";
         }
         if (e.type == AstNode::Type::ExprAdd && e.children.size() >= 2) {
             return exprProducesString(e.children[0]) || exprProducesString(e.children[1]);
@@ -2438,7 +2438,8 @@ private:
                 // struct with a method of its own by this name -- which is then called.
                 static const std::set<std::string> strMethods = {
                     "upper", "lower", "trim", "len", "contains", "starts_with", "ends_with",
-                    "index_of", "last_index_of", "count", "repeat", "split", "replace", "substring"
+                    "index_of", "last_index_of", "count", "repeat", "split", "replace", "substring",
+                    "__fmt"  // an f-string's {value:spec}; the lexer writes it, nobody else
                 };
                 if (strMethods.count(m)) {
                     advance();  // consume '('

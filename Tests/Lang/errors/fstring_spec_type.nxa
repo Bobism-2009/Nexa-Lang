@@ -1,0 +1,8 @@
+// A format that does not fit the value is refused in Nexa's terms, saying
+// what the format part is for, not as a C++ error or a silent no-op.
+#include <std/io>
+
+fn main() {
+    let n = 5;
+    io.println(f"{n:.2}");
+}

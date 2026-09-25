@@ -1,0 +1,2 @@
+a Point struct has no text form to join to a string -- use its fields
+at line 9
