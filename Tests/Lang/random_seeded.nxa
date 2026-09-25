@@ -1,0 +1,25 @@
+// Pins random.int under a seed: the same seed gives the same numbers on every
+// platform -- Windows, Linux, macOS, a Raspberry Pi, the browser.
+// std::mt19937 is fixed by the C++ standard; how its output becomes a number in
+// [min, max] is Nexa's own (std::uniform_int_distribution differs by library).
+// Reference: SYNTAX/Modules.txt (std/random)
+#include <std/io>
+#include <std/random>
+
+fn main() {
+    random.seed(42);
+    let dice: string = "";
+    for (i, 12) {
+        dice = dice + random.int(1, 6) + " ";
+    }
+    io.println("dice=", dice);
+
+    random.seed(7);
+    io.println("wide=", random.int(-1000000, 1000000));
+    io.println("one=", random.int(5, 5));
+    io.println("swapped=", random.int(10, 1));        // max..min is min..max
+    io.println("full=", random.int(-2147483647 - 1, 2147483647));
+
+    random.seed(42);
+    io.println("again=", random.int(1, 6));           // re-seeding restarts the sequence
+}

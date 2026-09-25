@@ -147,8 +147,10 @@ ARGUMENT TYPES
   value of 0. Everything else on this list is usable as a value.
 
 #include <std/random>
-  random.int(min, max)  - Random int in [min, max] inclusive
-  random.seed(n)        - Seed RNG for reproducibility
+  random.int(min, max)  - Random int in [min, max] inclusive (max..min is min..max)
+  random.seed(n)        - Seed RNG for reproducibility: the same seed gives the
+                          same numbers on every platform (Windows, Linux, macOS,
+                          ARM, the browser)
   Use: let roll = random.int(1, 6);  random.seed(42);
 
 #include <std/math>

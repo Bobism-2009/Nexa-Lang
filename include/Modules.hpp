@@ -1486,7 +1486,21 @@ public:
             out += "#include <random>\n";
             out += "static std::mt19937& __nexa_rng() { static std::mt19937 gen(std::random_device{}()); return gen; }\n";
             out += "static void __nexa_random_seed(int s) { __nexa_rng().seed(static_cast<unsigned>(s)); }\n";
-            out += "static int __nexa_random_int(int a, int b) { return std::uniform_int_distribution<int>(a, b)(__nexa_rng()); }\n";
+            // std::mt19937's output is fixed by the standard; std::uniform_int_distribution's
+            // mapping onto a range is not, and libstdc++, libc++ and MSVC each map it their own
+            // way -- random.seed(42) gave different numbers on Linux than on Windows, macOS or a
+            // Raspberry Pi. So the mapping is Nexa's: rejection sampling over the generator's
+            // 32-bit output, uniform and the same everywhere. min > max is taken as max..min.
+            out += "static int __nexa_random_int(int a, int b) {\n"
+                   "  if (a > b) { int t = a; a = b; b = t; }\n"
+                   "  const unsigned long long span = (unsigned long long)((long long)b - (long long)a) + 1ULL;\n"
+                   "  std::mt19937& g = __nexa_rng();\n"
+                   "  if (span > 0xFFFFFFFFULL) return (int)((long long)a + (long long)(g() & 0xFFFFFFFFULL));\n"
+                   "  const unsigned long long limit = 0x100000000ULL - (0x100000000ULL % span);\n"
+                   "  unsigned long long x;\n"
+                   "  do { x = (unsigned long long)(g() & 0xFFFFFFFFULL); } while (x >= limit);\n"
+                   "  return (int)((long long)a + (long long)(x % span));\n"
+                   "}\n";
         }
         if (hasMath() && usage.math) {
             out += "#include <cmath>\n";
