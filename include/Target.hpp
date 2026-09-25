@@ -429,13 +429,6 @@ inline std::string quoteArg(const std::string& a) {
     return out;
 }
 
-// Creating the inheritable log handle and the process that inherits it is one
-// step as far as every other thread is concerned. Otherwise a child started on
-// another thread in between would inherit this one's log too, and keep it open.
-inline std::mutex& spawnLock() {
-    static std::mutex m;
-    return m;
-}
 #endif
 
 // Runs argv to completion with stdout and stderr both going to log. Returns
@@ -447,26 +440,44 @@ inline int run(const std::vector<std::string>& argv, const fs::path& log) {
         if (i) cmd.push_back(' ');
         cmd += quoteArg(argv[i]);
     }
+    // The child inherits exactly one handle, its log, named in a handle list.
+    // Without the list, every inheritable handle in the process goes to every
+    // child -- including the log another thread has just opened for its own --
+    // and the only guard was a lock that let one process start at a time: with
+    // a thousand compiles to start, that queue was the build's bottleneck.
     PROCESS_INFORMATION pi{};
-    {
-        std::lock_guard<std::mutex> g(spawnLock());
-        SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
-        HANDLE h = CreateFileA(log.string().c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                               &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (h == INVALID_HANDLE_VALUE) return -1;
-        STARTUPINFOA si{};
-        si.cb = sizeof(si);
-        si.dwFlags = STARTF_USESTDHANDLES;
-        si.hStdInput = nullptr;
-        si.hStdOutput = h;
-        si.hStdError = h;
+    SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
+    HANDLE h = CreateFileA(log.string().c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return -1;
+    SIZE_T attrSize = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &attrSize);
+    std::vector<char> attrBuf(attrSize);
+    auto attrs = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attrBuf.data());
+    HANDLE inherit[1] = {h};
+    if (!InitializeProcThreadAttributeList(attrs, 1, 0, &attrSize)) {
+        CloseHandle(h);
+        return -1;
+    }
+    BOOL ok = UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherit, sizeof(inherit),
+                                        nullptr, nullptr);
+    if (ok) {
+        STARTUPINFOEXA si{};
+        si.StartupInfo.cb = sizeof(si);
+        si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        si.StartupInfo.hStdInput = nullptr;
+        si.StartupInfo.hStdOutput = h;
+        si.StartupInfo.hStdError = h;
+        si.lpAttributeList = attrs;
         std::vector<char> buf(cmd.begin(), cmd.end());
         buf.push_back('\0');
-        BOOL ok = CreateProcessA(nullptr, buf.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
-                                 nullptr, nullptr, &si, &pi);
-        CloseHandle(h);
-        if (!ok) return -1;
+        ok = CreateProcessA(nullptr, buf.data(), nullptr, nullptr, TRUE,
+                            CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr,
+                            &si.StartupInfo, &pi);
     }
+    DeleteProcThreadAttributeList(attrs);
+    CloseHandle(h);
+    if (!ok) return -1;
     WaitForSingleObject(pi.hProcess, INFINITE);
     DWORD code = 1;
     GetExitCodeProcess(pi.hProcess, &code);
@@ -589,6 +600,15 @@ inline void runAll(const std::vector<Job>& jobs, const fs::path& logDir, const s
     std::string failLabel, failLog;
     unsigned n = std::thread::hardware_concurrency();
     if (n == 0) n = 4;
+#ifdef _WIN32
+    // Two jobs per hardware thread on Windows: part of every compile there is
+    // spent not computing -- creating the process, tearing it down, the file
+    // scans behind each open -- and a second job keeps the core busy through
+    // it. On a 4-core, 8-thread i7-7700 the arm64-linux runtime took 29-31 s
+    // at 8 jobs and 28 s at 16, and no less past that. Linux compiles are
+    // CPU-bound throughout, and more jobs than threads only add switching.
+    n *= 2;
+#endif
     if (n > jobs.size()) n = (unsigned)jobs.size();
     std::vector<std::thread> pool;
     for (unsigned w = 0; w < n; w++) {
