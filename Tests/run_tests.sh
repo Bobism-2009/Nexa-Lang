@@ -33,6 +33,9 @@
 set -u
 
 NEXAC="./NexaC"
+# A Windows checkout (core.autocrlf) gives every .expected CRLF endings, and a
+# Windows program prints them; comparisons below drop the \r first.
+CR=$(printf '\r')
 JOBS=""
 FILTER="*"
 PHASES=""
@@ -136,6 +139,7 @@ do_run_case() {
     fi
     got=$("$out" 2>&1)
     rc=$?
+    got=$(printf '%s\n' "$got" | tr -d '\r')
     if [ $rc -ne 0 ]; then
         { echo fail
           echo "program exited $rc"
@@ -143,7 +147,7 @@ do_run_case() {
         } > "$WORK/res/$slot"
         return
     fi
-    want=$(cat "${src%.nxa}.expected")
+    want=$(tr -d '\r' < "${src%.nxa}.expected")
     if [ "$got" != "$want" ]; then
         { echo fail
           echo "output differs from ${name}.expected (-want +got):"
@@ -200,6 +204,7 @@ do_error_case() {
     missing=""
     # Each non-blank, non-# line of the .expected must appear in the output.
     while IFS= read -r want; do
+        want=${want%"$CR"}
         case $want in ''|'#'*) continue ;; esac
         case $out in *"$want"*) ;; *) missing="$missing$want
 " ;;

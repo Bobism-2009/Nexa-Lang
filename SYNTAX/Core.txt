@@ -190,6 +190,7 @@ VARIABLES
     unsigned int: let u: unsigned int = 42;  let w: unsigned int;
     short / unsigned short: let s: short = 7;  let us: unsigned short = 9;
     long / unsigned long:   let L: long = 1000;  let ul: unsigned long;
+                            (64-bit on every platform, Windows and wasm included)
     size_t: let n: size_t = 64;   (C++ std::size_t; use for sizes / array lengths)
     string: let s = "hello";  let name: string = io.readln();  let msg: string;
     bool:   let ok = true;  let flag: bool = false;  let b: bool;

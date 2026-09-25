@@ -1990,21 +1990,21 @@ private:
     };
 
     NexaIntRange nexaIntTypeRange(const std::string& t) const {
-        const bool long64 = (target_ != CppTarget::Windows && target_ != CppTarget::Wasm);
+        // Nexa's long is 64-bit everywhere (it is emitted as long long); only
+        // size_t follows the target.
         const bool sizeT64 = (target_ != CppTarget::Wasm);
         const unsigned long long i32Max = 2147483647ULL;
         const unsigned long long u32Max = 4294967295ULL;
         const unsigned long long i64Max = 9223372036854775807ULL;
         const unsigned long long u64Max = 18446744073709551615ULL;
-        const unsigned long long longMax = long64 ? i64Max : i32Max;
         NexaIntRange r;
         r.valid = true;
         if (t == "short")               { r.maxValue = 32767ULL;   r.maxNegMagnitude = 32768ULL; }
         else if (t == "unsigned short") { r.maxValue = 65535ULL; }
         else if (t == "int")            { r.maxValue = i32Max;     r.maxNegMagnitude = i32Max + 1; }
         else if (t == "unsigned int")   { r.maxValue = u32Max; }
-        else if (t == "long")           { r.maxValue = longMax;    r.maxNegMagnitude = longMax + 1; }
-        else if (t == "unsigned long")  { r.maxValue = long64 ? u64Max : u32Max; }
+        else if (t == "long")           { r.maxValue = i64Max;     r.maxNegMagnitude = i64Max + 1; }
+        else if (t == "unsigned long")  { r.maxValue = u64Max; }
         else if (t == "size_t")         { r.maxValue = sizeT64 ? u64Max : u32Max; }
         else r.valid = false;
         return r;
@@ -2097,20 +2097,18 @@ private:
 
         if (failing) {
             const NexaIntRange longR = nexaIntTypeRange("long");
-            const std::string hint = (longR.maxValue <= 2147483647ULL)
-                ? " (this target's 'long' is 32-bit)" : "";
             if (need.maxNegMagnitude > longR.maxNegMagnitude) {
                 *failing = need.negAt;
                 if (why) *why = "Slice literal: " + sliceElemDesc(need.negAt) +
-                                " does not fit any integer type" + hint;
+                                " does not fit any integer type";
             } else if (need.negAt) {
                 *failing = need.maxAt;
                 if (why) *why = "Slice literal: no integer type holds both " +
-                                sliceElemDesc(need.negAt) + " and " + sliceElemDesc(need.maxAt) + hint;
+                                sliceElemDesc(need.negAt) + " and " + sliceElemDesc(need.maxAt);
             } else {
                 *failing = need.maxAt;
                 if (why) *why = "Slice literal: " + sliceElemDesc(need.maxAt) +
-                                " does not fit any integer type" + hint;
+                                " does not fit any integer type";
             }
         }
         // Unreachable in a build that ran checkSemantics; the widest rung keeps codegen honest
@@ -4204,8 +4202,9 @@ private:
         if (t == "unsigned int") return "unsigned int";
         if (t == "short") return "short";
         if (t == "unsigned short") return "unsigned short";
-        if (t == "long") return "long";
-        if (t == "unsigned long") return "unsigned long";
+        // 64-bit on every platform: C++ long is 32-bit on Windows and wasm.
+        if (t == "long") return "long long";
+        if (t == "unsigned long") return "unsigned long long";
         if (t == "size_t") return "std::size_t";
         if (t == "void") return "void";
         if (t == "null") return "std::nullptr_t";
@@ -7347,15 +7346,15 @@ private:
                 }
                 if (to == "long") {
                     if (fromT == "string") {
-                        return "([](const std::string& __s){ char* __e=nullptr; long __v=std::strtol(__s.c_str(),&__e,10); return (__e==__s.c_str())?0L:__v; })(std::string(" + inner + "))";
+                        return "([](const std::string& __s){ char* __e=nullptr; long long __v=std::strtoll(__s.c_str(),&__e,10); return (__e==__s.c_str())?0LL:__v; })(std::string(" + inner + "))";
                     }
-                    return "static_cast<long>(" + inner + ")";
+                    return "static_cast<long long>(" + inner + ")";
                 }
                 if (to == "unsigned long") {
                     if (fromT == "string") {
-                        return "([](const std::string& __s){ char* __e=nullptr; unsigned long __v=std::strtoul(__s.c_str(),&__e,10); return (__e==__s.c_str())?0UL:__v; })(std::string(" + inner + "))";
+                        return "([](const std::string& __s){ char* __e=nullptr; unsigned long long __v=std::strtoull(__s.c_str(),&__e,10); return (__e==__s.c_str())?0ULL:__v; })(std::string(" + inner + "))";
                     }
-                    return "static_cast<unsigned long>(" + inner + ")";
+                    return "static_cast<unsigned long long>(" + inner + ")";
                 }
                 if (to == "size_t") {
                     if (fromT == "string") {
