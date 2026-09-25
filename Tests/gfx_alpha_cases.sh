@@ -227,6 +227,9 @@ struct __nexa_Gfx {
     // gfx.clear is in the lifted block. 0 here is a solid window, which is
     // the state every one of these cases is about.
     int transparent;
+    // Set when gfx draws on a gfx3d window rather than its own; the pixel
+    // readers accept either. 0 here: these cases draw on a gfx window.
+    int overlay;
     unsigned char* fb;
 };
 static __nexa_Gfx __nexa_g = {};

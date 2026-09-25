@@ -28,7 +28,9 @@ install-deps:
 		exit 1; \
 	fi
 
-NexaC: NexaC.cpp include/Lexer.hpp include/Parser.hpp include/Transpiler.hpp include/Modules.hpp include/nexapkg.hpp include/PlatformEmit.hpp include/Target.hpp
+# Every header: the runtimes (Gfx3dRuntime.hpp and the rest) are compiled into
+# NexaC as text, so editing one has to rebuild it.
+NexaC: NexaC.cpp $(wildcard include/*.hpp)
 	$(CXX) $(CXXFLAGS) NexaC.cpp -o NexaC
 
 install: NexaC

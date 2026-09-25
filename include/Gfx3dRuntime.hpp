@@ -88,13 +88,19 @@ inline std::string gfx3dRuntimeCpp() {
   // is the one thing not worth hand-declaring.
   #include <emscripten/emscripten.h>
   #include <emscripten/html5.h>
+  #include <time.h>
 #elif defined(__APPLE__)
   #import <Cocoa/Cocoa.h>
   #include <dlfcn.h>
+  #include <time.h>
 #elif defined(__linux__)
+  // keysym.h and time.h are named, not left to arrive through Xutil.h and
+  // the C++ headers: newer X11 and libstdc++ releases no longer bring them.
   #include <X11/Xlib.h>
   #include <X11/Xutil.h>
+  #include <X11/keysym.h>
   #include <dlfcn.h>
+  #include <time.h>
 #endif
 
 // --- the slice of OpenGL 1.1 this runtime uses ------------------------------
