@@ -329,6 +329,10 @@ STRING METHODS (core; no #include required)
     s.starts_with(prefix)  -> bool
     s.ends_with(suffix)    -> bool
     s.index_of(sub)        -> int       first index of sub, or -1 if absent
+    s.index_of(sub, from)  -> int       first index at or after from (from < 0 = 0), or -1
+    s.last_index_of(sub)   -> int       last index of sub, or -1 if absent
+    s.count(sub)           -> int       how many times sub occurs, not overlapping
+                                        ("aaaa".count("aa") is 2; count("") is 0)
     s.replace(from, to)    -> string   replace every occurrence
     s.substring(start, n)  -> string   n characters from start (n < 0 = to end)
     s.repeat(n)            -> string   s concatenated n times
@@ -344,6 +348,15 @@ STRING METHODS (core; no #include required)
     s = s.lower();                        // methods return a new string; assign to keep it
     s.lower();                            // valid statement; result is discarded
     Literal receivers (and literal args) fold at compile time, like crypto.hex_encode.
+
+    Every match of a substring, with index_of's start:
+      let at = path.index_of("/");
+      while (at >= 0) { io.println(at); at = path.index_of("/", at + 1); }
+    The extension of a file name:
+      let ext = name.substring(name.last_index_of(".") + 1, -1);
+
+    A struct with a method of the same name (count, contains, trim, ...) gets its
+    own method called: t.count(5) on a struct with fn count is that fn, not this.
 
   STRING INDEXING
     s[i]           - character at index i (type char); i is 0-based
@@ -369,6 +382,9 @@ SLICES ([]T)
     let mid = xs[1:3];     // half-open copy; also xs[:n], xs[n:], xs[:]
     if (xs.contains(9)) { ... }   // or xs.has(9)
     io.println(xs.index_of(9));   // index, or -1
+    io.println(xs.index_of(9, 2)); // first at or after index 2, or -1
+    io.println(xs.last_index_of(9));
+    io.println(xs.count(9));      // how many elements equal 9
     for (x in xs) { ... }
 
   xs.pop() on an empty slice is undefined behaviour, the same as indexing out of range.

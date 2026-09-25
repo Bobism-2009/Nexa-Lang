@@ -367,6 +367,8 @@ exports.STRING_METHODS = [
     "starts_with",
     "ends_with",
     "index_of",
+    "last_index_of",
+    "count",
     "replace",
     "substring",
     "repeat",

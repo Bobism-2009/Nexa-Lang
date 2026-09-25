@@ -1,0 +1,75 @@
+// Pins searching strings and slices: index_of (with and without a start),
+// last_index_of and count -- on variables and on literals, which fold at
+// compile time -- and that a struct whose methods share those names (or any
+// other string method's) gets its own methods called.
+// Reference: SYNTAX/Core.txt (STRING METHODS, SLICES)
+#include <std/io>
+
+struct Tally {
+    n: int;
+    fn count(x: int): int { return self.n * x; }
+    fn contains(x: int): bool { return x < self.n; }
+    fn index_of(a: int, b: int): int { return a + b + self.n; }
+    fn upper(): string { return "tally"; }
+    fn split(a: int, b: int): int { return a - b; }
+    fn trim(x: string): string { return "[" + x + "]"; }
+}
+
+fn main() {
+    let path = "/home/pi/nexa/src/main.nxa";
+
+    // index_of, and every match with index_of(sub, from)
+    io.println("first=", path.index_of("/"));
+    let found = "";
+    let at = path.index_of("/");
+    while (at >= 0) {
+        found = found + at + " ";
+        at = path.index_of("/", at + 1);
+    }
+    io.println("all=", found);
+    io.println("from_negative=", path.index_of("home", -5));
+    io.println("from_past_end=", path.index_of("a", 1000));
+    io.println("from_at_end=", path.index_of("", len(path)));
+
+    // last_index_of: the extension and the file name
+    let dot = path.last_index_of(".");
+    let slash = path.last_index_of("/");
+    io.println("ext=", path.substring(dot + 1, -1));
+    io.println("file=", path.substring(slash + 1, -1));
+    io.println("last_missing=", path.last_index_of("zz"));
+
+    // count: non-overlapping, left to right
+    io.println("count_slash=", path.count("/"));
+    io.println("count_overlap=", "aaaa".count("aa"));
+    io.println("count_empty=", path.count(""));
+    io.println("count_none=", path.count("xyz"));
+
+    // literals fold at compile time and must agree with the run-time answers
+    io.println("lit_index_from=", "a-b-a-b".index_of("b", 2));
+    io.println("lit_last=", "a-b-a-b".last_index_of("a"));
+    io.println("lit_count=", "a-b-a-b".count("-"));
+
+    // slices
+    let xs: []int = [4, 7, 4, 9, 4];
+    io.println("slice_index_from=", xs.index_of(4, 1));
+    io.println("slice_last=", xs.last_index_of(4));
+    io.println("slice_count=", xs.count(4));
+    io.println("slice_count_none=", xs.count(5));
+    let words: []string = ["go", "stop", "go"];
+    io.println("words_last=", words.last_index_of("go"));
+    io.println("words_count=", words.count("go"));
+
+    // a struct's own methods, even when named like string methods
+    let t = Tally{n: 3};
+    io.println("struct_count=", t.count(5));
+    io.println("struct_contains=", t.contains(2));
+    io.println("struct_index_of=", t.index_of(1, 2));
+    io.println("struct_upper=", t.upper());
+    // and a let takes the method's own type, not the string method's
+    let c = t.contains(9);
+    let parts = t.split(9, 2);
+    let wrapped = t.trim("x");
+    io.println("let_bool=", c);
+    io.println("let_int=", parts + 1);
+    io.println("let_string=", wrapped + "!");
+}

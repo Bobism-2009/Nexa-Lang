@@ -2432,22 +2432,22 @@ private:
             // value.method(args): core string methods — only with '.', not '->'
             if (!arrow && peek().type == TokenType::LParen) {
                 std::string m = ftok.value;
-                // method name -> argument count
-                static const std::map<std::string, int> strMethods = {
-                    {"upper", 0}, {"lower", 0}, {"trim", 0}, {"len", 0},
-                    {"contains", 1}, {"starts_with", 1}, {"ends_with", 1},
-                    {"index_of", 1}, {"repeat", 1}, {"split", 1},
-                    {"replace", 2}, {"substring", 2}
+                // The core string (and slice) methods, by name. How many arguments each
+                // takes is checked in the transpiler's semantic pass, not here: only
+                // there is it known whether the receiver is a string, a slice, or a
+                // struct with a method of its own by this name -- which is then called.
+                static const std::set<std::string> strMethods = {
+                    "upper", "lower", "trim", "len", "contains", "starts_with", "ends_with",
+                    "index_of", "last_index_of", "count", "repeat", "split", "replace", "substring"
                 };
-                auto mit = strMethods.find(m);
-                if (mit != strMethods.end()) {
+                if (strMethods.count(m)) {
                     advance();  // consume '('
                     AstNode call{AstNode::Type::StrMethod, m, {std::move(cur)}};
-                    for (int i = 0; i < mit->second; i++) {
-                        if (i > 0 && !match(TokenType::Comma)) {
-                            throw std::runtime_error("Expected ',' in ." + m + "(...) at line " + std::to_string(peek().line));
+                    if (peek().type != TokenType::RParen) {
+                        for (;;) {
+                            call.children.push_back(parseExpression());
+                            if (!match(TokenType::Comma)) break;
                         }
-                        call.children.push_back(parseExpression());
                     }
                     if (!match(TokenType::RParen)) {
                         throw std::runtime_error("Expected ')' after ." + m + "(...) at line " + std::to_string(peek().line));

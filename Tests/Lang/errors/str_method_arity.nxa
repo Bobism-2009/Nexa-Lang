@@ -1,0 +1,8 @@
+// A string method called with the wrong number of arguments is reported in
+// Nexa's terms, with the shape of the call, not as a C++ error.
+#include <std/io>
+
+fn main() {
+    let s = "a,b,c";
+    io.println(s.count());
+}

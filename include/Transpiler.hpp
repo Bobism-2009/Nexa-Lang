@@ -1380,6 +1380,7 @@ private:
     // Built-in container methods known to leave the receiver alone.
     static bool isReadOnlyBuiltinMethod(const std::string& m) {
         return m == "len" || m == "size" || m == "has" || m == "contains" || m == "index_of" ||
+               m == "last_index_of" ||
                m == "get" || m == "get_at" || m == "keys" || m == "values" || m == "count" ||
                m == "empty" || m == "ok" || m == "value" || m == "error" || m == "stringify" ||
                m == "join" || m == "min" || m == "max" || m == "sum";
@@ -3103,9 +3104,10 @@ private:
         if (nexaIsSliceType(recv)) {
             const std::string elem = nexaSliceElem(recv);
             if (argIdx == 1 && (method == "push" || method == "has" || method == "contains" ||
-                                method == "index_of")) {
+                                method == "index_of" || method == "last_index_of" || method == "count")) {
                 return elem;
             }
+            if (argIdx == 2 && method == "index_of") return "int";
             if (argIdx == 2 && method == "insert") return elem;
             if (argIdx == 1 && method == "join") return "string";
             if (argIdx == 1 && method == "remove") return "int";
@@ -3234,7 +3236,12 @@ private:
                 }
                 // The initializer is checked before the name is bound, so
                 // `let x = x;` reports the outer x (or an undefined name).
+                const bool initWasStrMethod =
+                    !s.children.empty() && s.children.back().type == AstNode::Type::StrMethod;
                 for (const AstNode& c : s.children) semExpr(c);
+                if (initWasStrMethod && s.children.back().type == AstNode::Type::FnCall) {
+                    semRetypeLetFromMethod(s);
+                }
                 semCheckVariableInit(s);
                 semDeclare(s.value, nexaDeclFromVariableAst(s));
                 break;
@@ -3347,8 +3354,73 @@ private:
         }
     }
 
+    // A `.name(...)` the parser read as a string method, by its name alone. On a
+    // struct that has a method of that name it is that method: the node becomes the
+    // ordinary method call it would have been under any other name. The tree is the
+    // parser's, owned by the caller, and not a const object; only its kind changes,
+    // so every fact already keyed by this node or its children still applies.
+    void semResolveStrMethod(const AstNode& e) {
+        if (e.children.empty()) return;
+        std::string recv = inferExprNexaType(e.children[0]);
+        if (isPointerType(recv)) recv = pointerPointeeType(recv);
+        if (!isStructDeclType(recv)) return;
+        auto mit = structMethods_.find(structNameFromDecl(recv));
+        if (mit == structMethods_.end() || mit->second.find(e.value) == mit->second.end()) return;
+        AstNode& n = const_cast<AstNode&>(e);
+        n.type = AstNode::Type::FnCall;
+        n.initValue = ".";
+    }
+
+    // `let x = t.split(1, 2)` where t's struct has a split of its own. The parser
+    // typed the let from the string method's result ([]string for split, bool for
+    // contains, ...) before anything knew t was a struct; the method's declared
+    // return type is the truth, applied the way an explicit `let x: T` is.
+    void semRetypeLetFromMethod(const AstNode& v) {
+        if (!v.declType.empty() && !(v.declType == "[]string" && v.children.back().value == "split")) return;
+        const std::string t = inferExprNexaType(v.children.back());
+        if (t.empty()) return;
+        AstNode& n = const_cast<AstNode&>(v);
+        n.declType = t;
+        const bool structOrEnum = isStructDeclType(t) || isEnumDeclType(t);
+        n.initIsInt = !structOrEnum && nexaIsNumericIntType(t);
+        n.initIsBool = (t == "bool");
+        n.initIsFloat = (t == "float");
+        n.initIsChar = (t == "char");
+        n.initFromArray = nexaIsSliceType(t);
+    }
+
+    // How many arguments each string/slice method takes, and how to write it.
+    void semCheckStrMethodArity(const AstNode& e) {
+        struct Shape { size_t min, max; const char* sig; };
+        static const std::map<std::string, Shape> shapes = {
+            {"upper", {0, 0, "s.upper()"}}, {"lower", {0, 0, "s.lower()"}},
+            {"trim", {0, 0, "s.trim()"}}, {"len", {0, 0, "s.len()"}},
+            {"contains", {1, 1, "s.contains(sub)"}}, {"starts_with", {1, 1, "s.starts_with(prefix)"}},
+            {"ends_with", {1, 1, "s.ends_with(suffix)"}},
+            {"index_of", {1, 2, "s.index_of(sub[, from])"}},
+            {"last_index_of", {1, 1, "s.last_index_of(sub)"}}, {"count", {1, 1, "s.count(sub)"}},
+            {"repeat", {1, 1, "s.repeat(n)"}}, {"split", {1, 1, "s.split(sep)"}},
+            {"replace", {2, 2, "s.replace(from, to)"}}, {"substring", {2, 2, "s.substring(start, n)"}},
+        };
+        auto it = shapes.find(e.value);
+        if (it == shapes.end()) return;
+        const size_t got = e.children.empty() ? 0 : e.children.size() - 1;
+        if (got < it->second.min || got > it->second.max) {
+            semError(e, std::string(it->second.sig) + " takes " +
+                        (it->second.min == it->second.max ? std::to_string(it->second.min)
+                                                          : std::to_string(it->second.min) + " or " +
+                                                                std::to_string(it->second.max)) +
+                        (it->second.max == 1 && it->second.min == 1 ? " argument" : " arguments") +
+                        ", not " + std::to_string(got));
+        }
+    }
+
     void semExpr(const AstNode& e) {
         semNoteLoc(e);
+        if (e.type == AstNode::Type::StrMethod) {
+            semResolveStrMethod(e);
+            if (e.type == AstNode::Type::StrMethod) semCheckStrMethodArity(e);
+        }
         switch (e.type) {
             case AstNode::Type::ExprVarRef:
                 semCheckNameUse(e, e.value);
@@ -7109,11 +7181,33 @@ private:
                 if (m == "ends_with")
                     return "([](const std::string& __s, const std::string& __p){ return __s.size() >= __p.size() && __s.compare(__s.size() - __p.size(), __p.size(), __p) == 0; })(" + R + ", " + A0 + ")";
                 if (m == "index_of") {
+                    // index_of(x, from): the first match at or after from. A from below 0
+                    // searches from the start; past the end, there is nothing to find.
+                    const std::string from = A1.empty() ? std::string("0") : A1;
                     if (nexaIsSliceType(inferExprNexaType(e.children[0]))) {
                         return "([&](){ const auto& __nexa_v = " + R + "; const auto& __nexa_x = " + A0 +
-                            "; for (int __nexa_i = 0; __nexa_i < (int)__nexa_v.size(); __nexa_i++) { if (__nexa_v[(size_t)__nexa_i] == __nexa_x) return __nexa_i; } return -1; })()";
+                            "; int __nexa_i = (int)(" + from + "); if (__nexa_i < 0) __nexa_i = 0;"
+                            " for (; __nexa_i < (int)__nexa_v.size(); __nexa_i++) { if (__nexa_v[(size_t)__nexa_i] == __nexa_x) return __nexa_i; } return -1; })()";
                     }
-                    return "([](const std::string& __s, const std::string& __p){ size_t __n = __s.find(__p); return __n == std::string::npos ? -1 : (int)__n; })(" + R + ", " + A0 + ")";
+                    if (A1.empty()) {
+                        return "([](const std::string& __s, const std::string& __p){ size_t __n = __s.find(__p); return __n == std::string::npos ? -1 : (int)__n; })(" + R + ", " + A0 + ")";
+                    }
+                    return "([](const std::string& __s, const std::string& __p, int __f){ if (__f < 0) __f = 0; if ((size_t)__f > __s.size()) return -1; size_t __n = __s.find(__p, (size_t)__f); return __n == std::string::npos ? -1 : (int)__n; })(" + R + ", " + A0 + ", " + from + ")";
+                }
+                if (m == "last_index_of") {
+                    if (nexaIsSliceType(inferExprNexaType(e.children[0]))) {
+                        return "([&](){ const auto& __nexa_v = " + R + "; const auto& __nexa_x = " + A0 +
+                            "; for (int __nexa_i = (int)__nexa_v.size() - 1; __nexa_i >= 0; __nexa_i--) { if (__nexa_v[(size_t)__nexa_i] == __nexa_x) return __nexa_i; } return -1; })()";
+                    }
+                    return "([](const std::string& __s, const std::string& __p){ size_t __n = __s.rfind(__p); return __n == std::string::npos ? -1 : (int)__n; })(" + R + ", " + A0 + ")";
+                }
+                if (m == "count") {
+                    // Non-overlapping, left to right, as replace() walks: "aaaa".count("aa") is 2.
+                    if (nexaIsSliceType(inferExprNexaType(e.children[0]))) {
+                        return "([&](){ const auto& __nexa_v = " + R + "; const auto& __nexa_x = " + A0 +
+                            "; int __nexa_c = 0; for (const auto& __nexa_e : __nexa_v) { if (__nexa_e == __nexa_x) __nexa_c++; } return __nexa_c; })()";
+                    }
+                    return "([](const std::string& __s, const std::string& __p){ if (__p.empty()) return 0; int __c = 0; size_t __i = 0; while ((__i = __s.find(__p, __i)) != std::string::npos) { __c++; __i += __p.size(); } return __c; })(" + R + ", " + A0 + ")";
                 }
                 if (m == "repeat")
                     return "([](const std::string& __s, int __n){ std::string __o; for (int __i = 0; __i < __n; __i++) __o += __s; return __o; })(" + R + ", " + A0 + ")";
@@ -7578,8 +7672,27 @@ private:
         }
         if (m == "index_of") {
             if (!a0) return std::nullopt;
-            size_t p = s.find(*a0);
+            size_t from = 0;
+            if (e.children.size() > 2) {
+                auto f = tryFoldIntLiteral(e.children[2]);
+                if (!f) return std::nullopt;
+                if (*f > 0) from = static_cast<size_t>(*f);
+                if (from > s.size()) return "-1";
+            }
+            size_t p = s.find(*a0, from);
             return p == std::string::npos ? "-1" : std::to_string(static_cast<int>(p));
+        }
+        if (m == "last_index_of") {
+            if (!a0) return std::nullopt;
+            size_t p = s.rfind(*a0);
+            return p == std::string::npos ? "-1" : std::to_string(static_cast<int>(p));
+        }
+        if (m == "count") {
+            if (!a0) return std::nullopt;
+            if (a0->empty()) return "0";
+            int c = 0;
+            for (size_t i = 0; (i = s.find(*a0, i)) != std::string::npos; i += a0->size()) c++;
+            return std::to_string(c);
         }
         return std::nullopt;
     }
