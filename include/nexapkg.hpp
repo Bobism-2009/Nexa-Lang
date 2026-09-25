@@ -56,6 +56,22 @@ static std::string runCapture(const std::string& cmd) {
     return out;
 }
 
+// fs::remove_all, for a directory a git clone has been in. git marks its pack
+// files read-only, and on Windows a read-only file cannot be deleted: remove_all
+// stops at the first one and leaves the directory behind -- and the next clone
+// into it fails, because git will not clone into a directory that is not
+// empty. Every file is made writable first.
+static void removeTree(const fs::path& p) {
+    std::error_code ec;
+    if (!fs::exists(p, ec)) return;
+    for (auto it = fs::recursive_directory_iterator(p, ec);
+         !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        std::error_code pec;
+        fs::permissions(it->path(), fs::perms::owner_write, fs::perm_options::add, pec);
+    }
+    fs::remove_all(p, ec);
+}
+
 static bool gitAvailable() {
     return !runCapture("git --version").empty();
 }
@@ -403,7 +419,7 @@ static bool installDep(const std::string& includePath, const std::string& source
     for (char c : includePath) tmpName += (c == '/') ? '_' : c;
     fs::path tmp = fs::temp_directory_path() / tmpName;
     std::error_code ec;
-    fs::remove_all(tmp, ec);
+    removeTree(tmp);
     fs::create_directories(tmp, ec);
 
     int ret = -1;
@@ -450,13 +466,13 @@ static bool installDep(const std::string& includePath, const std::string& source
     if (ret != 0) {
         std::cerr << "[nexapkg] Failed to fetch " << includePath << " from " << url
                   << (ref.empty() ? "" : ("@" + ref)) << "\n";
-        fs::remove_all(tmp, ec);
+        removeTree(tmp);
         return false;
     }
 
     outCommit = runCapture("git -C \"" + tmp.string() + "\" rev-parse HEAD");
 
-    fs::remove_all(targetBase, ec);
+    removeTree(targetBase);
     fs::create_directories(targetParent, ec);
     for (const auto& e : fs::directory_iterator(tmp)) {
         std::string fn = e.path().filename().string();
@@ -465,7 +481,7 @@ static bool installDep(const std::string& includePath, const std::string& source
         if (e.is_directory()) fs::copy(e.path(), dest, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
         else fs::copy_file(e.path(), dest, fs::copy_options::overwrite_existing, ec);
     }
-    fs::remove_all(tmp, ec);
+    removeTree(tmp);
     std::cout << "[nexapkg] Installed " << includePath
               << (ref.empty() ? "" : (" @" + ref))
               << (outCommit.empty() ? "" : (" (" + outCommit.substr(0, 7) + ")")) << "\n";
@@ -528,7 +544,7 @@ static int cmdRemove(const std::string& name, const std::string& dir) {
     writeLock(lockPath, lk);
 
     std::error_code ec;
-    fs::remove_all(base / ".nexa" / "packages" / name, ec);
+    removeTree(base / ".nexa" / "packages" / name);
     std::cout << "[nexapkg] Removed " << name << "\n";
     return 0;
 }
@@ -660,8 +676,8 @@ static std::string readTargetField(const fs::path& dir, const std::string& key) 
 static bool placeTarget(const fs::path& src, const std::string& name) {
     std::error_code ec;
     fs::path dest = getTargetsDir() / name;
-    fs::remove_all(dest, ec);
-    fs::remove_all(getTargetCacheDir(name), ec);
+    removeTree(dest);
+    removeTree(getTargetCacheDir(name));
     fs::create_directories(dest.parent_path(), ec);
     fs::copy(src, dest, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
     if (ec || !fs::exists(dest / "target.json")) {
@@ -712,7 +728,7 @@ static int cmdTargetInstall(const std::string& name, const std::string& from, bo
 
     fs::path tmp = fs::temp_directory_path() / ("nexapkg_target_" + name);
     std::error_code ec;
-    fs::remove_all(tmp, ec);
+    removeTree(tmp);
     std::string branch = ref.empty() ? "" : (" --branch \"" + ref + "\"");
     std::cout << "[nexapkg] Fetching target " << name << " from " << url << (ref.empty() ? "" : ("@" + ref)) << "...\n";
     // Only this target's directory is checked out. git older than 2.25 has no
@@ -724,7 +740,7 @@ static int cmdTargetInstall(const std::string& name, const std::string& from, bo
                               quiet()).c_str()) == 0;
     }
     if (!sparse) {
-        fs::remove_all(tmp, ec);
+        removeTree(tmp);
         if (std::system(("git clone --depth 1" + branch + " \"" + url + "\" \"" + tmp.string() + "\"" +
                          quiet()).c_str()) != 0) {
             std::cerr << "[nexapkg] Failed to fetch " << url << "\n";
@@ -745,11 +761,11 @@ static int cmdTargetInstall(const std::string& name, const std::string& from, bo
             avail += " " + line;
         }
         if (!avail.empty()) std::cerr << "[nexapkg] Available:" << avail << "\n";
-        fs::remove_all(tmp, ec);
+        removeTree(tmp);
         return 1;
     }
     bool ok = placeTarget(src, name);
-    fs::remove_all(tmp, ec);
+    removeTree(tmp);
     return ok ? 0 : 1;
 }
 
@@ -785,8 +801,8 @@ static int cmdTargetRemove(const std::string& name) {
         std::cerr << "[nexapkg] No target named '" << name << "' is installed\n";
         return 1;
     }
-    fs::remove_all(d, ec);
-    fs::remove_all(getTargetCacheDir(name), ec);
+    removeTree(d);
+    removeTree(getTargetCacheDir(name));
     std::cout << "[nexapkg] Removed target " << name << " and its compiled runtime\n";
     return 0;
 }
