@@ -379,12 +379,23 @@ static int assetScore(const std::string& name) {
     if (endsWithI(name, ".zip") || endsWithI(name, ".tar.gz")) s += 3;
     return s > 0 ? s : -1;
 #else
-    if (containsI(name, "windows") || containsI(name, "win64") || containsI(name, "installer")) return -1;
+    // The Linux download is the installer zip (it carries NexaC; applyFromDir takes that).
+    if (containsI(name, "windows") || containsI(name, "win64") || containsI(name, "win32")) return -1;
     if (containsI(name, "darwin") || containsI(name, "macos")) return -1;
-    int s = 0;
-    if (containsI(name, "linux")) s += 10;
+    if (!containsI(name, "linux")) return -1;
+    // One Linux download per CPU, and a NexaC for one CPU cannot run on another. A
+    // name without a CPU in it is the x86-64 build: every release before arm64 ones.
+    const bool namesArm64 = containsI(name, "arm64") || containsI(name, "aarch64");
+#if defined(__aarch64__)
+    if (!namesArm64) return -1;
+#elif defined(__x86_64__)
+    if (namesArm64) return -1;
+#else
+    return -1;  // no release is built for this CPU; build NexaC from source
+#endif
+    int s = 10;
     if (endsWithI(name, ".tar.gz") || endsWithI(name, ".zip")) s += 3;
-    return s > 0 ? s : -1;
+    return s;
 #endif
 }
 
@@ -431,7 +442,7 @@ static bool fetchLatest(Latest& out, std::string& err) {
 #ifdef _WIN32
         err = "latest release has no Windows NexaC download";
 #else
-        err = "latest release has no NexaC build for this OS";
+        err = "latest release has no NexaC build for this OS and CPU -- build it from source (make NexaC)";
 #endif
         return false;
     }

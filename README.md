@@ -53,6 +53,16 @@ clang++ -std=c++17 -O2 NexaC.cpp -o NexaC
 # Windows: adds .exe — e.g. NexaC.exe
 ```
 
+**Raspberry Pi and other 64-bit ARM Linux:** the same, on the Pi itself — Raspberry Pi OS
+already has clang. `make install-deps` adds the X11 headers `std/gfx` needs, and
+`make install` puts `NexaC` on your PATH:
+
+```bash
+make install-deps && make && make install
+```
+
+(To build *for* a Pi from another machine, use the [`arm64-linux` target](https://github.com/Bobism-2009/Nexa-Targets) instead: `NexaC hello.nxa --target arm64-linux`.)
+
 On macOS, install Apple's Command Line Tools first if needed:
 
 ```bash

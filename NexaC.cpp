@@ -1302,6 +1302,11 @@ static std::string nexaBuildCompileCmd(
         // (the whole pipeline is clang->clang, not C interop).
         cmd += " -Wno-return-type-c-linkage";
     }
+#if defined(__aarch64__) || defined(__arm__)
+    // ARM Linux makes a C char unsigned; a Nexa char is signed on every platform, so
+    // '\x80' is -128 on a Raspberry Pi too. (Windows, macOS and x86 are signed already.)
+    cmd += " -fsigned-char";
+#endif
     // Size/perf: drop machinery the generated code provably never uses. RTTI is never emitted
     // by the transpiler; exceptions/unwind tables are only needed for try/catch, throw, std::stoi,
     // or inline_cpp. Stripping them removes .eh_frame and RTTI metadata (smaller, no perf cost).
@@ -1368,10 +1373,10 @@ static std::string nexaBuildCompileCmd(
     // Native ELF output (Linux exe or .so), not mingw-cross (PE) builds.
     const bool elfTarget = !buildWin && !buildDll;
     if (elfTarget) {
-        // On aarch64 (e.g. Raspberry Pi) the default max-page-size is 64KB, which pads even a
-        // trivial binary to ~64KB+ of segment alignment. 4KB pages (the kernel default on Pi OS
-        // and most aarch64 Linux) shrink output ~10x. On x86-64 this is already the default (no-op).
-        cmd += " -Wl,-z,max-page-size=4096";
+        // No -z max-page-size: the linker's default is the largest page size the CPU's kernels
+        // use (64KB on aarch64), and a smaller one makes a binary that only loads on kernels
+        // with that page size. The Raspberry Pi 5 kernel uses 16KB pages; a binary linked for
+        // 4KB segfaulted there before main.
         // Release drops the build-id; debug asks for one outright. Merely not passing
         // --build-id=none is not enough: lld (and a plainly-configured GNU ld) emits no
         // build-id unless asked, and the build-id is how a debugger or symbol server pairs
