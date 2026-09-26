@@ -1,0 +1,64 @@
+// std/ui: a settings screen with every widget, and a dropdown that switches
+// the theme while it runs.
+//   NexaC Examples/ui_demo.nxa
+#include <std/io>
+#include <std/ui>
+
+fn main() {
+    if (ui.open("Nexa UI demo", 820, 540) == 0) {
+        io.println("could not open a window");
+        return;
+    }
+    let themes = ["light", "dark", "midnight", "paper", "contrast"];
+    let names = ["Light", "Dark", "Midnight", "Paper", "High contrast"];
+    let theme = 0;
+    let name = "Ada Lovelace";
+    let email = "";
+    let updates = true;
+    let usage = false;
+    let volume = 70;
+    let notify = true;
+    let quality = 1;
+    let saved = 0;
+
+    while (!gfx.closed()) {
+        gfx.poll();
+        ui.theme(themes[theme]);
+        ui.background();
+
+        ui.heading(32, 26, "Settings");
+        ui.caption(32, 64, "Everything here is drawn by std/ui -- try the theme menu.");
+
+        ui.panel(32, 100, 370, 350, "Account");
+        ui.text(52, 160, "Display name");
+        name = ui.textbox(52, 184, 330, name, "Your name");
+        ui.text(52, 238, "Email");
+        email = ui.textbox(52, 262, 330, email, "you@example.com");
+        updates = ui.checkbox(52, 318, "Send me product updates", updates);
+        usage = ui.checkbox(52, 348, "Share anonymous usage data", usage);
+        if (ui.button(52, 394, 110, 36, "Save")) {
+            saved++;
+        }
+        if (ui.button(172, 394, 100, 36, "Reset", "secondary")) {
+            name = "";
+            email = "";
+        }
+
+        ui.panel(420, 100, 368, 350, "Preferences");
+        ui.text(440, 160, "Theme");
+        ui.text(440, 226, "Volume");
+        volume = ui.slider(440, 252, 280, volume, 0, 100);
+        ui.caption(730, 254, f"{volume}%");
+        notify = ui.toggle(440, 294, "Notifications", notify);
+        quality = ui.radio(440, 334, "Balanced", quality, 0);
+        quality = ui.radio(440, 362, "Best quality", quality, 1);
+        ui.progress(440, 404, 328, volume / 100.0);
+        // Last, so its list opens over the widgets below it.
+        theme = ui.dropdown(440, 184, 328, names, theme);
+
+        if (saved > 0) {
+            ui.caption(32, 470, f"Saved {saved} time(s) as \"{name}\".");
+        }
+        gfx.present();
+    }
+}

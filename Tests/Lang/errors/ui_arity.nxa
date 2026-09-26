@@ -1,0 +1,7 @@
+// A wrong argument count shows how the call is written. ui.text takes a size,
+// or a size and a colour -- not half a colour.
+#include <std/ui>
+
+fn main() {
+    ui.text(10, 10, "hi", 14, 255);
+}

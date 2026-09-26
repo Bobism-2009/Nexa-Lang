@@ -1,0 +1,126 @@
+// A tour of std/ui: every widget, every theme, and the style controls,
+// all live. Change the theme, accent, rounding and text size on the left and
+// watch everything else follow; the panel at the bottom shows what each
+// widget is handing back.
+//   NexaC Examples/ui_showcase.nxa
+#include <std/io>
+#include <std/ui>
+
+fn main() {
+    if (ui.open("std/ui showcase", 980, 640) == 0) {
+        io.println("could not open a window");
+        return;
+    }
+
+    // --- style ---
+    let themeNames = ["Light", "Dark", "Midnight", "Paper", "High contrast"];
+    let themeIds = ["light", "dark", "midnight", "paper", "contrast"];
+    let theme = 1;
+    let accent = 0;                 // 0 = the theme's own
+    let rounding = 6;
+    let fontSize = 15;
+
+    // --- widget state ---
+    let name = "Ada Lovelace";
+    let email = "";
+    let agree = true;
+    let newsletter = false;
+    let wifi = true;
+    let airplane = false;
+    let plan = 1;
+    let volume = 65;
+    let brightness = 40;
+    let region = 0;
+    let regions = ["Europe", "North America", "South America", "Asia", "Africa", "Oceania"];
+    let saves = 0;
+    let deletes = 0;
+    let lastAction = "nothing yet";
+    let tick = 0;
+
+    while (!gfx.closed()) {
+        gfx.poll();
+        tick++;
+
+        // Style first, so everything drawn this frame uses it.
+        ui.theme(themeIds[theme]);
+        if (accent == 1) { ui.accent(16, 185, 129); }
+        if (accent == 2) { ui.accent(234, 88, 12); }
+        if (accent == 3) { ui.accent(219, 39, 119); }
+        ui.rounding(rounding);
+        ui.font_size(fontSize);
+        ui.background();
+
+        // ---------------------------------------------------------- header
+        ui.heading(28, 20, "std/ui showcase");
+        ui.caption(28, 58, f"Everything here is drawn by std/ui -- no images, no OS widgets.   Theme: {ui.theme()}, frame {tick}");
+
+        // ---------------------------------------------------------- style
+        ui.panel(20, 90, 300, 520, "Style");
+        ui.text(40, 150, "Theme");
+        ui.text(40, 216, "Accent colour");
+        accent = ui.radio(40, 244, "Theme default", accent, 0);
+        accent = ui.radio(40, 272, "Emerald", accent, 1);
+        accent = ui.radio(40, 300, "Orange", accent, 2);
+        accent = ui.radio(40, 328, "Pink", accent, 3);
+        ui.separator(40, 364, 260);
+        ui.text(40, 380, f"Corner rounding: {rounding}px");
+        rounding = ui.slider(40, 406, 260, rounding, 0, 16);
+        ui.text(40, 446, f"Text size: {fontSize}px");
+        fontSize = ui.slider(40, 472, 260, fontSize, 12, 20);
+        ui.text(40, 512, "Region");
+
+        // ---------------------------------------------------------- form
+        ui.panel(340, 90, 300, 330, "Form");
+        ui.text(360, 150, "Name");
+        name = ui.textbox(360, 174, 260, name, "Your name");
+        ui.text(360, 226, "Email");
+        email = ui.textbox(360, 250, 260, email, "you@example.com");
+        agree = ui.checkbox(360, 304, "I agree to the terms", agree);
+        newsletter = ui.checkbox(360, 332, "Send me the newsletter", newsletter);
+        if (ui.button(360, 368, 120, 36, "Save")) {
+            saves++;
+            lastAction = f"saved \"{name}\"";
+        }
+        if (ui.button(490, 368, 130, 36, "Clear", "secondary")) {
+            name = "";
+            email = "";
+            lastAction = "cleared the form";
+        }
+
+        // ---------------------------------------------------------- controls
+        ui.panel(660, 90, 300, 330, "Controls");
+        wifi = ui.toggle(680, 148, "Wi-Fi", wifi);
+        airplane = ui.toggle(680, 184, "Airplane mode", airplane);
+        ui.text(680, 224, "Plan");
+        plan = ui.radio(680, 250, "Free", plan, 0);
+        plan = ui.radio(680, 278, "Pro", plan, 1);
+        plan = ui.radio(680, 306, "Team", plan, 2);
+        ui.text(680, 342, f"Volume {volume}%");
+        volume = ui.slider(680, 368, 260, volume, 0, 100);
+
+        // ---------------------------------------------------------- buttons + progress
+        ui.panel(340, 440, 620, 170, "Buttons, progress and what the widgets return");
+        if (ui.button(360, 496, 100, 34, "Primary")) { lastAction = "clicked Primary"; }
+        if (ui.button(470, 496, 110, 34, "Secondary", "secondary")) { lastAction = "clicked Secondary"; }
+        if (ui.button(590, 496, 90, 34, "Ghost", "ghost")) { lastAction = "clicked Ghost"; }
+        if (ui.button(690, 496, 90, 34, "Delete", "danger")) {
+            deletes++;
+            lastAction = "clicked Delete";
+        }
+        ui.text(800, 503, f"Brightness {brightness}%");
+        brightness = ui.slider(800, 526, 140, brightness, 0, 100);
+        ui.progress(360, 546, 420, volume / 100.0);
+
+        let planName = "Free";
+        if (plan == 1) { planName = "Pro"; }
+        if (plan == 2) { planName = "Team"; }
+        ui.caption(360, 566, f"Last action: {lastAction}   saves: {saves}   deletes: {deletes}");
+        ui.caption(360, 584, f"name=\"{name}\"  agree={agree}  wifi={wifi}  plan={planName}  region={regions[region]}");
+
+        // Dropdowns last: their lists open over whatever is drawn below them.
+        region = ui.dropdown(40, 536, 260, regions, region);
+        theme = ui.dropdown(40, 174, 260, themeNames, theme);
+
+        gfx.present();
+    }
+}

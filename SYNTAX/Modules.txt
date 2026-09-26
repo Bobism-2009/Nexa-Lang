@@ -1273,6 +1273,96 @@ ARGUMENT TYPES
            gfx3d.close();
        }
 
+#include <std/ui>
+  Buttons, text boxes, checkboxes, sliders, dropdowns and panels, drawn in a
+  theme, with smooth text -- for menus, settings screens, editors and tools
+  that should look like an app rather than a game. Includes std/gfx: ui draws
+  in the gfx window, and the loop is gfx's loop.
+
+    #include <std/ui>
+    fn main() {
+        ui.open("Settings", 640, 400);
+        let name = "";
+        let sound = true;
+        while (!gfx.closed()) {
+            gfx.poll();
+            ui.background();
+            ui.panel(20, 20, 600, 360, "Profile");
+            name = ui.textbox(40, 80, 300, name, "Your name");
+            sound = ui.toggle(40, 130, "Sound", sound);
+            if (ui.button(40, 180, 120, 36, "Save")) { io.println("saved " + name); }
+            gfx.present();
+        }
+    }
+
+  Immediate mode: each widget is one call per frame that draws itself and
+  hands back what the user did. The program keeps the values -- the text, the
+  checked state, the slider position -- and passes them back in each frame,
+  as above. A widget is known by its position, so keep a widget at the same
+  (x, y) from frame to frame (moving it while it is being dragged or edited
+  lets go of it). Coordinates are pixels from the window's top-left.
+
+  WINDOW AND THEME
+  ui.open(title, w, h)           - gfx.open at scale 1 (ui is drawn pixel for pixel); 1/0.
+                                   A window from gfx.open works too, but at a scale above
+                                   1 the widgets are drawn at that framebuffer's size
+  ui.background()                - fill the window with the theme's background colour
+  ui.theme(name)                 - "light" (default), "dark", "midnight", "paper",
+                                   "contrast" (high contrast). Takes effect for everything
+                                   drawn after it; call it every frame or once
+  ui.theme()                     - the current theme's name
+  ui.accent(r, g, b)             - replace the theme's accent colour (buttons, checks,
+                                   sliders, focus); ui.theme(name) puts it back
+  ui.rounding(px)                - corner radius, 0..64 (default 6)
+  ui.font_size(px)               - body text size, 6..200 (default 15); widgets, headings
+                                   and captions scale from it
+
+  TEXT (Inter, anti-aliased, kerned; UTF-8 -- Latin-1 and common punctuation)
+  ui.text(x, y, s[, size[, r, g, b]]) - text with its top-left at (x, y), in the theme's
+                                   text colour unless a colour is given; returns its width.
+                                   s may be a number: ui.text(x, y, score)
+  ui.heading(x, y, s[, size])    - semibold, 1.5x the body size unless given; returns width
+  ui.caption(x, y, s)            - smaller, in the theme's muted colour; returns width
+  ui.text_width(s[, size])       - width in pixels of s at that size (default: body)
+  ui.text_height([size])         - height of one line of text at that size
+
+  CONTAINERS
+  ui.panel(x, y, w, h[, title])  - a raised card with a border and a soft shadow; with a
+                                   title, a header row across its top (about 40 px)
+  ui.separator(x, y, w)          - a 1 px rule in the border colour
+
+  WIDGETS
+  ui.button(x, y, w, h, label[, style]) - true on the frame it is clicked (pressed and
+                                   released over it). style: "primary" (default, the
+                                   accent), "secondary" (outlined), "ghost" (no fill until
+                                   hovered), "danger" (red)
+  ui.checkbox(x, y, label, checked) - the new checked state: checked = ui.checkbox(...)
+  ui.toggle(x, y, label, on)     - a switch; the new state
+  ui.radio(x, y, label, current, value) - one option of a group: returns value when it
+                                   is clicked, current otherwise --
+                                   q = ui.radio(x, y1, "Low", q, 0);
+                                   q = ui.radio(x, y2, "High", q, 1);
+  ui.slider(x, y, w, value, min, max) - int slider, 20 px tall; the new value while dragged
+  ui.progress(x, y, w, fraction) - a bar filled to fraction (0.0 .. 1.0)
+  ui.textbox(x, y, w, text[, placeholder]) - a one-line text field; returns the edited
+                                   text. Click to type; Backspace, Delete, Left, Right,
+                                   Home and End edit; Enter, Escape or Tab, or a click
+                                   elsewhere, finish. Its height is text_height() + 16
+  ui.dropdown(x, y, w, items, selected) - a []string menu; returns the chosen index.
+                                   The open list is drawn over everything at
+                                   gfx.present(), and while it is open it has the mouse:
+                                   a click on it does not reach a widget underneath.
+
+  Clicks and the editing keys are counted from the window's events, so a quick
+  tap -- a touchpad's -- is not missed between two frames, and a held key
+  repeats at the system's rate. ui reads typed text without taking it:
+  gfx.typed() still returns it.
+
+  The typeface is Inter 4.1 by The Inter Project Authors, under the SIL Open
+  Font License 1.1, and the text is rasterised by stb_truetype (public domain).
+  Both are compiled into programs that include std/ui; the licence travels
+  with the font in the generated source.
+
 #include <std/inline>
   Enables inline_cpp! { ... } — paste C++ into the generated file. Lines starting with #include are hoisted to the top of the generated .cpp (no automatic iostream).
   Use only when Nexa has no API for this; body is not parsed by Nexa (brace matching only; } in strings can break).

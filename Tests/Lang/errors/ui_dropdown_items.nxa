@@ -1,0 +1,7 @@
+// A dropdown lists text: a []int is caught by line, not by the C++ compiler.
+#include <std/ui>
+
+fn main() {
+    let nums = [1, 2, 3];
+    let i = ui.dropdown(10, 10, 100, nums, 0);
+}

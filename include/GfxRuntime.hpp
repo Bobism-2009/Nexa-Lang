@@ -119,6 +119,7 @@ struct GfxNeed {
     bool borderless = false;     // gfx.borderless -- the decoration toggle
     bool ontop = false;          // gfx.ontop -- the stacking toggle
     bool transparent = false;    // gfx.transparent -- the see-through toggle
+    bool ui = false;             // std/ui -- its two hooks, in gfx.poll() and gfx.present()
 };
 
 // gfx.sound / play / loop / stop / volume: a WAV loader and a polyphonic
@@ -469,7 +470,8 @@ inline std::string gfxRuntimeCpp(const GfxNeed& need) {
     const bool wantDraw = need.plot || need.shapesFill || need.shapesOutline ||
                           need.line || need.lineThick || need.text || wantRound ||
                           wantSector;
-    const bool wantPutA = wantDraw || need.blit || need.blitRot;
+    // std/ui blends every pixel it draws, anti-aliased, through this.
+    const bool wantPutA = wantDraw || need.blit || need.blitRot || need.ui;
     // "Something reads input at all", which is what __nexa_gfx_has_focus hangs
     // off: every family drops whatever arrived while the window was not the
     // one the user was typing at, and nothing else asks the question.
@@ -530,7 +532,7 @@ inline std::string gfxRuntimeCpp(const GfxNeed& need) {
     // The XK_* names, and only gfx.key/gfx.pressed/gfx.released spell keys
     // with them. gfx.typed() asks XLookupString for characters and never names
     // a key, so it does not bring this in.
-    if (need.keys) out += "#include <X11/keysym.h>\n";
+    if (need.keys || need.ui) out += "#include <X11/keysym.h>\n";
     out += R"NEXA_GFX(#endif
 )NEXA_GFX";
     // The frame limiter reads a monotonic clock and waits on it. Windows has
@@ -681,6 +683,23 @@ struct __nexa_Gfx {
     out += R"NEXA_GFX(};
 
 static __nexa_Gfx __nexa_g = {};
+)NEXA_GFX";
+    // std/ui reads a click as the button going down and coming up. Sampling
+    // the button once a poll misses a click that starts and ends between two
+    // -- a touchpad tap, a synthetic one -- so the event loops count the left
+    // button's presses and releases as well, for std/ui to take each poll.
+    // What a text box edits with goes into one queue, in the order the system
+    // sent it: a typed character as its code point, and an editing key -- one
+    // per key-down, auto-repeat included, so holding Backspace repeats at the
+    // rate the user set -- as -1 - k for backspace, delete, left, right, enter,
+    // escape, tab, home, end. One queue, because "ab", Backspace, "c" typed
+    // inside a frame has to come out "ac".
+    if (need.ui) out += "static int __nexa_ui_ev_down = 0;\nstatic int __nexa_ui_ev_up = 0;\n"
+                        "static std::vector<int> __nexa_ui_evq;\n"
+                        "static void __nexa_ui_key_ev(int k) {\n"
+                        "    if (__nexa_ui_evq.size() < 4096) __nexa_ui_evq.push_back(-1 - k);\n"
+                        "}\n";
+    out += R"NEXA_GFX(
 
 static void __nexa_gfx_clear(int r, int g, int b);
 static void __nexa_gfx_present();
@@ -719,7 +738,10 @@ static void __nexa_gfx_type_push_cp(unsigned cp) {
         out[n++] = (char)(0x80u | ((cp >> 6) & 0x3Fu));
         out[n++] = (char)(0x80u | (cp & 0x3Fu));
     }
-    if (__nexa_g.type_acc.size() + (size_t)n > __nexa_gfx_type_cap) return;
+)NEXA_GFX";
+    // The rest of the typed-text helpers, under the same flag as their start.
+    if (need.typed && need.ui) out += "    if (__nexa_ui_evq.size() < 4096) __nexa_ui_evq.push_back((int)cp);\n";
+    if (need.typed) out += R"NEXA_GFX(    if (__nexa_g.type_acc.size() + (size_t)n > __nexa_gfx_type_cap) return;
     __nexa_g.type_acc.append(out, (size_t)n);
 }
 
@@ -1300,7 +1322,27 @@ static LRESULT CALLBACK __nexa_gfx_wndproc(HWND hwnd, UINT msg, WPARAM wParam, L
         __nexa_gfx_fullscreen(0);
         return 0;
     }
-    if (msg == WM_SYSCOMMAND) {
+)NEXA_GFX";
+    if (need.ui) out += R"NEXA_GFX(    if (msg == WM_LBUTTONDOWN) __nexa_ui_ev_down++;
+    if (msg == WM_LBUTTONUP) __nexa_ui_ev_up++;
+    if (msg == WM_KEYDOWN) {
+        int k = -1;
+        switch (wParam) {
+            case VK_BACK: k = 0; break;
+            case VK_DELETE: k = 1; break;
+            case VK_LEFT: k = 2; break;
+            case VK_RIGHT: k = 3; break;
+            case VK_RETURN: k = 4; break;
+            case VK_ESCAPE: k = 5; break;
+            case VK_TAB: k = 6; break;
+            case VK_HOME: k = 7; break;
+            case VK_END: k = 8; break;
+            default: break;
+        }
+        if (k >= 0) __nexa_ui_key_ev(k);
+    }
+)NEXA_GFX";
+    out += R"NEXA_GFX(    if (msg == WM_SYSCOMMAND) {
         UINT cmd = (UINT)(wParam & 0xFFF0);
         if (cmd == SC_MINIMIZE) {
             if (__nexa_g.fullscreen) __nexa_gfx_fullscreen(0);
@@ -1411,6 +1453,23 @@ static LRESULT CALLBACK __nexa_gfx_wndproc(HWND hwnd, UINT msg, WPARAM wParam, L
     int code = (int)e->keyCode;
 )NEXA_GFX";
     if (need.keys) out += "    if (code >= 0 && code < 512) __nexa_g.keys[code] = down;\n";
+    if (need.ui) out += R"NEXA_GFX(    if (down) {
+        int k = -1;
+        switch (code) {
+            case 8: k = 0; break;
+            case 46: k = 1; break;
+            case 37: k = 2; break;
+            case 39: k = 3; break;
+            case 13: k = 4; break;
+            case 27: k = 5; break;
+            case 9: k = 6; break;
+            case 36: k = 7; break;
+            case 35: k = 8; break;
+            default: break;
+        }
+        if (k >= 0) __nexa_ui_key_ev(k);
+    }
+)NEXA_GFX";
     if (need.typed) out += R"NEXA_GFX(    // keypress is deprecated, so character input comes off keydown: the browser
     // has already applied shift and the keyboard layout to e->key.
     if (down && !e->ctrlKey && !e->altKey && !e->metaKey &&
@@ -1440,7 +1499,12 @@ static EM_BOOL __nexa_gfx_emouse(int type, const EmscriptenMouseEvent* e, void*)
     int ox = 0, oy = 0;
     int inside = __nexa_gfx_map_mouse((int)e->targetX, (int)e->targetY, cw, ch, &ox, &oy);
     unsigned short bt = e->buttons;
-    __nexa_gfx_mouse_apply(ox, oy, inside, (bt & 1) != 0, (bt & 4) != 0, (bt & 2) != 0);
+)NEXA_GFX";
+    if (need.mouse && need.ui) out += R"NEXA_GFX(    if (type == EMSCRIPTEN_EVENT_MOUSEDOWN && e->button == 0) __nexa_ui_ev_down++;
+    if (type == EMSCRIPTEN_EVENT_MOUSEUP && e->button == 0) __nexa_ui_ev_up++;
+)NEXA_GFX";
+    // The rest of the mouse callback, under the same flag as its start.
+    if (need.mouse) out += R"NEXA_GFX(    __nexa_gfx_mouse_apply(ox, oy, inside, (bt & 1) != 0, (bt & 4) != 0, (bt & 2) != 0);
     return EM_TRUE;
 }
 )NEXA_GFX";
@@ -2474,6 +2538,12 @@ static void __nexa_gfx_input_publish() {
 )NEXA_GFX";
         out += "}\n";
     }
+    // std/ui is drawn and read between the polls: the poll hands it the input,
+    // present lets it draw what goes over everything (an open dropdown).
+    if (need.ui) out += R"NEXA_GFX(
+static void __nexa_ui_after_poll();
+static void __nexa_ui_before_present();
+)NEXA_GFX";
     out += R"NEXA_GFX(
 static void __nexa_gfx_poll() {
     // Ahead of the window check on purpose: the audio stream is not owned by
@@ -2520,6 +2590,25 @@ static void __nexa_gfx_poll() {
                 if (chars) __nexa_gfx_type_push_utf8([chars UTF8String], -1);
             }
 )NEXA_GFX";
+    if (need.ui) out += R"NEXA_GFX(            if (et == NSEventTypeLeftMouseDown) __nexa_ui_ev_down++;
+            if (et == NSEventTypeLeftMouseUp) __nexa_ui_ev_up++;
+            if (et == NSEventTypeKeyDown) {
+                int k = -1;
+                switch ([ev keyCode]) {
+                    case 51: k = 0; break;
+                    case 117: k = 1; break;
+                    case 123: k = 2; break;
+                    case 124: k = 3; break;
+                    case 36: case 76: k = 4; break;
+                    case 53: k = 5; break;
+                    case 48: k = 6; break;
+                    case 115: k = 7; break;
+                    case 119: k = 8; break;
+                    default: break;
+                }
+                if (k >= 0) __nexa_ui_key_ev(k);
+            }
+)NEXA_GFX";
     out += R"NEXA_GFX(            [NSApp sendEvent:ev];
         }
     }
@@ -2529,6 +2618,25 @@ static void __nexa_gfx_poll() {
         XNextEvent(__nexa_g.dpy, &ev);
         if (ev.type == ClientMessage && (int)ev.xclient.data.l[0] == __nexa_g.wm_delete) __nexa_g.closed = 1;
         if (ev.type == DestroyNotify) __nexa_g.closed = 1;
+)NEXA_GFX";
+    if (need.ui) out += R"NEXA_GFX(        if (ev.type == ButtonPress && ev.xbutton.button == Button1) __nexa_ui_ev_down++;
+        if (ev.type == ButtonRelease && ev.xbutton.button == Button1) __nexa_ui_ev_up++;
+        if (ev.type == KeyPress) {
+            int k = -1;
+            switch (XLookupKeysym(&ev.xkey, 0)) {
+                case XK_BackSpace: k = 0; break;
+                case XK_Delete: case XK_KP_Delete: k = 1; break;
+                case XK_Left: case XK_KP_Left: k = 2; break;
+                case XK_Right: case XK_KP_Right: k = 3; break;
+                case XK_Return: case XK_KP_Enter: k = 4; break;
+                case XK_Escape: k = 5; break;
+                case XK_Tab: k = 6; break;
+                case XK_Home: case XK_KP_Home: k = 7; break;
+                case XK_End: case XK_KP_End: k = 8; break;
+                default: break;
+            }
+            if (k >= 0) __nexa_ui_key_ev(k);
+        }
 )NEXA_GFX";
     if (need.wheel) out += R"NEXA_GFX(        if (ev.type == ButtonPress) {
             // X11 sends scrolling as button clicks: 4/5 are up/down and 6/7 are
@@ -2576,6 +2684,7 @@ static void __nexa_gfx_poll() {
     if (need.mouse) out += "    __nexa_gfx_mouse_refresh();\n";
     if (need.keyEdge) out += "    __nexa_gfx_key_snapshot();\n";
     if (wantPublish) out += "    __nexa_gfx_input_publish();\n";
+    if (need.ui) out += "    __nexa_ui_after_poll();\n";
     out += R"NEXA_GFX(}
 
 static int __nexa_gfx_closed() {
@@ -3857,7 +3966,9 @@ static void __nexa_gfx_pace() {
     out += R"NEXA_GFX(
 static void __nexa_gfx_present() {
     if (!__nexa_g.ready || !__nexa_g.fb) return;
-    // Windows is the one platform where a frame with real alpha in it cannot
+)NEXA_GFX";
+    if (need.ui) out += "    __nexa_ui_before_present();\n";
+    out += R"NEXA_GFX(    // Windows is the one platform where a frame with real alpha in it cannot
     // go out the ordinary door -- see __nexa_gfx_present_alpha. Everywhere
     // else this is 0 and the frame goes the way it always has; the canvas, the
     // X server and CoreGraphics all take the fourth byte as it stands.

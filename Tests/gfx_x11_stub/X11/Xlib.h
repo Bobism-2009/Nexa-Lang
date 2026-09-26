@@ -91,6 +91,7 @@ typedef struct { int x, y, width, height; } Screen;
 #define SubstructureNotifyMask (1L << 19)
 #define SubstructureRedirectMask (1L << 20)
 
+#define Button1 1
 #define Button1Mask (1 << 8)
 #define Button2Mask (1 << 9)
 #define Button3Mask (1 << 10)
@@ -289,6 +290,7 @@ extern int XGetInputFocus(Display* d, Window* focus, int* revert);
 extern int XQueryKeymap(Display* d, char keys[32]);
 extern KeyCode XKeysymToKeycode(Display* d, KeySym ks);
 extern int XLookupString(XKeyEvent* e, char* buf, int n, KeySym* ks, void* status);
+extern KeySym XLookupKeysym(XKeyEvent* e, int index);
 extern XImage* XCreateImage(Display* d, Visual* v, unsigned int depth, int format,
                             int offset, char* data, unsigned int w, unsigned int h,
                             int pad, int bytes_per_line);
@@ -323,6 +325,10 @@ extern unsigned long XWhitePixel(Display* d, int screen);
 extern void nexa_x11_stub_reset(int display_works);
 extern void nexa_x11_stub_set_focus(int focused);
 extern void nexa_x11_stub_push_button(int press, unsigned int button);
+/* std/ui: a key-down that names a key rather than typing text, and where the
+   pointer is (window coordinates) with the left button up or down. */
+extern void nexa_x11_stub_push_keysym(KeySym ks);
+extern void nexa_x11_stub_set_pointer(int x, int y, int left_down);
 extern void nexa_x11_stub_push_key(const char* latin1_text);
 extern void nexa_x11_stub_set_key(KeySym ks, int down);
 

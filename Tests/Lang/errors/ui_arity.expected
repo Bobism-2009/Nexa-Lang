@@ -1,0 +1,2 @@
+ui.text(x, y, s[, size[, r, g, b]]) takes 3 to 7 arguments, not 5
+at line 6

@@ -1,0 +1,6 @@
+// A ui call that draws has no value to keep.
+#include <std/ui>
+
+fn main() {
+    let p = ui.panel(10, 10, 100, 100);
+}

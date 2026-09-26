@@ -113,6 +113,9 @@ static void nexa_stub_log_call(int what) {
 }
 static XEvent nexa_stub_queue[NEXA_STUB_EVENTS];
 static char nexa_stub_text[NEXA_STUB_EVENTS][64];
+static KeySym nexa_stub_evsym[NEXA_STUB_EVENTS];
+static int nexa_stub_ptr_set = 0, nexa_stub_ptr_x = 0, nexa_stub_ptr_y = 0, nexa_stub_ptr_down = 0;
+static unsigned int nexa_stub_win_w = 0, nexa_stub_win_h = 0;  /* as created */
 static int nexa_stub_head = 0;
 static int nexa_stub_tail = 0;
 static char nexa_stub_keymap[32];
@@ -137,12 +140,15 @@ static XEvent* nexa_stub_alloc(int type) {
     memset(e, 0, sizeof(*e));
     e->type = type;
     nexa_stub_text[nexa_stub_tail][0] = 0;
+    nexa_stub_evsym[nexa_stub_tail] = 0;
     nexa_stub_tail = next;
     return e;
 }
 
 void nexa_x11_stub_reset(int display_works) {
     nexa_stub_display_works = display_works;
+    nexa_stub_ptr_set = 0;
+    nexa_stub_ptr_down = 0;
     nexa_stub_focused = 1;
     nexa_stub_head = 0;
     nexa_stub_tail = 0;
@@ -313,6 +319,21 @@ void nexa_x11_stub_push_key(const char* latin1_text) {
     e->xkey.keycode = (unsigned int)slot;      /* XLookupString finds the text again */
 }
 
+void nexa_x11_stub_push_keysym(KeySym ks) {
+    int slot = nexa_stub_tail;
+    XEvent* e = nexa_stub_alloc(KeyPress);
+    if (!e) return;
+    nexa_stub_evsym[slot] = ks;
+    e->xkey.keycode = (unsigned int)slot;      /* no text: XLookupString finds none */
+}
+
+void nexa_x11_stub_set_pointer(int x, int y, int left_down) {
+    nexa_stub_ptr_set = 1;
+    nexa_stub_ptr_x = x;
+    nexa_stub_ptr_y = y;
+    nexa_stub_ptr_down = left_down ? 1 : 0;
+}
+
 void nexa_x11_stub_set_key(KeySym ks, int down) {
     int code = nexa_stub_code_for(ks);
     if (!code) return;
@@ -369,8 +390,10 @@ int XSelectInput(Display* d, Window w, long m) {
 Window XCreateSimpleWindow(Display* d, Window parent, int x, int y,
                            unsigned int w, unsigned int h, unsigned int bw,
                            unsigned long border, unsigned long background) {
-    (void)d; (void)parent; (void)x; (void)y; (void)w; (void)h; (void)bw;
+    (void)d; (void)parent; (void)x; (void)y; (void)bw;
     (void)border; (void)background;
+    nexa_stub_win_w = w;
+    nexa_stub_win_h = h;
     /* A simple window copies its parent's depth and visual, which is what the
        zeroes recorded here mean: nothing of its own was asked for. */
     nexa_stub_win_depth = 0;
@@ -385,7 +408,9 @@ Window XCreateWindow(Display* d, Window parent, int x, int y,
                      unsigned int w, unsigned int h, unsigned int bw,
                      int depth, unsigned int c_class, Visual* visual,
                      unsigned long valuemask, XSetWindowAttributes* attrs) {
-    (void)d; (void)parent; (void)x; (void)y; (void)w; (void)h; (void)bw;
+    (void)d; (void)parent; (void)x; (void)y; (void)bw;
+    nexa_stub_win_w = w;
+    nexa_stub_win_h = h;
     nexa_stub_win_depth = depth;
     nexa_stub_win_class = (int)c_class;
     nexa_stub_win_visual_id = visual ? visual->visualid : 0;
@@ -501,8 +526,16 @@ int XFreePixmap(Display* d, Pixmap p) { (void)d; (void)p; return 0; }
 Status XGetWindowAttributes(Display* d, Window w, XWindowAttributes* a) {
     (void)d; (void)w;
     if (a) memset(a, 0, sizeof(*a));
-    /* Fails unless a test has said what the window looks like -- which is the
-       honest answer for a server that never created one. */
+    /* A test that places the pointer is one where the window is on screen at
+       the size it was made, so the pointer has somewhere to be. */
+    if (a && nexa_stub_ptr_set && nexa_stub_map_state < 0) {
+        a->map_state = IsViewable;
+        a->width = (int)nexa_stub_win_w;
+        a->height = (int)nexa_stub_win_h;
+        return 1;
+    }
+    /* Otherwise it fails unless a test has said what the window looks like --
+       which is the honest answer for a server that never created one. */
     if (!a || nexa_stub_map_state < 0) return 0;
     a->map_state = nexa_stub_map_state;
     return 1;
@@ -514,10 +547,10 @@ Bool XQueryPointer(Display* d, Window w, Window* root, Window* child,
     if (child) *child = 0;
     if (rx) *rx = 0;
     if (ry) *ry = 0;
-    if (wx) *wx = 0;
-    if (wy) *wy = 0;
-    if (mask) *mask = 0;
-    return 0;
+    if (wx) *wx = nexa_stub_ptr_x;
+    if (wy) *wy = nexa_stub_ptr_y;
+    if (mask) *mask = nexa_stub_ptr_down ? Button1Mask : 0;
+    return nexa_stub_ptr_set ? 1 : 0;
 }
 int XGetInputFocus(Display* d, Window* focus, int* revert) {
     (void)d;
@@ -533,6 +566,11 @@ int XQueryKeymap(Display* d, char keys[32]) {
 KeyCode XKeysymToKeycode(Display* d, KeySym ks) {
     (void)d;
     return (KeyCode)nexa_stub_code_for(ks);
+}
+KeySym XLookupKeysym(XKeyEvent* e, int index) {
+    (void)index;
+    if (!e || e->keycode >= (unsigned int)NEXA_STUB_EVENTS) return 0;
+    return nexa_stub_evsym[e->keycode];
 }
 int XLookupString(XKeyEvent* e, char* buf, int n, KeySym* ks, void* status) {
     (void)status;

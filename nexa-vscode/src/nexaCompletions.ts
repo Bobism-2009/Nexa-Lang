@@ -73,6 +73,7 @@ export const STD_INCLUDES = [
   "std/thread",
   "std/gfx",
   "std/gfx3d",
+  "std/ui",
   "std/inline",
 ];
 
@@ -236,6 +237,29 @@ export const MODULE_MEMBERS: Record<string, { name: string; detail: string }[]> 
   dll: [
     { name: "load", detail: "dll.load(path)" },
     { name: "call", detail: "dll.call(handle, name, args...)" },
+  ],
+  ui: [
+    { name: "open", detail: "ui.open(title, w, h) — gfx window at scale 1; 1/0" },
+    { name: "background", detail: "ui.background() — fill with the theme background" },
+    { name: "theme", detail: "ui.theme(name) — light, dark, midnight, paper, contrast; ui.theme() reads" },
+    { name: "accent", detail: "ui.accent(r, g, b) — replace the accent colour" },
+    { name: "rounding", detail: "ui.rounding(px) — corner radius (default 6)" },
+    { name: "font_size", detail: "ui.font_size(px) — body text size (default 15)" },
+    { name: "text", detail: "ui.text(x, y, s[, size[, r, g, b]]) — smooth text; returns width" },
+    { name: "heading", detail: "ui.heading(x, y, s[, size]) — semibold heading; returns width" },
+    { name: "caption", detail: "ui.caption(x, y, s) — small muted text; returns width" },
+    { name: "text_width", detail: "ui.text_width(s[, size]) — width in pixels" },
+    { name: "text_height", detail: "ui.text_height([size]) — one line's height" },
+    { name: "panel", detail: "ui.panel(x, y, w, h[, title]) — card with border and shadow" },
+    { name: "separator", detail: "ui.separator(x, y, w) — 1 px rule" },
+    { name: "button", detail: "ui.button(x, y, w, h, label[, style]) — true when clicked; primary/secondary/ghost/danger" },
+    { name: "checkbox", detail: "ui.checkbox(x, y, label, checked) — the new state" },
+    { name: "toggle", detail: "ui.toggle(x, y, label, on) — switch; the new state" },
+    { name: "radio", detail: "ui.radio(x, y, label, current, value) — value when clicked" },
+    { name: "slider", detail: "ui.slider(x, y, w, value, min, max) — the new value" },
+    { name: "progress", detail: "ui.progress(x, y, w, fraction) — bar, 0.0 .. 1.0" },
+    { name: "textbox", detail: "ui.textbox(x, y, w, text[, placeholder]) — the edited text" },
+    { name: "dropdown", detail: "ui.dropdown(x, y, w, items, selected) — the chosen index" },
   ],
   gfx3d: [
     { name: "open", detail: "gfx3d.open(title, w, h) — 3D window; 1/0" },

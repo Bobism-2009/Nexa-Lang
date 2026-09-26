@@ -1,0 +1,6 @@
+// ui.* without #include <std/ui> is refused by name, not left to C++.
+#include <std/io>
+
+fn main() {
+    ui.background();
+}

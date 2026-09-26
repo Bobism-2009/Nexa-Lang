@@ -1,0 +1,2 @@
+ui.dropdown(x, y, w, items, selected) expects a []string of items for items, but got '[]int'
+at line 6

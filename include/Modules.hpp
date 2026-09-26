@@ -7,6 +7,7 @@
 #include "FileRuntime.hpp"
 #include "HttpRuntime.hpp"
 #include "GfxRuntime.hpp"
+#include "UiRuntime.hpp"
 #include "Gfx3dRuntime.hpp"
 #include "JsonRuntime.hpp"
 #include "PlatformEmit.hpp"
@@ -110,6 +111,9 @@ public:
         bool dll = false;
         bool exceptions = false;
         bool gfx = false;
+        // std/ui: its runtime is appended after the program, and it reads the
+        // gfx input the way gfx.mouse/key/pressed/typed do, so it sets those.
+        bool ui = false;
         // Which gfx feature groups the program's calls can reach, so that
         // gfxRuntimeCpp emits only those. See GfxNeed in GfxRuntime.hpp: these
         // are its fields, and the GfxCall walk in Transpiler.hpp sets them.
@@ -252,6 +256,12 @@ public:
     // carry a GL loader it never calls.
     bool hasGfx3d() const {
         return enabled_.count("std/gfx3d") > 0;
+    }
+
+    // Widgets and themes on the gfx window. Including it includes std/gfx:
+    // there is no ui without the window it draws in.
+    bool hasUi() const {
+        return enabled_.count("std/ui") > 0;
     }
 
     bool hasJson() const {
@@ -1621,7 +1631,9 @@ public:
             // A snapshot is taken by asking the live reader once per key name,
             // so the edge readers need the whole of gfx.key() underneath them.
             if (need.keyEdge) need.keys = true;
+            need.ui = usage.ui;
             out += gfxRuntimeCpp(need);
+            if (usage.ui) out += uiForwardDeclsCpp();
         }
         if (hasGfx3d() && usage.gfx3d) {
             out += gfx3dRuntimeCpp();

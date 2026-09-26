@@ -1,0 +1,6 @@
+// A misspelt ui call names itself and lists what there is.
+#include <std/ui>
+
+fn main() {
+    ui.buton(10, 10, 80, 30, "OK");
+}

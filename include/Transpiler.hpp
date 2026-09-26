@@ -4,6 +4,7 @@
 #include "Modules.hpp"
 #include "PlatformEmit.hpp"
 #include "StbImageRuntime.hpp"
+#include "UiRuntime.hpp"
 #include <string>
 #include <sstream>
 #include <cstdio>
@@ -360,6 +361,15 @@ public:
                 case AstNode::Type::GfxCall:
                     cppUsage.gfx = true;
                     noteGfxUsage(n, cppUsage);
+                    break;
+                case AstNode::Type::UiCall:
+                    // The widgets read the mouse and typed text; the keys a
+                    // text box edits with come from the event loop's own
+                    // count (GfxNeed::ui). The window is gfx's.
+                    cppUsage.gfx = true;
+                    cppUsage.ui = true;
+                    cppUsage.gfxMouse = true;
+                    cppUsage.gfxTyped = true;
                     break;
                 case AstNode::Type::Gfx3dCall:
                     cppUsage.gfx3d = true;
@@ -1261,6 +1271,7 @@ public:
             // reference to satisfy. See the GfxCall usage scan.
             src += gfxStbImageRuntimeCpp();
         }
+        if (cppUsage_.ui) src += uiRuntimeCpp();
         // Last, once nothing else will add or drop a line: turn the statement markers into
         // `#line` directives. The appended gfx runtime carries no markers, and the final
         // snap-back before it already points line info back at the generated file.
@@ -2478,6 +2489,15 @@ private:
                 // are 1/0 or a size, and the draws are statements.
                 if (e.value == "backend" || e.value == "typed") return "string";
                 return "int";  // ambient reads back a level; the rest are 1/0 or a size
+            case AstNode::Type::UiCall: {
+                const std::string& m = e.value;
+                if (m == "textbox") return "string";
+                if (m == "theme") return e.children.empty() ? "string" : "void";
+                if (m == "button" || m == "checkbox" || m == "toggle") return "bool";
+                if (m == "open" || m == "text" || m == "heading" || m == "caption" || m == "text_width" ||
+                    m == "text_height" || m == "radio" || m == "slider" || m == "dropdown") return "int";
+                return "void";
+            }
             case AstNode::Type::GfxCall:
                 if (e.value == "title") return e.children.empty() ? "string" : "int";
                 if (e.value == "drop" || e.value == "opendialog" || e.value == "openfile"
@@ -3650,6 +3670,35 @@ private:
     // std/gfx. Zero-argument builtins (close, poll, present, closed, width,
     // height, scale, wheel, wheel_x, typed, mouse_x, mouse_y, drop,
     // audio_queued, audio_flush) need no row.
+    // std/ui. Text parameters are 'x': a number is written out as "..." + n
+    // would write it, so ui.text(x, y, score) needs no conversion.
+    static const BuiltinArgRow* uiArgRows() {
+        static const BuiltinArgRow rows[] = {
+            {"open",        "ui.open(title, w, h)",                        "xnn"},
+            {"theme",       "ui.theme(name)",                              "t"},
+            {"accent",      "ui.accent(r, g, b)",                          "nnn"},
+            {"rounding",    "ui.rounding(px)",                             "n"},
+            {"font_size",   "ui.font_size(px)",                            "n"},
+            {"text",        "ui.text(x, y, s, size, r, g, b)",             "nnxnnnn"},
+            {"heading",     "ui.heading(x, y, s, size)",                   "nnxn"},
+            {"caption",     "ui.caption(x, y, s)",                         "nnx"},
+            {"text_width",  "ui.text_width(s, size)",                      "xn"},
+            {"text_height", "ui.text_height(size)",                        "n"},
+            {"panel",       "ui.panel(x, y, w, h, title)",                 "nnnnx"},
+            {"separator",   "ui.separator(x, y, w)",                       "nnn"},
+            {"button",      "ui.button(x, y, w, h, label, style)",         "nnnnxt"},
+            {"checkbox",    "ui.checkbox(x, y, label, checked)",           "nnxn"},
+            {"toggle",      "ui.toggle(x, y, label, on)",                  "nnxn"},
+            {"radio",       "ui.radio(x, y, label, current, value)",       "nnxnn"},
+            {"slider",      "ui.slider(x, y, w, value, min, max)",         "nnnnnn"},
+            {"progress",    "ui.progress(x, y, w, fraction)",              "nnnn"},
+            {"textbox",     "ui.textbox(x, y, w, text, placeholder)",      "nnnxx"},
+            {"dropdown",    "ui.dropdown(x, y, w, items, selected)",       "nnnln"},
+            {"", nullptr, nullptr},
+        };
+        return rows;
+    }
+
     // std/gfx3d. Zero-argument builtins (close, poll, present, closed, width,
     // height, backend) need no row.
     static const BuiltinArgRow* gfx3dArgRows() {
@@ -4019,6 +4068,7 @@ private:
             case 't': return t == "string";
             case 'x': return t == "string" || semArgIsNumber(t);
             case 'h': return t == "[]string";
+            case 'l': return t == "[]string";
             case 's': return t == "struct:HttpServer";
             case 'r': return t == "struct:HttpRequest";
             default: return true;
@@ -4031,6 +4081,7 @@ private:
             case 't': return "text";
             case 'x': return "text or a number";
             case 'h': return "a []string of header lines";
+            case 'l': return "a []string of items";
             case 's': return "an http.localhost() server";
             case 'r': return "an http.accept() request";
             default: return nullptr;
@@ -4098,6 +4149,9 @@ private:
                 break;
             case AstNode::Type::Gfx3dCall:
                 semCheckBuiltinArgRow(e, findBuiltinArgRow(gfx3dArgRows(), e.value, e.children.size()));
+                break;
+            case AstNode::Type::UiCall:
+                semCheckBuiltinArgRow(e, findBuiltinArgRow(uiArgRows(), e.value, e.children.size()));
                 break;
             case AstNode::Type::MathCall:
                 semCheckBuiltinArgRow(e, findBuiltinArgRow(mathArgRows(), e.value, e.children.size()));
@@ -4898,6 +4952,7 @@ private:
         // gfx3d.backend() is the one call in the module that answers with
         // text, so it is the one that concatenates instead of being counted.
         if (e.type == AstNode::Type::Gfx3dCall) return e.value == "backend" || e.value == "typed";
+        if (e.type == AstNode::Type::UiCall) return e.value == "textbox" || (e.value == "theme" && e.children.empty());
         if (e.type == AstNode::Type::ExprCast && e.value == "string") return true;
         if (e.type == AstNode::Type::FileCall) {
             const std::string& m = e.value;
@@ -5548,7 +5603,7 @@ private:
                     << emitFilePathCStr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ");\n";
             } else if (child.type == AstNode::Type::FileCall) {
                 out << indent << "(void)(" << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ");\n";
-            } else if (child.type == AstNode::Type::GfxCall) {
+            } else if (child.type == AstNode::Type::GfxCall || child.type == AstNode::Type::UiCall) {
                 out << indent << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::Gfx3dCall) {
                 out << indent << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
@@ -6583,6 +6638,11 @@ private:
             // below and became `if (false)`: the whole input family of both
             // modules read as never-happening, silently, in a program that
             // compiled and ran.
+            case AstNode::Type::UiCall: {
+                std::string call = emitExpr(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                if (c.value == "textbox" || (c.value == "theme" && c.children.empty())) return "!(" + call + ").empty()";
+                return call;
+            }
             case AstNode::Type::GfxCall: {
                 std::string call = emitExpr(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 const std::string& m = c.value;
@@ -7234,6 +7294,56 @@ private:
                     return "(__nexa_gfx_mix_pump(), __nexa_gfx_audio_flush(), 0)";
                 }
                 return "__nexa_gfx3d_" + fn + "(" + args + ")";
+            }
+            case AstNode::Type::UiCall: {
+                const std::string& fn = e.value;
+                auto a = [&](size_t i) {
+                    return emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                };
+                // Text arguments take a number too, turned into text as "..." + n is.
+                auto s = [&](size_t i) {
+                    return emitOsStringArg(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                };
+                auto opt = [&](size_t i, const std::string& dflt) { return e.children.size() > i ? a(i) : dflt; };
+                const size_t n = e.children.size();
+                if (fn == "open") return "__nexa_ui_open(" + s(0) + ", " + a(1) + ", " + a(2) + ")";
+                if (fn == "background") return "__nexa_ui_background()";
+                if (fn == "theme") return n ? "__nexa_ui_theme_set(" + s(0) + ")" : std::string("__nexa_ui_theme_get()");
+                if (fn == "accent") return "__nexa_ui_accent_set(" + a(0) + ", " + a(1) + ", " + a(2) + ")";
+                if (fn == "rounding") return "__nexa_ui_rounding_set(" + a(0) + ")";
+                if (fn == "font_size") return "__nexa_ui_font_size_set(" + a(0) + ")";
+                if (fn == "text") {
+                    std::string size = opt(3, "0");
+                    std::string col = n == 7 ? a(4) + ", " + a(5) + ", " + a(6) : std::string("-1, -1, -1");
+                    return "__nexa_ui_text(" + a(0) + ", " + a(1) + ", " + s(2) + ", " + size + ", " + col + ")";
+                }
+                if (fn == "heading") return "__nexa_ui_heading(" + a(0) + ", " + a(1) + ", " + s(2) + ", " + opt(3, "0") + ")";
+                if (fn == "caption") return "__nexa_ui_caption(" + a(0) + ", " + a(1) + ", " + s(2) + ")";
+                if (fn == "text_width") return "__nexa_ui_text_width(" + s(0) + ", " + opt(1, "0") + ")";
+                if (fn == "text_height") return "__nexa_ui_text_height(" + opt(0, "0") + ")";
+                if (fn == "panel") {
+                    return "__nexa_ui_panel(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " +
+                           (n > 4 ? s(4) : std::string("std::string()")) + ")";
+                }
+                if (fn == "separator") return "__nexa_ui_separator(" + a(0) + ", " + a(1) + ", " + a(2) + ")";
+                if (fn == "button") {
+                    return "__nexa_ui_button(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + s(4) + ", " +
+                           (n > 5 ? s(5) : std::string("std::string(\"primary\")")) + ")";
+                }
+                if (fn == "checkbox") return "__nexa_ui_checkbox(" + a(0) + ", " + a(1) + ", " + s(2) + ", static_cast<bool>(" + a(3) + "))";
+                if (fn == "toggle") return "__nexa_ui_toggle(" + a(0) + ", " + a(1) + ", " + s(2) + ", static_cast<bool>(" + a(3) + "))";
+                if (fn == "radio") return "__nexa_ui_radio(" + a(0) + ", " + a(1) + ", " + s(2) + ", " + a(3) + ", " + a(4) + ")";
+                if (fn == "slider") {
+                    return "__nexa_ui_slider(" + a(0) + ", " + a(1) + ", " + a(2) + ", static_cast<int>(" + a(3) + "), " +
+                           a(4) + ", " + a(5) + ")";
+                }
+                if (fn == "progress") return "__nexa_ui_progress(" + a(0) + ", " + a(1) + ", " + a(2) + ", static_cast<double>(" + a(3) + "))";
+                if (fn == "textbox") {
+                    return "__nexa_ui_textbox(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + s(3) + ", " +
+                           (n > 4 ? s(4) : std::string("std::string()")) + ")";
+                }
+                if (fn == "dropdown") return "__nexa_ui_dropdown(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + a(4) + ")";
+                throw std::runtime_error("Internal: unknown ui method " + fn);
             }
             case AstNode::Type::GfxCall: {
                 const std::string& fn = e.value;

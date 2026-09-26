@@ -31,7 +31,7 @@ struct AstNode {
                       DllLoad, DllCall,
                       FileRead, FileWrite, FileAppend, FileExists, FileMkdir, FileCall,
                       RandomInt, RandomSeed,
-                      MathCall, CryptoCall, HttpCall, TcpCall, UdpCall, GfxCall, Gfx3dCall, JsonCall,
+                      MathCall, CryptoCall, HttpCall, TcpCall, UdpCall, GfxCall, Gfx3dCall, UiCall, JsonCall,
                       ResultMake,
                       StrMethod,
                       TimeSleep, TimeSeconds, TimeMilliseconds, TimeNowMs,
@@ -944,7 +944,7 @@ private:
         static const std::vector<std::string> mods = {
             "std/io", "std/os", "std/file", "std/dll", "std/random", "std/math",
             "std/crypto", "std/network", "std/json", "std/time", "std/thread",
-            "std/gfx", "std/gfx3d", "std/inline",
+            "std/gfx", "std/gfx3d", "std/ui", "std/inline",
         };
         return mods;
     }
@@ -976,9 +976,6 @@ private:
         if (angleStart != std::string::npos && angleEnd != std::string::npos && angleEnd > angleStart) {
             std::string path = raw.substr(angleStart + 1, angleEnd - angleStart - 1);
             if (path.size() >= 4 && path.substr(0, 4) == "std/") {
-                if (path == "std/ui") {
-                    throw std::runtime_error("std/ui has been removed");
-                }
                 if (path == "std/wait") {
                     throw std::runtime_error("std/wait has been removed; use #include <std/time>");
                 }
@@ -999,6 +996,7 @@ private:
                 }
                 // #include <std/io> - built-in module
                 modules_.enable(path);
+                if (path == "std/ui") modules_.enable("std/gfx");
                 return {{AstNode::Type::Include, path, {}}};
             }
             if (isCppHeaderIncludePath(path) || isBareCppStdHeader(path)) {
@@ -1354,6 +1352,9 @@ private:
                 stmts.push_back(parseGfxCall(true));
             } else if (t.type == TokenType::Identifier && t.value == "gfx3d") {
                 stmts.push_back(parseGfx3dCall(true));
+            } else if (t.type == TokenType::Identifier && t.value == "ui" && pos_ + 1 < tokens_.size() &&
+                       tokens_[pos_ + 1].type == TokenType::Dot) {
+                stmts.push_back(parseUiCall(true));
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
                        (tokens_[pos_ + 1].type == TokenType::Dot || tokens_[pos_ + 1].type == TokenType::Arrow)) {
                 const Token& id2 = tokens_[pos_ + 2];
@@ -1370,8 +1371,6 @@ private:
             } else if (t.type == TokenType::Identifier && (t.value == "getprocessid" || t.value == "getpid") &&
                        pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::LParen) {
                 stmts.push_back(parseOsGetProcessIdBareStmt());
-            } else if (t.type == TokenType::Identifier && t.value == "ui") {
-                throw std::runtime_error("std/ui has been removed at line " + std::to_string(t.line));
             } else if (t.type == TokenType::Star) {
                 stmts.push_back(parseDerefAssignment());
             } else if (t.type == TokenType::Delete) {
@@ -2223,6 +2222,9 @@ private:
                 stmts.push_back(parseGfxCall(true));
             } else if (t.type == TokenType::Identifier && t.value == "gfx3d") {
                 stmts.push_back(parseGfx3dCall(true));
+            } else if (t.type == TokenType::Identifier && t.value == "ui" && pos_ + 1 < tokens_.size() &&
+                       tokens_[pos_ + 1].type == TokenType::Dot) {
+                stmts.push_back(parseUiCall(true));
             } else if (t.type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
                        (tokens_[pos_ + 1].type == TokenType::Dot || tokens_[pos_ + 1].type == TokenType::Arrow)) {
                 const Token& id2 = tokens_[pos_ + 2];
@@ -2239,8 +2241,6 @@ private:
             } else if (t.type == TokenType::Identifier && (t.value == "getprocessid" || t.value == "getpid") &&
                        pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::LParen) {
                 stmts.push_back(parseOsGetProcessIdBareStmt());
-            } else if (t.type == TokenType::Identifier && t.value == "ui") {
-                throw std::runtime_error("std/ui has been removed at line " + std::to_string(t.line));
             } else if (t.type == TokenType::Star) {
                 stmts.push_back(parseDerefAssignment());
             } else if (t.type == TokenType::Delete) {
@@ -2805,8 +2805,9 @@ private:
             if (method == "worker") return parseThreadWorkerExpr();
             if (method == "spawn") return parseThreadSpawnExpr();
         }
-        if (peek().type == TokenType::Identifier && peek().value == "ui") {
-            throw std::runtime_error("std/ui has been removed at line " + std::to_string(peek().line));
+        if (peek().type == TokenType::Identifier && peek().value == "ui" && pos_ + 2 < tokens_.size() &&
+            tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
+            return parseUiCall(false, true);
         }
         if (peek().type == TokenType::Identifier &&
             (peek().value == "ok" || peek().value == "err") &&
@@ -4374,6 +4375,93 @@ private:
         if (m == "close") return "gfx.close() closes the window";
         if (m == "maxfps") return "gfx.maxfps(fps) sets the frame cap";
         return nullptr;
+    }
+
+    // std/ui: every method, its argument range, how to write it, and whether it
+    // hands back a value. A drawing call has none, and is refused in value
+    // position the way gfx's are.
+    struct UiMethod { const char* name; int lo; int hi; const char* sig; bool value; };
+    static const UiMethod* uiMethod(const std::string& m) {
+        static const UiMethod table[] = {
+            {"open", 3, 3, "ui.open(title, w, h)", true},
+            {"background", 0, 0, "ui.background()", false},
+            {"theme", 0, 1, "ui.theme(name) or ui.theme()", true},
+            {"accent", 3, 3, "ui.accent(r, g, b)", false},
+            {"rounding", 1, 1, "ui.rounding(px)", false},
+            {"font_size", 1, 1, "ui.font_size(px)", false},
+            {"text", 3, 7, "ui.text(x, y, s[, size[, r, g, b]])", true},
+            {"heading", 3, 4, "ui.heading(x, y, s[, size])", true},
+            {"caption", 3, 3, "ui.caption(x, y, s)", true},
+            {"text_width", 1, 2, "ui.text_width(s[, size])", true},
+            {"text_height", 0, 1, "ui.text_height([size])", true},
+            {"panel", 4, 5, "ui.panel(x, y, w, h[, title])", false},
+            {"separator", 3, 3, "ui.separator(x, y, w)", false},
+            {"button", 5, 6, "ui.button(x, y, w, h, label[, style])", true},
+            {"checkbox", 4, 4, "ui.checkbox(x, y, label, checked)", true},
+            {"toggle", 4, 4, "ui.toggle(x, y, label, on)", true},
+            {"radio", 5, 5, "ui.radio(x, y, label, current, value)", true},
+            {"slider", 6, 6, "ui.slider(x, y, w, value, min, max)", true},
+            {"progress", 4, 4, "ui.progress(x, y, w, fraction)", false},
+            {"textbox", 4, 5, "ui.textbox(x, y, w, text[, placeholder])", true},
+            {"dropdown", 5, 5, "ui.dropdown(x, y, w, items, selected)", true},
+        };
+        for (const UiMethod& u : table) {
+            if (m == u.name) return &u;
+        }
+        return nullptr;
+    }
+
+    AstNode parseUiCall(bool requireSemicolon, bool valuePosition = false) {
+        size_t line = peek().line;
+        if (!modules_.hasUi()) {
+            throw std::runtime_error("ui.* requires #include <std/ui> at line " + std::to_string(line));
+        }
+        advance();  // ui
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        const Token& methodTok = peek();
+        if (methodTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected ui method at line " + std::to_string(methodTok.line));
+        }
+        std::string method = methodTok.value;
+        advance();
+        const UiMethod* spec = uiMethod(method);
+        if (!spec) {
+            throw std::runtime_error("Unknown ui method 'ui." + method + "' at line " + std::to_string(methodTok.line) +
+                " (use open, background, theme, accent, rounding, font_size, text, heading, caption, text_width,"
+                " text_height, panel, separator, button, checkbox, toggle, radio, slider, progress, textbox, dropdown)");
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after ui." + method + " at line " + std::to_string(peek().line));
+        }
+        AstNode node{AstNode::Type::UiCall, method, {}};
+        if (peek().type != TokenType::RParen) {
+            node.children.push_back(parseValueExpr());
+            while (match(TokenType::Comma)) node.children.push_back(parseValueExpr());
+        }
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' after ui." + method + "(...) at line " + std::to_string(peek().line));
+        }
+        int got = (int)node.children.size();
+        // ui.text takes a size, or a size and a colour: not half a colour.
+        bool badShape = got < spec->lo || got > spec->hi || (method == "text" && (got == 5 || got == 6));
+        if (badShape) {
+            throw std::runtime_error(std::string(spec->sig) + " takes " +
+                (spec->lo == spec->hi ? std::to_string(spec->lo) : std::to_string(spec->lo) + " to " + std::to_string(spec->hi)) +
+                (spec->hi == 1 && spec->lo == 1 ? " argument" : " arguments") + ", not " + std::to_string(got) +
+                " at line " + std::to_string(line));
+        }
+        // ui.theme(name) sets and has nothing to give; ui.theme() reads.
+        bool gives = spec->value && !(method == "theme" && got == 1);
+        if (valuePosition && !gives) {
+            throw std::runtime_error(std::string(spec->sig) + " draws or sets something and has no value" +
+                "; you aren't allowed to turn it into a variable at line " + std::to_string(line));
+        }
+        if (requireSemicolon && !match(TokenType::Semicolon)) {
+            throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
+        }
+        return node;
     }
 
     AstNode parseGfxCall(bool requireSemicolon, bool valuePosition = false) {

@@ -658,6 +658,44 @@ to install for any of them.
 Colours are 0..255. The draws hand nothing back and are statements only, so
 `let C = gfx3d.cube(...);` is an error naming the call -- as in std/gfx.)HELP" },
 
+{ "std/ui", "ui gui widget widgets button checkbox slider textbox dropdown menu theme themes dark light panel form settings font", Group::Module,
+  "widgets and themes: buttons, text boxes, sliders, dropdowns, smooth text",
+  R"HELP(std/ui - widgets and themes on the gfx window
+  #include <std/ui>          (includes std/gfx)
+  Full reference: SYNTAX/Modules.txt (std/ui)
+
+Immediate mode: each widget is one call a frame that draws itself and hands
+back what the user did. Keep the values yourself and pass them back in.
+
+  window   ui.open(title, w, h)       ui.background()
+  theme    ui.theme(name)  "light" "dark" "midnight" "paper" "contrast"
+           ui.theme()      ui.accent(r, g, b)
+           ui.rounding(px) ui.font_size(px)
+  text     ui.text(x, y, s[, size[, r, g, b]])   ui.heading(x, y, s[, size])
+           ui.caption(x, y, s)   ui.text_width(s[, size])   ui.text_height([size])
+  layout   ui.panel(x, y, w, h[, title])   ui.separator(x, y, w)
+  widgets  ui.button(x, y, w, h, label[, style])  true when clicked
+                  style: "primary" "secondary" "ghost" "danger"
+           ui.checkbox(x, y, label, checked)      the new state
+           ui.toggle(x, y, label, on)             the new state
+           ui.radio(x, y, label, current, value)  value when clicked
+           ui.slider(x, y, w, value, min, max)    the new value
+           ui.progress(x, y, w, fraction)
+           ui.textbox(x, y, w, text[, placeholder]) the edited text
+           ui.dropdown(x, y, w, items, selected)  the chosen index
+
+  fn main() {
+      ui.open("Settings", 640, 400);
+      let name = "";
+      while (!gfx.closed()) {
+          gfx.poll();
+          ui.background();
+          name = ui.textbox(40, 40, 300, name, "Your name");
+          if (ui.button(40, 90, 120, 36, "Save")) { io.println(name); }
+          gfx.present();
+      }
+  })HELP" },
+
 { "std/dll", "dll so dylib shared library plugin", Group::Module,
   "load a .dll / .so / .dylib and call into it",
   R"HELP(std/dll - dynamic libraries

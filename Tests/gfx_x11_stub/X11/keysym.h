@@ -21,5 +21,13 @@
 #define XK_Alt_L 0xffe9
 #define XK_Alt_R 0xffea
 #define XK_space 0x0020
+#define XK_Home 0xff50
+#define XK_End 0xff57
+#define XK_KP_Enter 0xff8d
+#define XK_KP_Home 0xff95
+#define XK_KP_Left 0xff96
+#define XK_KP_Right 0xff98
+#define XK_KP_End 0xff9c
+#define XK_KP_Delete 0xff9f
 
 #endif
