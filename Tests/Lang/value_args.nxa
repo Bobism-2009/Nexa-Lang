@@ -1,0 +1,41 @@
+// Pins that every place a value goes takes a whole expression -- a comparison,
+// !x, a && b, a ternary -- not only arithmetic: plain, indexed, member and
+// pointer assignment, method calls, and the arguments of built-in calls.
+// Reference: SYNTAX/Core.txt (VARIABLES), SYNTAX/Modules.txt
+#include <std/io>
+#include <std/os>
+#include <std/math>
+
+struct P { x: int; ok: bool; }
+
+fn main() {
+    let a = 1;
+    let b = 2;
+    let ok = false;
+    let flags: []bool = [false, false];
+    let p = P{x: 0, ok: false};
+    let m: map[string]bool;
+
+    ok = a < b;
+    flags[0] = a < b && b == 2;
+    p.ok = !(a > b);
+    m["k"] = a == 1 || b == 1;
+    let t = false;
+    let pt: *bool = &t;
+    *pt = b >= 2;
+    io.println(ok, " ", flags[0], " ", t, " ", p.ok, " ", m["k"]);
+
+    p.x = a < b ? 10 : 20;
+    a += b > 1 ? 5 : 0;
+    io.println(p.x, " ", a);
+
+    flags.push(a > 100);
+    io.println(len(flags), " ", flags[2]);
+
+    io.println(math.abs(a < b ? -3 : 3), " ", math.max(a, b > 1 ? 50 : 60));
+    io.println(len(a < b ? "ab" : "c"), " [", trim(a > b ? " x " : " y "), "] ", io.to_int(a < b ? "7" : "8"));
+
+    os.setenv("NEXA_VALUE_ARGS", a > b);
+    let name = "NEXA_VALUE" + "_ARGS";
+    io.println(os.getenv(name), " ", os.getenv(a > b ? "NOPE_NOT_SET" : "NEXA_VALUE_ARGS"));
+}

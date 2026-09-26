@@ -1029,7 +1029,8 @@ public:
                 throw std::runtime_error("Global variable cannot use dll.load()");
             }
             std::string vname = preserveNames_ ? node.value : ("__nexa_g_" + std::to_string(globalIdx++));
-            if (!node.children.empty() && node.children[0].type == AstNode::Type::OsGetenv) {
+            if (!node.children.empty() && node.children[0].type == AstNode::Type::OsGetenv &&
+                node.children[0].children.empty()) {
                 const std::string& envName = node.children[0].value;
                 out << "const char* __nexa_ge_" << globalIdx << " = getenv(\"" << escapeString(envName) << "\");\n";
                 out << "std::string " << vname << " = __nexa_ge_" << globalIdx << " ? __nexa_ge_" << globalIdx << " : \"\";\n";
@@ -5330,7 +5331,8 @@ private:
                     out << indent << "__nexa_dll_handles.push_back(dlopen(\"" << escapeString(child.initValue) << "\", RTLD_LAZY));\n";
                     out << indent << "#endif\n";
                     out << indent << "int " << vname << " = (int)__nexa_dll_handles.size() - 1;\n";
-                } else if (!child.children.empty() && child.children[0].type == AstNode::Type::OsGetenv) {
+                } else if (!child.children.empty() && child.children[0].type == AstNode::Type::OsGetenv &&
+                           child.children[0].children.empty()) {
                     const std::string& envName = child.children[0].value;
                     out << indent << "const char* __nexa_ge_" << varIdx << " = getenv(\"" << escapeString(envName) << "\");\n";
                     out << indent << "std::string " << vname << " = __nexa_ge_" << varIdx << " ? __nexa_ge_" << varIdx << " : \"\";\n";
@@ -6807,6 +6809,10 @@ private:
                 // String concat must not produce const char* + const char* — see emitConcatOperand folds.
                 return emitCppStringValue(e.value);
             case AstNode::Type::OsGetenv: {
+                if (!e.children.empty()) {
+                    return "([](const std::string& __n){ const char* __p = getenv(__n.c_str()); return __p ? std::string(__p) : std::string(); })(" +
+                           emitOsStringArg(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
+                }
                 std::string s = "([]{ const char* __p = getenv(\"" + escapeString(e.value) + "\"); return __p ? std::string(__p) : std::string(\"\"); }())";
                 return s;
             }

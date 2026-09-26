@@ -84,6 +84,7 @@ ARGUMENT TYPES
   os.endian()       - "little" or "big"
   os.platform()     - Returns "windows", "linux", "darwin", "wasm", or "unknown"
   os.getenv(name)   - Get environment variable, returns string (or "")
+                      name is any string: "HOME", a variable, "APP_" + key
   os.setenv(name, value) - Set environment variable for this process
   os.hostname()     - Machine hostname, returns string
   os.username() / os.user() - Current username, returns string

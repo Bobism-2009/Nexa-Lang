@@ -931,7 +931,7 @@ private:
         } else {
             throw std::runtime_error("Expected '=' or compound assignment at line " + std::to_string(peek().line));
         }
-        AstNode expr = parseExpression();
+        AstNode expr = parseValueExpr();
         if (!match(TokenType::Semicolon)) {
             throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
         }
@@ -1180,7 +1180,7 @@ private:
                 if (match(TokenType::Assign)) {
                     seenDefault = true;
                     hasDefault.push_back(true);
-                    defaults.push_back(parseExpression());
+                    defaults.push_back(parseValueExpr());
                 } else {
                     if (seenDefault) {
                         throw std::runtime_error(
@@ -1451,7 +1451,7 @@ private:
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after len at line " + std::to_string(peek().line));
         }
-        AstNode arg = parseExpression();
+        AstNode arg = parseValueExpr();
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' in len(...) at line " + std::to_string(peek().line));
         }
@@ -1465,10 +1465,10 @@ private:
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after trim at line " + std::to_string(peek().line));
         }
-        AstNode arg = parseExpression();
+        AstNode arg = parseValueExpr();
         AstNode node{AstNode::Type::ExprTrim, "", {arg}};
         if (match(TokenType::Comma)) {
-            node.children.push_back(parseExpression());
+            node.children.push_back(parseValueExpr());
         }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' in trim(...) at line " + std::to_string(peek().line));
@@ -1763,7 +1763,7 @@ private:
         if (!match(TokenType::Throw)) {
             throw std::runtime_error("Expected 'throw' at line " + std::to_string(line));
         }
-        AstNode expr = parseExpression();
+        AstNode expr = parseValueExpr();
         if (!match(TokenType::Semicolon)) {
             throw std::runtime_error("Expected ';' after throw at line " + std::to_string(peek().line));
         }
@@ -1854,7 +1854,7 @@ private:
             else {
                 throw std::runtime_error("Expected '=' or compound assignment at line " + std::to_string(peek().line));
             }
-            AstNode expr = parseExpression();
+            AstNode expr = parseValueExpr();
             if (!match(TokenType::Semicolon)) {
                 throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
             }
@@ -1875,7 +1875,7 @@ private:
         else {
             throw std::runtime_error("Expected '=' or compound assignment at line " + std::to_string(peek().line));
         }
-        AstNode expr = parseExpression();
+        AstNode expr = parseValueExpr();
         if (!match(TokenType::Semicolon)) {
             throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
         }
@@ -1908,7 +1908,7 @@ private:
         else {
             throw std::runtime_error("Expected '=' after *ptr at line " + std::to_string(peek().line));
         }
-        AstNode rhs = parseExpression();
+        AstNode rhs = parseValueExpr();
         if (!match(TokenType::Semicolon)) {
             throw std::runtime_error("Expected ';' after pointer assignment at line " + std::to_string(peek().line));
         }
@@ -1949,7 +1949,7 @@ private:
         } else {
             throw std::runtime_error("Expected '=', compound assignment (e.g. '+=', '&=', '<<=') at line " + std::to_string(peek().line));
         }
-        AstNode expr = parseExpression();
+        AstNode expr = parseValueExpr();
         if (!match(TokenType::Semicolon)) {
             throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
         }
@@ -2446,7 +2446,7 @@ private:
                     AstNode call{AstNode::Type::StrMethod, m, {std::move(cur)}};
                     if (peek().type != TokenType::RParen) {
                         for (;;) {
-                            call.children.push_back(parseExpression());
+                            call.children.push_back(parseValueExpr());
                             if (!match(TokenType::Comma)) break;
                         }
                     }
@@ -2467,7 +2467,7 @@ private:
                 call.children.push_back(std::move(cur));
                 if (peek().type != TokenType::RParen) {
                     for (;;) {
-                        call.children.push_back(parseExpression());
+                        call.children.push_back(parseValueExpr());
                         if (!match(TokenType::Comma)) break;
                     }
                 }
@@ -3026,7 +3026,7 @@ private:
             if (!match(TokenType::LParen)) {
                 throw std::runtime_error("Expected '(' after os." + method + " at line " + std::to_string(peek().line));
             }
-            AstNode arg = parseExpression();
+            AstNode arg = parseValueExpr();
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' after os." + method + "(...) at line " + std::to_string(peek().line));
             }
@@ -3046,7 +3046,7 @@ private:
             if (!match(TokenType::LParen)) {
                 throw std::runtime_error("Expected '(' after os.clip_set at line " + std::to_string(peek().line));
             }
-            AstNode arg = parseExpression();
+            AstNode arg = parseValueExpr();
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' after os.clip_set(...) at line " + std::to_string(peek().line));
             }
@@ -3057,7 +3057,7 @@ private:
             if (!match(TokenType::LParen)) {
                 throw std::runtime_error("Expected '(' after os." + method + " at line " + std::to_string(peek().line));
             }
-            AstNode arg = parseExpression();
+            AstNode arg = parseValueExpr();
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' after os." + method + "(...) at line " + std::to_string(peek().line));
             }
@@ -3075,11 +3075,11 @@ private:
             if (!match(TokenType::LParen)) {
                 throw std::runtime_error("Expected '(' after os.notify at line " + std::to_string(peek().line));
             }
-            AstNode titleArg = parseExpression();
+            AstNode titleArg = parseValueExpr();
             if (!match(TokenType::Comma)) {
                 throw std::runtime_error("Expected ',' in os.notify(title, message) at line " + std::to_string(peek().line));
             }
-            AstNode msgArg = parseExpression();
+            AstNode msgArg = parseValueExpr();
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' after os.notify(...) at line " + std::to_string(peek().line));
             }
@@ -3090,7 +3090,7 @@ private:
             if (!match(TokenType::LParen)) {
                 throw std::runtime_error("Expected '(' after os.open at line " + std::to_string(peek().line));
             }
-            AstNode arg = parseExpression();
+            AstNode arg = parseValueExpr();
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' after os.open(...) at line " + std::to_string(peek().line));
             }
@@ -3101,11 +3101,11 @@ private:
             if (!match(TokenType::LParen)) {
                 throw std::runtime_error("Expected '(' after os.save at line " + std::to_string(peek().line));
             }
-            AstNode pathArg = parseExpression();
+            AstNode pathArg = parseValueExpr();
             if (!match(TokenType::Comma)) {
                 throw std::runtime_error("Expected ',' after os.save path at line " + std::to_string(peek().line));
             }
-            AstNode dataArg = parseExpression();
+            AstNode dataArg = parseValueExpr();
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' after os.save(...) at line " + std::to_string(peek().line));
             }
@@ -3116,7 +3116,7 @@ private:
             if (!match(TokenType::LParen)) {
                 throw std::runtime_error("Expected '(' after os." + method + " at line " + std::to_string(peek().line));
             }
-            AstNode arg = parseExpression();
+            AstNode arg = parseValueExpr();
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' after os." + method + "(...) at line " + std::to_string(peek().line));
             }
@@ -3131,9 +3131,9 @@ private:
             if (method == "spawn_wait") tag = "wait";
             else if (method == "spawn_at") tag = "at";
             AstNode node{AstNode::Type::OsSpawn, tag, {}};
-            node.children.push_back(parseExpression());
+            node.children.push_back(parseValueExpr());
             while (match(TokenType::Comma)) {
-                node.children.push_back(parseExpression());
+                node.children.push_back(parseValueExpr());
             }
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' after os." + method + "(...) at line " + std::to_string(peek().line));
@@ -3151,7 +3151,7 @@ private:
             if (!match(TokenType::LParen)) {
                 throw std::runtime_error("Expected '(' after os." + method + " at line " + std::to_string(peek().line));
             }
-            AstNode arg = parseExpression();
+            AstNode arg = parseValueExpr();
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' after os." + method + "(...) at line " + std::to_string(peek().line));
             }
@@ -3189,7 +3189,7 @@ private:
             if (!match(TokenType::LParen)) {
                 throw std::runtime_error("Expected '(' after os." + method + " at line " + std::to_string(peek().line));
             }
-            AstNode arg = parseExpression();
+            AstNode arg = parseValueExpr();
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' after os." + method + "(...) at line " + std::to_string(peek().line));
             }
@@ -3203,11 +3203,11 @@ private:
             if (!match(TokenType::LParen)) {
                 throw std::runtime_error("Expected '(' after os.messagebox at line " + std::to_string(peek().line));
             }
-            AstNode textArg = parseExpression();
+            AstNode textArg = parseValueExpr();
             if (!match(TokenType::Comma)) {
                 throw std::runtime_error("Expected ',' in os.messagebox(text, title) at line " + std::to_string(peek().line));
             }
-            AstNode titleArg = parseExpression();
+            AstNode titleArg = parseValueExpr();
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
             }
@@ -3219,7 +3219,7 @@ private:
             if (!match(TokenType::LParen)) {
                 throw std::runtime_error("Expected '(' after os.exit at line " + std::to_string(peek().line));
             }
-            AstNode codeArg = parseExpression();
+            AstNode codeArg = parseValueExpr();
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' after os.exit(...) at line " + std::to_string(peek().line));
             }
@@ -3230,11 +3230,11 @@ private:
             if (!match(TokenType::LParen)) {
                 throw std::runtime_error("Expected '(' after os.setenv at line " + std::to_string(peek().line));
             }
-            AstNode nameArg = parseExpression();
+            AstNode nameArg = parseValueExpr();
             if (!match(TokenType::Comma)) {
                 throw std::runtime_error("Expected ',' in os.setenv(name, value) at line " + std::to_string(peek().line));
             }
-            AstNode valueArg = parseExpression();
+            AstNode valueArg = parseValueExpr();
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' after os.setenv(...) at line " + std::to_string(peek().line));
             }
@@ -3256,7 +3256,7 @@ private:
             }
             AstNode node{AstNode::Type::OsGetProcessId, "", {}};
             if (peek().type != TokenType::RParen) {
-                node.children.push_back(parseExpression());
+                node.children.push_back(parseValueExpr());
             }
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' after os." + method + " at line " + std::to_string(peek().line));
@@ -3274,7 +3274,7 @@ private:
         AstNode result{AstNode::Type::OsSystem, "", {}};
         if (argTok.type == TokenType::String || argTok.type == TokenType::Identifier ||
             argTok.type == TokenType::LParen) {
-            result.children.push_back(parseExpression());
+            result.children.push_back(parseValueExpr());
             result.isVarRef = false;
         } else {
             throw std::runtime_error("Expected string or expression at line " + std::to_string(argTok.line));
@@ -3303,9 +3303,9 @@ private:
             throw std::runtime_error("Expected '(' after os.spawn at line " + std::to_string(peek().line));
         }
         AstNode node{AstNode::Type::OsSpawn, "", {}};
-        node.children.push_back(parseExpression());
+        node.children.push_back(parseValueExpr());
         while (match(TokenType::Comma)) {
-            node.children.push_back(parseExpression());
+            node.children.push_back(parseValueExpr());
         }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' after os.spawn(...) at line " + std::to_string(peek().line));
@@ -3329,7 +3329,7 @@ private:
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after os.system at line " + std::to_string(peek().line));
         }
-        AstNode cmdArg = parseExpression();
+        AstNode cmdArg = parseValueExpr();
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' after os.system(...) at line " + std::to_string(peek().line));
         }
@@ -3353,16 +3353,20 @@ private:
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
         }
-        const Token& argTok = peek();
-        if (argTok.type != TokenType::String) {
-            throw std::runtime_error("Expected string for env var name at line " + std::to_string(argTok.line));
+        // os.getenv("HOME") keeps the name in the node; any other name -- a
+        // variable, a + chain, a ternary -- is an expression read at run time.
+        if (peek().type == TokenType::String && pos_ + 1 < tokens_.size() &&
+            tokens_[pos_ + 1].type == TokenType::RParen) {
+            advance();
+            std::string envName = tokens_[pos_ - 1].value;
+            advance();  // ')'
+            return {AstNode::Type::OsGetenv, envName, {}};
         }
-        advance();
-        std::string envName = tokens_[pos_ - 1].value;
+        AstNode nameArg = parseValueExpr();
         if (!match(TokenType::RParen)) {
-            throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
+            throw std::runtime_error("Expected ')' after os.getenv(name) at line " + std::to_string(peek().line));
         }
-        return {AstNode::Type::OsGetenv, envName, {}};
+        return {AstNode::Type::OsGetenv, "", {nameArg}};
     }
 
     AstNode parseOsGetVolume() {
@@ -3531,7 +3535,7 @@ private:
         }
         AstNode node{AstNode::Type::OsGetProcessId, "", {}};
         if (peek().type != TokenType::RParen) {
-            node.children.push_back(parseExpression());
+            node.children.push_back(parseValueExpr());
         }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' after os." + method + " at line " + std::to_string(peek().line));
@@ -3556,7 +3560,7 @@ private:
         }
         AstNode node{AstNode::Type::OsGetProcessId, "", {}};
         if (peek().type != TokenType::RParen) {
-            node.children.push_back(parseExpression());
+            node.children.push_back(parseValueExpr());
         }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' after " + method + " at line " + std::to_string(peek().line));
@@ -3673,11 +3677,11 @@ private:
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after getline at line " + std::to_string(peek().line));
         }
-        AstNode sourceArg = parseExpression();
+        AstNode sourceArg = parseValueExpr();
         AstNode node{AstNode::Type::IoGetline, "", {}};
         node.children.push_back(sourceArg);
         if (match(TokenType::Comma)) {
-            node.children.push_back(parseExpression());
+            node.children.push_back(parseValueExpr());
         }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' after io.getline(...) at line " + std::to_string(peek().line));
@@ -3706,7 +3710,7 @@ private:
         if (peek().type == TokenType::RParen) {
             arg = {AstNode::Type::ExprStringLiteral, "", {}};
         } else {
-            arg = parseExpression();
+            arg = parseValueExpr();
         }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
@@ -3731,10 +3735,10 @@ private:
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after trim at line " + std::to_string(peek().line));
         }
-        AstNode arg = parseExpression();
+        AstNode arg = parseValueExpr();
         AstNode node{AstNode::Type::ExprTrim, "", {arg}};
         if (match(TokenType::Comma)) {
-            node.children.push_back(parseExpression());
+            node.children.push_back(parseValueExpr());
         }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' after io.trim(...) at line " + std::to_string(peek().line));
@@ -3807,13 +3811,13 @@ private:
             }
             return node;
         }
-        node.children.push_back(parseExpression());
+        node.children.push_back(parseValueExpr());
         if (method == "write" || method == "append" ||
             method == "rename" || method == "copy" || method == "join") {
             if (!match(TokenType::Comma)) {
                 throw std::runtime_error("Expected ',' in file." + method + "(a, b) at line " + std::to_string(peek().line));
             }
-            node.children.push_back(parseExpression());
+            node.children.push_back(parseValueExpr());
         }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' after file." + method + "(...) at line " + std::to_string(peek().line));
@@ -3859,12 +3863,12 @@ private:
             node = {AstNode::Type::FileCall, method, {}};
         }
         if (method != "cwd") {
-            node.children.push_back(parseExpression());
+            node.children.push_back(parseValueExpr());
             if (method == "write" || method == "append" || method == "rename" || method == "copy" || method == "join") {
                 if (!match(TokenType::Comma)) {
                     throw std::runtime_error("Expected ',' in file." + method + "(...) at line " + std::to_string(peek().line));
                 }
-                node.children.push_back(parseExpression());
+                node.children.push_back(parseValueExpr());
             }
         }
         if (!match(TokenType::RParen)) {
@@ -3892,11 +3896,11 @@ private:
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
         }
-        AstNode minArg = parseExpression();
+        AstNode minArg = parseValueExpr();
         if (!match(TokenType::Comma)) {
             throw std::runtime_error("Expected ',' in random.int(min, max) at line " + std::to_string(peek().line));
         }
-        AstNode maxArg = parseExpression();
+        AstNode maxArg = parseValueExpr();
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
         }
@@ -3940,12 +3944,12 @@ private:
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after math." + method + " at line " + std::to_string(peek().line));
         }
-        node.children.push_back(parseExpression());
+        node.children.push_back(parseValueExpr());
         if (twoArg.find(method) != twoArg.end()) {
             if (!match(TokenType::Comma)) {
                 throw std::runtime_error("Expected ',' in math." + method + "(a, b) at line " + std::to_string(peek().line));
             }
-            node.children.push_back(parseExpression());
+            node.children.push_back(parseValueExpr());
         }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' after math." + method + " arguments at line " + std::to_string(peek().line));
@@ -3985,10 +3989,10 @@ private:
             throw std::runtime_error("Expected '(' after crypto." + method + " at line " + std::to_string(peek().line));
         }
         AstNode node{AstNode::Type::CryptoCall, method, {}};
-        node.children.push_back(parseExpression());
+        node.children.push_back(parseValueExpr());
         if (isXor) {
             while (match(TokenType::Comma)) {
-                node.children.push_back(parseExpression());
+                node.children.push_back(parseValueExpr());
             }
             if (node.children.size() < 2) {
                 throw std::runtime_error("crypto.xor(data, key...) requires at least one key at line " + std::to_string(line));
@@ -3997,7 +4001,7 @@ private:
             if (!match(TokenType::Comma)) {
                 throw std::runtime_error("Expected ',' in crypto." + method + "(a, b) at line " + std::to_string(peek().line));
             }
-            node.children.push_back(parseExpression());
+            node.children.push_back(parseValueExpr());
         }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' after crypto." + method + "(...) at line " + std::to_string(peek().line));
@@ -4019,7 +4023,7 @@ private:
         AstNode node{AstNode::Type::ResultMake, kind, {}};
         if (kind == "ok") {
             if (peek().type != TokenType::RParen) {
-                node.children.push_back(parseExpression());
+                node.children.push_back(parseValueExpr());
                 if (peek().type == TokenType::Comma) {
                     throw std::runtime_error("ok(...) takes at most one value at line " + std::to_string(peek().line));
                 }
@@ -4028,7 +4032,7 @@ private:
             if (peek().type == TokenType::RParen) {
                 throw std::runtime_error("err(...) requires an error message at line " + std::to_string(line));
             }
-            node.children.push_back(parseExpression());
+            node.children.push_back(parseValueExpr());
             if (peek().type == TokenType::Comma) {
                 throw std::runtime_error("err(...) takes one argument at line " + std::to_string(peek().line));
             }
@@ -4085,7 +4089,7 @@ private:
                 throw std::runtime_error("Expected ',' in http." + method + "(" + shape + ") at line " +
                     std::to_string(peek().line));
             }
-            node.children.push_back(parseExpression());
+            node.children.push_back(parseValueExpr());
         }
         // With no required arguments the optional one stands alone, so there is
         // no comma in front of it: http.localhost() and http.localhost(8080).
@@ -4094,7 +4098,7 @@ private:
                                       : peek().type == TokenType::Comma;
             if (present) {
                 if (fixed > 0) advance();
-                node.children.push_back(parseExpression());
+                node.children.push_back(parseValueExpr());
             }
         }
         if (!match(TokenType::RParen)) {
@@ -4146,11 +4150,11 @@ private:
                 throw std::runtime_error("Expected ',' in tcp." + method + "(" + shape + ") at line " +
                     std::to_string(peek().line));
             }
-            node.children.push_back(parseExpression());
+            node.children.push_back(parseValueExpr());
         }
         if (optTail && peek().type == TokenType::Comma) {
             advance();
-            node.children.push_back(parseExpression());
+            node.children.push_back(parseValueExpr());
         }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' after tcp." + method + "(" + shape + tail +
@@ -4201,11 +4205,11 @@ private:
                 throw std::runtime_error("Expected ',' in udp." + method + "(" + shape + ") at line " +
                     std::to_string(peek().line));
             }
-            node.children.push_back(parseExpression());
+            node.children.push_back(parseValueExpr());
         }
         if (optTail && peek().type == TokenType::Comma) {
             advance();
-            node.children.push_back(parseExpression());
+            node.children.push_back(parseValueExpr());
         }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' after udp." + method + "(" + shape + tail +
@@ -4248,9 +4252,9 @@ private:
             }
             return node;
         }
-        node.children.push_back(parseExpression());
+        node.children.push_back(parseValueExpr());
         if (method == "stringify" && match(TokenType::Comma)) {
-            node.children.push_back(parseExpression());
+            node.children.push_back(parseValueExpr());
         }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' after json." + method + "(...) at line " + std::to_string(peek().line));
@@ -4294,7 +4298,7 @@ private:
         AstNode result{AstNode::Type::DllCall, symTok.value, {}};
         result.children.push_back({AstNode::Type::ExprVarRef, handleVar, {}});
         while (match(TokenType::Comma)) {
-            result.children.push_back(parseExpression());
+            result.children.push_back(parseValueExpr());
         }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
@@ -4329,7 +4333,7 @@ private:
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
         }
         AstNode pathArg{AstNode::Type::ExprVarRef, pathVar, {}};
-        AstNode contentArg = parseExpression();
+        AstNode contentArg = parseValueExpr();
         AstNode node{isAppend ? AstNode::Type::FileAppend : AstNode::Type::FileWrite, "", {}};
         node.children.push_back(pathArg);
         node.children.push_back(contentArg);
@@ -4440,9 +4444,9 @@ private:
         }
         AstNode node{AstNode::Type::GfxCall, method, {}};
         if (peek().type != TokenType::RParen) {
-            node.children.push_back(parseExpression());
+            node.children.push_back(parseValueExpr());
             while (match(TokenType::Comma)) {
-                node.children.push_back(parseExpression());
+                node.children.push_back(parseValueExpr());
             }
         }
         if (!match(TokenType::RParen)) {
@@ -4672,9 +4676,9 @@ private:
         }
         AstNode node{AstNode::Type::Gfx3dCall, method, {}};
         if (peek().type != TokenType::RParen) {
-            node.children.push_back(parseExpression());
+            node.children.push_back(parseValueExpr());
             while (match(TokenType::Comma)) {
-                node.children.push_back(parseExpression());
+                node.children.push_back(parseValueExpr());
             }
         }
         if (!match(TokenType::RParen)) {
@@ -4768,14 +4772,14 @@ private:
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
         }
-        AstNode arg1 = parseExpression();
+        AstNode arg1 = parseValueExpr();
         AstNode node{method == "int" ? AstNode::Type::RandomInt : AstNode::Type::RandomSeed, "", {}};
         node.children.push_back(arg1);
         if (method == "int") {
             if (!match(TokenType::Comma)) {
                 throw std::runtime_error("Expected ',' in random.int(min, max) at line " + std::to_string(peek().line));
             }
-            node.children.push_back(parseExpression());
+            node.children.push_back(parseValueExpr());
         }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
@@ -4805,7 +4809,7 @@ private:
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
         }
-        AstNode durationArg = parseExpression();
+        AstNode durationArg = parseValueExpr();
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
         }
@@ -4834,7 +4838,7 @@ private:
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
         }
-        AstNode arg = parseExpression();
+        AstNode arg = parseValueExpr();
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
         }
@@ -4858,7 +4862,7 @@ private:
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
         }
-        AstNode arg = parseExpression();
+        AstNode arg = parseValueExpr();
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
         }
@@ -4975,7 +4979,7 @@ private:
             if (!match(TokenType::LParen)) {
                 throw std::runtime_error("Expected '(' after thread.run at line " + std::to_string(peek().line));
             }
-            AstNode handleArg = parseExpression();
+            AstNode handleArg = parseValueExpr();
             if (!match(TokenType::Comma)) {
                 throw std::runtime_error("Expected ',' in thread.run(worker, job) at line " + std::to_string(peek().line));
             }
@@ -4992,7 +4996,7 @@ private:
             if (!match(TokenType::LParen)) {
                 throw std::runtime_error("Expected '(' after thread.worker_join at line " + std::to_string(peek().line));
             }
-            AstNode handleArg = parseExpression();
+            AstNode handleArg = parseValueExpr();
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' after thread.worker_join(...) at line " + std::to_string(peek().line));
             }
@@ -5007,7 +5011,7 @@ private:
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
         }
-        AstNode handleArg = parseExpression();
+        AstNode handleArg = parseValueExpr();
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
         }
