@@ -1,0 +1,33 @@
+// Pins how a bool becomes text: always true or false, never 1 or 0, whether it
+// is printed, joined with +, put in an f-string or cast -- and whatever it is:
+// a variable, a literal, a comparison, !x, a && b, a fn returning bool, or an
+// element of a []bool.
+// Reference: SYNTAX/Core.txt (VARIABLES), SYNTAX/Modules.txt (io.println)
+#include <std/io>
+
+fn isBig(n: int): bool { return n > 10; }
+
+fn main() {
+    let ok = true;
+    let off: bool = false;
+    let same = 1 == 1;
+    let flags: []bool = [true, false];
+
+    io.println(ok);
+    io.println(off);
+    io.println(true, " ", false);
+    io.println(same);
+    io.println(3 > 2, " ", !ok, " ", ok && off, " ", ok || off);
+    io.println(isBig(20), " ", isBig(3));
+    io.println(flags[0], " ", flags[1]);
+    io.print(ok);
+    io.print(" ");
+    io.print(2 < 1);
+    io.println("");
+
+    io.println("join: " + ok + " " + off + " " + (2 > 1) + " " + isBig(1) + " " + flags[1]);
+    io.println(f"fstring: {ok} {same} {1 < 2} {isBig(99)} {flags[0]}");
+    io.println("cast: " + (string)same + " " + (string)(2 < 1));
+    let s: string = "is " + (5 == 5);
+    io.println(s);
+}

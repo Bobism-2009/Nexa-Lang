@@ -4516,7 +4516,8 @@ private:
             return;
         }
         if (arg.type == AstNode::Type::ExprBoolLiteral) {
-            out << indent << "printf(\"%d" << (newline ? "\\n" : "") << "\", " << (arg.value == "true" ? "1" : "0") << ");\n";
+            out << indent << "fputs(\"" << (arg.value == "true" ? "true" : "false")
+                << (newline ? "\\n" : "") << "\", stdout);\n";
             return;
         }
         std::string ntype = inferExprNexaType(arg);
@@ -4545,10 +4546,12 @@ private:
         } else if (exprIsC) {
             out << indent << "printf(\"%c" << (newline ? "\\n" : "") << "\", " << expr << ");\n";
         } else if (exprIsBoolT) {
-            // printf is variadic, so the argument must already be an int. std::vector<bool>
-            // indexes to a proxy reference rather than a bool, and passing that through
-            // varargs is undefined — io.println(flags[0]) printed garbage without this cast.
-            out << indent << "printf(\"%d" << (newline ? "\\n" : "") << "\", static_cast<int>(" << expr << "));\n";
+            // true/false, as "..." + b and f"{b}" spell it. The ternary also reads a
+            // std::vector<bool> element through its proxy reference, which varargs
+            // could not -- io.println(flags[0]) once printed garbage that way.
+            const char* nl = newline ? "\\n" : "";
+            out << indent << "fputs((" << expr << ") ? \"true" << nl << "\" : \"false" << nl
+                << "\", stdout);\n";
         } else if (exprIsPtr) {
             out << indent << "printf(\"%p" << (newline ? "\\n" : "") << "\", (void*)(" << expr << "));\n";
         } else if (ntype == "json") {
@@ -4627,7 +4630,9 @@ private:
                                 const std::map<std::string, bool>* varIsBool) {
         std::string v = emitExpr(e, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
         if (exprIsString(e, *varIsString)) return "std::string(" + v + ")";
-        return "std::to_string(" + v + ")";
+        // Anything else becomes text the way "..." + value makes it: 1.5 not
+        // 1.500000, true not 1.
+        return emitConcatOperand(e, varMap, *varIsString, *varIsFloat, *varIsChar, *varIsBool);
     }
 
     std::string emitOsSpawnCall(const AstNode& e,
@@ -5041,7 +5046,18 @@ private:
             return fieldTypeOfMemberExpr(e) == "bool";
         }
         if (e.type == AstNode::Type::StrMethod) return strMethodReturnsBool(e.value);
-        return false;
+        if (e.type == AstNode::Type::ExprIntLiteral || e.type == AstNode::Type::ExprFloatLiteral ||
+            e.type == AstNode::Type::ExprStringLiteral || e.type == AstNode::Type::ExprCharLiteral) {
+            return false;
+        }
+        // Anything else that is a bool by type -- a comparison, !x, a && b, a call
+        // to a fn returning bool, flags[i] -- so "..." + (a < b) says true, as
+        // "..." + ok already did, rather than 1.
+        try {
+            return inferExprNexaType(e) == "bool";
+        } catch (...) {
+            return false;
+        }
     }
 
     static void astClassifyReturns(const AstNode& n, bool& hasValueReturn, bool& hasVoidReturn) {
@@ -5473,6 +5489,8 @@ private:
                         out << indent << "printf(\"%g\\n\", " << v << ");\n";
                     } else if (isC) {
                         out << indent << "printf(\"%c\\n\", " << v << ");\n";
+                    } else if (ntype == "bool") {
+                        out << indent << "fputs(" << v << " ? \"true\\n\" : \"false\\n\", stdout);\n";
                     } else if (nexaIsNumericIntType(ntype)) {
                         emitIntegerPrintf(out, indent, ntype, v, true);
                     } else {
@@ -5501,6 +5519,8 @@ private:
                         out << indent << "printf(\"%g\", " << v << ");\n";
                     } else if (isC) {
                         out << indent << "printf(\"%c\", " << v << ");\n";
+                    } else if (ntype == "bool") {
+                        out << indent << "fputs(" << v << " ? \"true\" : \"false\", stdout);\n";
                     } else if (nexaIsNumericIntType(ntype)) {
                         emitIntegerPrintf(out, indent, ntype, v, false);
                     } else {
@@ -5661,24 +5681,24 @@ private:
             } else if (child.type == AstNode::Type::OsClipSet) {
                 std::string e = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 bool isStr = exprIsString(child.children[0], varIsString);
-                std::string arg = isStr ? ("std::string(" + e + ")") : ("std::to_string(" + e + ")");
+                std::string arg = isStr ? ("std::string(" + e + ")") : emitConcatOperand(child.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 out << indent << "__nexa_os_clip_set(" << arg << ");\n";
             } else if (child.type == AstNode::Type::OsType) {
                 std::string e = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 bool isStr = exprIsString(child.children[0], varIsString);
-                std::string arg = isStr ? ("std::string(" + e + ")") : ("std::to_string(" + e + ")");
+                std::string arg = isStr ? ("std::string(" + e + ")") : emitConcatOperand(child.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 out << indent << "__nexa_os_type(" << arg << ");\n";
             } else if (child.type == AstNode::Type::OsClipGet) {
                 out << indent << "(void)__nexa_os_clip_get();\n";
             } else if (child.type == AstNode::Type::OsNotify) {
                 std::string te = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 std::string me = emitExpr(child.children[1], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
-                std::string ta = exprIsString(child.children[0], varIsString) ? ("std::string(" + te + ")") : ("std::to_string(" + te + ")");
-                std::string ma = exprIsString(child.children[1], varIsString) ? ("std::string(" + me + ")") : ("std::to_string(" + me + ")");
+                std::string ta = exprIsString(child.children[0], varIsString) ? ("std::string(" + te + ")") : emitConcatOperand(child.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                std::string ma = exprIsString(child.children[1], varIsString) ? ("std::string(" + me + ")") : emitConcatOperand(child.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 out << indent << "__nexa_os_notify(" << ta << ", " << ma << ");\n";
             } else if (child.type == AstNode::Type::OsOpen) {
                 std::string e = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
-                std::string arg = exprIsString(child.children[0], varIsString) ? ("std::string(" + e + ")") : ("std::to_string(" + e + ")");
+                std::string arg = exprIsString(child.children[0], varIsString) ? ("std::string(" + e + ")") : emitConcatOperand(child.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 out << indent << "__nexa_os_open(" << arg << ");\n";
             } else if (child.type == AstNode::Type::OsLoad) {
                 std::string p = emitOsStringArg(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
@@ -5725,8 +5745,8 @@ private:
             } else if (child.type == AstNode::Type::OsSetenv) {
                 std::string ne = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 std::string ve = emitExpr(child.children[1], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
-                std::string na = exprIsString(child.children[0], varIsString) ? ("std::string(" + ne + ")") : ("std::to_string(" + ne + ")");
-                std::string va = exprIsString(child.children[1], varIsString) ? ("std::string(" + ve + ")") : ("std::to_string(" + ve + ")");
+                std::string na = exprIsString(child.children[0], varIsString) ? ("std::string(" + ne + ")") : emitConcatOperand(child.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                std::string va = exprIsString(child.children[1], varIsString) ? ("std::string(" + ve + ")") : emitConcatOperand(child.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 out << indent << "__nexa_os_setenv(" << na << ", " << va << ");\n";
             } else if (child.type == AstNode::Type::OsHostname) {
                 out << indent << "(void)__nexa_os_hostname();\n";
@@ -5739,8 +5759,8 @@ private:
                 std::string titleExpr = emitExpr(child.children[1], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 bool textIsStr = exprIsString(child.children[0], varIsString);
                 bool titleIsStr = exprIsString(child.children[1], varIsString);
-                std::string textArg = textIsStr ? textExpr : ("std::to_string(" + textExpr + ")");
-                std::string titleArg = titleIsStr ? titleExpr : ("std::to_string(" + titleExpr + ")");
+                std::string textArg = textIsStr ? textExpr : emitConcatOperand(child.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                std::string titleArg = titleIsStr ? titleExpr : emitConcatOperand(child.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 out << indent << "__nexa_os_messagebox(" << textArg << ", " << titleArg << ");\n";
             } else if (child.type == AstNode::Type::OsGetProcessId) {
                 if (!child.children.empty()) {
@@ -6795,7 +6815,7 @@ private:
                 if (exprIsString(e.children[0], *varIsString)) {
                     return "__nexa_os_exec(" + cmd + ")";
                 }
-                return "__nexa_os_exec(std::to_string(" + cmd + "))";
+                return "__nexa_os_exec(" + emitConcatOperand(e.children[0], varMap, *varIsString, *varIsFloat, *varIsChar, *varIsBool) + ")";
             }
             case AstNode::Type::OsSpawn:
                 return emitOsSpawnCall(e, varMap, varIsString, varIsFloat, varIsChar, varIsBool);

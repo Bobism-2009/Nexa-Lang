@@ -194,6 +194,8 @@ VARIABLES
     size_t: let n: size_t = 64;   (C++ std::size_t; use for sizes / array lengths)
     string: let s = "hello";  let name: string = io.readln();  let msg: string;
     bool:   let ok = true;  let flag: bool = false;  let b: bool;
+            As text -- printed, joined with +, in an f-string -- a bool is true
+            or false, never 1 or 0; comparisons and fns returning bool too.
     float:  let pi = 3.14;  let x: float = 2.5;  let f: float;
     char:   let c = 'A';  let ch: char = 'x';  let letter: char;
     unsigned char: let b: unsigned char = 255;

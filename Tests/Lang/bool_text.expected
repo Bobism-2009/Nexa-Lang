@@ -1,0 +1,12 @@
+true
+false
+true false
+true
+true false false true
+true false
+true false
+true false
+join: true false true false false
+fstring: true true true true true
+cast: true false
+is true

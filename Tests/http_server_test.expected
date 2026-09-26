@@ -1,8 +1,8 @@
-bind 1
+bind true
 port 1
-echo 1 [POST|/echo|payload|t1]
+echo true [POST|/echo|payload|t1]
 nope 404 [gone]
-raw 1 [rawy]
+raw true [rawy]
 served 1 [GET|/echo||-]
 close 1
-dead 0 [could not connect]
+dead false [could not connect]
