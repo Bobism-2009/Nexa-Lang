@@ -17,6 +17,13 @@
 #            never makes a sound, because the size is part of the ioctl number
 #            and the kernel simply refuses a request it does not recognise.
 #
+#   iec958 -- always runs where a shared library can be preloaded. A card that
+#            takes IEC958 subframes and no PCM -- the Raspberry Pi's HDMI
+#            ports -- is played through a stand-in: an LD_PRELOADed ioctl that
+#            refuses 16-bit PCM, takes subframes a hundred frames at a time,
+#            and keeps every word. Each word is checked against an encoder
+#            written here from the IEC958 layout, not copied from the backend.
+#
 #   live  -- runs on any machine with a sound card. The program has to actually
 #            play, and the clock is what proves it: a stream that opened but
 #            never started hands three thousand samples back instantly, and a
@@ -155,6 +162,7 @@ int main() {
                 NEXA_SND_PARAM_FIRST_INTERVAL);
     std::printf("rw_interleaved=%d s16_le=%d std=%d\n",
                 NEXA_SND_ACCESS_RW_INTERLEAVED, NEXA_SND_FORMAT_S16_LE, NEXA_SND_SUBFORMAT_STD);
+    std::printf("iec958_subframe_le=%d\n", NEXA_SND_FORMAT_IEC958_SUBFRAME_LE);
     return 0;
 }
 ABI
@@ -188,6 +196,8 @@ abi_says "the parameter numbers are the kernel's SNDRV_PCM_HW_PARAM_*" \
     'access=0 format=1 subformat=2 channels=10 rate=11 period=13 periods=15 buffer=17 first=8'
 abi_says "interleaved read/write, S16_LE and the standard subformat" \
     'rw_interleaved=3 s16_le=2 std=0'
+abi_says "IEC958_SUBFRAME_LE is the kernel's SNDRV_PCM_FORMAT_IEC958_SUBFRAME_LE" \
+    'iec958_subframe_le=18'
 
 if [ "$(getconf LONG_BIT 2>/dev/null || echo 0)" = "64" ]; then
     abi_says "the structs are the size the kernel's are" 'hw=608 sw=136 xferi=24'
@@ -230,6 +240,168 @@ if [ -n "$diags" ]; then
 else
     say_ok "build: the kernel PCM backend compiles clean under -Wall -Wextra"
 fi
+
+# --- iec958: a card that takes subframes and nothing else --------------------
+
+iec_half() {
+    if ! "$NEXAC" "$SUITE/gfx_pcm_iec_test.nxa" --source "$WORK/iec.cpp" > "$WORK/iec.log" 2>&1; then
+        say_fail "iec958: NexaC could not transpile Tests/gfx_pcm_iec_test.nxa"
+        sed 's/^/  /' "$WORK/iec.log"
+        return
+    fi
+    if ! "$CXX" -std=c++17 -O1 -Wno-unused-function -I "$SUITE/gfx_x11_stub" \
+            "$WORK/iec.cpp" "$SUITE/gfx_x11_stub/x11_stub.cpp" -o "$WORK/iecprog" > "$WORK/iec.log" 2>&1; then
+        say_fail "iec958: the generated program does not build"
+        grep -E 'error' "$WORK/iec.log" | head -n 5 | sed 's/^/  /'
+        return
+    fi
+
+    # The stand-in card, built on the backend's own declarations so the two
+    # agree on the structs (the abi half above holds those to the kernel's).
+    cat > "$WORK/fakecard.cpp" <<'FAKE'
+#include <dlfcn.h>
+#include <errno.h>
+#include <limits.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+#include "uapi.h"
+
+static int is_card(int fd) {
+    const char* want = getenv("FAKE_CARD");
+    char link[64], path[PATH_MAX];
+    snprintf(link, sizeof(link), "/proc/self/fd/%d", fd);
+    ssize_t n = readlink(link, path, sizeof(path) - 1);
+    if (!want || n <= 0) return 0;
+    path[n] = 0;
+    return strcmp(path, want) == 0;
+}
+
+static int has(const struct __nexa_snd_hw_params* p, int which, unsigned bit) {
+    return (p->masks[which].bits[bit >> 5] >> (bit & 31)) & 1;
+}
+
+static struct __nexa_snd_interval* iv(struct __nexa_snd_hw_params* p, int param) {
+    return &p->intervals[param - NEXA_SND_PARAM_FIRST_INTERVAL];
+}
+
+static int fail(int e) { errno = e; return -1; }
+
+extern "C" int ioctl(int fd, unsigned long req, ...) {
+    va_list ap;
+    va_start(ap, req);
+    void* arg = va_arg(ap, void*);
+    va_end(ap);
+    if (!is_card(fd)) {
+        typedef int (*real_t)(int, unsigned long, ...);
+        static real_t real = (real_t)dlsym(RTLD_NEXT, "ioctl");
+        return real(fd, req, arg);
+    }
+    if (req == NEXA_SND_IOCTL_HW_PARAMS) {
+        struct __nexa_snd_hw_params* p = (struct __nexa_snd_hw_params*)arg;
+        if (has(p, NEXA_SND_PARAM_FORMAT, NEXA_SND_FORMAT_S16_LE)) return fail(EINVAL);
+        if (!has(p, NEXA_SND_PARAM_FORMAT, NEXA_SND_FORMAT_IEC958_SUBFRAME_LE)) return fail(EINVAL);
+        struct __nexa_snd_interval* ch = iv(p, NEXA_SND_PARAM_CHANNELS);
+        struct __nexa_snd_interval* rate = iv(p, NEXA_SND_PARAM_RATE);
+        if (ch->min > 2 || ch->max < 2) return fail(EINVAL);
+        if (rate->min > 48000 || rate->max < 48000) return fail(EINVAL);
+        ch->min = ch->max = 2;
+        rate->min = rate->max = 48000;
+        iv(p, NEXA_SND_PARAM_PERIOD_SIZE)->min = 960;
+        iv(p, NEXA_SND_PARAM_BUFFER_SIZE)->min = 4800;
+        FILE* f = fopen(getenv("FAKE_LOG"), "a");
+        if (f) { fprintf(f, "hw_params iec958 2ch 48000\n"); fclose(f); }
+        return 0;
+    }
+    if (req == NEXA_SND_IOCTL_WRITEI) {
+        struct __nexa_snd_xferi* x = (struct __nexa_snd_xferi*)arg;
+        unsigned long n = x->frames > 100 ? 100 : x->frames;  // a partial write each time
+        FILE* f = fopen(getenv("FAKE_DUMP"), "ab");
+        if (!f) return fail(EIO);
+        fwrite(x->buf, 8, n, f);
+        fclose(f);
+        x->result = (long)n;
+        return 0;
+    }
+    if (req == NEXA_SND_IOCTL_DELAY) {
+        *(long*)arg = 0;
+        return 0;
+    }
+    return 0;  // sw_params, prepare, drain, drop
+}
+FAKE
+
+    # The reference: every word from the IEC958 layout, one bit at a time.
+    cat > "$WORK/iecref.cpp" <<'REF'
+#include <stdio.h>
+int main(int argc, char** argv) {
+    if (argc < 2) return 2;
+    FILE* f = fopen(argv[1], "rb");
+    if (!f) { printf("no dump\n"); return 1; }
+    // Consumer, not copyrighted, original PCM, 48 kHz, 16-bit words.
+    const unsigned char status[24] = {0x04, 0x82, 0x00, 0x02, 0x02};
+    unsigned int got[2];
+    int frame = 0;
+    while (fread(got, 4, 2, f) == 2) {
+        short sample = (short)((frame * 131) % 65536 - 32768);
+        for (int ch = 0; ch < 2; ch++) {
+            int block = frame % 192;
+            unsigned int w = 0;
+            w |= ch == 1 ? 0x4u : (block == 0 ? 0x8u : 0x2u);          // preamble Y, Z or X
+            w |= (unsigned int)(unsigned short)sample << 12;           // 16 bits of a 24-bit field
+            if ((status[block / 8] >> (block % 8)) & 1) w |= 1u << 30;  // channel status
+            int ones = 0;
+            for (int b = 4; b < 31; b++) ones += (w >> b) & 1;
+            if (ones & 1) w |= 1u << 31;                                // even parity, 4-31
+            if (got[ch] != w) {
+                printf("frame %d channel %d: got %08x, wanted %08x\n", frame, ch, got[ch], w);
+                return 1;
+            }
+        }
+        frame++;
+    }
+    printf("frames=%d\n", frame);
+    return 0;
+}
+REF
+
+    if ! "$CXX" -std=c++17 -shared -fPIC -I "$WORK" "$WORK/fakecard.cpp" -o "$WORK/fakecard.so" -ldl \
+            > "$WORK/iec.log" 2>&1 ||
+       ! "$CXX" -std=c++17 "$WORK/iecref.cpp" -o "$WORK/iecref" >> "$WORK/iec.log" 2>&1; then
+        echo "SKIP iec958: cannot build a preloadable stand-in card here"
+        grep -E 'error' "$WORK/iec.log" | head -n 3 | sed 's/^/       /'
+        skips=$((skips + 1))
+        return
+    fi
+
+    : > "$WORK/fake.card"
+    rm -f "$WORK/fake.dump" "$WORK/fake.log"
+    if ! FAKE_CARD="$WORK/fake.card" FAKE_DUMP="$WORK/fake.dump" FAKE_LOG="$WORK/fake.log" \
+            NEXA_PCM_DEVICE="$WORK/fake.card" LD_PRELOAD="$WORK/fakecard.so" \
+            timeout 60 "$WORK/iecprog" > "$WORK/out" 2>&1; then
+        say_fail "iec958: the program exited non-zero"
+        sed 's/^/  /' "$WORK/out"
+        return
+    fi
+    if grep -qx "audio=1" "$WORK/out" && grep -qx "fed=500" "$WORK/out" && grep -qx "done" "$WORK/out" &&
+            grep -q "hw_params iec958 2ch 48000" "$WORK/fake.log" 2>/dev/null; then
+        say_ok "iec958: a card that refuses 16-bit PCM is opened in IEC958 subframes"
+    else
+        say_fail "iec958: a card that takes only IEC958 subframes did not open"
+        sed 's/^/  /' "$WORK/out"
+        return
+    fi
+    if "$WORK/iecref" "$WORK/fake.dump" > "$WORK/ref.out" && grep -qx "frames=500" "$WORK/ref.out"; then
+        say_ok "iec958: all 500 frames are the subframes IEC958 says, across partial writes"
+    else
+        say_fail "iec958: the subframes are not what IEC958 says"
+        sed 's/^/  /' "$WORK/ref.out"
+    fi
+}
+iec_half
 
 # --- live: on any machine with a card ----------------------------------------
 

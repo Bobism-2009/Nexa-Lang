@@ -5474,6 +5474,7 @@ struct __nexa_snd_xferi {
 
 #define NEXA_SND_ACCESS_RW_INTERLEAVED 3
 #define NEXA_SND_FORMAT_S16_LE 2
+#define NEXA_SND_FORMAT_IEC958_SUBFRAME_LE 18
 #define NEXA_SND_SUBFORMAT_STD 0
 
 #define NEXA_SND_IOCTL_HW_PARAMS NEXA_SND_IOWR(0x11, struct __nexa_snd_hw_params)
@@ -5497,6 +5498,54 @@ static unsigned long __nexa_snd_period = 0;
 static int __nexa_snd_channels = 1;
 static short __nexa_snd_lr[NEXA_PCM_LEN * 2];
 
+// Some outputs take no PCM at all, only IEC958 subframes: the Raspberry Pi 4
+// and 5 HDMI ports (vc4-hdmi) are the ones anybody meets. A subframe is the
+// 32-bit word an S/PDIF or HDMI link carries per channel per frame -- the
+// sample, plus a preamble, a channel-status bit, a validity bit and parity --
+// and on those cards libasound's iec958 plugin builds them in software. There
+// is no libasound here, so when a card refuses 16-bit PCM the backend builds
+// them itself, the same way that plugin does, and the mixer above never knows.
+static int __nexa_snd_iec = 0;
+// Position in the 192-frame channel-status block. It restarts with the stream,
+// on every PREPARE, as the plugin's does.
+static unsigned int __nexa_snd_iec_frame = 0;
+// The 192 channel-status bits, one per frame, sent on both channels: consumer
+// audio, not copyrighted, original, PCM (AES0 0x04, AES1 0x82 -- what the Pi's
+// own vc4-hdmi.conf asks for), the sample rate in AES3 and a 16-bit word
+// length in AES4.
+static unsigned char __nexa_snd_iec_status[24];
+static unsigned int __nexa_snd_iec_buf[NEXA_PCM_LEN * 2];
+
+static void __nexa_snd_iec_setup(int rate) {
+    std::memset(__nexa_snd_iec_status, 0, sizeof(__nexa_snd_iec_status));
+    __nexa_snd_iec_status[0] = 0x04;
+    __nexa_snd_iec_status[1] = 0x82;
+    unsigned char fs = 0x01;  // not indicated
+    if (rate == 44100) fs = 0x00;
+    else if (rate == 48000) fs = 0x02;
+    else if (rate == 32000) fs = 0x03;
+    else if (rate == 22050) fs = 0x04;
+    else if (rate == 24000) fs = 0x06;
+    else if (rate == 88200) fs = 0x08;
+    else if (rate == 96000) fs = 0x0a;
+    __nexa_snd_iec_status[3] = fs;
+    __nexa_snd_iec_status[4] = 0x02;
+    __nexa_snd_iec_frame = 0;
+}
+
+// One subframe: the sample in bits 12-27 (a 16-bit sample is the top of the
+// 24-bit field), the status bit in 30, even parity over 4-31, and the
+// preamble in 0-3 -- Z to start a block, X for a left channel otherwise, Y for
+// a right one. The preamble values are libasound's defaults.
+static unsigned int __nexa_snd_iec_subframe(short s, unsigned int frame, int right) {
+    unsigned int w = (unsigned int)(unsigned short)s << 12;
+    if (__nexa_snd_iec_status[frame >> 3] & (1u << (frame & 7))) w |= 0x40000000u;
+    if (__builtin_parity(w)) w |= 0x80000000u;
+    if (right) w |= 0x04;
+    else w |= frame == 0 ? 0x08u : 0x02u;
+    return w;
+}
+
 // Every ioctl below reports the same way: 0 or a frame count on success, a
 // negative errno on failure, so one recover path serves all of them.
 static int __nexa_snd_ctl(unsigned long req, void* arg) {
@@ -5504,6 +5553,7 @@ static int __nexa_snd_ctl(unsigned long req, void* arg) {
         if (errno == EINTR) continue;
         return -errno;
     }
+    if (req == NEXA_SND_IOCTL_PREPARE) __nexa_snd_iec_frame = 0;
     return 0;
 }
 
@@ -5567,7 +5617,8 @@ static int __nexa_snd_sw_params(unsigned long buffer) {
 
 // Configures the already-open device for 16-bit PCM at one rate. Four goes at
 // it, mono before stereo and the wanted buffer before whatever the driver
-// would rather have. The buffer wanted is five twenty-millisecond periods -- a
+// would rather have -- and then two more in IEC958 subframes, stereo, for the
+// card that takes nothing else. The buffer wanted is five twenty-millisecond periods -- a
 // tenth of a second, the same depth the mixer aims to keep queued and the same
 // order as the four 2048-sample waveOut buffers on Windows -- and the second
 // attempt bounds the buffer from above rather than leaving it free, because
@@ -5578,15 +5629,19 @@ static int __nexa_snd_configure(int rate) {
     unsigned int period = (unsigned int)(rate / 50);
     if (period < 32) period = 32;
     int channels = 1;
-    while (channels < 3) {
+    while (channels < 4) {
+        // The third pass is IEC958: always two channels, one subframe each.
+        const int iec = channels == 3;
         int attempt = 0;
         while (attempt < 2) {
             struct __nexa_snd_hw_params hw;
             __nexa_snd_params_any(&hw);
             __nexa_snd_mask_one(&hw, NEXA_SND_PARAM_ACCESS, NEXA_SND_ACCESS_RW_INTERLEAVED);
-            __nexa_snd_mask_one(&hw, NEXA_SND_PARAM_FORMAT, NEXA_SND_FORMAT_S16_LE);
+            __nexa_snd_mask_one(&hw, NEXA_SND_PARAM_FORMAT,
+                                iec ? NEXA_SND_FORMAT_IEC958_SUBFRAME_LE : NEXA_SND_FORMAT_S16_LE);
             __nexa_snd_mask_one(&hw, NEXA_SND_PARAM_SUBFORMAT, NEXA_SND_SUBFORMAT_STD);
-            __nexa_snd_want(&hw, NEXA_SND_PARAM_CHANNELS, (unsigned int)channels, (unsigned int)channels);
+            const unsigned int ch = iec ? 2u : (unsigned int)channels;
+            __nexa_snd_want(&hw, NEXA_SND_PARAM_CHANNELS, ch, ch);
             __nexa_snd_want(&hw, NEXA_SND_PARAM_RATE, (unsigned int)rate, (unsigned int)rate);
             if (attempt == 0) {
                 __nexa_snd_want(&hw, NEXA_SND_PARAM_PERIOD_SIZE, period, period);
@@ -5595,7 +5650,9 @@ static int __nexa_snd_configure(int rate) {
                 __nexa_snd_want(&hw, NEXA_SND_PARAM_BUFFER_SIZE, 32, (unsigned int)(rate / 5));
             }
             if (__nexa_snd_ctl(NEXA_SND_IOCTL_HW_PARAMS, &hw) == 0) {
-                __nexa_snd_channels = channels;
+                __nexa_snd_channels = (int)ch;
+                __nexa_snd_iec = iec;
+                if (iec) __nexa_snd_iec_setup(rate);
                 __nexa_snd_period = __nexa_snd_got(&hw, NEXA_SND_PARAM_PERIOD_SIZE);
                 return __nexa_snd_sw_params(__nexa_snd_got(&hw, NEXA_SND_PARAM_BUFFER_SIZE));
             }
@@ -5631,6 +5688,7 @@ static int __nexa_snd_try(const char* path, int rate) {
     __nexa_snd_fd = -1;
     __nexa_snd_period = 0;
     __nexa_snd_channels = 1;
+    __nexa_snd_iec = 0;
     return 0;
 }
 
@@ -5702,7 +5760,20 @@ static int __nexa_snd_open(int rate) {
 static long __nexa_snd_writei(const short* buf, unsigned long frames) {
     struct __nexa_snd_xferi x;
     if (frames > NEXA_PCM_LEN) frames = NEXA_PCM_LEN;
-    if (__nexa_snd_channels == 2) {
+    if (__nexa_snd_iec) {
+        // Built from the block position of the first frame; the position moves
+        // on only by the frames the card took, so a partial write picks up
+        // where the card stopped.
+        unsigned long i = 0;
+        unsigned int f = __nexa_snd_iec_frame;
+        while (i < frames) {
+            __nexa_snd_iec_buf[i * 2] = __nexa_snd_iec_subframe(buf[i], f, 0);
+            __nexa_snd_iec_buf[i * 2 + 1] = __nexa_snd_iec_subframe(buf[i], f, 1);
+            f = f + 1 == 192 ? 0 : f + 1;
+            i++;
+        }
+        x.buf = (const void*)__nexa_snd_iec_buf;
+    } else if (__nexa_snd_channels == 2) {
         unsigned long i = 0;
         while (i < frames) {
             __nexa_snd_lr[i * 2] = buf[i];
@@ -5716,7 +5787,9 @@ static long __nexa_snd_writei(const short* buf, unsigned long frames) {
     x.result = 0;
     x.frames = frames;
     int r = __nexa_snd_ctl(NEXA_SND_IOCTL_WRITEI, &x);
-    return r < 0 ? (long)r : x.result;
+    if (r < 0) return (long)r;
+    if (__nexa_snd_iec && x.result > 0) __nexa_snd_iec_frame = (unsigned int)((__nexa_snd_iec_frame + (unsigned long)x.result) % 192);
+    return x.result;
 }
 
 // Putting a broken stream back: an underrun is prepared away, and a stream the
@@ -5765,6 +5838,7 @@ static void __nexa_snd_close() {
     __nexa_snd_fd = -1;
     __nexa_snd_period = 0;
     __nexa_snd_channels = 1;
+    __nexa_snd_iec = 0;
 }
 
 // --- the stream, as gfx.audio() and the mixer see it -------------------------

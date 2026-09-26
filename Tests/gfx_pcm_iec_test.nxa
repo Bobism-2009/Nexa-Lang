@@ -1,0 +1,21 @@
+// Plays a known ramp through gfx.audio() for the iec958 half of
+// Tests/gfx_pcm_cases.sh, where the "card" is a stand-in that takes IEC958
+// subframes and nothing else -- as the Raspberry Pi's HDMI ports do. The suite
+// checks every word the card was handed against the samples fed here, so the
+// ramp formula is repeated there and the two must stay the same.
+
+#include <std/gfx>
+#include <std/io>
+
+fn main() {
+    io.println("audio=" + gfx.audio(48000));
+    let fed: int = 0;
+    let i: int = 0;
+    while (i < 500) {
+        fed = fed + gfx.sample((i * 131) % 65536 - 32768);
+        i = i + 1;
+    }
+    gfx.audio_flush();
+    io.println("fed=" + fed);
+    io.println("done");
+}

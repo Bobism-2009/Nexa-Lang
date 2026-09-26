@@ -760,7 +760,10 @@ ARGUMENT TYPES
                                    will only take stereo or its own rate gets both, and
                                    gfx.play is matched to whatever it took -- so on one, raw
                                    gfx.sample plays at the card's rate rather than the rate
-                                   asked for. With no card at all this returns 0 and the
+                                   asked for. An output that takes no PCM at all, only
+                                   IEC958 subframes -- the Raspberry Pi 4/5 HDMI ports --
+                                   is fed subframes built from the samples, as ALSA does.
+                                   With no card at all this returns 0 and the
                                    rest of the audio API stays quiet rather than failing
                                    gfx.close() also closes the stream
   gfx.sample(s)                  - queue one signed 16-bit sample (-32768..32767); 1/0
