@@ -116,7 +116,8 @@ FILE='#include <std/file>'
 NET='#include <std/network>'
 CRYPTO='#include <std/crypto>'
 TIME='#include <std/time>'
-RANDOM='#include <std/random>'
+# Not RANDOM: bash (Git Bash's sh) reads that name as a new random number each time.
+RAND='#include <std/random>'
 
 echo "-- accept: every builtin that takes an argument, called correctly"
 
@@ -282,7 +283,7 @@ accept crypto_ok          "$CRYPTO" '    let a = crypto.sha256("x");
     let j = crypto.xor("x", 1, 2, 3);'
 
 accept time_ok            "$TIME" '    time.sleep(10);'
-accept random_ok          "$RANDOM" '    random.seed(7);
+accept random_ok          "$RAND" '    random.seed(7);
     let r = random.int(1, 6);'
 
 echo "-- allow: the conversions this check must not take away"
@@ -448,7 +449,7 @@ reject crypto_bad_data    "$CRYPTO" '    let xs: []int = [1];
 
 reject time_bad_sleep     "$TIME" '    time.sleep("1000");' \
     'time.sleep(ms) expects a number for ms, but got text'
-reject random_bad_int     "$RANDOM" '    let r = random.int("1", 6);' \
+reject random_bad_int     "$RAND" '    let r = random.int("1", 6);' \
     'random.int(min, max) expects a number for min, but got text'
 
 if [ "$fails" -eq 0 ]; then
