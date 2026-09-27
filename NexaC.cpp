@@ -1602,15 +1602,22 @@ static std::string nexaBuildCompileCmd(
     // Native ELF output (Linux exe or .so), not mingw-cross (PE) builds.
     const bool elfTarget = !buildWin && !buildDll;
     if (elfTarget) {
-        // No -z max-page-size: the linker's default is the largest page size the CPU's kernels
-        // use (64KB on aarch64), and a smaller one makes a binary that only loads on kernels
-        // with that page size. The Raspberry Pi 5 kernel uses 16KB pages; a binary linked for
-        // 4KB segfaulted there before main.
+        // Page size: the linker's default is the largest page size the CPU's kernels use, and
+        // a smaller one makes a binary that only loads on kernels with pages that small or
+        // smaller. x86-64 keeps the default; aarch64 chooses 16KB below.
         // Release drops the build-id; debug asks for one outright. Merely not passing
         // --build-id=none is not enough: lld (and a plainly-configured GNU ld) emits no
         // build-id unless asked, and the build-id is how a debugger or symbol server pairs
         // a binary with separated debug info.
         cmd += debugBuild ? " -Wl,--build-id=sha1" : " -Wl,--build-id=none";
+#if defined(__aarch64__)
+        // GNU ld on aarch64 lays the RELRO region out for 64KB pages, padding every binary
+        // to ~67KB (hello world included). 16KB pages keep RELRO and run on 4KB and 16KB
+        // kernels -- every Raspberry Pi and most ARM distributions -- but not on the 64KB
+        // kernels some ARM servers use: hello world 67KB -> 18KB. 4KB would not do: a binary
+        // linked for 4KB pages segfaulted on the Pi 5's 16KB kernel before main.
+        cmd += " -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384";
+#endif
     }
     if (elfTarget && !buildShared) {
         // Self-contained w.r.t. the C++ toolchain runtime: embed libstdc++ and libgcc so the
