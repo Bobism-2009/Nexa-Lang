@@ -1,0 +1,34 @@
+// Names a C++ compiler would trip on, kept working in every build. --preserve-names
+// (and --debug, which implies it) keeps names as written, so C++ keywords, a local
+// hiding a parameter, a global or a function, and `let x = x + 1;` over an outer x
+// all have to come out as distinct, valid C++ names. Tests/debug_flag_cases.sh
+// builds this with --debug and compares against the same .expected.
+#include <std/io>
+#include <std/thread>
+let total = 100;
+let class = 3;
+fn count(n: int): int { return n + 1; }
+fn double(n: int): int { return n * 2; }
+fn bump(p: *int, n: int) { *p += n; }
+fn shadowParam(x: int, long: int): int {
+    let x = x + 1;
+    let long = long * 10;
+    return x + long;
+}
+fn main() {
+    let x = 5;
+    if (true) { let x = x + 1; io.println("inner ", x); }
+    io.println("outer ", x);
+    let count = count(1) + double(2);
+    io.println("count ", count, " class ", class);
+    let total = 7;
+    let t = thread.spawn(bump(&total, 3));
+    thread.join(t);
+    io.println("total ", total);
+    let add = fn(x: int, int: int): int { return x + int; };
+    io.println("lambda ", add(1, 2), " ", shadowParam(1, 2));
+    for (i, 2) { for (i, 2) { io.print(i); } }
+    io.println("");
+    let m: map[string]int; m["k"] = 1;
+    for (k, v in m) { let v = v + 1; io.println(k, v); }
+}

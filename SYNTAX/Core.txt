@@ -380,7 +380,7 @@ STRING METHODS (core; no #include required)
     s[i]           - character at index i (type char); i is 0-based
     s[i] = 'x';    - replace character at i (also accepts int code point)
     s[a:b]         - substring copy (half-open); also s[:n], s[n:], s[:]
-    Bounds are not checked (same as C++ std::string).
+    Bounds are checked only in a --debug build, as for slices (see SLICES).
     Note: []string indexing still returns string (parts[i]), not char.
 
   Indexing chains: grid[i][j], v["b"][1], xs[1:3][0], s.split(",")[0].
@@ -444,8 +444,17 @@ SLICES ([]T)
     io.println(xs.count(9));      // how many elements equal 9
     for (x in xs) { ... }
 
-  xs.pop() on an empty slice is undefined behaviour, the same as indexing out of range.
-  There is no bounds check; check len(xs) first if the slice may be empty.
+  An index outside [0, len) -- on a slice or a string, reading or writing -- is
+  checked only in a --debug build, which stops there, after what the program
+  printed, with:
+      index 5 out of range (len 2)
+  A normal build does not check, and an index out of range is undefined, as in C:
+  it can read garbage and carry on. The check is left out because it can make a
+  tight loop over a 2D grid several times slower. Build with --debug to find a
+  bad index; check len(xs) first where one can happen.
+
+  xs.pop() on an empty slice is undefined behaviour in every build; check len(xs)
+  first if the slice may be empty.
 
   xs.insert(i, v) and xs.remove(i) differ on purpose. insert clamps, because an
   append is a sensible reading of "insert past the end". remove has no such
@@ -612,6 +621,7 @@ COMPILE-TIME CHECKS
   legitimately name symbols Nexa never sees.
 
   Still undefined behaviour by design, not diagnosed: division by zero,
-  out-of-bounds indexing on a fixed array, reading an uninitialized local,
+  out-of-bounds indexing on a fixed array, indexing a slice or string out of
+  range (a --debug build stops at it), reading an uninitialized local,
   popping an empty slice, xs.remove(i) with i outside [0, len), and
   xs.min() / xs.max() on an empty slice.

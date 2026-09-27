@@ -137,7 +137,8 @@ ERRORS: TRY / CATCH / THROW
     anywhere; e is the Result's error text (see Result[T] in Core.txt).
   Nothing else does. The std modules report failure through Result, a return
   value or ok(); io.to_int("zz") returns 0. An index past the end of a slice is
-  not an error that can be caught either -- check len(xs) first.
+  not an error that can be caught either: a --debug build stops at it, and a
+  normal build does not check (SLICES in Core.txt). Check len(xs) first.
 
   An error nothing catches ends the program. What it printed before is kept,
   stderr gets "Uncaught error: <message>", and it exits non-zero.

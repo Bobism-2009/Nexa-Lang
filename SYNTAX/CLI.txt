@@ -46,6 +46,10 @@ OPTIONS
                     * adds -fsanitize=address,undefined when the C++ compiler can link
                       it; otherwise falls back to UBSan, then UBSan trap mode, then
                       plain -g, printing which one it used
+                    * slice and string indexes are checked: a bad one stops the
+                      program with "index 5 out of range (len 2)" after what it
+                      printed. A normal build does not check (it can slow a tight
+                      2D loop several times), so --debug is how to find one
                     * with --run the binary is kept (not deleted) so you can re-run it
                       under a debugger; it is written to the normal output path
                     * the debugger steps through your .nxa source: every statement gets

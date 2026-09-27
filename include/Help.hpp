@@ -176,6 +176,9 @@ BUILD
                        -fsanitize=address,undefined when the compiler can
                          link it, else UBSan, else UBSan trap, else plain -g,
                          printing which one it used
+                       slice and string indexes are checked: a bad one stops
+                         with "index 5 out of range (len 2)"; release builds
+                         do not check
                        the debugger steps through your .nxa: every statement
                          carries a #line back to the file and line you wrote
                        the generated C++ is kept as <output>.debug.cpp, which

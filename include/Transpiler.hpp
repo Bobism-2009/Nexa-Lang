@@ -433,6 +433,7 @@ public:
         }
         std::string moduleCppIncludes = modules_.getCppIncludes(cppUsage);
         out << moduleCppIncludes;
+        if (lineDirectives_) out << kIndexCheckRuntime;
         // Where __nexa_show goes if a slice or map is printed; known only once
         // the program has been written out, so the line is filled in (or
         // dropped) then.
@@ -804,7 +805,7 @@ public:
         }
 
         auto fnNameInitOnly = [&](const std::string& name) -> std::string {
-            if (preserveNames_) return name;
+            if (preserveNames_) return cppSafeName(name);
             return "__nexa_fn_" + std::to_string(slotForZeroArgFunctionNamed(name));
         };
 
@@ -917,7 +918,7 @@ public:
                 std::vector<std::pair<std::string, std::string>> dllStringParams;
                 for (size_t i = 0; i < node.paramNames.size(); i++) {
                     if (i > 0) out << ", ";
-                    std::string pname = preserveNames_ ? node.paramNames[i] : ("__nexa_param_" + std::to_string(i));
+                    std::string pname = preserveNames_ ? preservedVarName(node.paramNames[i], varMap) : ("__nexa_param_" + std::to_string(i));
                     std::string nexaT = "int";
                     if (i < node.paramTypes.size() && !node.paramTypes[i].empty()) {
                         nexaT = canonicalParamType(node, i);
@@ -993,7 +994,7 @@ public:
                     std::map<std::string, bool> varIsBool = globalVarIsBool;
                     std::map<std::string, bool> varIsEnum = globalVarIsEnum;
                     if (sliceMain) {
-                        std::string aname = preserveNames_ ? node.paramNames[0] : "__nexa_var_0";
+                        std::string aname = preserveNames_ ? preservedVarName(node.paramNames[0], varMap) : "__nexa_var_0";
                         varMap[node.paramNames[0]] = aname;
                         varIsString[node.paramNames[0]] = true;
                         varIdx = 1;
@@ -1043,13 +1044,14 @@ public:
             if (node.initFromDllLoad) {
                 throw std::runtime_error("Global variable cannot use dll.load()");
             }
-            std::string vname = preserveNames_ ? node.value : ("__nexa_g_" + std::to_string(globalIdx++));
+            std::string vname = preserveNames_ ? cppSafeName(node.value) : ("__nexa_g_" + std::to_string(globalIdx++));
             if (!node.children.empty() && node.children[0].type == AstNode::Type::OsGetenv &&
                 node.children[0].children.empty()) {
                 const std::string& envName = node.children[0].value;
                 out << "const char* __nexa_ge_" << globalIdx << " = getenv(\"" << escapeString(envName) << "\");\n";
                 out << "std::string " << vname << " = __nexa_ge_" << globalIdx << " ? __nexa_ge_" << globalIdx << " : \"\";\n";
                 globalVarMap[node.value] = vname;
+                globalCppNames_.insert(vname);
                 globalVarIsString[node.value] = true;
                 globalVarIsArray[node.value] = false;
                 globalIdx++;
@@ -1059,6 +1061,7 @@ public:
             if (!node.children.empty() && node.children[0].type == AstNode::Type::OsPlatform) {
                 out << "std::string " << vname << " = __nexa_os_platform();\n";
                 globalVarMap[node.value] = vname;
+                globalCppNames_.insert(vname);
                 globalVarIsString[node.value] = true;
                 globalVarIsArray[node.value] = false;
                 justEmittedGlobal = true;
@@ -1067,6 +1070,7 @@ public:
             if (!node.children.empty() && node.children[0].type == AstNode::Type::OsExeDir) {
                 out << "std::string " << vname << " = __nexa_exe_dir();\n";
                 globalVarMap[node.value] = vname;
+                globalCppNames_.insert(vname);
                 globalVarIsString[node.value] = true;
                 globalVarIsArray[node.value] = false;
                 justEmittedGlobal = true;
@@ -1083,11 +1087,13 @@ public:
                     globalVarIsString[node.value] = false;
                 }
                 globalVarMap[node.value] = vname;
+                globalCppNames_.insert(vname);
                 globalVarIsArray[node.value] = false;
                 justEmittedGlobal = true;
                 continue;
             }
             globalVarMap[node.value] = vname;
+                globalCppNames_.insert(vname);
             globalVarIsConst[node.value] = node.isConst;
             globalVarIsFloat[node.value] = (!node.declType.empty() && node.declType == "float") || node.initIsFloat;
             globalVarIsChar[node.value] = (!node.declType.empty() && node.declType == "char") || node.initIsChar;
@@ -1389,6 +1395,9 @@ private:
     const std::vector<AstNode>& ast_;
     const Modules& modules_;
     bool preserveNames_;
+    // The C++ names of the program's globals: a thread job captures a local whose
+    // address it takes by reference, and a global cannot be captured at all.
+    std::set<std::string> globalCppNames_;
     bool buildDll_;
     CppTarget target_;
     // Debug builds map generated C++ back to the .nxa source with `#line` directives.
@@ -2090,8 +2099,61 @@ private:
     std::string cppFnNameForSlot(size_t slotIdx) const {
         const FnOverloadSlot& sl = fnOverloadSlots_.at(slotIdx);
         if (ast_[sl.astIndex].isExtern) return ast_[sl.astIndex].value;
-        if (preserveNames_) return ast_[sl.astIndex].value;
+        if (preserveNames_) return cppSafeName(ast_[sl.astIndex].value);
         return "__nexa_fn_" + std::to_string(slotIdx);
+    }
+
+    static bool isCppKeyword(const std::string& n) {
+        static const std::set<std::string> kw = {
+            "alignas", "alignof", "and", "and_eq", "asm", "auto", "bitand", "bitor", "bool",
+            "break", "case", "catch", "char", "char8_t", "char16_t", "char32_t", "class",
+            "compl", "concept", "const", "consteval", "constexpr", "constinit", "const_cast",
+            "continue", "co_await", "co_return", "co_yield", "decltype", "default", "delete",
+            "do", "double", "dynamic_cast", "else", "enum", "explicit", "export", "extern",
+            "false", "float", "for", "friend", "goto", "if", "inline", "int", "long", "mutable",
+            "namespace", "new", "noexcept", "not", "not_eq", "nullptr", "operator", "or",
+            "or_eq", "private", "protected", "public", "register", "reinterpret_cast",
+            "requires", "return", "short", "signed", "sizeof", "static", "static_assert",
+            "static_cast", "struct", "switch", "template", "this", "thread_local", "throw",
+            "true", "try", "typedef", "typeid", "typename", "union", "unsigned", "using",
+            "virtual", "void", "volatile", "wchar_t", "while", "xor", "xor_eq",
+            "NULL", "std", "errno", "stdin", "stdout", "stderr", "assert", "offsetof",
+        };
+        return kw.count(n) > 0;
+    }
+
+    // A name a Nexa program may use that C++ reserves (`fn double`, `let long`) gets
+    // a trailing underscore under --preserve-names; other names are kept as written.
+    static std::string cppSafeName(const std::string& n) {
+        return isCppKeyword(n) ? n + "_" : n;
+    }
+
+    // The C++ name of a new variable under --preserve-names: the name written, unless
+    // C++ reserves it or it already means something where it is declared -- a
+    // parameter, an outer local, a global, a function. Then it gets a number: x_2.
+    // C++ rejects a parameter's shadow in the function body as a redefinition, reads
+    // `let x = x + 1;` as the new x, and lets a local hide a function it then calls.
+    std::string preservedVarName(const std::string& n, const std::map<std::string, std::string>& visible) const {
+        const std::string base = cppSafeName(n);
+        auto taken = [&](const std::string& c) {
+            for (const auto& kv : visible) {
+                if (kv.second == c) return true;
+            }
+            for (const auto& slot : fnOverloadSlots_) {
+                if (cppSafeName(slot.name) == c) return true;
+            }
+            return structCppNames_.count(c) > 0 || enumCppNames_.count(c) > 0;
+        };
+        std::string c = base;
+        for (int k = 2; taken(c); ++k) c = base + "_" + std::to_string(k);
+        return c;
+    }
+
+    // The C++ name a variable was declared under (the name itself for one NexaC did
+    // not declare, such as a C/C++ header's).
+    static std::string cppVarName(const std::map<std::string, std::string>& varMap, const std::string& n) {
+        auto it = varMap.find(n);
+        return it != varMap.end() ? it->second : n;
     }
 
     std::string emitThreadJobFn(const AstNode& e,
@@ -2122,8 +2184,7 @@ private:
         std::function<void(const AstNode&)> addrs = [&](const AstNode& n) {
             if (n.type == AstNode::Type::ExprAddrOf && !n.children.empty()) {
                 auto it = varMap.find(exprRootVarName(n.children[0]));
-                if (it != varMap.end() && (it->second.rfind("__nexa_var_", 0) == 0 ||
-                                           it->second.rfind("__nexa_param_", 0) == 0)) {
+                if (it != varMap.end() && !globalCppNames_.count(it->second)) {
                     byRef.insert(it->second);
                 }
             }
@@ -4843,6 +4904,47 @@ private:
     // io.println of a slice or map: [1, 2, 3], ["a", "b"], {"k": 1}, nested as
     // deep as the value is. Text inside is quoted, so ["a b"] is one element.
     mutable bool needShow_ = false;
+    // A --debug build checks every slice and string index and stops at a bad one,
+    // naming it; a release build indexes unchecked. The check measured free on most
+    // code but 5-8x slower on a nested 2D loop, which it keeps from vectorizing
+    // (Tests/bench, "grid"). A map, a pointer or anything else passes through.
+    static constexpr const char* kIndexCheckRuntime = R"NEXA_IX(#include <cstdio>
+#include <cstdlib>
+#include <string>
+#include <utility>
+#include <vector>
+[[noreturn]] __attribute__((noinline, cold)) static void __nexa_index_fail(long long __i, unsigned long long __n) {
+    std::fflush(stdout);
+    std::fprintf(stderr, "index %lld out of range (len %llu)\n", __i, __n);
+    std::abort();
+}
+template <class __C, class __I> inline decltype(auto) __nexa_ix(__C&& __c, __I __i) {
+    return std::forward<__C>(__c)[__i];
+}
+template <class __T, class __A, class __I> inline decltype(auto) __nexa_ix(std::vector<__T, __A>& __v, __I __i) {
+    if ((unsigned long long)(long long)__i >= __v.size()) __nexa_index_fail((long long)__i, __v.size());
+    return __v[(size_t)__i];
+}
+template <class __T, class __A, class __I> inline decltype(auto) __nexa_ix(const std::vector<__T, __A>& __v, __I __i) {
+    if ((unsigned long long)(long long)__i >= __v.size()) __nexa_index_fail((long long)__i, __v.size());
+    return __v[(size_t)__i];
+}
+template <class __I> inline char& __nexa_ix(std::string& __s, __I __i) {
+    if ((unsigned long long)(long long)__i >= __s.size()) __nexa_index_fail((long long)__i, __s.size());
+    return __s[(size_t)__i];
+}
+template <class __I> inline const char& __nexa_ix(const std::string& __s, __I __i) {
+    if ((unsigned long long)(long long)__i >= __s.size()) __nexa_index_fail((long long)__i, __s.size());
+    return __s[(size_t)__i];
+}
+)NEXA_IX";
+
+    // `base[index]`, checked in a --debug build.
+    std::string indexCpp(const std::string& base, const std::string& index) const {
+        if (lineDirectives_) return "__nexa_ix(" + base + ", " + index + ")";
+        return base + "[" + index + "]";
+    }
+
     static constexpr const char* kShowMarker = "// [nexa:show]";
     static constexpr const char* kShowRuntime = R"NEXA_SHOW(#include <cstdio>
 #include <map>
@@ -5571,7 +5673,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         int varIdx = 0;
         for (size_t i = 0; i < node.paramNames.size(); i++) {
             if (i > 0) out << ", ";
-            std::string pname = preserveNames_ ? node.paramNames[i] : ("__nexa_param_" + std::to_string(i));
+            std::string pname = preserveNames_ ? preservedVarName(node.paramNames[i], varMap) : ("__nexa_param_" + std::to_string(i));
             out << paramSigCpp(node, i) << " " << pname;
             varMap[node.paramNames[i]] = pname;
         }
@@ -5678,8 +5780,11 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         for (const AstNode& child : children) {
             LineMarkScope lineMark(lineDirectives_, out, child, indent);
             if (child.type == AstNode::Type::Variable) {
-                std::string vname = preserveNames_ ? child.value : ("__nexa_var_" + std::to_string(varIdx++));
-                if (!preserveNames_) varMap[child.value] = vname;
+                std::string vname = preserveNames_ ? preservedVarName(child.value, varMap) : ("__nexa_var_" + std::to_string(varIdx++));
+                // `let x = x + 1;` over an outer x reads the outer one: the new name takes
+                // over only once the initializer has been written (at the end of this branch).
+                const auto shadowed = varMap.find(child.value);
+                varMap[child.value] = shadowed != varMap.end() ? shadowed->second : vname;
                 varIsConst[child.value] = child.isConst;
                 bool isFloat = (!child.declType.empty() && child.declType == "float") || child.initIsFloat;
                 bool isChar = (!child.declType.empty() && child.declType == "char") || child.initIsChar;
@@ -5898,6 +6003,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     std::string c = child.isConst ? "const " : "";
                     out << indent << c << "std::string " << vname << " = " << emitCppStringValue(child.initValue) << ";\n";
                 }
+                varMap[child.value] = vname;
             } else if (child.type == AstNode::Type::IoPrintln) {
                 if (!child.children.empty()) {
                     for (size_t ai = 0; ai < child.children.size(); ++ai) {
@@ -5905,7 +6011,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                         emitIoPrintArg(out, indent, child.children[ai], varMap, varIsString, varIsFloat, varIsChar, varIsBool, varIsEnum, nl);
                     }
                 } else if (child.isVarRef) {
-                    std::string v = preserveNames_ ? child.value : varMap.at(child.value);
+                    std::string v = cppVarName(varMap, child.value);
                     AstNode vref{AstNode::Type::ExprVarRef, child.value, {}};
                     std::string ntype = inferExprNexaType(vref);
                     bool isStr = (ntype == "string");
@@ -5938,7 +6044,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                         emitIoPrintArg(out, indent, a, varMap, varIsString, varIsFloat, varIsChar, varIsBool, varIsEnum, false);
                     }
                 } else if (child.isVarRef) {
-                    std::string v = preserveNames_ ? child.value : varMap.at(child.value);
+                    std::string v = cppVarName(varMap, child.value);
                     AstNode vref{AstNode::Type::ExprVarRef, child.value, {}};
                     std::string ntype = inferExprNexaType(vref);
                     bool isStr = (ntype == "string");
@@ -6023,7 +6129,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 std::string idxExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 out << indent << "__nexa_thread_worker_join(" << idxExpr << ");\n";
             } else if (child.type == AstNode::Type::DllCall) {
-                std::string h = preserveNames_ ? child.children[0].value : varMap.at(child.children[0].value);
+                std::string h = cppVarName(varMap, child.children[0].value);
                 std::string paramTypes;
                 std::string fnArgs;
                 for (size_t ai = 1; ai < child.children.size(); ai++) {
@@ -6071,7 +6177,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                         out << indent << "std::system((" << expr << ").c_str());\n";
                     }
                 } else if (child.isVarRef) {
-                    std::string v = preserveNames_ ? child.value : varMap.at(child.value);
+                    std::string v = cppVarName(varMap, child.value);
                     out << indent << "std::system(" << v << ".c_str());\n";
                 } else {
                     out << indent << "std::system(\"" << escapeString(child.value) << "\");\n";
@@ -6260,7 +6366,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (lhsT == "bool" && rhsT == "string") {
                     throw std::runtime_error("Cannot assign string to bool '" + child.value + "'");
                 }
-                std::string v = preserveNames_ ? child.value : varMap.at(child.value);
+                std::string v = cppVarName(varMap, child.value);
                 out << indent << v << " = " << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::AssnIndex) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
@@ -6269,10 +6375,10 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (child.children.size() < 2) {
                     throw std::runtime_error("Internal: index assignment missing value");
                 }
-                std::string v = preserveNames_ ? child.value : varMap.at(child.value);
+                std::string v = cppVarName(varMap, child.value);
                 std::string lhs = v;
                 for (size_t i = 0; i + 1 < child.children.size(); i++) {
-                    lhs += "[" + emitExpr(child.children[i], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) + "]";
+                    lhs = indexCpp(lhs, emitExpr(child.children[i], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool));
                 }
                 const AstNode& rhs = child.children.back();
                 std::string val = emitExpr(rhs, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
@@ -6298,7 +6404,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
-                std::string v = preserveNames_ ? child.value : varMap.at(child.value);
+                std::string v = cppVarName(varMap, child.value);
                 if (varIsString.count(child.value) && varIsString.at(child.value)) {
                     // `s += x` appends in place. Emitting `s = s + x` instead built a whole
                     // new string every time, which turns the ordinary "build a string in a
@@ -6313,43 +6419,43 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
-                std::string v = preserveNames_ ? child.value : varMap.at(child.value);
+                std::string v = cppVarName(varMap, child.value);
                 out << indent << v << " = " << v << " - " << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::AssnMul) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
-                std::string v = preserveNames_ ? child.value : varMap.at(child.value);
+                std::string v = cppVarName(varMap, child.value);
                 out << indent << v << " = " << v << " * " << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::AssnDiv) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
-                std::string v = preserveNames_ ? child.value : varMap.at(child.value);
+                std::string v = cppVarName(varMap, child.value);
                 out << indent << v << " = " << v << " / " << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::AssnMod) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
-                std::string v = preserveNames_ ? child.value : varMap.at(child.value);
+                std::string v = cppVarName(varMap, child.value);
                 out << indent << v << " = " << v << " % " << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::AssnBitAnd) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
-                std::string v = preserveNames_ ? child.value : varMap.at(child.value);
+                std::string v = cppVarName(varMap, child.value);
                 out << indent << v << " = " << v << " & " << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::AssnBitOr) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
-                std::string v = preserveNames_ ? child.value : varMap.at(child.value);
+                std::string v = cppVarName(varMap, child.value);
                 out << indent << v << " = " << v << " | " << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::AssnBitXor) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
-                std::string v = preserveNames_ ? child.value : varMap.at(child.value);
+                std::string v = cppVarName(varMap, child.value);
                 std::string rhs = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 if (varIsString.count(child.value) && varIsString.at(child.value)) {
                     out << indent << "{ int __nexa_k = " << rhs << "; for (size_t __nexa_i = 0; __nexa_i < " << v << ".size(); __nexa_i++) "
@@ -6361,13 +6467,13 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
-                std::string v = preserveNames_ ? child.value : varMap.at(child.value);
+                std::string v = cppVarName(varMap, child.value);
                 out << indent << v << " = " << v << " << " << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::AssnShr) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
-                std::string v = preserveNames_ ? child.value : varMap.at(child.value);
+                std::string v = cppVarName(varMap, child.value);
                 out << indent << v << " = " << v << " >> " << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::InlineCpp) {
                 emitInlineCppRaw(out, stripInlineCppIncludeLines(child.value), indent);
@@ -6381,7 +6487,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 emitBlock(out, child.children[1].children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "    ", inStringSwitchCase);
                 out << indent << "}\n";
             } else if (child.type == AstNode::Type::For) {
-                std::string loopVar = preserveNames_ ? child.value : ("__nexa_for_" + std::to_string(varIdx++));
+                std::string loopVar = preserveNames_ ? preservedVarName(child.value, varMap) : ("__nexa_for_" + std::to_string(varIdx++));
                 auto it = varMap.find(child.value);
                 std::string prevVal = (it != varMap.end()) ? it->second : "";
                 bool prevStr = varIsString.count(child.value) ? varIsString[child.value] : false;
@@ -6404,7 +6510,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (!prevVal.empty()) { varMap[child.value] = prevVal; varIsString[child.value] = prevStr; varIsConst[child.value] = prevConst; varIsFloat[child.value] = prevFloat; varIsChar[child.value] = prevChar; varIsBool[child.value] = prevBool; varIsEnum[child.value] = prevEnum; }
                 else { varMap.erase(child.value); varIsString.erase(child.value); varIsConst.erase(child.value); varIsFloat.erase(child.value); varIsChar.erase(child.value); varIsBool.erase(child.value); varIsEnum.erase(child.value); }
             } else if (child.type == AstNode::Type::ForIn) {
-                std::string loopVar = preserveNames_ ? child.value : ("__nexa_for_" + std::to_string(varIdx++));
+                std::string loopVar = preserveNames_ ? preservedVarName(child.value, varMap) : ("__nexa_for_" + std::to_string(varIdx++));
                 auto it = varMap.find(child.value);
                 std::string prevVal = (it != varMap.end()) ? it->second : "";
                 bool prevStr = varIsString.count(child.value) ? varIsString[child.value] : false;
@@ -6468,7 +6574,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 std::string prevDecl2;
                 bool hadDecl2 = false;
                 if (kv) {
-                    loopVal = preserveNames_ ? valueName : ("__nexa_forv_" + std::to_string(varIdx++));
+                    loopVal = preserveNames_ ? preservedVarName(valueName, varMap) : ("__nexa_forv_" + std::to_string(varIdx++));
                     auto vit = varMap.find(valueName);
                     prevVal2 = (vit != varMap.end()) ? vit->second : "";
                     prevStr2 = varIsString.count(valueName) ? varIsString[valueName] : false;
@@ -6594,7 +6700,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     bool prevEnum = varIsEnum.count(catchNexa) ? varIsEnum[catchNexa] : false;
                     bool hadEnum = varIsEnum.count(catchNexa) > 0;
 
-                    std::string cppCatch = preserveNames_ ? catchNexa : ("__nexa_var_" + std::to_string(varIdx++));
+                    std::string cppCatch = preserveNames_ ? preservedVarName(catchNexa, varMap) : ("__nexa_var_" + std::to_string(varIdx++));
                     varMap[catchNexa] = cppCatch;
                     varIsString[catchNexa] = true;
                     varIsConst[catchNexa] = false;
@@ -6674,13 +6780,13 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
-                std::string v = preserveNames_ ? child.value : varMap.at(child.value);
+                std::string v = cppVarName(varMap, child.value);
                 out << indent << v << " = " << v << " + 1;\n";
             } else if (child.type == AstNode::Type::DecPost) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
-                std::string v = preserveNames_ ? child.value : varMap.at(child.value);
+                std::string v = cppVarName(varMap, child.value);
                 out << indent << v << " = " << v << " - 1;\n";
             }
         }
@@ -7133,7 +7239,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         for (size_t i = 0; i < e.paramNames.size(); i++) {
             if (i) sig += ", ";
             std::string nexaT = (i < pts.size()) ? pts[i] : "int";
-            std::string pname = preserveNames_ ? e.paramNames[i] : ("__nexa_lam_" + std::to_string(i));
+            std::string pname = preserveNames_ ? preservedVarName(e.paramNames[i], localMap) : ("__nexa_lam_" + std::to_string(i));
             sig += nexaTypeToCpp(nexaT) + " " + pname;
             localMap[e.paramNames[i]] = pname;
             localStr[e.paramNames[i]] = (nexaT == "string");
@@ -8082,12 +8188,12 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             }
             case AstNode::Type::ExprArrayIndex: {
                 if (e.children.size() >= 2) {
-                    return emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + "[" +
-                        emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + "]";
+                    return indexCpp(emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool),
+                                    emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool));
                 }
                 auto it = varMap.find(e.value);
                 std::string v = (it != varMap.end()) ? it->second : e.value;
-                return v + "[" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + "]";
+                return indexCpp(v, emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool));
             }
             case AstNode::Type::ExprSlice: {
                 if (e.children.empty()) {

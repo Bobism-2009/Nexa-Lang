@@ -292,6 +292,71 @@ else
     pass "default build emits no #line directives"
 fi
 
+# A --debug build checks slice and string indexes: a bad one stops the program,
+# after what it printed, naming the index and the length. In range, reads and
+# writes through slices, nested slices, strings and maps work as in release.
+# Release builds stay unchecked (a check keeps a nested 2D loop from vectorizing).
+cat > "$WORK/index.nxa" <<'NXA'
+#include <std/io>
+
+fn main(args: []string) {
+    let xs = [1, 2, 3];
+    let grid: [][]int = [[1, 2], [3, 4]];
+    let m: map[string]int;
+    let s = "hey";
+    xs[1] = 7; grid[1][0] += 5; m["a"] += 2; s[0] = 'H';
+    io.println(xs[1] + grid[1][0] + m["a"], " ", s, s[2]);
+    let which = len(args) > 1 ? args[1] : "";
+    if (which == "slice") { io.println(xs[len(xs)]); }
+    if (which == "nested") { grid[1][2] = 0; }
+    if (which == "string") { io.println(s[-1]); }
+}
+NXA
+EXE=""
+case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) EXE=".exe" ;; esac
+out=$("$NEXAC" "$WORK/index.nxa" --debug -o "$WORK/index$EXE" 2>&1)
+if [ $? -ne 0 ]; then
+    fail "debug index" "NexaC exited non-zero" "$out"
+else
+    got=$("$WORK/index$EXE" </dev/null 2>&1 | tr -d '\r')
+    if [ "$got" = "17 Heyy" ]; then pass "debug build: in-range indexing unchanged"; else fail "debug index" "in range printed" "$got"; fi
+    for c in "slice:index 3 out of range (len 3)" "nested:index 2 out of range (len 2)" "string:index -1 out of range (len 3)"; do
+        arg=${c%%:*}; want=${c#*:}
+        "$WORK/index$EXE" "$arg" >"$WORK/ix.out" 2>"$WORK/ix.err" </dev/null
+        code=$?
+        if [ "$code" -ne 0 ] && [ "$(tr -d '\r' <"$WORK/ix.out")" = "17 Heyy" ] && grep -q "$want" "$WORK/ix.err"; then
+            pass "debug build: bad $arg index stops with \"$want\""
+        else
+            fail "debug index $arg" "exit $code, wanted \"$want\" after the output" "$(cat "$WORK/ix.out" "$WORK/ix.err" | head -4)"
+        fi
+    done
+fi
+# --debug keeps names as written (it implies --preserve-names). These Tests/Lang
+# programs use names that C++ reserves or that hide another -- a variable called
+# double, a function called count, a let over a parameter -- and each failed to
+# build with --debug, or printed the wrong thing, while the default build was fine.
+LANG_DIR=$(cd "$(dirname "$0")" && pwd)/Lang
+for t in preserved_names scoping int_literals let_from_fields thread_spawn_address; do
+    out=$("$NEXAC" "$LANG_DIR/$t.nxa" --debug -o "$WORK/$t$EXE" 2>&1)
+    if [ $? -ne 0 ]; then
+        fail "debug $t" "does not build with --debug" "$(echo "$out" | grep -m2 -i error)"
+        continue
+    fi
+    got=$(cd "$LANG_DIR" && "$WORK/$t$EXE" </dev/null 2>&1 | tr -d '\r')
+    want=$(tr -d '\r' <"$LANG_DIR/$t.expected")
+    if [ "$got" = "$want" ]; then
+        pass "debug build of Lang/$t prints what the release build does"
+    else
+        fail "debug $t" "output differs from Lang/$t.expected" "$(echo "$got" | head -4)"
+    fi
+done
+out=$("$NEXAC" "$WORK/index.nxa" --source "$WORK/index_rel.cpp" 2>&1)
+if grep -q '__nexa_ix' "$WORK/index_rel.cpp" 2>/dev/null; then
+    fail "release index" "a release build checks indexes; only --debug should" ""
+else
+    pass "default build indexes unchecked"
+fi
+
 if [ $fails -eq 0 ]; then
     echo "All --debug cases passed."
     exit 0

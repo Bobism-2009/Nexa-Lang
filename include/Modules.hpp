@@ -1821,8 +1821,13 @@ public:
             if (usage.threadLambda) {
                 out += "static int __nexa_thread_spawn_fn(std::function<void()> fn) { return __nexa_thread_spawn_rec(std::move(fn)); }\n";
             }
+            // A joined thread's record is freed there (joining it again does nothing); left
+            // to the vector, every one showed as a leak in a --debug build's LeakSanitizer.
             out += "static void __nexa_thread_join(int idx) {\n";
-            out += "  if (idx >= 0 && static_cast<size_t>(idx) < __nexa_threads.size()) __nexa_thread_wait(__nexa_threads[idx]);\n";
+            out += "  if (idx < 0 || static_cast<size_t>(idx) >= __nexa_threads.size() || !__nexa_threads[idx]) return;\n";
+            out += "  __nexa_thread_wait(__nexa_threads[idx]);\n";
+            out += "  delete __nexa_threads[idx];\n";
+            out += "  __nexa_threads[idx] = nullptr;\n";
             out += "}\n";
             if (usage.threadWorker) {
                 out += "#include <deque>\n";
@@ -1868,7 +1873,7 @@ public:
                 out += "  return static_cast<int>(__nexa_workers.size()) - 1;\n";
                 out += "}\n";
                 out += "static void __nexa_thread_worker_run(int idx, std::function<void()> fn) {\n";
-                out += "  if (idx < 0 || static_cast<size_t>(idx) >= __nexa_workers.size()) return;\n";
+                out += "  if (idx < 0 || static_cast<size_t>(idx) >= __nexa_workers.size() || !__nexa_workers[idx]) return;\n";
                 out += "  __nexa_worker& wp = *__nexa_workers[idx];\n";
                 out += "  wp.lock();\n";
                 out += "  wp.jobs.push_back(std::move(fn));\n";
@@ -1876,13 +1881,16 @@ public:
                 out += "  wp.wake();\n";
                 out += "}\n";
                 out += "static void __nexa_thread_worker_join(int idx) {\n";
-                out += "  if (idx < 0 || static_cast<size_t>(idx) >= __nexa_workers.size()) return;\n";
+                out += "  if (idx < 0 || static_cast<size_t>(idx) >= __nexa_workers.size() || !__nexa_workers[idx]) return;\n";
                 out += "  __nexa_worker& wp = *__nexa_workers[idx];\n";
                 out += "  wp.lock();\n";
                 out += "  wp.stop = true;\n";
                 out += "  wp.unlock();\n";
                 out += "  wp.wake();\n";
                 out += "  __nexa_thread_wait(&wp.t);\n";
+                // Freed once stopped, as a joined thread is; run or join on it after does nothing.
+                out += "  delete __nexa_workers[idx];\n";
+                out += "  __nexa_workers[idx] = nullptr;\n";
                 out += "}\n";
             }
         }
