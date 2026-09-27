@@ -147,6 +147,9 @@ pick_cxx() {
 CXX=$(pick_cxx)
 if [ -z "$CXX" ]; then
     echo "skip gfx maxfps timing: no C++ compiler (set NEXA_CXX to force one)"
+elif [ "$(uname -s)" != "Linux" ]; then
+    # like the other suites' stand-in layers: the X11 stub is Linux's
+    echo "skip gfx maxfps timing: it builds against the X11 stand-in, on Linux"
 else
     # The stub's display starts switched off, so that every other headless
     # suite sees what a machine with no X server sees. This one needs the
@@ -180,6 +183,28 @@ STUB_ON
         fi
     fi
 fi
+
+# --- windows build: a silent program with a cap links (built, never run) --------
+#
+# On Windows the limiter asks winmm for a 1 ms tick. Its header came in only
+# with the audio backend, so a capped program that played no sound did not
+# compile; the transpile-only layer above cannot see that, since everything
+# Win32 is cut from a --source written anywhere else.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        printf '#include <std/gfx>\nfn main() {\n    if (gfx.open("cap", 64, 64, 1) == 1) {\n        gfx.maxfps(60);\n        gfx.present();\n    }\n}\n' > "$WORK/winbuild.nxa"
+        if "$NEXAC" "$WORK/winbuild.nxa" -o "$WORK/winbuild.exe" > "$WORK/winbuild.log" 2>&1; then
+            echo "ok windows: a capped program with no sound builds"
+        else
+            echo "FAIL windows: a capped program with no sound does not build"
+            grep -E 'error' "$WORK/winbuild.log" | head -n 3 | sed 's/^/  /'
+            fails=$((fails + 1))
+        fi
+        ;;
+    *)
+        echo "SKIP windows build: not on Windows"
+        ;;
+esac
 
 if [ $fails -eq 0 ]; then
     echo "gfx_maxfps ok"

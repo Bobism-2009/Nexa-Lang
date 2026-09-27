@@ -283,6 +283,27 @@ public:
         if (hasIo() && usage.ioReadln) {
             out += "#include <cstring>\n";
             out += "#include <string>\n";
+            // One line from stdin, however long, without its line ending; ""
+            // once input has run out, and io.eof() true from then on. (A fixed
+            // buffer read into twice split long lines, and at the end handed
+            // back whatever the buffer last held.)
+            out += "static bool __nexa_io_at_eof = false;\n";
+            out += "static std::string __nexa_io_readln() {\n";
+            out += "  fflush(stdout);\n";
+            out += "  std::string s;\n";
+            out += "  bool any = false;\n";
+            out += "  char buf[4096];\n";
+            out += "  while (fgets(buf, sizeof(buf), stdin)) {\n";
+            out += "    any = true;\n";
+            out += "    size_t n = strlen(buf);\n";
+            out += "    if (n > 0 && buf[n - 1] == '\\n') { s.append(buf, n - 1); break; }\n";
+            out += "    s.append(buf, n);\n";
+            out += "  }\n";
+            out += "  if (!any) __nexa_io_at_eof = true;\n";
+            out += "  if (!s.empty() && s.back() == '\\r') s.pop_back();\n";
+            out += "  return s;\n";
+            out += "}\n";
+            out += "static bool __nexa_io_eof() { return __nexa_io_at_eof; }\n";
         }
         if (hasIo() && usage.ioGetline) {
             out += "#include <string>\n";

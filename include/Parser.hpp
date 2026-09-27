@@ -16,7 +16,7 @@ namespace nexa {
 
 // AST node types - simple structure for our minimal grammar
 struct AstNode {
-    enum class Type { Include, CppHeaderInclude, IoPrint, IoPrintln, IoFlush, IoReadln, IoGetline, IoToInt, MainFunction, Function, FnCall, Variable, Assignment, OsSystem, OsExec, OsGetenv, OsPlatform, OsExeDir, OsGetProcessId,
+    enum class Type { Include, CppHeaderInclude, IoPrint, IoPrintln, IoFlush, IoReadln, IoGetline, IoToInt, IoEof, MainFunction, Function, FnCall, Variable, Assignment, OsSystem, OsExec, OsGetenv, OsPlatform, OsExeDir, OsGetProcessId,
                       OsHideConsoleWindow, OsShowConsoleWindow, OsMinimizeConsoleWindow, OsMaximizeConsoleWindow,
                       OsMessageBox, OsGrepKeys, OsKeyPressed,
                       OsLock, OsShutdown, OsReboot, OsSuspend, OsLogout,
@@ -2702,6 +2702,7 @@ private:
             // io.readln().trim(), os.getenv("HOME").upper(), file.read(p).split(",")[0].
             if (method == "readln") return applyIndexAndDotPostfix(parseIoReadlnExpr());
             if (method == "read_int") return applyIndexAndDotPostfix(parseIoReadIntExpr());
+            if (method == "eof") return parseIoEofExpr();
             if (method == "getline") return applyIndexAndDotPostfix(parseIoGetlineExpr());
             if (method == "to_int") return applyIndexAndDotPostfix(parseIoToIntExpr());
             if (method == "trim") return applyIndexAndDotPostfix(parseIoTrimExpr());
@@ -3633,6 +3634,21 @@ private:
             throw std::runtime_error("Expected '()' after readln at line " + std::to_string(peek().line));
         }
         return {AstNode::Type::IoReadln, "", {}};
+    }
+
+    // io.eof(): true once io.readln() has found no more input to read.
+    AstNode parseIoEofExpr() {
+        size_t line = peek().line;
+        if (!modules_.hasIo()) {
+            throw std::runtime_error("io.eof requires #include <std/io> at line " + std::to_string(line));
+        }
+        advance();  // io
+        advance();  // .
+        advance();  // eof
+        if (!match(TokenType::LParen) || !match(TokenType::RParen)) {
+            throw std::runtime_error("io.eof() takes no arguments at line " + std::to_string(line));
+        }
+        return {AstNode::Type::IoEof, "", {}};
     }
 
     // Same codegen as io.to_int(io.readln()) — one line without a temporary string binding.

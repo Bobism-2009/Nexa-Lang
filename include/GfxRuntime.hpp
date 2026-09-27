@@ -3913,6 +3913,13 @@ static long long __nexa_gfx_now_ns() {
 #endif
 }
 
+#ifdef _WIN32
+// timeBeginPeriod, below. The audio backend includes this too, but a silent
+// program has only <windows.h>, which WIN32_LEAN_AND_MEAN keeps from bringing
+// it; winmm itself is linked for every gfx program.
+#include <mmsystem.h>
+#endif
+
 static void __nexa_gfx_maxfps(int fps) {
     if (fps <= 0) {
         // Not a rejected argument: "no cap" is a thing to ask for, and it is

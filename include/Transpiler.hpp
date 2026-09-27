@@ -253,7 +253,8 @@ public:
                 case AstNode::Type::IoPrint:
                 case AstNode::Type::IoPrintln: cppUsage.ioPrint = true; break;
                 case AstNode::Type::IoFlush: cppUsage.ioFlush = true; break;
-                case AstNode::Type::IoReadln: cppUsage.ioReadln = true; break;
+                case AstNode::Type::IoReadln:
+                case AstNode::Type::IoEof: cppUsage.ioReadln = true; break;
                 case AstNode::Type::IoGetline: cppUsage.ioGetline = true; break;
                 case AstNode::Type::IoToInt: cppUsage.ioToInt = true; break;
                 case AstNode::Type::OsSystem: cppUsage.osSystem = true; break;
@@ -2454,6 +2455,7 @@ private:
             case AstNode::Type::ExprSizeof:
                 return "int";
             case AstNode::Type::IoToInt: return "int";
+            case AstNode::Type::IoEof: return "bool";
             case AstNode::Type::RandomInt: return "int";
             case AstNode::Type::MathCall:
                 // math.* operates in the floating-point domain and always yields float (double).
@@ -5412,10 +5414,7 @@ private:
                     nexaDeclStack_.back()[child.value] = nexaDeclFromVariableAst(child);
                 }
                 if (child.initFromReadln) {
-                    out << indent << "fflush(stdout);\n";
-                    out << indent << "char __nexa_buf[4096];\n";
-                    out << indent << "if (fgets(__nexa_buf, sizeof(__nexa_buf), stdin)) { __nexa_buf[strcspn(__nexa_buf, \"\\n\")] = 0; }\n";
-                    out << indent << "std::string " << vname << "(__nexa_buf);\n";
+                    out << indent << "std::string " << vname << " = __nexa_io_readln();\n";
                 } else if (child.initFromDllLoad) {
                     out << indent << "#ifdef _WIN32\n";
                     out << indent << "__nexa_dll_handles.push_back((void*)LoadLibraryA(\"" << escapeString(child.initValue) << "\"));\n";
@@ -6978,7 +6977,10 @@ private:
             case AstNode::Type::OsPlay:
                 return "__nexa_os_play(" + emitOsStringArg(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::IoReadln: {
-                return "([]{ fflush(stdout); char __b[4096]; if (fgets(__b, sizeof(__b), stdin)) __b[strcspn(__b, \"\\n\")] = 0; return std::string(__b); }())";
+                return "__nexa_io_readln()";
+            }
+            case AstNode::Type::IoEof: {
+                return "__nexa_io_eof()";
             }
             case AstNode::Type::IoGetline: {
                 std::string src = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);

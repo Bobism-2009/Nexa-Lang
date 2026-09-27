@@ -137,7 +137,11 @@ do_run_case() {
         } > "$WORK/res/$slot"
         return
     fi
-    got=$("$out" 2>&1)
+    # A test that reads stdin brings its input as <name>.stdin; the rest read
+    # an empty stdin, so a stray io.readln() ends rather than waits.
+    input=/dev/null
+    [ -f "${src%.nxa}.stdin" ] && input="${src%.nxa}.stdin"
+    got=$("$out" < "$input" 2>&1)
     rc=$?
     got=$(printf '%s\n' "$got" | tr -d '\r')
     if [ $rc -ne 0 ]; then

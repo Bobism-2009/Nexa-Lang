@@ -1,0 +1,22 @@
+// Reading stdin to its end: io.readln() gives each line whole (however long,
+// without its line ending, blank lines as ""), then "" once input has run out,
+// and io.eof() says which of the two a "" is.
+#include <std/io>
+
+fn main() {
+    let lines = 0;
+    let blank = 0;
+    let longest = 0;
+    let last = "";
+    while (true) {
+        let line = io.readln();
+        if (io.eof()) { break; }
+        lines++;
+        if (line == "") { blank++; }
+        if (line.len() > longest) { longest = line.len(); }
+        last = line;
+    }
+    io.println(f"{lines} lines, {blank} blank, longest {longest}, last [{last}]");
+    // past the end it stays ended
+    io.println(f"[{io.readln()}] {io.eof()}");
+}

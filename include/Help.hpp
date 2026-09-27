@@ -212,6 +212,7 @@ ENVIRONMENT
           io.println(a[, ...])     write, then a newline
           io.flush()               flush stdout
   in      io.readln()              one line from stdin, as a string
+          io.eof()                 true once readln has run out of input
           io.read_int()            one line from stdin, as an int
   text    io.to_int(s)             parse a decimal int (failure is 0)
           io.getline(text[, n])    line n of a buffer, 1-based

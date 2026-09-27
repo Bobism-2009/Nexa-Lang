@@ -17,7 +17,7 @@ Useful flags: `--filter strings` (one test), `--phase run`, `--jobs 4`,
 
 | Path | What it is | How it passes |
 | --- | --- | --- |
-| `Tests/Lang/*.nxa` | must compile and run | stdout matches the sibling `.expected` byte for byte |
+| `Tests/Lang/*.nxa` | must compile and run | stdout matches the sibling `.expected` byte for byte; stdin is the sibling `.stdin` if there is one, else empty |
 | `Tests/Lang/errors/*.nxa` | must **not** compile | NexaC exits non-zero and prints every line of the sibling `.expected` |
 | `Tests/Lang/known_bugs/*.nxa` | filed NexaC bugs | expected to fail; a pass is an `XPASS` and fails the run |
 
