@@ -26,6 +26,14 @@
 #   catch      Everywhere: with a try/catch in the program, .value() on an
 #              error is still an exception the catch receives.
 #
+#   uncaught   Everywhere, and in every kind of build -- the default, the
+#              stock runtime (NEXA_NO_SLIM=1), --debug, and a program with
+#              inline_cpp: a throw nothing catches keeps what the program
+#              printed, says "Uncaught error: <text>" on stderr and exits
+#              non-zero. (The stock handler dropped that output when stdout
+#              was a file or a pipe.) Windows and Linux: such a program, which
+#              keeps the exception runtime, is still under 128KB.
+#
 #   sh Tests/binary_size_cases.sh           (from the repo root)
 #
 # Usage: Tests/binary_size_cases.sh [path-to-NexaC]
@@ -152,6 +160,65 @@ if "$NEXAC" "$WORK/catch.nxa" -o "$WORK/catch$EXE" >"$WORK/b5.log" 2>&1; then
     if [ "$out" = "caught: no such file" ]; then ok catch; else bad catch "printed [$out]"; fi
 else
     bad catch "build failed: $(tail -3 "$WORK/b5.log")"
+fi
+
+cat > "$WORK/uncaught.nxa" <<'EOF'
+#include <std/io>
+fn main() {
+    let s = "a";
+    try {
+        s += "b";
+        io.println(s);
+    } catch (e) {
+        io.println(e);
+    }
+    throw "boom: " + s;
+}
+EOF
+# The same with C++ of its own in the program, which keeps the stock runtime.
+cat > "$WORK/uncaught_cpp.nxa" <<'EOF'
+#include <std/io>
+#include <std/inline>
+fn main() {
+    let s = "ab";
+    inline_cpp! {
+        (void)0;
+    }
+    io.println(s);
+    throw "boom: " + s;
+}
+EOF
+
+# check NAME SOURCE [ENV=VALUE] [flags...]: built that way, an uncaught throw keeps
+# the program's output ("ab"), names what was thrown and exits non-zero.
+check_uncaught() {
+    name=$1; src=$2; shift 2
+    envset=""
+    case "${1:-}" in *=*) envset=$1; shift ;; esac
+    exe="$WORK/$name$EXE"
+    if env $envset "$NEXAC" "$src" "$@" -o "$exe" >"$WORK/$name.log" 2>&1; then
+        "$exe" >"$WORK/$name.out" 2>"$WORK/$name.err" </dev/null
+        code=$?
+        out=$(tr -d "$CR" < "$WORK/$name.out")
+        if [ "$code" -ne 0 ] && [ "$out" = "ab" ] && grep -q "Uncaught error: boom: ab" "$WORK/$name.err"; then
+            ok "$name"
+        else
+            bad "$name" "exit $code, stdout [$out], stderr [$(head -3 "$WORK/$name.err")]"
+        fi
+    else
+        bad "$name" "build failed: $(tail -3 "$WORK/$name.log")"
+    fi
+}
+
+check_uncaught uncaught "$WORK/uncaught.nxa"
+check_uncaught uncaught_stock "$WORK/uncaught.nxa" NEXA_NO_SLIM=1
+check_uncaught uncaught_debug "$WORK/uncaught.nxa" NEXA_NO_SLIM= --debug
+check_uncaught uncaught_inline_cpp "$WORK/uncaught_cpp.nxa"
+rm -f "$WORK"/*.debug.cpp 2>/dev/null
+
+if [ "$SLIM" = 1 ] && [ -f "$WORK/uncaught$EXE" ]; then
+    size=$(wc -c < "$WORK/uncaught$EXE" | tr -d ' ')
+    if [ "$size" -lt 131072 ]; then ok "uncaught_size ($size bytes)"; else bad uncaught_size "$size bytes, over 128KB"; fi
 fi
 
 echo

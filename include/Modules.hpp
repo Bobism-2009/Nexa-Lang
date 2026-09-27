@@ -277,6 +277,31 @@ public:
         if (usage.exceptions) {
             out += "#include <stdexcept>\n";
         }
+        // A program that can throw -- try/catch/throw, or C++ of its own -- gets Nexa's
+        // terminate handler, on every platform and every kind of build. The stock one
+        // aborts without flushing stdout, so what the program printed before an uncaught
+        // error was lost whenever stdout was a file or a pipe; this one flushes, then says
+        // what was thrown. Installed before main; C++ in the program can still set its own.
+        if (usage.exceptions || hasInlineCpp()) {
+            out += "#include <cstdio>\n#include <cstdlib>\n#include <exception>\n";
+            out += "#if defined(__cpp_exceptions)\n"
+                   "[[noreturn]] static void __nexa_terminate() {\n"
+                   "    std::fflush(stdout);\n"
+                   "    if (std::exception_ptr __p = std::current_exception()) {\n"
+                   "        try {\n"
+                   "            std::rethrow_exception(__p);\n"
+                   "        } catch (const std::exception& __e) {\n"
+                   "            std::fprintf(stderr, \"Uncaught error: %s\\n\", __e.what());\n"
+                   "            std::abort();\n"
+                   "        } catch (...) {\n"
+                   "        }\n"
+                   "    }\n"
+                   "    std::fputs(\"Uncaught error\\n\", stderr);\n"
+                   "    std::abort();\n"
+                   "}\n"
+                   "[[maybe_unused]] static const bool __nexa_terminate_set = (std::set_terminate(__nexa_terminate), true);\n"
+                   "#endif\n";
+        }
         if (hasIo() && (usage.ioPrint || usage.ioReadln || usage.ioFlush)) {
             out += "#include <cstdio>\n";
         }

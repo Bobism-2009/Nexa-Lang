@@ -1231,6 +1231,14 @@ extern "C" __NEXA_W void __cxa_guard_abort(long long*) { pthread_mutex_unlock(&_
 #endif
 #undef __NEXA_W
 #endif
+)NEXASLIM";
+
+// __nexa_to_string, which std::to_string( calls are rewritten to on Windows (see
+// nexaRewriteToString): libc++ keeps std::to_string in the prebuilt object the slimming
+// keeps out. Shared by both slim preambles.
+static const char* kNexaToStringHelpers = R"NEXASLIM(#include <charconv>
+#include <cstdio>
+#include <string>
 #if !defined(__GLIBCXX__)
 // Integers through std::to_chars: header-only, cannot throw, and the same table-driven
 // conversion std::to_string itself uses, so this is no slower.
@@ -1258,6 +1266,41 @@ template <class __T> static std::string __nexa_to_string_i(__T __v) {
     return __s;
 }
 [[maybe_unused]] static std::string __nexa_to_string(float __v) { return __nexa_to_string((double)__v); }
+#endif
+)NEXASLIM";
+
+// A program that does throw keeps the exception runtime, but not everything around it. The
+// runtime prints an uncaught exception's type through the C++ demangler (~127KB on Windows,
+// ~70KB on Linux) and, on Windows, through mingw's own printf. Nexa's own terminate
+// handler (emitted with every program that can throw -- see Modules::getCppIncludes)
+// replaces the stock one, which used both, so:
+//   - the demangler gets a stub;
+//   - Windows: libc++abi's message routine prints through the C runtime, and the string
+//     members and std::to_string come from the program, as in kNexaSlimRuntime (compiled
+//     with exceptions here, so they throw exactly as the library's do).
+// Weak throughout: a library object needed for something else wins rather than clashes.
+static const char* kNexaSlimExceptRuntime = R"NEXASLIM(#include <cstdarg>
+#include <cstddef>
+#include <cstdio>
+#include <cstdlib>
+#include <exception>
+#include <string>
+extern "C" __attribute__((weak)) char* __cxa_demangle(const char*, char*, std::size_t*, int* __s) {
+    if (__s) *__s = -2;
+    return nullptr;
+}
+#if defined(__MINGW32__) && defined(_LIBCPP_VERSION)
+extern "C" __attribute__((weak)) void __abort_message(const char* __f, ...) {
+    std::fflush(stdout);
+    va_list __ap;
+    va_start(__ap, __f);
+    std::vfprintf(stderr, __f, __ap);
+    va_end(__ap);
+    std::fputc('\n', stderr);
+    std::abort();
+}
+template class std::basic_string<char>;
+template class std::basic_string<wchar_t>;
 #endif
 )NEXASLIM";
 
@@ -2315,14 +2358,20 @@ int main(int argc, char* argv[]) {
         // (see kNexaSlimRuntime). --source shows the program's own translation, so it is left
         // out there; --debug keeps the stock runtime a debugger expects. macOS links libc++ as
         // a system library, so it never carried the cost.
-        if (noExceptions && !sourceOnly && !debugBuild && !isLib && !buildWasm && !buildTarget &&
-            (cppTarget == nexa::CppTarget::Windows || cppTarget == nexa::CppTarget::Linux) &&
-            std::getenv("NEXA_NO_SLIM") == nullptr) {
+        // A program that throws gets kNexaSlimExceptRuntime instead -- unless it carries C++ of
+        // its own (inline_cpp, a C/C++ header), which may name the demangler or a terminate
+        // handler itself.
+        const bool slimTarget = !sourceOnly && !debugBuild && !isLib && !buildWasm && !buildTarget &&
+                                (cppTarget == nexa::CppTarget::Windows || cppTarget == nexa::CppTarget::Linux) &&
+                                std::getenv("NEXA_NO_SLIM") == nullptr;
+        const bool slimExcept = !noExceptions && !modules.hasInlineCpp() && !modules.hasCppHeader();
+        if (slimTarget && (noExceptions || slimExcept)) {
             // std::to_string is rewritten only on Windows, where libc++ keeps it in the
             // prebuilt object the slimming avoids. libstdc++'s is header code already, and a
             // wrapper around it measured 14% slower on string building (it was outlined).
-            cpp = std::string(kNexaSlimRuntime) +
-                  (cppTarget == nexa::CppTarget::Windows ? nexaRewriteToString(cpp) : cpp);
+            const bool win = cppTarget == nexa::CppTarget::Windows;
+            cpp = std::string(noExceptions ? kNexaSlimRuntime : kNexaSlimExceptRuntime) +
+                  (win ? std::string(kNexaToStringHelpers) + nexaRewriteToString(cpp) : cpp);
         }
 
         std::ofstream out(cppPath);

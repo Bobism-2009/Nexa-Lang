@@ -30,8 +30,14 @@ OPTIONS
   OUTPUT SIZE
   A program with no try/catch, throw or inline_cpp is built without the C++
   exception runtime. On Windows and Linux that keeps a typical program at 15-40KB,
-  where it was 140-220KB as soon as it used a string, a slice or a map. NEXA_NO_SLIM=1 in the
-  environment builds with the stock runtime instead, to compare or to rule it out.
+  where it was 140-220KB as soon as it used a string, a slice or a map. A program
+  that does throw keeps the exception runtime but not what it can do without (the
+  C++ demangler among it): 60-100KB rather than 140-260KB. Its uncaught error prints
+  as "Uncaught error: <what was thrown>", after everything the program printed
+  before it. A program with inline_cpp or a C/C++ header keeps the stock runtime.
+  NEXA_NO_SLIM=1 in the environment builds with the stock runtime instead, to
+  compare or to rule it out.
+
   --debug, -g     Build a debuggable binary instead of the stripped release build:
                     * -g -O0 and frame pointers (line info, readable backtraces)
                     * nothing stripped: symbol table, sections and build-id all kept
