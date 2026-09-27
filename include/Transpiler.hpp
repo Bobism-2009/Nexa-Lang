@@ -3477,6 +3477,44 @@ private:
         nexaDeclStack_.pop_back();
     }
 
+    // An integer expression NexaC knows the type of: literals, declared variables,
+    // len() and arithmetic on those. A call it cannot see into also infers as int.
+    bool semSurelyInt(const AstNode& e) const {
+        switch (e.type) {
+            case AstNode::Type::ExprIntLiteral:
+            case AstNode::Type::ExprLen:
+                return true;
+            case AstNode::Type::ExprVarRef:
+                return !lookupNexaDecl(e.value).empty();
+            case AstNode::Type::ExprMember:
+                return !e.children.empty() && !fieldTypeOfMemberExpr(e).empty();
+            case AstNode::Type::FnCall:
+                if (!e.initValue.empty()) return false;
+                for (const auto& slot : fnOverloadSlots_) {
+                    if (slot.name == e.value) return true;
+                }
+                return false;
+            case AstNode::Type::ExprAdd:
+            case AstNode::Type::ExprSub:
+            case AstNode::Type::ExprMul:
+            case AstNode::Type::ExprDiv:
+            case AstNode::Type::ExprMod:
+            case AstNode::Type::ExprBitAnd:
+            case AstNode::Type::ExprBitOr:
+            case AstNode::Type::ExprBitXor:
+            case AstNode::Type::ExprShl:
+            case AstNode::Type::ExprShr:
+            case AstNode::Type::ExprBitNot:
+                if (e.children.empty()) return false;
+                for (const AstNode& c : e.children) {
+                    if (!semSurelyInt(c)) return false;
+                }
+                return true;
+            default:
+                return false;
+        }
+    }
+
     void semBlock(const std::vector<AstNode>& stmts) {
         nexaDeclStack_.push_back({});
         for (const AstNode& s : stmts) semStmt(s);
@@ -3618,6 +3656,21 @@ private:
                     }
                 }
                 break;
+            // What a catch receives is the thrown string; anything else arrives as "".
+            // "int" is also what an expression NexaC cannot see into infers as (a
+            // call into a C/C++ header), so an int is refused only when it is sure.
+            case AstNode::Type::Throw: {
+                for (const AstNode& c : s.children) semExpr(c);
+                if (s.children.empty()) break;
+                const std::string t = inferExprNexaType(s.children[0]);
+                if (t.empty() || t == "string" || (t == "int" && !semSurelyInt(s.children[0]))) break;
+                std::string shown = t;
+                if (isStructDeclType(t)) shown = structNameFromDecl(t);
+                else if (t.rfind("enum:", 0) == 0) shown = "enum " + t.substr(5);
+                semError(s, "throw takes a string, and this is " + shown +
+                            " -- a catch would receive \"\". Throw text instead: throw \"...\" + value;");
+                break;
+            }
             default:
                 semExpr(s);
                 break;
@@ -6554,6 +6607,11 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     out << indDeep << "throw;\n";
                     out << indIn << "} catch (const std::exception& __nexa_ex) {\n";
                     out << indDeep << cppCatch << " = std::string(__nexa_ex.what());\n";
+                    // Text a C/C++ header function returned and the program threw.
+                    out << indIn << "} catch (const std::string& __nexa_ex) {\n";
+                    out << indDeep << cppCatch << " = __nexa_ex;\n";
+                    out << indIn << "} catch (const char* __nexa_ex) {\n";
+                    out << indDeep << cppCatch << " = std::string(__nexa_ex ? __nexa_ex : \"\");\n";
                     out << indIn << "} catch (...) {\n";
                     out << indDeep << cppCatch << " = std::string(\"\");\n";
                     out << indIn << "}\n";

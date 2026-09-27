@@ -1,0 +1,9 @@
+// Text a C++ header function returns can be thrown, and the catch gets the text.
+#include "throw_header_text.hpp"
+#include <std/io>
+
+fn main() {
+    try { throw header_text(); } catch (e) { io.println("caught " + e); }
+    try { throw header_cstr(); } catch (e) { io.println("caught " + e); }
+    try { throw "plain " + len("abc"); } catch (e) { io.println("caught " + e); }
+}

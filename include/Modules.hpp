@@ -283,7 +283,7 @@ public:
         // error was lost whenever stdout was a file or a pipe; this one flushes, then says
         // what was thrown. Installed before main; C++ in the program can still set its own.
         if (usage.exceptions || hasInlineCpp()) {
-            out += "#include <cstdio>\n#include <cstdlib>\n#include <exception>\n";
+            out += "#include <cstdio>\n#include <cstdlib>\n#include <exception>\n#include <string>\n";
             out += "#if defined(__cpp_exceptions)\n"
                    "[[noreturn]] static void __nexa_terminate() {\n"
                    "    std::fflush(stdout);\n"
@@ -292,6 +292,13 @@ public:
                    "            std::rethrow_exception(__p);\n"
                    "        } catch (const std::exception& __e) {\n"
                    "            std::fprintf(stderr, \"Uncaught error: %s\\n\", __e.what());\n"
+                   "            std::abort();\n"
+                   "        } catch (const std::string& __e) {\n"
+                   "            std::fprintf(stderr, \"Uncaught error: %s\\n\", __e.c_str());\n"
+                   "            std::abort();\n"
+                   "        } catch (const char* __e) {\n"
+                   "            if (__e) std::fprintf(stderr, \"Uncaught error: %s\\n\", __e);\n"
+                   "            else std::fputs(\"Uncaught error\\n\", stderr);\n"
                    "            std::abort();\n"
                    "        } catch (...) {\n"
                    "        }\n"

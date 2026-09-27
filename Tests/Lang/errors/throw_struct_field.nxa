@@ -1,0 +1,11 @@
+// A field is as sure an int as a variable: refused the same way.
+#include <std/io>
+
+struct Reply {
+    code: int;
+}
+
+fn main() {
+    let r = Reply { code: 500 };
+    throw r.code;
+}

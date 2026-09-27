@@ -126,8 +126,11 @@ ERRORS: TRY / CATCH / THROW
   - A catch block can throw, and so pass the error to a try further out:
       catch (e) { io.println("cleanup"); throw "load failed: " + e; }
   - break, continue and return work inside try and catch blocks as anywhere else.
-  - Throwing a number or anything other than a string compiles, but the catch
-    receives it as "" -- throw a string.
+  - Throwing a number, a bool, a struct or anything else that is not a string
+    is a compile error: the catch would have nothing to put in e. Make it text:
+    throw "status " + code;
+    Text a C/C++ header function returns (std::string or const char*) can be
+    thrown too; what it returns otherwise NexaC cannot see, and arrives as "".
 
   What throws besides throw:
   - r.value() on a Result that holds an error, when the program has a try/catch

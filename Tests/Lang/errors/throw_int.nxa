@@ -1,0 +1,11 @@
+// A catch receives what was thrown as text; a number would arrive as "".
+#include <std/io>
+
+fn main() {
+    let status = 404;
+    try {
+        throw status;
+    } catch (e) {
+        io.println(e);
+    }
+}

@@ -1,0 +1,3 @@
+caught from std::string
+caught from const char*
+caught plain 3
