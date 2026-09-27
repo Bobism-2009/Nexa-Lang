@@ -1075,6 +1075,235 @@ static bool nexaWriteWasmHtml(const std::filesystem::path& htmlPath,
     return true;
 }
 
+// A Windows program that can never throw does not need the C++ exception runtime, but the
+// static libc++ it links pulls that runtime in anyway, and with it the C++ demangler and
+// mingw's own printf and strtod: ~200KB that every program using a string, slice or map
+// carried, against 14KB for one that did not. The ways in, each closed here:
+//   - operator new throws bad_alloc: replaced by one that aborts, which is what an
+//     uncaught bad_alloc in a program without exceptions comes to anyway;
+//   - std::string's members are prebuilt in libc++ with exceptions on: instantiated here
+//     instead, so they are compiled with -fno-exceptions like the rest of the program;
+//   - libc++'s abort message goes through fprintf: its documented hook is overridden;
+//   - the terminate handler names exception types with __cxa_demangle: nothing is ever
+//     thrown, so it gets a stub;
+//   - std::to_string lives in the same prebuilt object as the string members: calls to it
+//     are rewritten to __nexa_to_string, which formats the same way.
+// Linux has the same shape with libstdc++ (138KB against 14KB), closed the same way through
+// its own hooks. Each half is guarded by the library it was measured on (llvm-mingw's libc++,
+// libstdc++ off Windows); any other gets only the to_string stand-in.
+static const char* kNexaSlimRuntime = R"NEXASLIM(#include <cstdio>
+#include <cstdlib>
+#include <new>
+#include <string>
+#if defined(__MINGW32__) && defined(_LIBCPP_VERSION)
+void* operator new(std::size_t __n) { void* __p = std::malloc(__n ? __n : 1); if (!__p) std::abort(); return __p; }
+void* operator new[](std::size_t __n) { return ::operator new(__n); }
+void* operator new(std::size_t __n, const std::nothrow_t&) noexcept { return std::malloc(__n ? __n : 1); }
+void* operator new[](std::size_t __n, const std::nothrow_t&) noexcept { return std::malloc(__n ? __n : 1); }
+void operator delete(void* __p) noexcept { std::free(__p); }
+void operator delete[](void* __p) noexcept { std::free(__p); }
+void operator delete(void* __p, std::size_t) noexcept { std::free(__p); }
+void operator delete[](void* __p, std::size_t) noexcept { std::free(__p); }
+void operator delete(void* __p, const std::nothrow_t&) noexcept { std::free(__p); }
+void operator delete[](void* __p, const std::nothrow_t&) noexcept { std::free(__p); }
+extern "C" char* __cxa_demangle(const char*, char*, std::size_t*, int* __s) { if (__s) *__s = -2; return nullptr; }
+_LIBCPP_BEGIN_NAMESPACE_STD
+[[noreturn]] void __libcpp_verbose_abort(const char* __m, ...) noexcept {
+    std::fputs(__m, stderr);
+    std::fputs("\n", stderr);
+    std::abort();
+}
+_LIBCPP_END_NAMESPACE_STD
+template class std::basic_string<char>;
+// A function-local static is initialised under __cxa_guard_acquire, whose failure path in
+// libc++abi reports through fprintf and the exception runtime. The same protocol without it:
+// the guard's first byte says done (the Itanium layout the compiler's own fast path reads),
+// and one recursive lock serialises first runs, so each static is still initialised once,
+// thread-safely. A spin lock: it is only ever contended while a static is first built.
+extern "C" __declspec(dllimport) unsigned long __stdcall GetCurrentThreadId(void);
+extern "C" __declspec(dllimport) int __stdcall SwitchToThread(void);
+static long __nexa_guard_owner = 0;
+static int __nexa_guard_depth = 0;
+static void __nexa_guard_lock() {
+    const long __me = (long)GetCurrentThreadId();
+    if (__atomic_load_n(&__nexa_guard_owner, __ATOMIC_ACQUIRE) == __me) { ++__nexa_guard_depth; return; }
+    long __free = 0;
+    while (!__atomic_compare_exchange_n(&__nexa_guard_owner, &__free, __me, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+        __free = 0;
+        SwitchToThread();
+    }
+    __nexa_guard_depth = 1;
+}
+static void __nexa_guard_unlock() {
+    if (--__nexa_guard_depth == 0) __atomic_store_n(&__nexa_guard_owner, 0L, __ATOMIC_RELEASE);
+}
+extern "C" int __cxa_guard_acquire(long long* __g) {
+    if (__atomic_load_n(reinterpret_cast<unsigned char*>(__g), __ATOMIC_ACQUIRE)) return 0;
+    __nexa_guard_lock();
+    if (*reinterpret_cast<unsigned char*>(__g)) { __nexa_guard_unlock(); return 0; }
+    return 1;
+}
+extern "C" void __cxa_guard_release(long long* __g) {
+    __atomic_store_n(reinterpret_cast<unsigned char*>(__g), (unsigned char)1, __ATOMIC_RELEASE);
+    __nexa_guard_unlock();
+}
+extern "C" void __cxa_guard_abort(long long*) { __nexa_guard_unlock(); }
+#elif defined(__GLIBCXX__) && !defined(_WIN32)
+// The same on Linux, where the static libstdc++ comes in through operator new, the
+// prebuilt string members and the std::__throw_* functions its headers call even under
+// -fno-exceptions. Weak: the linker takes these instead of pulling the library's object,
+// and if some newer libstdc++ still needs that object for another symbol, its strong
+// definitions win rather than clash.
+#define __NEXA_W __attribute__((weak))
+__NEXA_W void* operator new(std::size_t __n) { void* __p = std::malloc(__n ? __n : 1); if (!__p) std::abort(); return __p; }
+__NEXA_W void* operator new[](std::size_t __n) { return ::operator new(__n); }
+__NEXA_W void* operator new(std::size_t __n, const std::nothrow_t&) noexcept { return std::malloc(__n ? __n : 1); }
+__NEXA_W void* operator new[](std::size_t __n, const std::nothrow_t&) noexcept { return std::malloc(__n ? __n : 1); }
+__NEXA_W void operator delete(void* __p) noexcept { std::free(__p); }
+__NEXA_W void operator delete[](void* __p) noexcept { std::free(__p); }
+__NEXA_W void operator delete(void* __p, std::size_t) noexcept { std::free(__p); }
+__NEXA_W void operator delete[](void* __p, std::size_t) noexcept { std::free(__p); }
+__NEXA_W void operator delete(void* __p, const std::nothrow_t&) noexcept { std::free(__p); }
+__NEXA_W void operator delete[](void* __p, const std::nothrow_t&) noexcept { std::free(__p); }
+[[noreturn]] static void __nexa_cxx_fail(const char* __m) {
+    std::fflush(stdout);
+    std::fputs(__m, stderr);
+    std::fputs("\n", stderr);
+    std::abort();
+}
+namespace std {
+__NEXA_W void __throw_bad_exception() { __nexa_cxx_fail("bad_exception"); }
+__NEXA_W void __throw_bad_alloc() { __nexa_cxx_fail("out of memory"); }
+__NEXA_W void __throw_bad_array_new_length() { __nexa_cxx_fail("bad array new length"); }
+__NEXA_W void __throw_bad_cast() { __nexa_cxx_fail("bad cast"); }
+__NEXA_W void __throw_bad_typeid() { __nexa_cxx_fail("bad typeid"); }
+__NEXA_W void __throw_logic_error(const char* __s) { __nexa_cxx_fail(__s); }
+__NEXA_W void __throw_domain_error(const char* __s) { __nexa_cxx_fail(__s); }
+__NEXA_W void __throw_invalid_argument(const char* __s) { __nexa_cxx_fail(__s); }
+__NEXA_W void __throw_length_error(const char* __s) { __nexa_cxx_fail(__s); }
+__NEXA_W void __throw_out_of_range(const char* __s) { __nexa_cxx_fail(__s); }
+__NEXA_W void __throw_out_of_range_fmt(const char* __s, ...) { __nexa_cxx_fail(__s); }
+__NEXA_W void __throw_runtime_error(const char* __s) { __nexa_cxx_fail(__s); }
+__NEXA_W void __throw_range_error(const char* __s) { __nexa_cxx_fail(__s); }
+__NEXA_W void __throw_overflow_error(const char* __s) { __nexa_cxx_fail(__s); }
+__NEXA_W void __throw_underflow_error(const char* __s) { __nexa_cxx_fail(__s); }
+__NEXA_W void __throw_system_error(int) { __nexa_cxx_fail("system error"); }
+__NEXA_W void __throw_bad_function_call() { __nexa_cxx_fail("bad function call"); }
+}
+template class std::basic_string<char>;
+// A function-local static is initialised under __cxa_guard_acquire, whose error path in
+// libstdc++ throws. The same protocol without it: the first byte of the guard says done,
+// and one recursive lock (as libstdc++'s own slow path uses) serialises first runs, so a
+// static that is still initialised once, thread-safely. Generic Itanium guard layout only
+// (x86-64, aarch64) and glibc's recursive initializer; anything else keeps the library's.
+#if (defined(__x86_64__) || defined(__aarch64__)) && defined(__GLIBC__)
+#include <pthread.h>
+#ifdef PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP
+static pthread_mutex_t __nexa_guard_mx = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
+extern "C" __NEXA_W int __cxa_guard_acquire(long long* __g) {
+    if (__atomic_load_n(reinterpret_cast<unsigned char*>(__g), __ATOMIC_ACQUIRE)) return 0;
+    pthread_mutex_lock(&__nexa_guard_mx);
+    if (*reinterpret_cast<unsigned char*>(__g)) {
+        pthread_mutex_unlock(&__nexa_guard_mx);
+        return 0;
+    }
+    return 1;
+}
+extern "C" __NEXA_W void __cxa_guard_release(long long* __g) {
+    __atomic_store_n(reinterpret_cast<unsigned char*>(__g), (unsigned char)1, __ATOMIC_RELEASE);
+    pthread_mutex_unlock(&__nexa_guard_mx);
+}
+extern "C" __NEXA_W void __cxa_guard_abort(long long*) { pthread_mutex_unlock(&__nexa_guard_mx); }
+#endif
+#endif
+#undef __NEXA_W
+#endif
+template <class __T> static std::string __nexa_to_string_u(__T __u, bool __neg) {
+    char __b[24];
+    char* __e = __b + sizeof(__b);
+    char* __p = __e;
+    do { *--__p = (char)('0' + (int)(__u % 10)); __u /= 10; } while (__u);
+    if (__neg) *--__p = '-';
+    return std::string(__p, __e);
+}
+template <class __T> static std::string __nexa_to_string_s(__T __v) {
+    const unsigned long long __u = __v < 0 ? 0ull - (unsigned long long)__v : (unsigned long long)__v;
+    return __nexa_to_string_u(__u, __v < 0);
+}
+[[maybe_unused]] static std::string __nexa_to_string(int __v) { return __nexa_to_string_s(__v); }
+[[maybe_unused]] static std::string __nexa_to_string(long __v) { return __nexa_to_string_s(__v); }
+[[maybe_unused]] static std::string __nexa_to_string(long long __v) { return __nexa_to_string_s(__v); }
+[[maybe_unused]] static std::string __nexa_to_string(unsigned __v) { return __nexa_to_string_u(__v, false); }
+[[maybe_unused]] static std::string __nexa_to_string(unsigned long __v) { return __nexa_to_string_u(__v, false); }
+[[maybe_unused]] static std::string __nexa_to_string(unsigned long long __v) { return __nexa_to_string_u(__v, false); }
+[[maybe_unused]] static std::string __nexa_to_string(long double __v) {
+    const int __n = std::snprintf(nullptr, 0, "%Lf", __v);
+    std::string __s(__n > 0 ? (size_t)__n : 0, '\0');
+    if (__n > 0) std::snprintf(&__s[0], (size_t)__n + 1, "%Lf", __v);
+    return __s;
+}
+[[maybe_unused]] static std::string __nexa_to_string(double __v) {
+    const int __n = std::snprintf(nullptr, 0, "%f", __v);
+    std::string __s(__n > 0 ? (size_t)__n : 0, '\0');
+    if (__n > 0) std::snprintf(&__s[0], (size_t)__n + 1, "%f", __v);
+    return __s;
+}
+[[maybe_unused]] static std::string __nexa_to_string(float __v) { return __nexa_to_string((double)__v); }
+)NEXASLIM";
+
+// std::to_string( -> __nexa_to_string( in generated C++, outside string and char literals
+// (so a Nexa string that happens to spell it is left alone).
+static std::string nexaRewriteToString(const std::string& cpp) {
+    static const std::string from = "std::to_string(";
+    static const std::string to = "__nexa_to_string(";
+    std::string out;
+    out.reserve(cpp.size() + 1024);
+    size_t i = 0;
+    while (i < cpp.size()) {
+        const char c = cpp[i];
+        if (c == '"' || c == '\'') {
+            // A raw string R"delim( ... )delim" runs to its own terminator.
+            if (c == '"' && i > 0 && cpp[i - 1] == 'R') {
+                const size_t open = cpp.find('(', i);
+                if (open != std::string::npos) {
+                    const std::string term = ")" + cpp.substr(i + 1, open - i - 1) + "\"";
+                    const size_t close = cpp.find(term, open);
+                    const size_t end = close == std::string::npos ? cpp.size() : close + term.size();
+                    out.append(cpp, i, end - i);
+                    i = end;
+                    continue;
+                }
+            }
+            size_t j = i + 1;
+            while (j < cpp.size() && cpp[j] != c) {
+                if (cpp[j] == '\\') j++;
+                j++;
+            }
+            const size_t end = j < cpp.size() ? j + 1 : cpp.size();
+            out.append(cpp, i, end - i);
+            i = end;
+            continue;
+        }
+        if (c == '/' && i + 1 < cpp.size() && (cpp[i + 1] == '/' || cpp[i + 1] == '*')) {
+            const bool line = cpp[i + 1] == '/';
+            const size_t end = cpp.find(line ? "\n" : "*/", i + 2);
+            const size_t stop = end == std::string::npos ? cpp.size() : end + (line ? 0 : 2);
+            out.append(cpp, i, stop - i);
+            i = stop;
+            continue;
+        }
+        if (c == 's' && cpp.compare(i, from.size(), from) == 0 &&
+            (i == 0 || !(std::isalnum((unsigned char)cpp[i - 1]) || cpp[i - 1] == '_' || cpp[i - 1] == ':'))) {
+            out += to;
+            i += from.size();
+            continue;
+        }
+        out += c;
+        i++;
+    }
+    return out;
+}
+
 // Emscripten treats bare `-s` as a settings flag (not strip). Never reuse the native link line.
 static std::string nexaWasmCompileCmd(
     const WasmTool& tool,
@@ -2033,12 +2262,12 @@ int main(int argc, char* argv[]) {
         }
 
         // Decide which C++ machinery the generated code can safely omit. Exceptions/unwind tables
-        // are only needed for try/catch, throw, Result.value(), std::stoi (io.to_int), or inline_cpp.
-        // RTTI is never emitted by the transpiler, so it is dropped unless inline_cpp is present.
-        // usage.result matters even without an explicit .value() call: the Result runtime header
-        // itself contains `throw`, which -fno-exceptions rejects outright.
+        // are only needed for try/catch, throw, or inline_cpp. Result.value() throws only when
+        // the program is built with exceptions (otherwise it reports the error and aborts), and
+        // io.to_int parses with strtol, so neither needs them. RTTI is never emitted by the
+        // transpiler, so it is dropped unless inline_cpp is present.
         const nexa::Modules::CppUsage& usage = transpiler.cppUsage();
-        const bool noExceptions = !usage.exceptions && !usage.result && !usage.ioToInt && !modules.hasInlineCpp();
+        const bool noExceptions = !usage.exceptions && !modules.hasInlineCpp();
         const bool noRtti = !modules.hasInlineCpp();
 
         // What the target can and cannot do is the package's to say, and a
@@ -2059,10 +2288,20 @@ int main(int argc, char* argv[]) {
                                          missing + " (it supports: " + (have.empty() ? "no std modules" : have) + ")");
             }
             if (!noExceptions && !targetSpec.exceptions) {
-                throw std::runtime_error(absInputPath + ": this program needs C++ exceptions -- io.to_int, Result, "
-                                         "try/catch and inline_cpp all use them -- and the " + targetSpec.name +
+                throw std::runtime_error(absInputPath + ": this program needs C++ exceptions -- try/catch, throw "
+                                         "and inline_cpp use them -- and the " + targetSpec.name +
                                          " target is built without them");
             }
+        }
+
+        // A Windows or Linux executable that cannot throw links without the exception runtime
+        // (see kNexaSlimRuntime). --source shows the program's own translation, so it is left
+        // out there; --debug keeps the stock runtime a debugger expects. macOS links libc++ as
+        // a system library, so it never carried the cost.
+        if (noExceptions && !sourceOnly && !debugBuild && !isLib && !buildWasm && !buildTarget &&
+            (cppTarget == nexa::CppTarget::Windows || cppTarget == nexa::CppTarget::Linux) &&
+            std::getenv("NEXA_NO_SLIM") == nullptr) {
+            cpp = std::string(kNexaSlimRuntime) + nexaRewriteToString(cpp);
         }
 
         std::ofstream out(cppPath);

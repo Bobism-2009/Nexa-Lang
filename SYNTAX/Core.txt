@@ -579,7 +579,10 @@ RESULT (Result[T])
   ok()                   - success Result[void]
   err(message)           - failure (converts to any Result[T])
   r.ok()                 - true if this succeeded
-  r.value()              - the value; throws if not ok
+  r.value()              - the value. On an error: an exception, when the program
+                           has a try/catch to catch it; otherwise the program prints
+                           "Result.value() on an error: <error>" to stderr and stops
+                           (what it printed before still arrives). Check r.ok() first.
   r.error()              - error text ("" if ok)
 
   Write `: Result[T]` on functions that return one (return type is not inferred

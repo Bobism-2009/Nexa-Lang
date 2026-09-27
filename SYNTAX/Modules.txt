@@ -197,8 +197,7 @@ ARGUMENT TYPES
   crypto.base64_encode(data) / crypto.base64_decode(b64)
   crypto.random_bytes(n)            - n cryptographically-seeded random bytes (as string)
   Only the helpers you call are emitted. hex_encode/hex_decode of a literal
-  fold at compile time (hello-world sized). Encoding a variable in a static
-  .exe pulls libstdc++ string heap code (~200KB); a .dll does not.
+  fold at compile time (hello-world sized).
   XOR is symmetric — call again with the same key(s) to decrypt.
   Use: let enc = crypto.xor(text, "secret-key");
   Use: let h = crypto.sha256("hello");

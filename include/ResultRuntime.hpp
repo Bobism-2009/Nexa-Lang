@@ -8,7 +8,23 @@ inline std::string resultRuntimeCpp() {
     return R"NEXA_RESULT(
 #include <string>
 #include <utility>
+#include <cstdio>
+#include <cstdlib>
 #include <stdexcept>
+
+// .value() on an error: an exception a try/catch can catch when the program has one;
+// otherwise there is nothing to catch it, so say what the error was and stop, which is
+// what an uncaught exception comes to -- without linking the exception runtime for it.
+[[noreturn]] inline void __nexa_result_fail(const std::string& __e) {
+    const char* __m = __e.empty() ? "Result.value() on error" : __e.c_str();
+#if defined(__cpp_exceptions)
+    throw std::runtime_error(__m);
+#else
+    std::fflush(stdout);  // what the program printed before this still reaches its reader
+    std::fprintf(stderr, "Result.value() on an error: %s\n", __m);
+    std::abort();
+#endif
+}
 
 template<typename T>
 struct __nexa_result {
@@ -18,11 +34,11 @@ struct __nexa_result {
 
     bool ok() const { return _ok; }
     const T& value() const {
-        if (!_ok) throw std::runtime_error(_error.empty() ? "Result.value() on error" : _error);
+        if (!_ok) __nexa_result_fail(_error);
         return _value;
     }
     T& value() {
-        if (!_ok) throw std::runtime_error(_error.empty() ? "Result.value() on error" : _error);
+        if (!_ok) __nexa_result_fail(_error);
         return _value;
     }
     const std::string& error() const { return _error; }
@@ -48,7 +64,7 @@ struct __nexa_result<void> {
 
     bool ok() const { return _ok; }
     void value() const {
-        if (!_ok) throw std::runtime_error(_error.empty() ? "Result.value() on error" : _error);
+        if (!_ok) __nexa_result_fail(_error);
     }
     const std::string& error() const { return _error; }
 

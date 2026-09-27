@@ -401,9 +401,6 @@ public:
                     break;
                 case AstNode::Type::DllLoad:
                 case AstNode::Type::DllCall: cppUsage.dll = true; break;
-                case AstNode::Type::FnCall:
-                    if (n.initValue == "." && n.value == "value") cppUsage.exceptions = true;
-                    break;
                 case AstNode::Type::TryCatch:
                 case AstNode::Type::Throw: cppUsage.exceptions = true; break;
                 default: break;

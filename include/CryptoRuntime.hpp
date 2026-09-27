@@ -16,6 +16,76 @@ struct CryptoEmit {
     bool random = false;
 };
 
+// Bytes from the operating system's entropy source, for crypto.random_bytes and the
+// std/random seed. std::random_device did this, but its constructor can throw, which linked
+// the whole C++ exception runtime into every program that used either (~130KB). Each
+// platform's own call cannot throw; a platform with none of them keeps random_device.
+// Guarded so std/random and std/crypto can both ask for it.
+inline std::string entropyRuntimeCpp() {
+    return R"NEXA_ENTROPY(
+#ifndef __NEXA_ENTROPY_DEFINED
+#define __NEXA_ENTROPY_DEFINED 1
+#include <cstddef>
+#if defined(_WIN32)
+extern "C" int rand_s(unsigned int*);
+#elif defined(__APPLE__)
+#include <cstdlib>
+#elif defined(__linux__) && !defined(__EMSCRIPTEN__)
+#include <sys/random.h>
+#include <cstdio>
+#elif defined(__EMSCRIPTEN__) || defined(__wasi__)
+#include <unistd.h>
+#else
+#include <random>
+#endif
+static void __nexa_entropy(void* __buf, std::size_t __n) {
+    unsigned char* __p = static_cast<unsigned char*>(__buf);
+#if defined(_WIN32)
+    while (__n > 0) {
+        unsigned int __v = 0;
+        rand_s(&__v);
+        for (int __i = 0; __i < 4 && __n > 0; ++__i, --__n) { *__p++ = (unsigned char)(__v >> (8 * __i)); }
+    }
+#elif defined(__APPLE__)
+    arc4random_buf(__p, __n);
+#elif defined(__linux__) && !defined(__EMSCRIPTEN__)
+    while (__n > 0) {
+        const ssize_t __got = getrandom(__p, __n, 0);
+        if (__got <= 0) {
+            // A kernel without getrandom (before 3.17): read the device instead.
+            if (std::FILE* __f = std::fopen("/dev/urandom", "rb")) {
+                __n -= std::fread(__p, 1, __n, __f);
+                std::fclose(__f);
+            }
+            return;
+        }
+        __p += __got;
+        __n -= (std::size_t)__got;
+    }
+#elif defined(__EMSCRIPTEN__) || defined(__wasi__)
+    while (__n > 0) {
+        const std::size_t __k = __n < 256 ? __n : 256;
+        if (getentropy(__p, __k) != 0) return;
+        __p += __k;
+        __n -= __k;
+    }
+#else
+    std::random_device __rd;
+    while (__n > 0) {
+        unsigned int __v = __rd();
+        for (int __i = 0; __i < 4 && __n > 0; ++__i, --__n) { *__p++ = (unsigned char)(__v >> (8 * __i)); }
+    }
+#endif
+}
+static unsigned int __nexa_entropy_u32() {
+    unsigned int __v = 0;
+    __nexa_entropy(&__v, sizeof(__v));
+    return __v;
+}
+#endif
+)NEXA_ENTROPY";
+}
+
 inline std::string cryptoRuntimeCpp(const CryptoEmit& need) {
     std::string out;
     if (need.hex || need.xorv || need.base64 || need.sha256 || need.sha1 || need.hmac || need.random) {
@@ -28,7 +98,7 @@ inline std::string cryptoRuntimeCpp(const CryptoEmit& need) {
         out += "#include <cstdint>\n";
     }
     if (need.random) {
-        out += "#include <random>\n";
+        out += entropyRuntimeCpp();
     }
 
     if (need.xorv) {
@@ -163,10 +233,7 @@ static std::string __nexa_crypto_random_bytes(int __n) {
   if (__n <= 0) return std::string();
   std::string __out;
   __out.resize((size_t)__n);
-  std::random_device __rd;
-  for (int __i = 0; __i < __n; ++__i) {
-    __out[(size_t)__i] = (char)(__rd() & 0xFF);
-  }
+  __nexa_entropy(&__out[0], (size_t)__n);
   return __out;
 }
 )NEXA_CRYPTO";

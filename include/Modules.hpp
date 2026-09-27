@@ -346,7 +346,11 @@ public:
         }
         if (hasIo() && usage.ioToInt) {
             out += "#include <string>\n";
-            out += "static int __nexa_to_int(const std::string& s) { try { return std::stoi(s); } catch(...) { return 0; } }\n";
+            // std::stoi without its exceptions: the same strtol and range checks, 0 on failure
+            out += "#include <cerrno>\n#include <climits>\n#include <cstdlib>\n";
+            out += "static int __nexa_to_int(const std::string& s) { errno = 0; char* e = nullptr; "
+                   "long v = std::strtol(s.c_str(), &e, 10); "
+                   "if (e == s.c_str() || errno == ERANGE || v < INT_MIN || v > INT_MAX) return 0; return (int)v; }\n";
         }
         if (hasOs() && (usage.osSystem || usage.osExec || usage.osGetenv || usage.osLock ||
                         usage.osShutdown || usage.osReboot || usage.osSuspend ||
@@ -1515,7 +1519,8 @@ public:
         }
         if (hasRandom() && usage.random) {
             out += "#include <random>\n";
-            out += "static std::mt19937& __nexa_rng() { static std::mt19937 gen(std::random_device{}()); return gen; }\n";
+            out += entropyRuntimeCpp();
+            out += "static std::mt19937& __nexa_rng() { static std::mt19937 gen(__nexa_entropy_u32()); return gen; }\n";
             out += "static void __nexa_random_seed(int s) { __nexa_rng().seed(static_cast<unsigned>(s)); }\n";
             // std::mt19937's output is fixed by the standard; std::uniform_int_distribution's
             // mapping onto a range is not, and libstdc++, libc++ and MSVC each map it their own

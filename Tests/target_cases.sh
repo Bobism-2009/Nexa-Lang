@@ -41,7 +41,8 @@ expect() {
 
 printf '#include <std/io>\nfn main() {\n    io.println("hi");\n}\n' > "$WORK/io.nxa"
 printf '#include <std/gfx>\nfn main() {\n    gfx.open("x", 10, 10, 1);\n}\n' > "$WORK/gfx.nxa"
-printf '#include <std/io>\nfn main() {\n    io.println("n=" + io.to_int("42"));\n}\n' > "$WORK/exc.nxa"
+# try/catch is what needs exceptions (io.to_int and Result no longer do).
+printf '#include <std/io>\nfn main() {\n    try {\n        io.println("n");\n    } catch (e) {\n        io.println(e);\n    }\n}\n' > "$WORK/exc.nxa"
 
 # A fixture target: everything --target reads, and nothing to compile.
 make_fixture() {
