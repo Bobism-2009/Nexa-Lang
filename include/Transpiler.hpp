@@ -370,6 +370,7 @@ public:
                     cppUsage.ui = true;
                     cppUsage.gfxMouse = true;
                     cppUsage.gfxTyped = true;
+                    cppUsage.gfxWheel = true;  // lists and tables scroll with it
                     break;
                 case AstNode::Type::Gfx3dCall:
                     cppUsage.gfx3d = true;
@@ -2232,9 +2233,8 @@ private:
             if (!v.children.empty() && v.children[0].type == AstNode::Type::ExprArrayLiteral) {
                 const AstNode& arr = v.children[0];
                 if (arr.children.empty()) return "[]int";
-                std::string et = arrayLiteralElemNexaType(arr);
-                if (nexaIsSliceType(et)) return et;
-                return "[]" + et;
+                // a literal of slices is a slice of them: [["a"], ["b"]] is [][]string
+                return "[]" + arrayLiteralElemNexaType(arr);
             }
             return "[]int";
         }
@@ -2417,9 +2417,7 @@ private:
             case AstNode::Type::ExprTrim: return "string";
             case AstNode::Type::ExprArrayLiteral: {
                 if (!e.children.empty()) {
-                    std::string et = arrayLiteralElemNexaType(e);
-                    if (nexaIsSliceType(et)) return et;
-                    return "[]" + et;
+                    return "[]" + arrayLiteralElemNexaType(e);
                 }
                 const std::string want = emptySliceTypeOf(e);
                 return want.empty() ? std::string("[]int") : want;
@@ -2492,10 +2490,11 @@ private:
             case AstNode::Type::UiCall: {
                 const std::string& m = e.value;
                 if (m == "textbox") return "string";
-                if (m == "theme") return e.children.empty() ? "string" : "void";
+                if (m == "theme" || m == "style") return e.children.empty() ? "string" : "void";
                 if (m == "button" || m == "checkbox" || m == "toggle") return "bool";
                 if (m == "open" || m == "text" || m == "heading" || m == "caption" || m == "text_width" ||
-                    m == "text_height" || m == "radio" || m == "slider" || m == "dropdown") return "int";
+                    m == "text_height" || m == "radio" || m == "slider" || m == "dropdown" || m == "tabs" ||
+                    m == "list" || m == "table" || m == "menu" || m == "dialog") return "int";
                 return "void";
             }
             case AstNode::Type::GfxCall:
@@ -3676,6 +3675,7 @@ private:
         static const BuiltinArgRow rows[] = {
             {"open",        "ui.open(title, w, h)",                        "xnn"},
             {"theme",       "ui.theme(name)",                              "t"},
+            {"style",       "ui.style(name)",                              "t"},
             {"accent",      "ui.accent(r, g, b)",                          "nnn"},
             {"rounding",    "ui.rounding(px)",                             "n"},
             {"font_size",   "ui.font_size(px)",                            "n"},
@@ -3686,7 +3686,7 @@ private:
             {"text_height", "ui.text_height(size)",                        "n"},
             {"panel",       "ui.panel(x, y, w, h, title)",                 "nnnnx"},
             {"separator",   "ui.separator(x, y, w)",                       "nnn"},
-            {"button",      "ui.button(x, y, w, h, label, style)",         "nnnnxt"},
+            {"button",      "ui.button(x, y, w, h, label, kind)",          "nnnnxt"},
             {"checkbox",    "ui.checkbox(x, y, label, checked)",           "nnxn"},
             {"toggle",      "ui.toggle(x, y, label, on)",                  "nnxn"},
             {"radio",       "ui.radio(x, y, label, current, value)",       "nnxnn"},
@@ -3694,6 +3694,13 @@ private:
             {"progress",    "ui.progress(x, y, w, fraction)",              "nnnn"},
             {"textbox",     "ui.textbox(x, y, w, text, placeholder)",      "nnnxx"},
             {"dropdown",    "ui.dropdown(x, y, w, items, selected)",       "nnnln"},
+            {"tabs",        "ui.tabs(x, y, w, labels, selected)",          "nnnln"},
+            {"list",        "ui.list(x, y, w, h, items, selected)",        "nnnnln"},
+            {"table",       "ui.table(x, y, w, h, headers, rows, selected)", "nnnnlLn"},
+            {"menubar",     "ui.menubar(x, y, w)",                         "nnn"},
+            {"menu",        "ui.menu(x, y, label, items)",                 "nnxl"},
+            {"dialog",      "ui.dialog(title, message, buttons)",          "xxl"},
+            {"tooltip",     "ui.tooltip(text)",                            "x"},
             {"", nullptr, nullptr},
         };
         return rows;
@@ -4069,6 +4076,7 @@ private:
             case 'x': return t == "string" || semArgIsNumber(t);
             case 'h': return t == "[]string";
             case 'l': return t == "[]string";
+            case 'L': return t == "[][]string";
             case 's': return t == "struct:HttpServer";
             case 'r': return t == "struct:HttpRequest";
             default: return true;
@@ -4082,6 +4090,7 @@ private:
             case 'x': return "text or a number";
             case 'h': return "a []string of header lines";
             case 'l': return "a []string of items";
+            case 'L': return "a [][]string of rows";
             case 's': return "an http.localhost() server";
             case 'r': return "an http.accept() request";
             default: return nullptr;
@@ -4952,7 +4961,9 @@ private:
         // gfx3d.backend() is the one call in the module that answers with
         // text, so it is the one that concatenates instead of being counted.
         if (e.type == AstNode::Type::Gfx3dCall) return e.value == "backend" || e.value == "typed";
-        if (e.type == AstNode::Type::UiCall) return e.value == "textbox" || (e.value == "theme" && e.children.empty());
+        if (e.type == AstNode::Type::UiCall) {
+            return e.value == "textbox" || ((e.value == "theme" || e.value == "style") && e.children.empty());
+        }
         if (e.type == AstNode::Type::ExprCast && e.value == "string") return true;
         if (e.type == AstNode::Type::FileCall) {
             const std::string& m = e.value;
@@ -6640,7 +6651,7 @@ private:
             // compiled and ran.
             case AstNode::Type::UiCall: {
                 std::string call = emitExpr(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
-                if (c.value == "textbox" || (c.value == "theme" && c.children.empty())) return "!(" + call + ").empty()";
+                if (c.value == "textbox" || ((c.value == "theme" || c.value == "style") && c.children.empty())) return "!(" + call + ").empty()";
                 return call;
             }
             case AstNode::Type::GfxCall: {
@@ -7309,6 +7320,7 @@ private:
                 if (fn == "open") return "__nexa_ui_open(" + s(0) + ", " + a(1) + ", " + a(2) + ")";
                 if (fn == "background") return "__nexa_ui_background()";
                 if (fn == "theme") return n ? "__nexa_ui_theme_set(" + s(0) + ")" : std::string("__nexa_ui_theme_get()");
+                if (fn == "style") return n ? "__nexa_ui_style_set(" + s(0) + ")" : std::string("__nexa_ui_style_get()");
                 if (fn == "accent") return "__nexa_ui_accent_set(" + a(0) + ", " + a(1) + ", " + a(2) + ")";
                 if (fn == "rounding") return "__nexa_ui_rounding_set(" + a(0) + ")";
                 if (fn == "font_size") return "__nexa_ui_font_size_set(" + a(0) + ")";
@@ -7343,6 +7355,18 @@ private:
                            (n > 4 ? s(4) : std::string("std::string()")) + ")";
                 }
                 if (fn == "dropdown") return "__nexa_ui_dropdown(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + a(4) + ")";
+                if (fn == "tabs") return "__nexa_ui_tabs(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + a(4) + ")";
+                if (fn == "list") {
+                    return "__nexa_ui_list(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + a(4) + ", " + a(5) + ")";
+                }
+                if (fn == "table") {
+                    return "__nexa_ui_table(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + a(4) + ", " + a(5) +
+                           ", " + a(6) + ")";
+                }
+                if (fn == "menubar") return "__nexa_ui_menubar(" + a(0) + ", " + a(1) + ", " + a(2) + ")";
+                if (fn == "menu") return "__nexa_ui_menu(" + a(0) + ", " + a(1) + ", " + s(2) + ", " + a(3) + ")";
+                if (fn == "dialog") return "__nexa_ui_dialog(" + s(0) + ", " + s(1) + ", " + a(2) + ")";
+                if (fn == "tooltip") return "__nexa_ui_tooltip(" + s(0) + ")";
                 throw std::runtime_error("Internal: unknown ui method " + fn);
             }
             case AstNode::Type::GfxCall: {

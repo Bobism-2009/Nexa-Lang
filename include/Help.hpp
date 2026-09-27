@@ -658,9 +658,9 @@ to install for any of them.
 Colours are 0..255. The draws hand nothing back and are statements only, so
 `let C = gfx3d.cube(...);` is an error naming the call -- as in std/gfx.)HELP" },
 
-{ "std/ui", "ui gui widget widgets button checkbox slider textbox dropdown menu theme themes dark light panel form settings font", Group::Module,
-  "widgets and themes: buttons, text boxes, sliders, dropdowns, smooth text",
-  R"HELP(std/ui - widgets and themes on the gfx window
+{ "std/ui", "ui gui widget widgets button checkbox slider textbox dropdown menu theme themes style styles fluent windows tabs list table menu menubar dialog modal tooltip dark light panel form settings font", Group::Module,
+  "widgets, themes and styles: buttons, text boxes, sliders, dropdowns, smooth text",
+  R"HELP(std/ui - widgets, themes and styles on the gfx window
   #include <std/ui>          (includes std/gfx)
   Full reference: SYNTAX/Modules.txt (std/ui)
 
@@ -671,11 +671,13 @@ back what the user did. Keep the values yourself and pass them back in.
   theme    ui.theme(name)  "light" "dark" "midnight" "paper" "contrast"
            ui.theme()      ui.accent(r, g, b)
            ui.rounding(px) ui.font_size(px)
+  style    ui.style(name)  "modern" (std/ui's own) "fluent" (Windows 11)
+           ui.style()      (the colours come from the theme; any style, any theme)
   text     ui.text(x, y, s[, size[, r, g, b]])   ui.heading(x, y, s[, size])
            ui.caption(x, y, s)   ui.text_width(s[, size])   ui.text_height([size])
   layout   ui.panel(x, y, w, h[, title])   ui.separator(x, y, w)
-  widgets  ui.button(x, y, w, h, label[, style])  true when clicked
-                  style: "primary" "secondary" "ghost" "danger"
+  widgets  ui.button(x, y, w, h, label[, kind])   true when clicked
+                  kind: "primary" "secondary" "ghost" "danger"
            ui.checkbox(x, y, label, checked)      the new state
            ui.toggle(x, y, label, on)             the new state
            ui.radio(x, y, label, current, value)  value when clicked
@@ -683,6 +685,12 @@ back what the user did. Keep the values yourself and pass them back in.
            ui.progress(x, y, w, fraction)
            ui.textbox(x, y, w, text[, placeholder]) the edited text
            ui.dropdown(x, y, w, items, selected)  the chosen index
+  app      ui.tabs(x, y, w, labels, selected)     the chosen tab
+           ui.list(x, y, w, h, items, selected)   selected row; scrolls, Up/Down
+           ui.table(x, y, w, h, headers, rows, selected)   rows: [][]string
+           ui.menubar(x, y, w)   ui.menu(x, y, label, items)  item chosen, or -1
+           ui.dialog(title, message, buttons)     -1 until a button is clicked
+           ui.tooltip(text)      a tip for the widget just drawn
 
   fn main() {
       ui.open("Settings", 640, 400);

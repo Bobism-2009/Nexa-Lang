@@ -1,0 +1,124 @@
+// A small library app built from std/ui's app widgets: a menu bar, tabs, a
+// scrolling list and table, tooltips and a confirmation dialog. View switches
+// between std/ui's own look and Windows 11's, and between the themes.
+//   NexaC Examples/ui_app.nxa
+#include <std/io>
+#include <std/ui>
+
+fn main() {
+    if (ui.open("Library", 960, 640) == 0) {
+        io.println("could not open a window");
+        return;
+    }
+    let styleIds = ["modern", "fluent"];
+    let themeIds = ["light", "dark", "midnight", "paper", "contrast"];
+    let style = 1;
+    let theme = 0;
+
+    let shelves = ["All books", "Reading", "Finished", "Wishlist", "Classics", "Science", "Poetry",
+                   "History", "Travel", "Cooking", "Art", "Children", "Mystery", "Plays"];
+    let shelf = 0;
+    let books = [
+        ["Frankenstein", "Mary Shelley", "1818", "280"],
+        ["Pride and Prejudice", "Jane Austen", "1813", "432"],
+        ["Moby-Dick", "Herman Melville", "1851", "635"],
+        ["Middlemarch", "George Eliot", "1871", "880"],
+        ["Jane Eyre", "Charlotte Bronte", "1847", "532"],
+        ["Wuthering Heights", "Emily Bronte", "1847", "416"],
+        ["Great Expectations", "Charles Dickens", "1861", "544"],
+        ["Dracula", "Bram Stoker", "1897", "418"],
+        ["The Time Machine", "H. G. Wells", "1895", "118"],
+        ["Little Women", "Louisa May Alcott", "1868", "759"],
+        ["Anna Karenina", "Leo Tolstoy", "1878", "864"],
+        ["Crime and Punishment", "Fyodor Dostoevsky", "1866", "671"],
+        ["The Odyssey", "Homer", "-700", "541"],
+        ["Walden", "Henry David Thoreau", "1854", "352"],
+        ["Emma", "Jane Austen", "1815", "474"],
+        ["Persuasion", "Jane Austen", "1817", "249"]
+    ];
+    let book = 0;
+    let tab = 0;
+    let rating = 4;
+    let notes = "";
+    let reminders = true;
+    let sync = false;
+    let confirmDelete = false;
+    let showAbout = false;
+    let status = "Ready";
+
+    while (!gfx.closed()) {
+        gfx.poll();
+        ui.style(styleIds[style]);
+        ui.theme(themeIds[theme]);
+        ui.background();
+
+        ui.heading(24, 52, "Library");
+        ui.caption(24, 88, f"{len(books)} books on your shelves");
+        tab = ui.tabs(24, 112, 912, ["Books", "Details", "Settings"], tab);
+
+        if (tab == 0) {
+            shelf = ui.list(24, 164, 220, 404, shelves, shelf);
+            ui.tooltip("Pick a shelf; scroll for more");
+            book = ui.table(260, 164, 676, 404, ["Title", "Author", "Year", "Pages"], books, book);
+            if (ui.button(260, 580, 110, 34, "Open")) {
+                if (book >= 0) { status = f"Opened {books[book][0]}"; }
+            }
+            ui.tooltip("Open the selected book");
+            if (ui.button(380, 580, 110, 34, "Delete", "danger")) {
+                if (book >= 0) { confirmDelete = true; }
+            }
+            ui.tooltip("Remove the selected book from the library");
+        }
+        if (tab == 1 && book >= 0) {
+            ui.panel(24, 164, 560, 404, books[book][0]);
+            ui.text(48, 228, f"by {books[book][1]}");
+            ui.caption(48, 256, f"First published {books[book][2]}  -  {books[book][3]} pages");
+            ui.text(48, 300, f"Your rating: {rating} of 5");
+            rating = ui.slider(48, 326, 300, rating, 1, 5);
+            ui.text(48, 372, "Notes");
+            notes = ui.textbox(48, 396, 512, notes, "What did you think?");
+        }
+        if (tab == 2) {
+            ui.panel(24, 164, 560, 250, "Settings");
+            reminders = ui.toggle(48, 224, "Remind me to keep reading", reminders);
+            sync = ui.toggle(48, 262, "Sync with my other devices", sync);
+            ui.text(48, 310, "Theme");
+            theme = ui.dropdown(48, 334, 300, ["Light", "Dark", "Midnight", "Paper", "High contrast"], theme);
+        }
+        ui.caption(520, 588, status);
+
+        // The menu bar last, so its menus open over everything above.
+        ui.menubar(0, 0, 960);
+        let mx = 8;
+        let file = ui.menu(mx, 0, "File", ["New book\tCtrl+N", "Import...\tCtrl+O", "-", "Exit"]);
+        mx = mx + ui.text_width("File") + 24;
+        let view = ui.menu(mx, 0, "View", ["std/ui style", "Windows 11 style", "-",
+                                           "Light", "Dark", "Midnight", "Paper", "High contrast"]);
+        mx = mx + ui.text_width("View") + 24;
+        let help = ui.menu(mx, 0, "Help", ["About Library"]);
+        if (file == 0) { status = "New book: not in this demo"; }
+        if (file == 1) { status = "Import: not in this demo"; }
+        if (file == 3) { break; }
+        if (view == 0 || view == 1) { style = view; }
+        if (view >= 3) { theme = view - 3; }
+        if (help == 0) { showAbout = true; }
+
+        if (confirmDelete) {
+            let answer = ui.dialog("Delete this book?",
+                f"\"{books[book][0]}\" will be removed from your library. This can't be undone.",
+                ["Delete", "Cancel"]);
+            if (answer == 0) {
+                status = f"Deleted {books[book][0]}";
+                books.remove(book);
+                if (book >= len(books)) { book = len(books) - 1; }
+            }
+            if (answer >= 0) { confirmDelete = false; }
+        }
+        if (showAbout) {
+            if (ui.dialog("About Library", "A std/ui example: menus, tabs, a list, a table, tooltips and dialogs.", ["OK"]) >= 0) {
+                showAbout = false;
+            }
+        }
+        gfx.present();
+    }
+}

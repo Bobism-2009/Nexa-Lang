@@ -692,7 +692,7 @@ static __nexa_Gfx __nexa_g = {};
     // sent it: a typed character as its code point, and an editing key -- one
     // per key-down, auto-repeat included, so holding Backspace repeats at the
     // rate the user set -- as -1 - k for backspace, delete, left, right, enter,
-    // escape, tab, home, end. One queue, because "ab", Backspace, "c" typed
+    // escape, tab, home, end, up, down. One queue, because "ab", Backspace, "c" typed
     // inside a frame has to come out "ac".
     if (need.ui) out += "static int __nexa_ui_ev_down = 0;\nstatic int __nexa_ui_ev_up = 0;\n"
                         "static std::vector<int> __nexa_ui_evq;\n"
@@ -1337,6 +1337,8 @@ static LRESULT CALLBACK __nexa_gfx_wndproc(HWND hwnd, UINT msg, WPARAM wParam, L
             case VK_TAB: k = 6; break;
             case VK_HOME: k = 7; break;
             case VK_END: k = 8; break;
+            case VK_UP: k = 9; break;
+            case VK_DOWN: k = 10; break;
             default: break;
         }
         if (k >= 0) __nexa_ui_key_ev(k);
@@ -1465,6 +1467,8 @@ static LRESULT CALLBACK __nexa_gfx_wndproc(HWND hwnd, UINT msg, WPARAM wParam, L
             case 9: k = 6; break;
             case 36: k = 7; break;
             case 35: k = 8; break;
+            case 38: k = 9; break;
+            case 40: k = 10; break;
             default: break;
         }
         if (k >= 0) __nexa_ui_key_ev(k);
@@ -2604,6 +2608,8 @@ static void __nexa_gfx_poll() {
                     case 48: k = 6; break;
                     case 115: k = 7; break;
                     case 119: k = 8; break;
+                    case 126: k = 9; break;
+                    case 125: k = 10; break;
                     default: break;
                 }
                 if (k >= 0) __nexa_ui_key_ev(k);
@@ -2633,6 +2639,8 @@ static void __nexa_gfx_poll() {
                 case XK_Tab: k = 6; break;
                 case XK_Home: case XK_KP_Home: k = 7; break;
                 case XK_End: case XK_KP_End: k = 8; break;
+                case XK_Up: k = 9; break;
+                case XK_Down: k = 10; break;
                 default: break;
             }
             if (k >= 0) __nexa_ui_key_ev(k);

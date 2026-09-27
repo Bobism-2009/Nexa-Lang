@@ -4386,6 +4386,7 @@ private:
             {"open", 3, 3, "ui.open(title, w, h)", true},
             {"background", 0, 0, "ui.background()", false},
             {"theme", 0, 1, "ui.theme(name) or ui.theme()", true},
+            {"style", 0, 1, "ui.style(name) or ui.style()", true},
             {"accent", 3, 3, "ui.accent(r, g, b)", false},
             {"rounding", 1, 1, "ui.rounding(px)", false},
             {"font_size", 1, 1, "ui.font_size(px)", false},
@@ -4396,7 +4397,7 @@ private:
             {"text_height", 0, 1, "ui.text_height([size])", true},
             {"panel", 4, 5, "ui.panel(x, y, w, h[, title])", false},
             {"separator", 3, 3, "ui.separator(x, y, w)", false},
-            {"button", 5, 6, "ui.button(x, y, w, h, label[, style])", true},
+            {"button", 5, 6, "ui.button(x, y, w, h, label[, kind])", true},
             {"checkbox", 4, 4, "ui.checkbox(x, y, label, checked)", true},
             {"toggle", 4, 4, "ui.toggle(x, y, label, on)", true},
             {"radio", 5, 5, "ui.radio(x, y, label, current, value)", true},
@@ -4404,6 +4405,13 @@ private:
             {"progress", 4, 4, "ui.progress(x, y, w, fraction)", false},
             {"textbox", 4, 5, "ui.textbox(x, y, w, text[, placeholder])", true},
             {"dropdown", 5, 5, "ui.dropdown(x, y, w, items, selected)", true},
+            {"tabs", 5, 5, "ui.tabs(x, y, w, labels, selected)", true},
+            {"list", 6, 6, "ui.list(x, y, w, h, items, selected)", true},
+            {"table", 7, 7, "ui.table(x, y, w, h, headers, rows, selected)", true},
+            {"menubar", 3, 3, "ui.menubar(x, y, w)", false},
+            {"menu", 4, 4, "ui.menu(x, y, label, items)", true},
+            {"dialog", 3, 3, "ui.dialog(title, message, buttons)", true},
+            {"tooltip", 1, 1, "ui.tooltip(text)", false},
         };
         for (const UiMethod& u : table) {
             if (m == u.name) return &u;
@@ -4429,8 +4437,9 @@ private:
         const UiMethod* spec = uiMethod(method);
         if (!spec) {
             throw std::runtime_error("Unknown ui method 'ui." + method + "' at line " + std::to_string(methodTok.line) +
-                " (use open, background, theme, accent, rounding, font_size, text, heading, caption, text_width,"
-                " text_height, panel, separator, button, checkbox, toggle, radio, slider, progress, textbox, dropdown)");
+                " (use open, background, theme, style, accent, rounding, font_size, text, heading, caption, text_width,"
+                " text_height, panel, separator, button, checkbox, toggle, radio, slider, progress, textbox, dropdown, tabs, list, table,"
+                " menubar, menu, dialog, tooltip)");
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after ui." + method + " at line " + std::to_string(peek().line));
@@ -4452,8 +4461,9 @@ private:
                 (spec->hi == 1 && spec->lo == 1 ? " argument" : " arguments") + ", not " + std::to_string(got) +
                 " at line " + std::to_string(line));
         }
-        // ui.theme(name) sets and has nothing to give; ui.theme() reads.
-        bool gives = spec->value && !(method == "theme" && got == 1);
+        // ui.theme(name) and ui.style(name) set and have nothing to give; with
+        // no name they read.
+        bool gives = spec->value && !((method == "theme" || method == "style") && got == 1);
         if (valuePosition && !gives) {
             throw std::runtime_error(std::string(spec->sig) + " draws or sets something and has no value" +
                 "; you aren't allowed to turn it into a variable at line " + std::to_string(line));

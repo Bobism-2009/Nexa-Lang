@@ -1,0 +1,7 @@
+// A table's rows are a [][]string: one []string per row.
+#include <std/ui>
+
+fn main() {
+    let rows = ["Ada", "Alan"];
+    let sel = ui.table(10, 10, 300, 200, ["Name"], rows, -1);
+}

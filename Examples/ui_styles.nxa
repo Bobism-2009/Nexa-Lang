@@ -1,0 +1,89 @@
+// std/ui styles: the same screen as std/ui's own "modern" look and as
+// Windows 11's controls ("fluent"). A theme picks the colours, a style how
+// the widgets are built; try each style with each theme.
+//   NexaC Examples/ui_styles.nxa
+#include <std/io>
+#include <std/ui>
+
+fn main() {
+    if (ui.open("std/ui styles", 900, 600) == 0) {
+        io.println("could not open a window");
+        return;
+    }
+    let styleNames = ["Modern", "Windows 11"];
+    let styleIds = ["modern", "fluent"];
+    let themeNames = ["Light", "Dark", "Midnight", "Paper", "High contrast"];
+    let themeIds = ["light", "dark", "midnight", "paper", "contrast"];
+    let style = 0;
+    let theme = 0;
+
+    let name = "Ada Lovelace";
+    let search = "";
+    let remember = true;
+    let beta = false;
+    let sound = true;
+    let dark = false;
+    let size = 1;
+    let volume = 60;
+    let speed = 3;
+    let level = 0;
+    let levels = ["Easy", "Normal", "Hard", "Nightmare"];
+    let clicks = 0;
+    let said = "nothing yet";
+
+    while (!gfx.closed()) {
+        gfx.poll();
+        ui.style(styleIds[style]);
+        ui.theme(themeIds[theme]);
+        ui.background();
+
+        ui.heading(28, 20, f"{styleNames[style]} style");
+        ui.caption(28, 58, f"ui.style(\"{ui.style()}\") with ui.theme(\"{ui.theme()}\")");
+
+        // ------------------------------------------------ pickers
+        ui.panel(20, 92, 240, 488, "Look");
+        ui.text(40, 150, "Style");
+        for (i, 2) {
+            style = ui.radio(40, 178 + i * 30, styleNames[i], style, i);
+        }
+        ui.separator(40, 250, 200);
+        ui.text(40, 266, "Theme");
+
+        // ------------------------------------------------ a form
+        ui.panel(280, 92, 290, 300, "Account");
+        ui.text(300, 150, "Name");
+        name = ui.textbox(300, 174, 250, name, "Your name");
+        ui.text(300, 224, "Search");
+        search = ui.textbox(300, 248, 250, search, "Type to search...");
+        remember = ui.checkbox(300, 302, "Remember me", remember);
+        beta = ui.checkbox(300, 330, "Join the beta", beta);
+
+        // ------------------------------------------------ controls
+        ui.panel(590, 92, 290, 300, "Settings");
+        sound = ui.toggle(610, 148, "Sound", sound);
+        dark = ui.toggle(610, 182, "Night mode", dark);
+        ui.text(610, 222, f"Volume {volume}%");
+        volume = ui.slider(610, 248, 250, volume, 0, 100);
+        ui.text(610, 284, f"Speed {speed}");
+        speed = ui.slider(610, 310, 250, speed, 1, 10);
+        ui.progress(610, 352, 250, volume / 100.0);
+
+        // ------------------------------------------------ buttons
+        ui.panel(280, 412, 600, 168, "Buttons");
+        if (ui.button(300, 470, 110, 38, "Primary")) { clicks++; said = "Primary"; }
+        if (ui.button(422, 470, 120, 38, "Secondary", "secondary")) { clicks++; said = "Secondary"; }
+        if (ui.button(554, 470, 90, 38, "Ghost", "ghost")) { clicks++; said = "Ghost"; }
+        if (ui.button(656, 470, 100, 38, "Delete", "danger")) { clicks++; said = "Delete"; }
+        size = ui.radio(776, 470, "S", size, 0);
+        size = ui.radio(776, 498, "L", size, 1);
+        ui.caption(300, 526, f"Clicked: {said} ({clicks} clicks)");
+        ui.caption(300, 548, f"Difficulty: {levels[level]}   Name: {name}");
+
+        // Dropdowns last: their lists open over what is below them.
+        level = ui.dropdown(40, 520, 200, levels, level);
+        theme = ui.dropdown(40, 290, 200, themeNames, theme);
+        ui.caption(40, 496, "Difficulty");
+
+        gfx.present();
+    }
+}

@@ -1,0 +1,22 @@
+// A slice literal of slice literals, with no type written: it is a slice of
+// slices, [][]string or [][]int, the same as when the type is written.
+#include <std/io>
+
+fn count(rows: [][]string): int {
+    let n = 0;
+    for (r in rows) { n = n + len(r); }
+    return n;
+}
+
+fn main() {
+    let names = [["Ada", "Lovelace"], ["Alan", "Turing"], ["Grace"]];
+    io.println(len(names));
+    io.println(names[1][1]);
+    io.println(count(names));
+    names.push(["Edsger", "W.", "Dijkstra"]);
+    io.println(names[3][2]);
+    let grid = [[1, 2, 3], [4, 5, 6]];
+    io.println(grid[1][2] + grid[0][0]);
+    let typed: [][]string = [["x"]];
+    io.println(len(typed[0]));
+}

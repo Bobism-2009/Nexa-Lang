@@ -1,0 +1,6 @@
+// ui.style(name) sets the style; only ui.style() reads it.
+#include <std/ui>
+
+fn main() {
+    let s = ui.style("pixel");
+}

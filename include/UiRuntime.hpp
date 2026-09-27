@@ -40,9 +40,19 @@ static std::string __nexa_ui_textbox(int x, int y, int w, std::string text, cons
 static int __nexa_ui_dropdown(int x, int y, int w, const std::vector<std::string>& items, int selected);
 static void __nexa_ui_theme_set(const std::string& name);
 static std::string __nexa_ui_theme_get();
+static void __nexa_ui_style_set(const std::string& name);
+static std::string __nexa_ui_style_get();
 static void __nexa_ui_accent_set(int r, int g, int b);
 static void __nexa_ui_rounding_set(int px);
 static void __nexa_ui_font_size_set(int px);
+static int __nexa_ui_tabs(int x, int y, int w, const std::vector<std::string>& labels, int selected);
+static int __nexa_ui_list(int x, int y, int w, int h, const std::vector<std::string>& items, int selected);
+static int __nexa_ui_table(int x, int y, int w, int h, const std::vector<std::string>& headers,
+                           const std::vector<std::vector<std::string>>& rows, int selected);
+static void __nexa_ui_menubar(int x, int y, int w);
+static int __nexa_ui_menu(int x, int y, const std::string& label, const std::vector<std::string>& items);
+static int __nexa_ui_dialog(const std::string& title, const std::string& message, const std::vector<std::string>& buttons);
+static void __nexa_ui_tooltip(const std::string& text);
 )NEXA_UI";
 }
 
@@ -5200,8 +5210,24 @@ static const __nexa_ui_Theme __nexa_ui_themes[] = {
 };
 static const int __nexa_ui_theme_count = (int)(sizeof(__nexa_ui_themes) / sizeof(__nexa_ui_themes[0]));
 
+// A style is how widgets are built -- their shapes, edges and states -- where
+// a theme is their colours: "modern" is std/ui's own look, "fluent" is
+// Windows 11's controls.
+enum { __NEXA_UI_MODERN, __NEXA_UI_FLUENT };
+static const char* const __nexa_ui_styles[] = {"modern", "fluent"};
+static const int __nexa_ui_style_count = (int)(sizeof(__nexa_ui_styles) / sizeof(__nexa_ui_styles[0]));
+
+// What an open dialog draws at gfx.present(), over everything.
+struct __nexa_ui_Dialog {
+    int x = 0, y = 0, w = 0, h = 0, body = 0, ts = 0, by = 0, bh = 0;
+    std::string title;
+    std::vector<std::string> lines, buttons;
+    std::vector<int> bx, bw, hover, held;
+};
+
 struct __nexa_ui_State {
     int theme = 0;
+    int style = __NEXA_UI_MODERN;
     int accent_set = 0;
     unsigned int accent = 0;
     int rounding = 6;
@@ -5228,6 +5254,24 @@ struct __nexa_ui_State {
     int osel = -1;
     std::vector<std::string> oitems;
     int open_frames = 0;
+    int okind = 0;                // what is open: 0 a dropdown's list, 1 a menu
+    std::vector<int> otop;        // a menu's rows' tops, from oy (separators are short)
+    unsigned int closed_now = 0;  // what this frame's press closed
+    // the wheel: notches gathered by the polls, and this frame's, until a view takes them
+    int pend_wheel = 0, wheel = 0;
+    std::map<unsigned int, float> scrolls;  // lists' and tables' offsets
+    int grab = 0;                 // where on a scrollbar's thumb it was taken
+    // the last widget drawn, which ui.tooltip() is about
+    unsigned int last_id = 0;
+    int lx = 0, ly = 0, lw = 0, lh = 0;
+    // the tooltip: the widget the mouse rests on, since when, and what to show
+    unsigned int tip_id = 0;
+    long long tip_ms = 0;
+    int tip_armed = 0, tip_touched = 0, tip_show = 0;
+    std::string tip_text;
+    // a dialog this frame, and last frame (whose widgets it blocks)
+    int modal = 0, modal_prev = 0, in_modal = 0;
+    __nexa_ui_Dialog dlg;
 };
 static __nexa_ui_State __nexa_ui;
 
@@ -5268,6 +5312,66 @@ static unsigned int __nexa_ui_shade(unsigned int c, int amount) {
 static unsigned int __nexa_ui_text_on(unsigned int fill) {
     return __nexa_ui_luma(fill) > 150 ? 0x111418 : 0xFFFFFF;
 }
+static int __nexa_ui_is(int style) { return __nexa_ui.style == style; }
+
+// Windows 11's colours, for the fluent style. The light and dark themes take
+// Windows' own (its Mica page, cards, text and accent); paper and midnight keep
+// their page, cards, text and accent, with the control colours worked out from
+// them the way Windows layers its translucent fills; contrast keeps its white
+// outlines on black, as Windows' high-contrast themes do.
+struct __nexa_ui_Fluent {
+    int dark;
+    unsigned int bg, card, card_edge, text, text2;
+    unsigned int ctrl, ctrl_hover, ctrl_press, ctrl_edge, ctrl_bottom;
+    unsigned int strong, alt, input, input_focus, thumb;
+    unsigned int flyout, flyout_edge, divider, subtle_hover, subtle_press;
+    unsigned int accent, on_accent, critical, on_critical;
+};
+static __nexa_ui_Fluent __nexa_ui_fl() {
+    const __nexa_ui_Theme& t = __nexa_ui_t();
+    int light = std::strcmp(t.name, "light") == 0, dark = std::strcmp(t.name, "dark") == 0;
+    __nexa_ui_Fluent f;
+    if (light) { f.bg = 0xF3F3F3; f.card = 0xFBFBFB; f.text = 0x1A1A1A; }
+    else if (dark) { f.bg = 0x202020; f.card = 0x2B2B2B; f.text = 0xFFFFFF; }
+    else { f.bg = t.bg; f.card = t.surface; f.text = t.text; }
+    f.dark = __nexa_ui_luma(f.bg) < 128;
+    const unsigned int k = f.card, W = 0xFFFFFF, B = 0x000000;
+    auto mix = __nexa_ui_mix;
+    if (!f.dark) {
+        f.card_edge = mix(k, B, 16); f.text2 = mix(f.text, k, 85);
+        f.ctrl = mix(k, W, 180); f.ctrl_hover = mix(f.ctrl, B, 8); f.ctrl_press = mix(f.ctrl, B, 14);
+        f.ctrl_edge = mix(k, B, 20); f.ctrl_bottom = mix(k, B, 50);
+        f.strong = mix(k, B, 115); f.alt = mix(k, B, 6);
+        f.input = f.ctrl; f.input_focus = W; f.thumb = W;
+        f.flyout = mix(k, W, 128); f.flyout_edge = mix(k, B, 20); f.divider = mix(k, B, 18);
+        f.subtle_hover = mix(k, B, 10); f.subtle_press = mix(k, B, 6);
+    } else {
+        f.card_edge = mix(k, B, 90); f.text2 = mix(f.text, k, 50);
+        f.ctrl = mix(k, W, 20); f.ctrl_hover = mix(f.ctrl, W, 8); f.ctrl_press = mix(f.ctrl, B, 20);
+        f.ctrl_edge = mix(k, W, 30); f.ctrl_bottom = mix(k, W, 14);
+        f.strong = mix(k, W, 150); f.alt = mix(k, B, 30);
+        f.input = mix(k, W, 14); f.input_focus = mix(k, B, 60); f.thumb = mix(k, W, 40);
+        f.flyout = mix(k, W, 4); f.flyout_edge = mix(k, W, 26); f.divider = mix(k, W, 20);
+        f.subtle_hover = mix(k, W, 14); f.subtle_press = mix(k, W, 8);
+    }
+    f.accent = __nexa_ui.accent_set ? __nexa_ui.accent : light ? 0x005FB8 : dark ? 0x60CDFF : t.accent;
+    f.on_accent = __nexa_ui_text_on(f.accent);
+    f.critical = light ? 0xC42B1C : dark ? 0xFF99A4 : t.danger;
+    f.on_critical = __nexa_ui_text_on(f.critical);
+    if (std::strcmp(t.name, "contrast") == 0) {
+        f.card_edge = f.ctrl_edge = f.ctrl_bottom = f.strong = f.flyout_edge = t.border;
+        f.ctrl = f.ctrl_press = f.input = f.input_focus = f.alt = f.flyout = f.thumb = t.surface;
+        f.ctrl_hover = f.subtle_hover = f.subtle_press = t.raised;
+        f.divider = t.track;
+        f.text2 = t.muted;
+        if (!__nexa_ui.accent_set) f.on_accent = t.on_accent;
+    }
+    return f;
+}
+// The page, body text and secondary text in the current style.
+static unsigned int __nexa_ui_col_page() { return __nexa_ui_is(__NEXA_UI_FLUENT) ? __nexa_ui_fl().bg : __nexa_ui_t().bg; }
+static unsigned int __nexa_ui_col_text() { return __nexa_ui_is(__NEXA_UI_FLUENT) ? __nexa_ui_fl().text : __nexa_ui_t().text; }
+static unsigned int __nexa_ui_col_muted() { return __nexa_ui_is(__NEXA_UI_FLUENT) ? __nexa_ui_fl().text2 : __nexa_ui_t().muted; }
 
 // --- pixels -----------------------------------------------------------------------
 
@@ -5567,7 +5671,7 @@ static float __nexa_ui_text_top(float y, float h, int font, int size) {
 
 // An editing key k arrives in the queue as -1 - k (see __nexa_ui_key_ev).
 enum { __NEXA_UI_BKSP, __NEXA_UI_DEL, __NEXA_UI_LEFT, __NEXA_UI_RIGHT, __NEXA_UI_ENTER,
-       __NEXA_UI_ESC, __NEXA_UI_TAB, __NEXA_UI_HOME, __NEXA_UI_END };
+       __NEXA_UI_ESC, __NEXA_UI_TAB, __NEXA_UI_HOME, __NEXA_UI_END, __NEXA_UI_UP, __NEXA_UI_DOWN };
 
 // Called by gfx.poll(), which a frame runs twice: only gathers.
 static void __nexa_ui_after_poll() {
@@ -5576,6 +5680,7 @@ static void __nexa_ui_after_poll() {
     if ((!d && __nexa_ui.seen_down) || __nexa_ui_ev_up) __nexa_ui.pend_release = 1;
     __nexa_ui_ev_down = __nexa_ui_ev_up = 0;
     __nexa_ui.seen_down = d;
+    __nexa_ui.pend_wheel += __nexa_g.wheel_y;
     // Like gfx.typed(), nothing typed while the window was not focused counts.
     if (__nexa_gfx_has_focus()) {
         __nexa_ui.pend_ev.insert(__nexa_ui.pend_ev.end(), __nexa_ui_evq.begin(), __nexa_ui_evq.end());
@@ -5596,6 +5701,21 @@ static void __nexa_ui_begin() {
     __nexa_ui.ev.swap(__nexa_ui.pend_ev);
     __nexa_ui.pend_ev.clear();
     __nexa_ui.pend_press = __nexa_ui.pend_release = 0;
+    __nexa_ui.wheel = __nexa_ui.pend_wheel;
+    __nexa_ui.pend_wheel = 0;
+    __nexa_ui.closed_now = 0;
+    // a tooltip is forgotten once the mouse is off its widget for a frame
+    if (!__nexa_ui.tip_touched) __nexa_ui.tip_id = 0;
+    __nexa_ui.tip_touched = 0;
+    __nexa_ui.tip_show = 0;
+    // A dialog up last frame has the mouse and keys this frame: nothing else
+    // keeps the keyboard, and nothing else stays open.
+    __nexa_ui.modal_prev = __nexa_ui.modal;
+    __nexa_ui.modal = 0;
+    if (__nexa_ui.modal_prev) {
+        __nexa_ui.focus = 0;
+        __nexa_ui.open = 0;
+    }
     // A click outside the text box takes the keyboard away from it; a click
     // outside an open list closes it. Widgets under the click take it back.
     if (__nexa_ui.pressed) {
@@ -5603,7 +5723,10 @@ static void __nexa_ui_begin() {
         if (__nexa_ui.open && __nexa_ui.open_frames > 0) {
             int inside = __nexa_ui.mx >= __nexa_ui.ox && __nexa_ui.mx < __nexa_ui.ox + __nexa_ui.ow &&
                          __nexa_ui.my >= __nexa_ui.oy && __nexa_ui.my < __nexa_ui.oy + __nexa_ui.oh;
-            if (!inside) __nexa_ui.open = 0;
+            if (!inside) {
+                __nexa_ui.closed_now = __nexa_ui.open;
+                __nexa_ui.open = 0;
+            }
         }
     }
 }
@@ -5617,6 +5740,8 @@ static unsigned int __nexa_ui_id(int kind, int x, int y) {
 }
 
 static int __nexa_ui_in(int x, int y, int w, int h) {
+    // behind a dialog, nothing is under the mouse
+    if (__nexa_ui.modal_prev && !__nexa_ui.in_modal) return 0;
     int mx = __nexa_ui.mx, my = __nexa_ui.my;
     if (!(mx >= x && mx < x + w && my >= y && my < y + h)) return 0;
     // Under an open list, the list has the mouse.
@@ -5635,10 +5760,21 @@ static int __nexa_ui_clickable(unsigned int id, int x, int y, int w, int h, int&
     return __nexa_ui.active == id && __nexa_ui.released && hover;
 }
 
-// Called by gfx.present(), before the frame goes out.
+// The widget ui.tooltip() will be about.
+static void __nexa_ui_mark(unsigned int id, int x, int y, int w, int h) {
+    __nexa_ui.last_id = id;
+    __nexa_ui.lx = x; __nexa_ui.ly = y; __nexa_ui.lw = w; __nexa_ui.lh = h;
+}
+
+// Called by gfx.present(), before the frame goes out: what goes over
+// everything -- an open list or menu, a tooltip, a dialog.
 static void __nexa_ui_draw_list();
+static void __nexa_ui_draw_tip();
+static void __nexa_ui_draw_dialog();
 static void __nexa_ui_before_present() {
     __nexa_ui_draw_list();
+    __nexa_ui_draw_tip();
+    __nexa_ui_draw_dialog();
     if (!__nexa_ui.down) __nexa_ui.active = 0;
     if (__nexa_ui.open) __nexa_ui.open_frames++;
     __nexa_ui.fresh = 1;
@@ -5661,6 +5797,15 @@ static void __nexa_ui_before_present() {
     __nexa_ui.accent = (unsigned int)((c8(r) << 16) | (c8(g) << 8) | c8(b));
     __nexa_ui.accent_set = 1;
 }
+[[maybe_unused]] static void __nexa_ui_style_set(const std::string& name) {
+    for (int i = 0; i < __nexa_ui_style_count; i++) {
+        if (name == __nexa_ui_styles[i]) {
+            __nexa_ui.style = i;
+            return;
+        }
+    }
+}
+[[maybe_unused]] static std::string __nexa_ui_style_get() { return __nexa_ui_styles[__nexa_ui.style]; }
 [[maybe_unused]] static void __nexa_ui_rounding_set(int px) { __nexa_ui.rounding = px < 0 ? 0 : (px > 64 ? 64 : px); }
 [[maybe_unused]] static void __nexa_ui_font_size_set(int px) { __nexa_ui.size = px < 6 ? 6 : (px > 200 ? 200 : px); }
 
@@ -5673,7 +5818,7 @@ static void __nexa_ui_before_present() {
 [[maybe_unused]] static void __nexa_ui_background() {
     if (!__nexa_g.fb) return;
     __nexa_ui_begin();
-    unsigned int c = __nexa_ui_t().bg;
+    unsigned int c = __nexa_ui_col_page();
     int n = __nexa_g.w * __nexa_g.h;
     for (int i = 0; i < n; i++) {
         __nexa_gfx_put4(i * 4, (unsigned char)((c >> 16) & 255), (unsigned char)((c >> 8) & 255),
@@ -5684,18 +5829,24 @@ static void __nexa_ui_before_present() {
 [[maybe_unused]] static int __nexa_ui_text(int x, int y, const std::string& s, int size, int r, int g, int b) {
     __nexa_ui_begin();
     if (size <= 0) size = __nexa_ui.size;
-    unsigned int c = r < 0 ? __nexa_ui_t().text : (unsigned int)(((r & 255) << 16) | ((g & 255) << 8) | (b & 255));
-    return (int)std::ceil(__nexa_ui_text_run((float)x, (float)y, s, 0, size, c, 255, true));
+    unsigned int c = r < 0 ? __nexa_ui_col_text() : (unsigned int)(((r & 255) << 16) | ((g & 255) << 8) | (b & 255));
+    int wv = (int)std::ceil(__nexa_ui_text_run((float)x, (float)y, s, 0, size, c, 255, true));
+    __nexa_ui_mark(__nexa_ui_id(20, x, y), x, y, wv, __nexa_ui_line_h(0, size));
+    return wv;
 }
 [[maybe_unused]] static int __nexa_ui_heading(int x, int y, const std::string& s, int size) {
     __nexa_ui_begin();
     if (size <= 0) size = (int)(__nexa_ui.size * 1.5f + 0.5f);
-    return (int)std::ceil(__nexa_ui_text_run((float)x, (float)y, s, 1, size, __nexa_ui_t().text, 255, true));
+    int wv = (int)std::ceil(__nexa_ui_text_run((float)x, (float)y, s, 1, size, __nexa_ui_col_text(), 255, true));
+    __nexa_ui_mark(__nexa_ui_id(20, x, y), x, y, wv, __nexa_ui_line_h(1, size));
+    return wv;
 }
 [[maybe_unused]] static int __nexa_ui_caption(int x, int y, const std::string& s) {
     __nexa_ui_begin();
     int size = __nexa_ui.size - 2 < 6 ? 6 : __nexa_ui.size - 2;
-    return (int)std::ceil(__nexa_ui_text_run((float)x, (float)y, s, 0, size, __nexa_ui_t().muted, 255, true));
+    int wv = (int)std::ceil(__nexa_ui_text_run((float)x, (float)y, s, 0, size, __nexa_ui_col_muted(), 255, true));
+    __nexa_ui_mark(__nexa_ui_id(20, x, y), x, y, wv, __nexa_ui_line_h(0, size));
+    return wv;
 }
 [[maybe_unused]] static int __nexa_ui_text_width(const std::string& s, int size) {
     if (size <= 0) size = __nexa_ui.size;
@@ -5706,8 +5857,179 @@ static void __nexa_ui_before_present() {
     return __nexa_ui_line_h(0, size);
 }
 
+// --- the fluent style ----------------------------------------------------------------
+//
+// Windows 11's controls, drawn from WinUI's own measurements: 4 px corners on
+// controls and 8 px on cards and menus, the darker bottom edge that lifts a
+// button off the page, the accent line under a text box that has the
+// keyboard, 20 px checkboxes and radio buttons, a 40 x 20 switch, a slider
+// thumb with an accent centre, a 3 px progress bar on a hairline. The widgets
+// below do the input the same way for every style and call in only to draw.
+
+static void __nexa_ui_chevron(float cx, float cy, unsigned int c, int down);
+
+// A horizontal hairline, whole pixels.
+static void __nexa_ui_hline(float x, float y, float w, float t, unsigned int c, int a) {
+    __nexa_ui_rrect(x, y, w, t, 0, c, a);
+}
+
+// A control's resting frame: a light edge all round and a darker bottom edge.
+static void __nexa_ui_fl_frame(float x, float y, float w, float h, float r, unsigned int edge, unsigned int bottom) {
+    __nexa_ui_rrect_line(x, y, w, h, r, 1.0f, edge, 255);
+    __nexa_ui_hline(x + r, y + h - 1, w - 2 * r, 1.0f, bottom, 255);
+}
+
+static void __nexa_ui_fl_label(int x, int y, int w, int h, const std::string& label, unsigned int c) {
+    int size = __nexa_ui.size;
+    float tw = __nexa_ui_text_run(0, 0, label, 0, size, 0, 0, false);
+    float ty = __nexa_ui_text_top((float)y, (float)h, 0, size);
+    int sx0 = __nexa_ui.cx0, sy0 = __nexa_ui.cy0, sx1 = __nexa_ui.cx1, sy1 = __nexa_ui.cy1;
+    __nexa_ui.cx0 = x + 4; __nexa_ui.cy0 = y; __nexa_ui.cx1 = x + w - 4; __nexa_ui.cy1 = y + h;
+    __nexa_ui_text_run(std::floor(x + (w - tw) * 0.5f), ty, label, 0, size, c, 255, true);
+    __nexa_ui.cx0 = sx0; __nexa_ui.cy0 = sy0; __nexa_ui.cx1 = sx1; __nexa_ui.cy1 = sy1;
+}
+
+static void __nexa_ui_panel_fluent(int x, int y, int w, int h, const std::string& title) {
+    __nexa_ui_Fluent f = __nexa_ui_fl();
+    __nexa_ui_rrect((float)x, (float)y, (float)w, (float)h, 8.0f, f.card, 255);
+    __nexa_ui_rrect_line((float)x, (float)y, (float)w, (float)h, 8.0f, 1.0f, f.card_edge, 255);
+    if (!title.empty()) {
+        int size = __nexa_ui.size;
+        int bar = __nexa_ui_line_h(1, size) + 22;
+        float ty = __nexa_ui_text_top((float)y, (float)bar, 1, size);
+        __nexa_ui_text_run((float)(x + 16), ty, title, 1, size, f.text, 255, true);
+        __nexa_ui_hline((float)(x + 1), (float)(y + bar), (float)(w - 2), 1.0f, f.divider, 255);
+    }
+}
+
+static void __nexa_ui_button_fluent(int x, int y, int w, int h, const std::string& label, const std::string& kind,
+                                    int hover, int held) {
+    __nexa_ui_Fluent f = __nexa_ui_fl();
+    float r = 4.0f;
+    if (kind == "ghost") {
+        // a subtle button: no fill until the mouse is over it
+        if (hover || held) __nexa_ui_rrect((float)x, (float)y, (float)w, (float)h, r, held ? f.subtle_press : f.subtle_hover, 255);
+        __nexa_ui_fl_label(x, y, w, h, label, held ? f.text2 : f.text);
+    } else if (kind == "secondary") {
+        __nexa_ui_rrect((float)x, (float)y, (float)w, (float)h, r, held ? f.ctrl_press : hover ? f.ctrl_hover : f.ctrl, 255);
+        __nexa_ui_fl_frame((float)x, (float)y, (float)w, (float)h, r, f.ctrl_edge, held ? f.ctrl_edge : f.ctrl_bottom);
+        __nexa_ui_fl_label(x, y, w, h, label, held ? f.text2 : f.text);
+    } else {
+        // the accent button, or the critical colour for "danger"
+        bool danger = kind == "danger";
+        unsigned int base = danger ? f.critical : f.accent;
+        unsigned int on = danger ? f.on_critical : f.on_accent;
+        unsigned int fill = held ? __nexa_ui_mix(base, f.card, 52) : hover ? __nexa_ui_mix(base, f.card, 26) : base;
+        __nexa_ui_rrect((float)x, (float)y, (float)w, (float)h, r, fill, 255);
+        if (!held) {
+            __nexa_ui_hline(x + r, (float)y, w - 2 * r, 1.0f, __nexa_ui_mix(fill, 0xFFFFFF, 22), 255);
+            __nexa_ui_hline(x + r, (float)(y + h - 1), w - 2 * r, 1.0f, __nexa_ui_mix(fill, 0x000000, f.dark ? 40 : 90), 255);
+        }
+        __nexa_ui_fl_label(x, y, w, h, label, held ? __nexa_ui_mix(on, fill, 70) : on);
+    }
+}
+
+static void __nexa_ui_checkbox_fluent(int x, int y, int box, bool checked, int hover, int held) {
+    __nexa_ui_Fluent f = __nexa_ui_fl();
+    float r = 4.0f;
+    if (checked) {
+        unsigned int fill = held ? __nexa_ui_mix(f.accent, f.card, 52) : hover ? __nexa_ui_mix(f.accent, f.card, 26) : f.accent;
+        __nexa_ui_rrect((float)x, (float)y, (float)box, (float)box, r, fill, 255);
+        __nexa_ui_segment(x + 5.0f, y + 10.5f, x + 8.5f, y + 14.0f, 1.5f, f.on_accent, 255);
+        __nexa_ui_segment(x + 8.5f, y + 14.0f, x + 15.0f, y + 6.5f, 1.5f, f.on_accent, 255);
+    } else {
+        unsigned int fill = held ? f.subtle_press : hover ? f.subtle_hover : f.alt;
+        __nexa_ui_rrect((float)x, (float)y, (float)box, (float)box, r, fill, 255);
+        __nexa_ui_rrect_line((float)x, (float)y, (float)box, (float)box, r, 1.0f, f.strong, 255);
+    }
+}
+
+static void __nexa_ui_radio_fluent(int x, int y, int box, int sel, int hover, int held) {
+    __nexa_ui_Fluent f = __nexa_ui_fl();
+    float cx = x + box * 0.5f, cy = y + box * 0.5f;
+    if (sel) {
+        // an accent ring round a white centre that grows under the mouse
+        __nexa_ui_circle(cx, cy, box * 0.5f, hover && !held ? __nexa_ui_mix(f.accent, f.card, 26) : f.accent, 255);
+        __nexa_ui_circle(cx, cy, held ? 5.0f : hover ? 7.0f : 6.0f, f.on_accent, 255);
+    } else {
+        __nexa_ui_circle(cx, cy, box * 0.5f, f.strong, 255);
+        __nexa_ui_circle(cx, cy, box * 0.5f - 1.0f, held ? f.subtle_press : hover ? f.subtle_hover : f.alt, 255);
+        if (held) __nexa_ui_circle(cx, cy, 5.0f, f.strong, 255);
+    }
+}
+
+static void __nexa_ui_toggle_fluent(int x, int y, int tw, int th, bool on, int hover, int held) {
+    __nexa_ui_Fluent f = __nexa_ui_fl();
+    float r = th * 0.5f, cy = y + r;
+    float kr = hover || held ? 7.0f : 6.0f;
+    if (on) {
+        __nexa_ui_rrect((float)x, (float)y, (float)tw, (float)th, r, hover ? __nexa_ui_mix(f.accent, f.card, 26) : f.accent, 255);
+        __nexa_ui_circle(x + tw - r, cy, kr, f.on_accent, 255);
+    } else {
+        __nexa_ui_rrect((float)x, (float)y, (float)tw, (float)th, r, hover ? f.subtle_hover : f.alt, 255);
+        __nexa_ui_rrect_line((float)x, (float)y, (float)tw, (float)th, r, 1.0f, f.strong, 255);
+        __nexa_ui_circle(x + r, cy, kr, f.strong, 255);
+    }
+}
+
+// kx is the thumb's centre; the rail runs along cy.
+static void __nexa_ui_slider_fluent(int x, int w, float kx, float cy, int hover, int dragging) {
+    __nexa_ui_Fluent f = __nexa_ui_fl();
+    __nexa_ui_rrect((float)x, cy - 2, (float)w, 4, 2, f.strong, 255);
+    __nexa_ui_rrect((float)x, cy - 2, kx - x, 4, 2, f.accent, 255);
+    __nexa_ui_circle(kx, cy, 10.0f, f.ctrl_edge, 255);
+    __nexa_ui_circle(kx, cy, 9.0f, f.thumb, 255);
+    __nexa_ui_circle(kx, cy, dragging ? 5.0f : hover ? 7.0f : 6.0f, dragging ? __nexa_ui_mix(f.accent, f.card, 40) : f.accent, 255);
+}
+
+static void __nexa_ui_progress_fluent(int x, int y, int w, double fraction) {
+    __nexa_ui_Fluent f = __nexa_ui_fl();
+    // a hairline rail and a 3 px bar along it
+    __nexa_ui_hline((float)x, (float)(y + 4), (float)w, 1.0f, f.strong, 255);
+    if (fraction > 0) __nexa_ui_rrect((float)x, (float)(y + 3), (float)(w * fraction), 3, 1.5f, f.accent, 255);
+}
+
+// A text box's frame, or with button on, a dropdown's (which is a button).
+static void __nexa_ui_field_fluent(int x, int y, int w, int h, int hover, int lit, int button) {
+    __nexa_ui_Fluent f = __nexa_ui_fl();
+    float r = 4.0f;
+    if (button) {
+        __nexa_ui_rrect((float)x, (float)y, (float)w, (float)h, r, lit ? f.ctrl_press : hover ? f.ctrl_hover : f.ctrl, 255);
+        __nexa_ui_fl_frame((float)x, (float)y, (float)w, (float)h, r, f.ctrl_edge, lit ? f.ctrl_edge : f.ctrl_bottom);
+        return;
+    }
+    __nexa_ui_rrect((float)x, (float)y, (float)w, (float)h, r, lit ? f.input_focus : hover ? f.ctrl_hover : f.input, 255);
+    __nexa_ui_rrect_line((float)x, (float)y, (float)w, (float)h, r, 1.0f, f.ctrl_edge, 255);
+    if (lit) __nexa_ui_hline((float)(x + 1), (float)(y + h - 2), (float)(w - 2), 2.0f, f.accent, 255);
+    else __nexa_ui_hline(x + r, (float)(y + h - 1), w - 2 * r, 1.0f, f.strong, 255);
+}
+
+// The open list: an 8 px menu lifted off the page; rows are inset, and the
+// chosen one carries a short accent bar at its left.
+static void __nexa_ui_list_fluent(int x, int y, int w, int h) {
+    __nexa_ui_Fluent f = __nexa_ui_fl();
+    __nexa_ui_shadow((float)x, (float)y, (float)w, (float)h, 8.0f, 16.0f, 6.0f, f.dark ? 110 : 40);
+    __nexa_ui_rrect((float)x, (float)y, (float)w, (float)h, 8.0f, f.flyout, 255);
+    __nexa_ui_rrect_line((float)x, (float)y, (float)w, (float)h, 8.0f, 1.0f, f.flyout_edge, 255);
+}
+static unsigned int __nexa_ui_list_row_fluent(int x, int iy, int w, int ih, int hover, int chosen) {
+    __nexa_ui_Fluent f = __nexa_ui_fl();
+    if (hover || chosen) {
+        __nexa_ui_rrect((float)(x + 4), (float)(iy + 1), (float)(w - 8), (float)(ih - 2), 4.0f,
+                        hover ? f.subtle_hover : f.subtle_press, 255);
+    }
+    if (chosen) __nexa_ui_rrect((float)(x + 5), iy + ih * 0.5f - 8, 3, 16, 1.5f, f.accent, 255);
+    return f.text;
+}
+
+// --- containers -------------------------------------------------------------------
+
 [[maybe_unused]] static void __nexa_ui_panel(int x, int y, int w, int h, const std::string& title) {
     __nexa_ui_begin();
+    if (__nexa_ui_is(__NEXA_UI_FLUENT)) {
+        __nexa_ui_panel_fluent(x, y, w, h, title);
+        return;
+    }
     const __nexa_ui_Theme& t = __nexa_ui_t();
     float r = (float)(__nexa_ui.rounding + 2);
     __nexa_ui_shadow((float)x, (float)y, (float)w, (float)h, r, 10.0f, 3.0f, t.shadow_alpha);
@@ -5724,17 +6046,23 @@ static void __nexa_ui_before_present() {
 
 [[maybe_unused]] static void __nexa_ui_separator(int x, int y, int w) {
     __nexa_ui_begin();
+    if (__nexa_ui_is(__NEXA_UI_FLUENT)) {
+        __nexa_ui_hline((float)x, (float)y, (float)w, 1.0f, __nexa_ui_fl().divider, 255);
+        return;
+    }
     __nexa_ui_rrect((float)x, (float)y, (float)w, 1.0f, 0, __nexa_ui_t().border, 255);
 }
 
 // --- widgets ----------------------------------------------------------------------
 
-[[maybe_unused]] static bool __nexa_ui_button(int x, int y, int w, int h, const std::string& label, const std::string& style) {
-    __nexa_ui_begin();
+// A button's look in a given state; __nexa_ui_button reads the mouse.
+static void __nexa_ui_button_paint(int x, int y, int w, int h, const std::string& label, const std::string& style,
+                                   int hover, int held) {
     const __nexa_ui_Theme& t = __nexa_ui_t();
-    unsigned int id = __nexa_ui_id(1, x, y);
-    int hover, held;
-    bool clicked = __nexa_ui_clickable(id, x, y, w, h, hover, held) != 0;
+    if (__nexa_ui_is(__NEXA_UI_FLUENT)) {
+        __nexa_ui_button_fluent(x, y, w, h, label, style, hover, held);
+        return;
+    }
     float r = (float)__nexa_ui.rounding;
     unsigned int fill, text, edge = 0;
     int filled = 1, outlined = 0;
@@ -5763,6 +6091,15 @@ static void __nexa_ui_before_present() {
     __nexa_ui.cx0 = x + 4; __nexa_ui.cy0 = y; __nexa_ui.cx1 = x + w - 4; __nexa_ui.cy1 = y + h;
     __nexa_ui_text_run(std::floor(x + (w - tw) * 0.5f), ty, label, 1, size, text, 255, true);
     __nexa_ui.cx0 = sx0; __nexa_ui.cy0 = sy0; __nexa_ui.cx1 = sx1; __nexa_ui.cy1 = sy1;
+}
+
+[[maybe_unused]] static bool __nexa_ui_button(int x, int y, int w, int h, const std::string& label, const std::string& style) {
+    __nexa_ui_begin();
+    unsigned int id = __nexa_ui_id(1, x, y);
+    int hover, held;
+    bool clicked = __nexa_ui_clickable(id, x, y, w, h, hover, held) != 0;
+    __nexa_ui_mark(id, x, y, w, h);
+    __nexa_ui_button_paint(x, y, w, h, label, style, hover, held);
     return clicked;
 }
 
@@ -5773,9 +6110,10 @@ static int __nexa_ui_labelled(int kind, int x, int y, int bw, int bh, const std:
     int h = bh > __nexa_ui_line_h(0, __nexa_ui.size) ? bh : __nexa_ui_line_h(0, __nexa_ui.size);
     unsigned int id = __nexa_ui_id(kind, x, y);
     int clicked = __nexa_ui_clickable(id, x, y, bw + lw, h, hover, held);
+    __nexa_ui_mark(id, x, y, bw + lw, h);
     if (!label.empty()) {
         float ty = __nexa_ui_text_top((float)y, (float)bh, 0, __nexa_ui.size);
-        __nexa_ui_text_run((float)(x + bw + 8), ty, label, 0, __nexa_ui.size, __nexa_ui_t().text, 255, true);
+        __nexa_ui_text_run((float)(x + bw + 8), ty, label, 0, __nexa_ui.size, __nexa_ui_col_text(), 255, true);
     }
     return clicked;
 }
@@ -5784,8 +6122,12 @@ static int __nexa_ui_labelled(int kind, int x, int y, int bw, int bh, const std:
     __nexa_ui_begin();
     const __nexa_ui_Theme& t = __nexa_ui_t();
     int hover, held;
-    int box = 18;
+    int box = __nexa_ui_is(__NEXA_UI_FLUENT) ? 20 : 18;
     if (__nexa_ui_labelled(2, x, y, box, box, label, hover, held)) checked = !checked;
+    if (__nexa_ui_is(__NEXA_UI_FLUENT)) {
+        __nexa_ui_checkbox_fluent(x, y, box, checked, hover, held);
+        return checked;
+    }
     float r = (float)(__nexa_ui.rounding < 5 ? __nexa_ui.rounding : 5);
     if (checked) {
         unsigned int a = __nexa_ui_accent();
@@ -5806,8 +6148,12 @@ static int __nexa_ui_labelled(int kind, int x, int y, int bw, int bh, const std:
     __nexa_ui_begin();
     const __nexa_ui_Theme& t = __nexa_ui_t();
     int hover, held;
-    int tw = 36, th = 20;
+    int tw = __nexa_ui_is(__NEXA_UI_FLUENT) ? 40 : 36, th = 20;
     if (__nexa_ui_labelled(3, x, y, tw, th, label, hover, held)) on = !on;
+    if (__nexa_ui_is(__NEXA_UI_FLUENT)) {
+        __nexa_ui_toggle_fluent(x, y, tw, th, on, hover, held);
+        return on;
+    }
     unsigned int rail = on ? __nexa_ui_accent() : t.track;
     if (hover) rail = __nexa_ui_shade(rail, 20);
     __nexa_ui_rrect((float)x, (float)y, (float)tw, (float)th, th * 0.5f, rail, 255);
@@ -5821,9 +6167,13 @@ static int __nexa_ui_labelled(int kind, int x, int y, int bw, int bh, const std:
     __nexa_ui_begin();
     const __nexa_ui_Theme& t = __nexa_ui_t();
     int hover, held;
-    int box = 18;
+    int box = __nexa_ui_is(__NEXA_UI_FLUENT) ? 20 : 18;
     if (__nexa_ui_labelled(4, x, y, box, box, label, hover, held)) current = value;
     float cx = x + box * 0.5f, cy = y + box * 0.5f;
+    if (__nexa_ui_is(__NEXA_UI_FLUENT)) {
+        __nexa_ui_radio_fluent(x, y, box, current == value, hover, held);
+        return current;
+    }
     if (current == value) {
         unsigned int a = __nexa_ui_accent();
         if (hover) a = __nexa_ui_shade(a, 22);
@@ -5846,6 +6196,7 @@ static int __nexa_ui_labelled(int kind, int x, int y, int bw, int bh, const std:
     float kr = 8.0f;
     unsigned int id = __nexa_ui_id(5, x, y);
     int hover = __nexa_ui_in(x, y, w, h);
+    __nexa_ui_mark(id, x, y, w, h);
     if (hover && __nexa_ui.pressed) __nexa_ui.active = id;
     int dragging = __nexa_ui.active == id && __nexa_ui.down;
     if (dragging && w > 2 * kr && hi > lo) {
@@ -5857,6 +6208,10 @@ static int __nexa_ui_labelled(int kind, int x, int y, int bw, int bh, const std:
     float f = hi > lo ? (float)(value - lo) / (hi - lo) : 0;
     float cy = y + h * 0.5f;
     float kx = x + kr + f * (w - 2 * kr);
+    if (__nexa_ui_is(__NEXA_UI_FLUENT)) {
+        __nexa_ui_slider_fluent(x, w, kx, cy, hover, dragging);
+        return value;
+    }
     __nexa_ui_rrect((float)x, cy - 2, (float)w, 4, 2, t.track, 255);
     __nexa_ui_rrect((float)x, cy - 2, kx - x, 4, 2, __nexa_ui_accent(), 255);
     __nexa_ui_shadow(kx - kr, cy - kr, 2 * kr, 2 * kr, kr, 3.0f, 1.0f, t.shadow_alpha + 20);
@@ -5872,6 +6227,10 @@ static int __nexa_ui_labelled(int kind, int x, int y, int bw, int bh, const std:
     const __nexa_ui_Theme& t = __nexa_ui_t();
     if (fraction < 0) fraction = 0;
     if (fraction > 1) fraction = 1;
+    if (__nexa_ui_is(__NEXA_UI_FLUENT)) {
+        __nexa_ui_progress_fluent(x, y, w, fraction);
+        return;
+    }
     __nexa_ui_rrect((float)x, (float)y, (float)w, 8, 4, t.track, 255);
     if (fraction > 0) __nexa_ui_rrect((float)x, (float)y, (float)(w * fraction), 8, 4, __nexa_ui_accent(), 255);
 }
@@ -5899,6 +6258,7 @@ static int __nexa_ui_hit(const std::string& s, float px, int size) {
     int pad = 10;
     unsigned int id = __nexa_ui_id(6, x, y);
     int hover = __nexa_ui_in(x, y, w, h);
+    __nexa_ui_mark(id, x, y, w, h);
     int focused = __nexa_ui.focus == id;
     if (hover && __nexa_ui.pressed) {
         if (!focused) __nexa_ui.scroll = 0;
@@ -5971,14 +6331,18 @@ static int __nexa_ui_hit(const std::string& s, float px, int size) {
         if (moved) __nexa_ui.caret_ms = __nexa_ui.frame_ms;
     }
     float r = (float)__nexa_ui.rounding;
-    __nexa_ui_rrect((float)x, (float)y, (float)w, (float)h, r, t.input, 255);
-    if (focused) {
-        unsigned int a = __nexa_ui_accent();
-        __nexa_ui_rrect_line(x - 3.0f, y - 3.0f, w + 6.0f, h + 6.0f, r + 3, 3.0f, a, 60);
-        __nexa_ui_rrect_line((float)x, (float)y, (float)w, (float)h, r, 1.5f, a, 255);
+    if (__nexa_ui_is(__NEXA_UI_FLUENT)) {
+        __nexa_ui_field_fluent(x, y, w, h, hover, focused, 0);
     } else {
-        __nexa_ui_rrect_line((float)x, (float)y, (float)w, (float)h, r, 1.0f,
-                             hover ? __nexa_ui_shade(t.border, 40) : t.border, 255);
+        __nexa_ui_rrect((float)x, (float)y, (float)w, (float)h, r, t.input, 255);
+        if (focused) {
+            unsigned int a = __nexa_ui_accent();
+            __nexa_ui_rrect_line(x - 3.0f, y - 3.0f, w + 6.0f, h + 6.0f, r + 3, 3.0f, a, 60);
+            __nexa_ui_rrect_line((float)x, (float)y, (float)w, (float)h, r, 1.5f, a, 255);
+        } else {
+            __nexa_ui_rrect_line((float)x, (float)y, (float)w, (float)h, r, 1.0f,
+                                 hover ? __nexa_ui_shade(t.border, 40) : t.border, 255);
+        }
     }
     int inner = w - 2 * pad;
     float ty = __nexa_ui_text_top((float)y, (float)h, 0, size);
@@ -5992,14 +6356,14 @@ static int __nexa_ui_hit(const std::string& s, float px, int size) {
     int sx0 = __nexa_ui.cx0, sy0 = __nexa_ui.cy0, sx1 = __nexa_ui.cx1, sy1 = __nexa_ui.cy1;
     __nexa_ui.cx0 = x + pad - 1; __nexa_ui.cy0 = y + 1; __nexa_ui.cx1 = x + w - pad + 1; __nexa_ui.cy1 = y + h - 1;
     if (text.empty() && !focused) {
-        __nexa_ui_text_run((float)(x + pad), ty, placeholder, 0, size, t.muted, 255, true);
+        __nexa_ui_text_run((float)(x + pad), ty, placeholder, 0, size, __nexa_ui_col_muted(), 255, true);
     } else {
-        __nexa_ui_text_run(x + pad - scroll, ty, text, 0, size, t.text, 255, true);
+        __nexa_ui_text_run(x + pad - scroll, ty, text, 0, size, __nexa_ui_col_text(), 255, true);
     }
     if (focused && ((__nexa_ui.frame_ms - __nexa_ui.caret_ms) % 1060) < 530) {
         float cxp = __nexa_ui_text_run(0, 0, text.substr(0, (size_t)__nexa_ui.caret), 0, size, 0, 0, false);
         float px = std::floor(x + pad - scroll + cxp);
-        __nexa_ui_rrect(px, (float)(y + 7), 1.5f, (float)(h - 14), 0, t.text, 255);
+        __nexa_ui_rrect(px, (float)(y + 7), 1.5f, (float)(h - 14), 0, __nexa_ui_col_text(), 255);
     }
     __nexa_ui.cx0 = sx0; __nexa_ui.cy0 = sy0; __nexa_ui.cx1 = sx1; __nexa_ui.cy1 = sy1;
     return text;
@@ -6037,6 +6401,7 @@ static void __nexa_ui_chevron(float cx, float cy, unsigned int c, int down) {
         }
     }
     int hover, held;
+    __nexa_ui_mark(id, x, y, w, h);
     if (__nexa_ui_clickable(id, x, y, w, h, hover, held)) {
         if (is_open) {
             __nexa_ui.open = 0;
@@ -6048,18 +6413,23 @@ static void __nexa_ui_chevron(float cx, float cy, unsigned int c, int down) {
         }
     }
     float r = (float)__nexa_ui.rounding;
-    __nexa_ui_rrect((float)x, (float)y, (float)w, (float)h, r, hover && !is_open ? t.raised : t.input, 255);
-    __nexa_ui_rrect_line((float)x, (float)y, (float)w, (float)h, r, is_open ? 1.5f : 1.0f,
-                         is_open ? __nexa_ui_accent() : t.border, 255);
+    if (__nexa_ui_is(__NEXA_UI_FLUENT)) {
+        __nexa_ui_field_fluent(x, y, w, h, hover, is_open, 1);
+    } else {
+        __nexa_ui_rrect((float)x, (float)y, (float)w, (float)h, r, hover && !is_open ? t.raised : t.input, 255);
+        __nexa_ui_rrect_line((float)x, (float)y, (float)w, (float)h, r, is_open ? 1.5f : 1.0f,
+                             is_open ? __nexa_ui_accent() : t.border, 255);
+    }
     float ty = __nexa_ui_text_top((float)y, (float)h, 0, size);
     std::string shown = selected >= 0 && selected < (int)items.size() ? items[(size_t)selected] : std::string();
     int sx0 = __nexa_ui.cx0, sy0 = __nexa_ui.cy0, sx1 = __nexa_ui.cx1, sy1 = __nexa_ui.cy1;
     __nexa_ui.cx0 = x + 10; __nexa_ui.cy0 = y; __nexa_ui.cx1 = x + w - 28; __nexa_ui.cy1 = y + h;
-    __nexa_ui_text_run((float)(x + 10), ty, shown, 0, size, t.text, 255, true);
+    __nexa_ui_text_run((float)(x + 10), ty, shown, 0, size, __nexa_ui_col_text(), 255, true);
     __nexa_ui.cx0 = sx0; __nexa_ui.cy0 = sy0; __nexa_ui.cx1 = sx1; __nexa_ui.cy1 = sy1;
-    __nexa_ui_chevron((float)(x + w - 16), y + h * 0.5f, t.muted, !is_open);
+    __nexa_ui_chevron((float)(x + w - 16), y + h * 0.5f, __nexa_ui_col_muted(), __nexa_ui_is(__NEXA_UI_FLUENT) || !is_open);
     if (is_open) {
         int ih = __nexa_ui_line_h(0, size) + 12;
+        __nexa_ui.okind = 0;
         __nexa_ui.item_h = ih;
         __nexa_ui.ox = x;
         __nexa_ui.oy = y + h + 4;
@@ -6072,28 +6442,731 @@ static void __nexa_ui_chevron(float cx, float cy, unsigned int c, int down) {
 }
 
 // The open list, over everything drawn this frame.
+static void __nexa_ui_draw_menu();
 static void __nexa_ui_draw_list() {
     if (!__nexa_ui.open || !__nexa_g.fb) return;
+    if (__nexa_ui.okind == 1) {
+        __nexa_ui_draw_menu();
+        return;
+    }
     const __nexa_ui_Theme& t = __nexa_ui_t();
     int x = __nexa_ui.ox, y = __nexa_ui.oy, w = __nexa_ui.ow, h = __nexa_ui.oh, ih = __nexa_ui.item_h;
     int size = __nexa_ui.size;
     float r = (float)__nexa_ui.rounding;
     int sx0 = __nexa_ui.cx0, sy0 = __nexa_ui.cy0, sx1 = __nexa_ui.cx1, sy1 = __nexa_ui.cy1;
     __nexa_ui.cx1 = -1;
-    __nexa_ui_shadow((float)x, (float)y, (float)w, (float)h, r, 14.0f, 5.0f, t.shadow_alpha + 20);
-    __nexa_ui_rrect((float)x, (float)y, (float)w, (float)h, r, t.surface, 255);
-    __nexa_ui_rrect_line((float)x, (float)y, (float)w, (float)h, r, 1.0f, t.border, 255);
+    int fl = __nexa_ui_is(__NEXA_UI_FLUENT);
+    if (fl) {
+        __nexa_ui_list_fluent(x, y, w, h);
+    } else {
+        __nexa_ui_shadow((float)x, (float)y, (float)w, (float)h, r, 14.0f, 5.0f, t.shadow_alpha + 20);
+        __nexa_ui_rrect((float)x, (float)y, (float)w, (float)h, r, t.surface, 255);
+        __nexa_ui_rrect_line((float)x, (float)y, (float)w, (float)h, r, 1.0f, t.border, 255);
+    }
     for (int k = 0; k < (int)__nexa_ui.oitems.size(); k++) {
         int iy = y + 4 + k * ih;
         int hover = __nexa_ui.mx >= x && __nexa_ui.mx < x + w && __nexa_ui.my >= iy && __nexa_ui.my < iy + ih;
-        if (hover) __nexa_ui_rrect((float)(x + 4), (float)iy, (float)(w - 8), (float)ih, r - 2 > 0 ? r - 2 : 0, t.raised, 255);
-        unsigned int c = k == __nexa_ui.osel ? __nexa_ui_accent() : t.text;
-        float ty = __nexa_ui_text_top((float)iy, (float)ih, k == __nexa_ui.osel ? 1 : 0, size);
+        unsigned int c;
+        if (fl) {
+            c = __nexa_ui_list_row_fluent(x, iy, w, ih, hover, k == __nexa_ui.osel);
+        } else {
+            if (hover) __nexa_ui_rrect((float)(x + 4), (float)iy, (float)(w - 8), (float)ih, r - 2 > 0 ? r - 2 : 0, t.raised, 255);
+            c = k == __nexa_ui.osel ? __nexa_ui_accent() : t.text;
+        }
+        // modern sets the chosen item in semibold; Windows keeps it regular
+        int font = k == __nexa_ui.osel && !fl ? 1 : 0;
+        float ty = __nexa_ui_text_top((float)iy, (float)ih, font, size);
         __nexa_ui.cx0 = x + 10; __nexa_ui.cy0 = y; __nexa_ui.cx1 = x + w - 10; __nexa_ui.cy1 = y + h;
-        __nexa_ui_text_run((float)(x + 12), ty, __nexa_ui.oitems[(size_t)k], k == __nexa_ui.osel ? 1 : 0, size, c, 255, true);
+        __nexa_ui_text_run((float)(x + (fl ? 16 : 12)), ty, __nexa_ui.oitems[(size_t)k], font, size, c, 255, true);
         __nexa_ui.cx1 = -1;
     }
     __nexa_ui.cx0 = sx0; __nexa_ui.cy0 = sy0; __nexa_ui.cx1 = sx1; __nexa_ui.cy1 = sy1;
+}
+
+// --- app widgets: tabs, lists, tables, menus, dialogs, tooltips -------------------
+
+// Sets the clip to a box, inside whatever clip there already is, until it
+// goes out of scope.
+struct __nexa_ui_Clip {
+    int s0, s1, s2, s3;
+    __nexa_ui_Clip(int x0, int y0, int x1, int y1) {
+        s0 = __nexa_ui.cx0; s1 = __nexa_ui.cy0; s2 = __nexa_ui.cx1; s3 = __nexa_ui.cy1;
+        int a0 = s0, b0 = s1, a1 = s2, b1 = s3;
+        if (a1 < 0) { a0 = 0; b0 = 0; a1 = __nexa_g.w; b1 = __nexa_g.h; }
+        __nexa_ui.cx0 = x0 > a0 ? x0 : a0;
+        __nexa_ui.cy0 = y0 > b0 ? y0 : b0;
+        __nexa_ui.cx1 = x1 < a1 ? x1 : a1;
+        __nexa_ui.cy1 = y1 < b1 ? y1 : b1;
+        if (__nexa_ui.cx1 < __nexa_ui.cx0) __nexa_ui.cx1 = __nexa_ui.cx0;
+        if (__nexa_ui.cy1 < __nexa_ui.cy0) __nexa_ui.cy1 = __nexa_ui.cy0;
+    }
+    ~__nexa_ui_Clip() { __nexa_ui.cx0 = s0; __nexa_ui.cy0 = s1; __nexa_ui.cx1 = s2; __nexa_ui.cy1 = s3; }
+};
+
+// The whole window as the clip, for what is drawn over everything.
+struct __nexa_ui_NoClip {
+    int s0, s1, s2, s3;
+    __nexa_ui_NoClip() {
+        s0 = __nexa_ui.cx0; s1 = __nexa_ui.cy0; s2 = __nexa_ui.cx1; s3 = __nexa_ui.cy1;
+        __nexa_ui.cx1 = -1;
+    }
+    ~__nexa_ui_NoClip() { __nexa_ui.cx0 = s0; __nexa_ui.cy0 = s1; __nexa_ui.cx1 = s2; __nexa_ui.cy1 = s3; }
+};
+
+static float __nexa_ui_width(const std::string& s, int font, int size) {
+    return __nexa_ui_text_run(0, 0, s, font, size, 0, 0, false);
+}
+
+// Lines of s no wider than maxw, broken at spaces and at every newline. A word
+// longer than a line is left whole (and clipped where it is drawn).
+static std::vector<std::string> __nexa_ui_wrap(const std::string& s, int font, int size, int maxw) {
+    std::vector<std::string> lines;
+    size_t start = 0;
+    for (;;) {
+        size_t nl = s.find('\n', start);
+        std::string para = s.substr(start, nl == std::string::npos ? std::string::npos : nl - start);
+        std::string line;
+        size_t i = 0;
+        for (;;) {
+            size_t sp = para.find(' ', i);
+            std::string word = para.substr(i, sp == std::string::npos ? std::string::npos : sp - i);
+            std::string trial = line.empty() ? word : line + " " + word;
+            if (!line.empty() && __nexa_ui_width(trial, font, size) > maxw) {
+                lines.push_back(line);
+                line = word;
+            } else {
+                line = trial;
+            }
+            if (sp == std::string::npos) break;
+            i = sp + 1;
+        }
+        lines.push_back(line);
+        if (nl == std::string::npos) break;
+        start = nl + 1;
+    }
+    return lines;
+}
+
+// --- scrolling ---
+
+static unsigned int __nexa_ui_bar_id(unsigned int id) { return (id ^ 0x9E3779B9u) ? (id ^ 0x9E3779B9u) : 2; }
+
+static void __nexa_ui_bar_geom(int y, int h, int content, int off, int& ty, int& th) {
+    int maxoff = content - h;
+    th = h * h / content;
+    if (th < 24) th = 24;
+    if (th > h) th = h;
+    ty = y + (maxoff > 0 ? (h - th) * off / maxoff : 0);
+}
+
+// A view of `content` pixels scrolled in the box (x, y, w, h): the wheel over
+// it and dragging its scrollbar move it. Returns how far down it is.
+static int __nexa_ui_scrollview(unsigned int id, int x, int y, int w, int h, int content, int step) {
+    float& off = __nexa_ui.scrolls[id];
+    int maxoff = content - h > 0 ? content - h : 0;
+    if (maxoff > 0 && __nexa_ui.wheel && __nexa_ui_in(x, y, w, h)) {
+        off -= (float)(__nexa_ui.wheel * step * 3);
+        __nexa_ui.wheel = 0;  // this view took it
+    }
+    if (off > maxoff) off = (float)maxoff;
+    if (off < 0) off = 0;
+    if (maxoff > 0) {
+        int ty, th;
+        __nexa_ui_bar_geom(y, h, content, (int)off, ty, th);
+        unsigned int bid = __nexa_ui_bar_id(id);
+        int bx = x + w - 12;
+        if (__nexa_ui.pressed && __nexa_ui_in(bx, y, 12, h)) {
+            __nexa_ui.active = bid;
+            int my = __nexa_ui.my;
+            __nexa_ui.grab = my >= ty && my < ty + th ? my - ty : th / 2;
+            __nexa_ui.pressed = 0;  // spent on the bar: the row beneath does not take it
+        }
+        if (__nexa_ui.active == bid && __nexa_ui.down && h > th) {
+            off = (float)(__nexa_ui.my - __nexa_ui.grab - y) * maxoff / (h - th);
+            if (off > maxoff) off = (float)maxoff;
+            if (off < 0) off = 0;
+        }
+    }
+    return (int)off;
+}
+
+// Scrolls so that a row from top to top + rh is in view.
+static int __nexa_ui_reveal(unsigned int id, int top, int rh, int h, int content) {
+    float& off = __nexa_ui.scrolls[id];
+    if (top - 4 < off) off = (float)(top - 4);
+    if (top + rh + 4 > off + h) off = (float)(top + rh + 4 - h);
+    int maxoff = content - h > 0 ? content - h : 0;
+    if (off > maxoff) off = (float)maxoff;
+    if (off < 0) off = 0;
+    return (int)off;
+}
+
+static void __nexa_ui_scrollbar(unsigned int id, int x, int y, int w, int h, int content, int off) {
+    if (content <= h) return;
+    int ty, th;
+    __nexa_ui_bar_geom(y, h, content, off, ty, th);
+    int bx = x + w - 12;
+    int over = __nexa_ui_in(x, y, w, h);
+    int drag = __nexa_ui.active == __nexa_ui_bar_id(id) && __nexa_ui.down;
+    if (__nexa_ui_is(__NEXA_UI_FLUENT)) {
+        // Windows: a hairline that widens into a bar when the mouse comes near
+        __nexa_ui_Fluent f = __nexa_ui_fl();
+        if (over || drag) __nexa_ui_rrect((float)(bx + 3), (float)(ty + 3), 6, (float)(th - 6), 3, f.strong, 255);
+        else __nexa_ui_rrect((float)(bx + 6), (float)(ty + 3), 2, (float)(th - 6), 1, f.strong, 200);
+    } else {
+        const __nexa_ui_Theme& t = __nexa_ui_t();
+        unsigned int c = drag ? t.muted : over ? __nexa_ui_shade(t.border, 40) : t.border;
+        __nexa_ui_rrect((float)(bx + 3), (float)(ty + 3), 6, (float)(th - 6), 3, c, 255);
+    }
+}
+
+// Up, Down, Home and End move a selection among n rows, in the list or table
+// that has the keyboard. Returns whether it moved.
+static int __nexa_ui_rows_keys(int& sel, int n) {
+    int moved = 0;
+    for (int v : __nexa_ui.ev) {
+        if (v >= 0 || n <= 0) continue;
+        int k = -1 - v;
+        if (k == __NEXA_UI_UP) { sel = sel <= 0 ? 0 : sel - 1; moved = 1; }
+        else if (k == __NEXA_UI_DOWN) { sel = sel < 0 ? 0 : (sel + 1 < n ? sel + 1 : n - 1); moved = 1; }
+        else if (k == __NEXA_UI_HOME) { sel = 0; moved = 1; }
+        else if (k == __NEXA_UI_END) { sel = n - 1; moved = 1; }
+    }
+    __nexa_ui.ev.clear();
+    return moved;
+}
+
+// The frame of a list or table.
+static void __nexa_ui_box(int x, int y, int w, int h, int lit) {
+    if (__nexa_ui_is(__NEXA_UI_FLUENT)) {
+        __nexa_ui_Fluent f = __nexa_ui_fl();
+        __nexa_ui_rrect((float)x, (float)y, (float)w, (float)h, 4.0f, f.input, 255);
+        __nexa_ui_rrect_line((float)x, (float)y, (float)w, (float)h, 4.0f, 1.0f, f.ctrl_edge, 255);
+        return;
+    }
+    const __nexa_ui_Theme& t = __nexa_ui_t();
+    float r = (float)__nexa_ui.rounding;
+    __nexa_ui_rrect((float)x, (float)y, (float)w, (float)h, r, t.input, 255);
+    __nexa_ui_rrect_line((float)x, (float)y, (float)w, (float)h, r, 1.0f, lit ? __nexa_ui_accent() : t.border, 255);
+}
+
+// One row's highlight; returns the colour its text is drawn in. The selected
+// row is solid accent while its list has the keyboard, tinted when not.
+static unsigned int __nexa_ui_row(int x, int iy, int w, int ih, int hover, int sel, int focused) {
+    if (__nexa_ui_is(__NEXA_UI_FLUENT)) {
+        __nexa_ui_Fluent f = __nexa_ui_fl();
+        if (hover || sel) {
+            __nexa_ui_rrect((float)x, (float)(iy + 1), (float)w, (float)(ih - 2), 4.0f,
+                            hover ? f.subtle_hover : f.subtle_press, 255);
+        }
+        if (sel) __nexa_ui_rrect((float)(x + 1), iy + ih * 0.5f - 8, 3, 16, 1.5f, f.accent, 255);
+        return f.text;
+    }
+    const __nexa_ui_Theme& t = __nexa_ui_t();
+    float r = (float)(__nexa_ui.rounding - 2 > 0 ? __nexa_ui.rounding - 2 : 0);
+    if (sel) {
+        unsigned int a = __nexa_ui_accent();
+        __nexa_ui_rrect((float)x, (float)iy, (float)w, (float)ih, r, a, focused ? 255 : 48);
+        if (focused) return __nexa_ui.accent_set ? __nexa_ui_text_on(a) : t.on_accent;
+    } else if (hover) {
+        __nexa_ui_rrect((float)x, (float)iy, (float)w, (float)ih, r, t.raised, 255);
+    }
+    return t.text;
+}
+
+// --- tabs ---
+
+[[maybe_unused]] static int __nexa_ui_tabs(int x, int y, int w, const std::vector<std::string>& labels, int selected) {
+    __nexa_ui_begin();
+    const __nexa_ui_Theme& t = __nexa_ui_t();
+    int fl = __nexa_ui_is(__NEXA_UI_FLUENT);
+    __nexa_ui_Fluent f = __nexa_ui_fl();
+    int size = __nexa_ui.size;
+    int h = __nexa_ui_line_h(0, size) + 18;
+    __nexa_ui_mark(__nexa_ui_id(17, x, y), x, y, w, h);
+    if (!fl) __nexa_ui_rrect((float)x, (float)(y + h - 1), (float)w, 1.0f, 0, t.border, 255);
+    int cx = x;
+    for (int k = 0; k < (int)labels.size(); k++) {
+        int tw = (int)std::ceil(__nexa_ui_width(labels[(size_t)k], 1, size)) + 32;
+        unsigned int id = __nexa_ui_id(8, cx, y);
+        int hover, held;
+        if (__nexa_ui_clickable(id, cx, y, tw, h, hover, held)) selected = k;
+        int sel = k == selected;
+        float ty = __nexa_ui_text_top((float)y, (float)(h - 2), 0, size);
+        if (fl) {
+            // Windows' selector bar: a wash under the mouse, a short accent
+            // bar under the chosen one
+            if (hover || held) __nexa_ui_rrect((float)(cx + 2), (float)(y + 4), (float)(tw - 4), (float)(h - 8), 4.0f,
+                                               held ? f.subtle_press : f.subtle_hover, 255);
+            float lw = __nexa_ui_width(labels[(size_t)k], 0, size);
+            __nexa_ui_text_run(std::floor(cx + (tw - lw) * 0.5f), ty, labels[(size_t)k], 0, size,
+                               sel || hover ? f.text : f.text2, 255, true);
+            if (sel) __nexa_ui_rrect(cx + tw * 0.5f - 8, (float)(y + h - 5), 16, 3, 1.5f, f.accent, 255);
+        } else {
+            // underlined tabs: the chosen one in semibold over an accent line
+            float lw = __nexa_ui_width(labels[(size_t)k], sel ? 1 : 0, size);
+            __nexa_ui_text_run(std::floor(cx + (tw - lw) * 0.5f), ty, labels[(size_t)k], sel ? 1 : 0, size,
+                               sel || hover ? t.text : t.muted, 255, true);
+            if (sel) __nexa_ui_rrect((float)(cx + 6), (float)(y + h - 3), (float)(tw - 12), 3, 1.5f, __nexa_ui_accent(), 255);
+            else if (hover) __nexa_ui_rrect((float)(cx + 6), (float)(y + h - 3), (float)(tw - 12), 3, 1.5f, t.border, 255);
+        }
+        cx += tw;
+    }
+    __nexa_ui_mark(__nexa_ui_id(17, x, y), x, y, w, h);
+    return selected;
+}
+
+// --- list and table ---
+
+[[maybe_unused]] static int __nexa_ui_list(int x, int y, int w, int h, const std::vector<std::string>& items, int selected) {
+    __nexa_ui_begin();
+    int fl = __nexa_ui_is(__NEXA_UI_FLUENT);
+    int size = __nexa_ui.size;
+    int ih = __nexa_ui_line_h(0, size) + 12;
+    int n = (int)items.size();
+    unsigned int id = __nexa_ui_id(12, x, y);
+    if (selected >= n) selected = n - 1;
+    int content = n * ih + 8;
+    int off = __nexa_ui_scrollview(id, x, y, w, h, content, ih);
+    int bar = content > h ? 12 : 0;
+    // a press on a row chooses it, and gives the list the keyboard
+    if (__nexa_ui.pressed && __nexa_ui_in(x, y, w - bar, h)) {
+        int k = (__nexa_ui.my - y - 4 + off) / ih;
+        if (k >= 0 && k < n) selected = k;
+        __nexa_ui.focus = id;
+    }
+    if (__nexa_ui.focus == id && __nexa_ui_rows_keys(selected, n)) {
+        off = __nexa_ui_reveal(id, selected * ih + 4, ih, h, content);
+    }
+    int focused = __nexa_ui.focus == id;
+    __nexa_ui_box(x, y, w, h, focused);
+    {
+        __nexa_ui_Clip clip(x + 1, y + 1, x + w - 1, y + h - 1);
+        int first = (off - 4) / ih;
+        for (int k = first < 0 ? 0 : first; k < n; k++) {
+            int iy = y + 4 + k * ih - off;
+            if (iy >= y + h) break;
+            int hover = __nexa_ui_in(x, iy, w - bar, ih) && __nexa_ui_in(x, y, w, h);
+            unsigned int c = __nexa_ui_row(x + 4, iy, w - 8 - bar, ih, hover, k == selected, focused);
+            __nexa_ui_Clip cell(x + 4, iy, x + w - bar - 8, iy + ih);
+            __nexa_ui_text_run((float)(x + (fl ? 16 : 12)), __nexa_ui_text_top((float)iy, (float)ih, 0, size),
+                               items[(size_t)k], 0, size, c, 255, true);
+        }
+    }
+    __nexa_ui_scrollbar(id, x, y, w, h, content, off);
+    __nexa_ui_mark(id, x, y, w, h);
+    return selected;
+}
+
+[[maybe_unused]] static int __nexa_ui_table(int x, int y, int w, int h, const std::vector<std::string>& headers,
+                                           const std::vector<std::vector<std::string>>& rows, int selected) {
+    __nexa_ui_begin();
+    const __nexa_ui_Theme& t = __nexa_ui_t();
+    int fl = __nexa_ui_is(__NEXA_UI_FLUENT);
+    __nexa_ui_Fluent f = __nexa_ui_fl();
+    int size = __nexa_ui.size;
+    int ih = __nexa_ui_line_h(0, size) + 12;
+    int hh = ih + 2;
+    int n = (int)rows.size(), cols = (int)headers.size();
+    unsigned int id = __nexa_ui_id(13, x, y);
+    if (selected >= n) selected = n - 1;
+    int vy = y + hh, vh = h - hh;
+    int content = n * ih + 4;
+    int off = __nexa_ui_scrollview(id, x, vy, w, vh, content, ih);
+    int bar = content > vh ? 12 : 0;
+    // Columns as wide as their widest cell (of the first 200 rows), then
+    // stretched or squeezed to the table's width.
+    std::vector<int> cw((size_t)(cols > 0 ? cols : 0));
+    int total = 0;
+    for (int c = 0; c < cols; c++) {
+        float m = __nexa_ui_width(headers[(size_t)c], 1, size);
+        for (int r = 0; r < n && r < 200; r++) {
+            if (c < (int)rows[(size_t)r].size()) {
+                float cwid = __nexa_ui_width(rows[(size_t)r][(size_t)c], 0, size);
+                if (cwid > m) m = cwid;
+            }
+        }
+        cw[(size_t)c] = (int)std::ceil(m) + 28;
+        total += cw[(size_t)c];
+    }
+    int inner = w - bar;
+    if (cols > 0 && total <= inner) {
+        cw[(size_t)(cols - 1)] += inner - total;
+    } else if (cols > 0) {
+        int used = 0;
+        for (int c = 0; c < cols; c++) {
+            cw[(size_t)c] = c == cols - 1 ? inner - used : cw[(size_t)c] * inner / total;
+            used += cw[(size_t)c];
+        }
+    }
+    if (__nexa_ui.pressed && __nexa_ui_in(x, vy, w - bar, vh)) {
+        int k = (__nexa_ui.my - vy - 2 + off) / ih;
+        if (k >= 0 && k < n) selected = k;
+        __nexa_ui.focus = id;
+    }
+    if (__nexa_ui.focus == id && __nexa_ui_rows_keys(selected, n)) {
+        off = __nexa_ui_reveal(id, selected * ih + 2, ih, vh, content);
+    }
+    int focused = __nexa_ui.focus == id;
+    __nexa_ui_box(x, y, w, h, focused);
+    // the header row
+    {
+        __nexa_ui_Clip clip(x + 1, y + 1, x + w - 1, vy);
+        int cx = x;
+        for (int c = 0; c < cols; c++) {
+            __nexa_ui_Clip cell(cx + 4, y, cx + cw[(size_t)c] - 6, vy);
+            __nexa_ui_text_run((float)(cx + (fl ? 16 : 14)), __nexa_ui_text_top((float)y, (float)hh, 1, size),
+                               headers[(size_t)c], 1, size, fl ? f.text2 : t.muted, 255, true);
+            cx += cw[(size_t)c];
+            if (!fl && c < cols - 1) __nexa_ui_rrect((float)(cx - 1), (float)(y + 8), 1, (float)(hh - 16), 0, t.border, 255);
+        }
+        __nexa_ui_rrect((float)(x + 1), (float)(vy - 1), (float)(w - 2), 1, 0, fl ? f.divider : t.border, 255);
+    }
+    {
+        __nexa_ui_Clip clip(x + 1, vy, x + w - 1, y + h - 1);
+        int first = (off - 2) / ih;
+        for (int k = first < 0 ? 0 : first; k < n; k++) {
+            int iy = vy + 2 + k * ih - off;
+            if (iy >= y + h) break;
+            int hover = __nexa_ui_in(x, iy, w - bar, ih) && __nexa_ui_in(x, vy, w, vh);
+            unsigned int col = __nexa_ui_row(x + 4, iy, w - 8 - bar, ih, hover, k == selected, focused);
+            int cx = x;
+            const std::vector<std::string>& row = rows[(size_t)k];
+            for (int c = 0; c < cols && c < (int)row.size(); c++) {
+                __nexa_ui_Clip cell(cx + 4, iy, cx + cw[(size_t)c] - 6, iy + ih);
+                __nexa_ui_text_run((float)(cx + (fl ? 16 : 14)), __nexa_ui_text_top((float)iy, (float)ih, 0, size),
+                                   row[(size_t)c], 0, size, col, 255, true);
+                cx += cw[(size_t)c];
+            }
+        }
+    }
+    __nexa_ui_scrollbar(id, x, vy, w, vh, content, off);
+    __nexa_ui_mark(id, x, y, w, h);
+    return selected;
+}
+
+// --- menus ---
+
+// A menu item's label and, after a tab, the shortcut shown at its right.
+static void __nexa_ui_menu_split(const std::string& item, std::string& label, std::string& hint) {
+    size_t tab = item.find('\t');
+    label = tab == std::string::npos ? item : item.substr(0, tab);
+    hint = tab == std::string::npos ? std::string() : item.substr(tab + 1);
+}
+
+[[maybe_unused]] static void __nexa_ui_menubar(int x, int y, int w) {
+    __nexa_ui_begin();
+    int h = __nexa_ui_line_h(0, __nexa_ui.size) + 14;
+    if (__nexa_ui_is(__NEXA_UI_FLUENT)) {
+        // Windows draws a menu bar straight on the window
+        __nexa_ui_rrect((float)x, (float)y, (float)w, (float)h, 0, __nexa_ui_fl().bg, 255);
+        return;
+    }
+    const __nexa_ui_Theme& t = __nexa_ui_t();
+    __nexa_ui_rrect((float)x, (float)y, (float)w, (float)h, 0, t.surface, 255);
+    __nexa_ui_rrect((float)x, (float)(y + h - 1), (float)w, 1, 0, t.border, 255);
+}
+
+[[maybe_unused]] static int __nexa_ui_menu(int x, int y, const std::string& label, const std::vector<std::string>& items) {
+    __nexa_ui_begin();
+    const __nexa_ui_Theme& t = __nexa_ui_t();
+    int fl = __nexa_ui_is(__NEXA_UI_FLUENT);
+    __nexa_ui_Fluent f = __nexa_ui_fl();
+    int size = __nexa_ui.size;
+    int h = __nexa_ui_line_h(0, size) + 14;
+    int tw = (int)std::ceil(__nexa_ui_width(label, 0, size)) + 24;
+    unsigned int id = __nexa_ui_id(15, x, y);
+    int result = -1;
+    int is_open = __nexa_ui.open == id;
+    // choosing from the open menu, laid out last frame
+    if (is_open && __nexa_ui.open_frames > 0 && __nexa_ui.pressed &&
+        __nexa_ui.mx >= __nexa_ui.ox && __nexa_ui.mx < __nexa_ui.ox + __nexa_ui.ow &&
+        __nexa_ui.my >= __nexa_ui.oy && __nexa_ui.my < __nexa_ui.oy + __nexa_ui.oh) {
+        for (int k = 0; k < (int)__nexa_ui.oitems.size() && k < (int)__nexa_ui.otop.size(); k++) {
+            int top = __nexa_ui.oy + __nexa_ui.otop[(size_t)k];
+            int rh = __nexa_ui.oitems[(size_t)k] == "-" ? 9 : __nexa_ui.item_h;
+            if (__nexa_ui.my >= top && __nexa_ui.my < top + rh && __nexa_ui.oitems[(size_t)k] != "-") result = k;
+        }
+        if (result >= 0) {
+            __nexa_ui.open = 0;
+            is_open = 0;
+        }
+        __nexa_ui.pressed = 0;
+        __nexa_ui.active = 0;
+    }
+    // Escape closes it
+    if (is_open) {
+        for (size_t i = 0; i < __nexa_ui.ev.size(); i++) {
+            if (__nexa_ui.ev[i] == -1 - __NEXA_UI_ESC) {
+                __nexa_ui.open = 0;
+                is_open = 0;
+                __nexa_ui.ev.erase(__nexa_ui.ev.begin() + (long)i);
+                break;
+            }
+        }
+    }
+    int hover = __nexa_ui_in(x, y, tw, h);
+    // A menu opens as the button goes down, as on every desktop; the press that
+    // closed it (it was open) leaves it closed.
+    if (hover && __nexa_ui.pressed) {
+        if (__nexa_ui.closed_now != id) {
+            __nexa_ui.open = id;
+            __nexa_ui.open_frames = 0;
+            is_open = 1;
+        }
+        __nexa_ui.pressed = 0;
+    }
+    // Across a menu bar: with another menu open, the one under the mouse takes over.
+    if (!is_open && hover && __nexa_ui.open && __nexa_ui.okind == 1 && __nexa_ui.open != id) {
+        __nexa_ui.open = id;
+        __nexa_ui.open_frames = 1;
+        is_open = 1;
+    }
+    if (fl) {
+        if (is_open || hover) __nexa_ui_rrect((float)x, (float)(y + 4), (float)tw, (float)(h - 8), 4.0f,
+                                              is_open ? f.subtle_press : f.subtle_hover, 255);
+    } else if (is_open || hover) {
+        float r = (float)(__nexa_ui.rounding - 2 > 0 ? __nexa_ui.rounding - 2 : 0);
+        __nexa_ui_rrect((float)x, (float)(y + 3), (float)tw, (float)(h - 6), r, is_open ? __nexa_ui_shade(t.raised, 10) : t.raised, 255);
+    }
+    __nexa_ui_text_run((float)(x + 12), __nexa_ui_text_top((float)y, (float)h, 0, size), label, 0, size,
+                       fl ? f.text : t.text, 255, true);
+    if (is_open) {
+        int ih = __nexa_ui_line_h(0, size) + 12;
+        float widest = 0;
+        __nexa_ui.otop.clear();
+        int top = 4;
+        for (const std::string& item : items) {
+            __nexa_ui.otop.push_back(top);
+            if (item == "-") { top += 9; continue; }
+            std::string l, k;
+            __nexa_ui_menu_split(item, l, k);
+            float wv = __nexa_ui_width(l, 0, size) + (k.empty() ? 0 : __nexa_ui_width(k, 0, size) + 40);
+            if (wv > widest) widest = wv;
+            top += ih;
+        }
+        __nexa_ui.okind = 1;
+        __nexa_ui.item_h = ih;
+        __nexa_ui.ox = x;
+        __nexa_ui.oy = y + h + (fl ? 4 : 2);
+        __nexa_ui.ow = (int)widest + 48 > 200 ? (int)widest + 48 : 200;
+        __nexa_ui.oh = top + 4;
+        __nexa_ui.oitems = items;
+    }
+    __nexa_ui_mark(id, x, y, tw, h);
+    return result;
+}
+
+static void __nexa_ui_draw_menu() {
+    const __nexa_ui_Theme& t = __nexa_ui_t();
+    int fl = __nexa_ui_is(__NEXA_UI_FLUENT);
+    __nexa_ui_Fluent f = __nexa_ui_fl();
+    int x = __nexa_ui.ox, y = __nexa_ui.oy, w = __nexa_ui.ow, h = __nexa_ui.oh, ih = __nexa_ui.item_h;
+    int size = __nexa_ui.size;
+    __nexa_ui_NoClip all;
+    float r = (float)__nexa_ui.rounding;
+    if (fl) {
+        __nexa_ui_list_fluent(x, y, w, h);
+    } else {
+        __nexa_ui_shadow((float)x, (float)y, (float)w, (float)h, r, 14.0f, 5.0f, t.shadow_alpha + 20);
+        __nexa_ui_rrect((float)x, (float)y, (float)w, (float)h, r, t.surface, 255);
+        __nexa_ui_rrect_line((float)x, (float)y, (float)w, (float)h, r, 1.0f, t.border, 255);
+    }
+    for (int k = 0; k < (int)__nexa_ui.oitems.size() && k < (int)__nexa_ui.otop.size(); k++) {
+        const std::string& item = __nexa_ui.oitems[(size_t)k];
+        int top = y + __nexa_ui.otop[(size_t)k];
+        if (item == "-") {
+            __nexa_ui_rrect((float)(x + (fl ? 1 : 8)), (float)(top + 4), (float)(w - (fl ? 2 : 16)), 1, 0, fl ? f.divider : t.border, 255);
+            continue;
+        }
+        int hover = __nexa_ui.mx >= x && __nexa_ui.mx < x + w && __nexa_ui.my >= top && __nexa_ui.my < top + ih;
+        if (hover) {
+            if (fl) __nexa_ui_rrect((float)(x + 4), (float)(top + 1), (float)(w - 8), (float)(ih - 2), 4.0f, f.subtle_hover, 255);
+            else __nexa_ui_rrect((float)(x + 4), (float)top, (float)(w - 8), (float)ih, r - 2 > 0 ? r - 2 : 0, t.raised, 255);
+        }
+        std::string l, hint;
+        __nexa_ui_menu_split(item, l, hint);
+        float ty = __nexa_ui_text_top((float)top, (float)ih, 0, size);
+        __nexa_ui_text_run((float)(x + 16), ty, l, 0, size, fl ? f.text : t.text, 255, true);
+        if (!hint.empty()) {
+            float hw = __nexa_ui_width(hint, 0, size - 1);
+            __nexa_ui_text_run(std::floor(x + w - 16 - hw), __nexa_ui_text_top((float)top, (float)ih, 0, size - 1), hint, 0,
+                               size - 1, fl ? f.text2 : t.muted, 255, true);
+        }
+    }
+}
+
+// --- tooltips ---
+
+[[maybe_unused]] static void __nexa_ui_tooltip(const std::string& text) {
+    __nexa_ui_begin();
+    if (!__nexa_ui.last_id || text.empty()) return;
+    if (!__nexa_ui_in(__nexa_ui.lx, __nexa_ui.ly, __nexa_ui.lw, __nexa_ui.lh)) return;
+    __nexa_ui.tip_touched = 1;
+    if (__nexa_ui.tip_id != __nexa_ui.last_id) {
+        __nexa_ui.tip_id = __nexa_ui.last_id;
+        __nexa_ui.tip_ms = __nexa_ui.frame_ms;
+        __nexa_ui.tip_armed = 1;
+    }
+    // a click puts it away until the mouse leaves and comes back
+    if (__nexa_ui.pressed || __nexa_ui.down) __nexa_ui.tip_armed = 0;
+    if (__nexa_ui.tip_armed && __nexa_ui.frame_ms - __nexa_ui.tip_ms >= 500) {
+        __nexa_ui.tip_show = 1;
+        __nexa_ui.tip_text = text;
+    }
+}
+
+static void __nexa_ui_draw_tip() {
+    if (!__nexa_ui.tip_show || __nexa_ui.modal || __nexa_ui.modal_prev) return;
+    int fl = __nexa_ui_is(__NEXA_UI_FLUENT);
+    const __nexa_ui_Theme& t = __nexa_ui_t();
+    __nexa_ui_Fluent f = __nexa_ui_fl();
+    int size = __nexa_ui.size - 2 < 8 ? 8 : __nexa_ui.size - 2;
+    std::vector<std::string> lines = __nexa_ui_wrap(__nexa_ui.tip_text, 0, size, 300);
+    float tw = 0;
+    for (const std::string& l : lines) {
+        float wv = __nexa_ui_width(l, 0, size);
+        if (wv > tw) tw = wv;
+    }
+    int lh = __nexa_ui_line_h(0, size);
+    int bw = (int)std::ceil(tw) + 18, bh = (int)lines.size() * lh + 12;
+    int px = __nexa_ui.mx + 12, py = __nexa_ui.my + 22;
+    if (px + bw > __nexa_g.w - 4) px = __nexa_g.w - 4 - bw;
+    if (py + bh > __nexa_g.h - 4) py = __nexa_ui.my - bh - 8;
+    if (px < 4) px = 4;
+    if (py < 4) py = 4;
+    __nexa_ui_NoClip all;
+    unsigned int ink;
+    if (fl) {
+        __nexa_ui_shadow((float)px, (float)py, (float)bw, (float)bh, 4.0f, 8.0f, 2.0f, f.dark ? 90 : 30);
+        __nexa_ui_rrect((float)px, (float)py, (float)bw, (float)bh, 4.0f, f.flyout, 255);
+        __nexa_ui_rrect_line((float)px, (float)py, (float)bw, (float)bh, 4.0f, 1.0f, f.flyout_edge, 255);
+        ink = f.text;
+    } else {
+        // modern: the theme turned inside out -- a dark tip on a light page
+        __nexa_ui_shadow((float)px, (float)py, (float)bw, (float)bh, 5.0f, 4.0f, 1.0f, t.shadow_alpha);
+        __nexa_ui_rrect((float)px, (float)py, (float)bw, (float)bh, 5.0f, t.text, 255);
+        ink = t.bg;
+    }
+    for (size_t i = 0; i < lines.size(); i++) {
+        __nexa_ui_text_run((float)(px + 9), (float)(py + 6 + (int)i * lh), lines[i], 0, size, ink, 255, true);
+    }
+}
+
+// --- dialogs ---
+
+[[maybe_unused]] static int __nexa_ui_dialog(const std::string& title, const std::string& message,
+                                            const std::vector<std::string>& buttons) {
+    __nexa_ui_begin();
+    int fl = __nexa_ui_is(__NEXA_UI_FLUENT);
+    int size = __nexa_ui.size;
+    __nexa_ui.modal = 1;
+    __nexa_ui.focus = 0;
+    __nexa_ui.open = 0;
+    __nexa_ui_Dialog& d = __nexa_ui.dlg;
+    int W = __nexa_g.w, H = __nexa_g.h;
+    d.w = W - 32 < 460 ? W - 32 : 460;
+    if (d.w < 160) d.w = 160;
+    int pad = 24;
+    d.ts = size + 5;
+    d.title = title;
+    d.lines = __nexa_ui_wrap(message, 0, size, d.w - 2 * pad);
+    int th = __nexa_ui_line_h(1, d.ts), lh = __nexa_ui_line_h(0, size);
+    d.bh = fl ? 32 : 36;
+    d.body = pad + th + 12 + (int)d.lines.size() * lh + pad;
+    d.h = d.body + (fl ? 2 * pad + d.bh : d.bh + pad);
+    d.x = (W - d.w) / 2;
+    d.y = (H - d.h) / 2;
+    d.by = d.y + d.body + (fl ? pad : 0);
+    int n = (int)buttons.size();
+    d.buttons = buttons;
+    d.bx.assign((size_t)n, 0);
+    d.bw.assign((size_t)n, 0);
+    d.hover.assign((size_t)n, 0);
+    d.held.assign((size_t)n, 0);
+    if (fl) {
+        // Windows: the buttons share the footer's width
+        int each = n > 0 ? (d.w - 2 * pad - 8 * (n - 1)) / n : 0;
+        for (int i = 0; i < n; i++) {
+            d.bx[(size_t)i] = d.x + pad + i * (each + 8);
+            d.bw[(size_t)i] = each;
+        }
+    } else {
+        int total = 0;
+        for (int i = 0; i < n; i++) {
+            int bw = (int)std::ceil(__nexa_ui_width(buttons[(size_t)i], 1, size)) + 40;
+            d.bw[(size_t)i] = bw < 88 ? 88 : bw;
+            total += d.bw[(size_t)i] + (i ? 8 : 0);
+        }
+        int bx = d.x + d.w - pad - total;
+        for (int i = 0; i < n; i++) {
+            d.bx[(size_t)i] = bx;
+            bx += d.bw[(size_t)i] + 8;
+        }
+    }
+    int result = -1;
+    __nexa_ui.in_modal = 1;
+    for (int i = 0; i < n; i++) {
+        int hv, hd;
+        if (__nexa_ui_clickable(__nexa_ui_id(16, d.bx[(size_t)i], d.by), d.bx[(size_t)i], d.by, d.bw[(size_t)i], d.bh, hv, hd)) result = i;
+        d.hover[(size_t)i] = hv;
+        d.held[(size_t)i] = hd;
+    }
+    __nexa_ui.in_modal = 0;
+    // Enter answers with the first button, Escape with the last -- keys that
+    // came while the dialog was up
+    if (__nexa_ui.modal_prev && n > 0) {
+        for (int v : __nexa_ui.ev) {
+            if (v == -1 - __NEXA_UI_ENTER && result < 0) result = 0;
+            if (v == -1 - __NEXA_UI_ESC && result < 0) result = n - 1;
+        }
+    }
+    __nexa_ui.ev.clear();
+    return result;
+}
+
+static void __nexa_ui_draw_dialog() {
+    if (!__nexa_ui.modal) return;
+    const __nexa_ui_Dialog& d = __nexa_ui.dlg;
+    const __nexa_ui_Theme& t = __nexa_ui_t();
+    int fl = __nexa_ui_is(__NEXA_UI_FLUENT);
+    __nexa_ui_Fluent f = __nexa_ui_fl();
+    int size = __nexa_ui.size, pad = 24;
+    __nexa_ui_NoClip all;
+    // the page behind goes dim
+    __nexa_ui_rrect(0, 0, (float)__nexa_g.w, (float)__nexa_g.h, 0, 0x000000, fl ? (f.dark ? 110 : 77) : 96);
+    unsigned int ink;
+    if (fl) {
+        // Windows' content dialog: a white body over a grey footer
+        __nexa_ui_shadow((float)d.x, (float)d.y, (float)d.w, (float)d.h, 8.0f, 28.0f, 10.0f, f.dark ? 170 : 70);
+        __nexa_ui_rrect((float)d.x, (float)d.y, (float)d.w, (float)d.h, 8.0f, f.bg, 255);
+        {
+            __nexa_ui_Clip top(d.x, d.y, d.x + d.w, d.y + d.body);
+            __nexa_ui_rrect((float)d.x, (float)d.y, (float)d.w, (float)d.h, 8.0f, f.dark ? f.card : 0xFFFFFF, 255);
+        }
+        __nexa_ui_rrect((float)d.x, (float)(d.y + d.body), (float)d.w, 1, 0, f.card_edge, 255);
+        __nexa_ui_rrect_line((float)d.x, (float)d.y, (float)d.w, (float)d.h, 8.0f, 1.0f, f.flyout_edge, 255);
+        ink = f.text;
+    } else {
+        float r = (float)(__nexa_ui.rounding + 4);
+        __nexa_ui_shadow((float)d.x, (float)d.y, (float)d.w, (float)d.h, r, 28.0f, 10.0f, t.shadow_alpha + 40);
+        __nexa_ui_rrect((float)d.x, (float)d.y, (float)d.w, (float)d.h, r, t.surface, 255);
+        __nexa_ui_rrect_line((float)d.x, (float)d.y, (float)d.w, (float)d.h, r, 1.0f, t.border, 255);
+        ink = t.text;
+    }
+    __nexa_ui_text_run((float)(d.x + pad), (float)(d.y + pad), d.title, 1, d.ts, ink, 255, true);
+    int lh = __nexa_ui_line_h(0, size);
+    int my = d.y + pad + __nexa_ui_line_h(1, d.ts) + 12;
+    {
+        __nexa_ui_Clip clip(d.x + pad, d.y, d.x + d.w - pad, d.y + d.body);
+        for (size_t i = 0; i < d.lines.size(); i++) {
+            __nexa_ui_text_run((float)(d.x + pad), (float)(my + (int)i * lh), d.lines[i], 0, size, ink, 255, true);
+        }
+    }
+    for (size_t i = 0; i < d.buttons.size(); i++) {
+        __nexa_ui_button_paint(d.bx[i], d.by, d.bw[i], d.bh, d.buttons[i], i == 0 ? "primary" : "secondary",
+                               d.hover[i], d.held[i]);
+    }
 }
 )NEXA_UI";
     return out;

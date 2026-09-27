@@ -50,6 +50,8 @@ fn main() {
     }
     ui.theme("dark");
     io.println("theme=" + ui.theme());
+    ui.style("fluent");
+    io.println("style=" + ui.style());
     ui.accent(200, 60, 120);
     ui.rounding(4);
     ui.font_size(14);
@@ -67,6 +69,15 @@ fn main() {
     ui.progress(120, 180, 100, 0.5);
     let name = ui.textbox(120, 200, 100, "x", "placeholder");
     let d = ui.dropdown(200, 10, 100, ["a", "b"], 0);
+    let tb = ui.tabs(10, 10, 200, ["a", "b"], 0);
+    let ls = ui.list(10, 10, 100, 100, ["a", "b"], 0);
+    let rows = [["a", "b"], ["c", "d"]];
+    let tr = ui.table(10, 10, 200, 100, ["x", "y"], rows, -1);
+    ui.menubar(0, 0, 300);
+    let mn = ui.menu(0, 0, "File", ["New\tCtrl+N", "-", "Quit"]);
+    ui.tooltip("tip");
+    let dl = ui.dialog("Title", "Message", ["OK"]);
+    io.println("app=" + tb + "," + ls + "," + tr + "," + mn + "," + dl);
     gfx.present();
     io.println("widgets=" + b + "," + c + "," + t + "," + r + "," + s + "," + name + "," + d);
     io.println("done");
@@ -82,7 +93,7 @@ if ! "$NEXAC" "$WORK/all.nxa" --source "$WORK/all.cpp" > "$WORK/emit.log" 2>&1; 
 fi
 for want in "__nexa_ui_after_poll();" "__nexa_ui_before_present();" "STB_TRUETYPE_IMPLEMENTATION" \
             "__nexa_ui_font_regular" "__nexa_ui_font_semibold" "SIL Open Font License" \
-            "__nexa_ui_dropdown(" "__nexa_ui_evq"; do
+            "__nexa_ui_dropdown(" "__nexa_ui_evq" "__nexa_ui_style_set("; do
     if grep -qF "$want" "$WORK/all.cpp"; then
         say_ok "emit: the ui program carries $want"
     else
@@ -119,7 +130,8 @@ else
     else
         say_ok "build: the ui program compiles clean under -Wall -Wextra"
         if "$WORK/all" > "$WORK/run.out" 2>&1 && grep -qx "open=0" "$WORK/run.out" &&
-                grep -qx "theme=dark" "$WORK/run.out" && grep -qx "done" "$WORK/run.out"; then
+                grep -qx "theme=dark" "$WORK/run.out" && grep -qx "style=fluent" "$WORK/run.out" &&
+                grep -qx "app=0,0,-1,-1,-1" "$WORK/run.out" && grep -qx "done" "$WORK/run.out"; then
             say_ok "headless: with no display ui.open is 0 and every widget is quiet"
         else
             say_fail "headless: the ui program did not run quietly without a display"

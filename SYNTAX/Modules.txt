@@ -1275,8 +1275,8 @@ ARGUMENT TYPES
 
 #include <std/ui>
   Buttons, text boxes, checkboxes, sliders, dropdowns and panels, drawn in a
-  theme, with smooth text -- for menus, settings screens, editors and tools
-  that should look like an app rather than a game. Includes std/gfx: ui draws
+  theme and a style (std/ui's own, or Windows 11's), with smooth text -- for
+  menus, settings screens, editors and tools. Includes std/gfx: ui draws
   in the gfx window, and the loop is gfx's loop.
 
     #include <std/ui>
@@ -1313,9 +1313,31 @@ ARGUMENT TYPES
   ui.theme()                     - the current theme's name
   ui.accent(r, g, b)             - replace the theme's accent colour (buttons, checks,
                                    sliders, focus); ui.theme(name) puts it back
-  ui.rounding(px)                - corner radius, 0..64 (default 6)
+  ui.rounding(px)                - corner radius, 0..64 (default 6). The fluent style keeps
+                                   Windows' own corners whatever it is
   ui.font_size(px)               - body text size, 6..200 (default 15); widgets, headings
                                    and captions scale from it
+
+  STYLES
+  A theme is the colours; a style is how the widgets are built -- their
+  shapes, edges and states. Any style goes with any theme, and like the theme
+  it applies to everything drawn after it.
+  ui.style(name)                 - "modern" (default): std/ui's own look -- soft shadows,
+                                     rounded corners, a focus glow
+                                   "fluent": Windows 11's controls (WinUI). Mica-grey page,
+                                     8 px cards, 4 px controls with a darker bottom edge,
+                                     the accent line under the text box being typed in,
+                                     20 px checkboxes and radio buttons, a 40 x 20 switch,
+                                     a slider thumb with an accent centre, a 3 px progress
+                                     bar, menus with an accent marker on the chosen item.
+                                     With the light and dark themes it takes Windows' own
+                                     colours (accent #005FB8, or #60CDFF on dark); with the
+                                     others their colours; ui.accent works in both.
+                                     The checkbox, radio and switch are 2-4 px larger
+                                   An unknown name leaves the style as it was
+  ui.style()                     - the current style's name
+    ui.style("fluent");
+    ui.theme("dark");
 
   TEXT (Inter, anti-aliased, kerned; UTF-8 -- Latin-1 and common punctuation)
   ui.text(x, y, s[, size[, r, g, b]]) - text with its top-left at (x, y), in the theme's
@@ -1327,13 +1349,13 @@ ARGUMENT TYPES
   ui.text_height([size])         - height of one line of text at that size
 
   CONTAINERS
-  ui.panel(x, y, w, h[, title])  - a raised card with a border and a soft shadow; with a
+  ui.panel(x, y, w, h[, title])  - a card (drawn as the style draws one) and, with a
                                    title, a header row across its top (about 40 px)
   ui.separator(x, y, w)          - a 1 px rule in the border colour
 
   WIDGETS
-  ui.button(x, y, w, h, label[, style]) - true on the frame it is clicked (pressed and
-                                   released over it). style: "primary" (default, the
+  ui.button(x, y, w, h, label[, kind]) - true on the frame it is clicked (pressed and
+                                   released over it). kind: "primary" (default, the
                                    accent), "secondary" (outlined), "ghost" (no fill until
                                    hovered), "danger" (red)
   ui.checkbox(x, y, label, checked) - the new checked state: checked = ui.checkbox(...)
@@ -1352,6 +1374,56 @@ ARGUMENT TYPES
                                    The open list is drawn over everything at
                                    gfx.present(), and while it is open it has the mouse:
                                    a click on it does not reach a widget underneath.
+
+  APP WIDGETS
+  ui.tabs(x, y, w, labels, selected) - a row of tabs across w; returns the chosen index.
+                                   Each tab is as wide as its label; show the chosen
+                                   tab's page yourself:  if (tab == 0) { ... }
+  ui.list(x, y, w, h, items, selected) - a []string in a scrolling box; returns the
+                                   selected index (-1 for none). A click selects a row
+                                   and gives the list the keyboard: Up, Down, Home and
+                                   End then move the selection, scrolling to it. The
+                                   wheel over it and its scrollbar scroll it
+  ui.table(x, y, w, h, headers, rows, selected) - rows is a [][]string, one []string
+                                   per row, a cell per header; returns the selected row
+                                   like ui.list, and scrolls and takes keys the same
+                                   way. The header stays put. Columns are as wide as
+                                   their widest cell (of the first 200 rows), then
+                                   stretched or squeezed to w
+                                     let rows = [["Ada", "1815"], ["Alan", "1912"]];
+                                     sel = ui.table(20, 60, 400, 300, ["Name", "Born"], rows, sel);
+  ui.menubar(x, y, w)            - the strip menus sit on (optional; menus work without)
+  ui.menu(x, y, label, items)    - a menu title; a click opens its items below it.
+                                   Returns the index of the item chosen, on the frame
+                                   it is chosen, and -1 otherwise. "-" is a separator;
+                                   text after a tab is the shortcut shown at the
+                                   right: "Save\tCtrl+S" (a hint only: it does not
+                                   bind the key). With one menu open, moving onto the
+                                   next title opens that one; Escape or a click
+                                   elsewhere closes it. Call menus after the page, so
+                                   they open over it; the next title's x is
+                                   x + ui.text_width(label) + 24
+                                     let f = ui.menu(8, 0, "File", ["Open\tCtrl+O", "-", "Exit"]);
+                                     if (f == 2) { break; }
+  ui.dialog(title, message, buttons) - a modal dialog, centred, over a dimmed page.
+                                   Returns -1 while it waits and the index of the
+                                   button clicked once it is answered; Enter answers
+                                   with the first button, Escape with the last. While
+                                   it is up the page behind takes no clicks or keys.
+                                   Call it every frame while it should show, after the
+                                   rest of the page:
+                                     if (asking) {
+                                         let a = ui.dialog("Delete?", "This can't be undone.",
+                                                           ["Delete", "Cancel"]);
+                                         if (a == 0) { remove(); }
+                                         if (a >= 0) { asking = false; }
+                                     }
+  ui.tooltip(text)               - a tip for the widget drawn just before it, shown
+                                   when the mouse rests on that widget for half a
+                                   second:  ui.button(...); ui.tooltip("Saves the file");
+
+  Open lists and menus, tooltips and dialogs are drawn at gfx.present(), over
+  everything, in that order.
 
   Clicks and the editing keys are counted from the window's events, so a quick
   tap -- a touchpad's -- is not missed between two frames, and a held key

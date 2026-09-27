@@ -26,10 +26,11 @@ MODULE INCLUDES (angle brackets)
                             camera: gfx3d.camera/perspective
                             shapes: gfx3d.tri, gfx3d.cube
                             renderer: gfx3d.renderer/backend (OpenGL today)
-  #include <std/ui>       - Widgets and themes on the gfx window (includes std/gfx):
-                            ui.open/background/theme/accent, ui.text/heading/caption,
+  #include <std/ui>       - Widgets, themes and styles on the gfx window (includes std/gfx):
+                            ui.open/background/theme/style/accent, ui.text/heading/caption,
                             ui.panel, ui.button/checkbox/toggle/radio/slider/progress,
-                            ui.textbox, ui.dropdown
+                            ui.textbox, ui.dropdown, ui.tabs/list/table,
+                            ui.menubar/menu, ui.dialog, ui.tooltip
   #include <std/inline>   - Enables inline_cpp! { ... } (raw C++ pasted into generated code; use sparingly)
   - Standard library modules
 
