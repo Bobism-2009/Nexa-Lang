@@ -1,0 +1,35 @@
+// A comma after the last item, as a list written one per line has: in a slice
+// literal, a struct literal, a call and a function's parameters.
+#include <std/io>
+
+struct Point {
+    x: int;
+    y: int;
+}
+
+fn area(
+    w: int,
+    h: int,
+): int {
+    return w * h;
+}
+
+fn main() {
+    let names = [
+        "ada",
+        "alan",
+    ];
+    let grid = [
+        [1, 2,],
+        [3],
+    ];
+    let p = Point {
+        x: 1,
+        y: 2,
+    };
+    let a = area(
+        3,
+        4,
+    );
+    io.println(names, " ", grid, " ", p.x + p.y, " ", a);
+}

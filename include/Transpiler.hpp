@@ -750,6 +750,16 @@ public:
                 for (size_t i = 0; i < node.paramNames.size(); i++) {
                     out << "    " << nexaTypeToCpp(node.paramTypes[i]) << " " << node.paramNames[i] << ";\n";
                 }
+                // A closure has no ==, so a struct holding one (anywhere inside it)
+                // has none either.
+                std::set<std::string> seen;
+                if (structHoldsClosure(nexaName, seen)) {
+                    for (const AstNode& meth : node.children) {
+                        if (meth.type == AstNode::Type::Function) emitStructMethodDecl(out, meth);
+                    }
+                    out << "};\n\n";
+                    continue;
+                }
                 out << "    bool operator==(const " << cppName << "& __o) const {\n";
                 if (node.paramNames.empty()) {
                     out << "        return true;\n";
@@ -851,14 +861,6 @@ public:
             }
             if (wroteAnyProto) out << "\n";
         }
-        for (const AstNode& node : ast_) {
-            if (node.type != AstNode::Type::StructDef) continue;
-            std::string cppName = structCppNames_.at(node.value);
-            for (const AstNode& meth : node.children) {
-                if (meth.type == AstNode::Type::Function) emitStructMethodBody(out, meth, cppName);
-            }
-        }
-
         for (size_t astIdx = 0; astIdx < ast_.size(); ++astIdx) {
             const AstNode& node = ast_[astIdx];
             if (node.type == AstNode::Type::Include || node.type == AstNode::Type::CppHeaderInclude) {
@@ -1203,6 +1205,20 @@ public:
                 out << c << "std::string " << vname << " = " << emitCppStringValue(node.initValue) << ";\n";
             }
             justEmittedGlobal = true;
+        }
+
+        // Method bodies after every global, so a method can use one; each is
+        // declared in its struct, so what calls it earlier already compiles.
+        {
+            GlobalScope g{&globalVarMap, &globalVarIsString, &globalVarIsConst, &globalVarIsFloat,
+                          &globalVarIsChar, &globalVarIsBool, &globalVarIsEnum};
+            for (const AstNode& node : ast_) {
+                if (node.type != AstNode::Type::StructDef) continue;
+                std::string cppName = structCppNames_.at(node.value);
+                for (const AstNode& meth : node.children) {
+                    if (meth.type == AstNode::Type::Function) emitStructMethodBody(out, meth, cppName, &g);
+                }
+            }
         }
 
         // Emit DLL/SO loader hook: auto-call __init__ when library is loaded
@@ -1591,6 +1607,27 @@ private:
         return false;
     }
 
+    bool typeHoldsClosure(const std::string& t, std::set<std::string>& seen) const {
+        if (nexaIsFnType(t)) return true;
+        if (nexaIsSliceType(t)) return typeHoldsClosure(nexaSliceElem(t), seen);
+        if (nexaIsResultType(t)) return typeHoldsClosure(nexaResultInner(t), seen);
+        if (nexaIsMapType(t)) {
+            std::string k, v;
+            return nexaSplitMapType(t, k, v) && (typeHoldsClosure(k, seen) || typeHoldsClosure(v, seen));
+        }
+        if (isStructDeclType(t)) return structHoldsClosure(structNameFromDecl(t), seen);
+        return false;
+    }
+    bool structHoldsClosure(const std::string& name, std::set<std::string>& seen) const {
+        if (!seen.insert(name).second) return false;
+        auto it = structFields_.find(name);
+        if (it == structFields_.end()) return false;
+        for (const auto& kv : it->second) {
+            if (typeHoldsClosure(kv.second, seen)) return true;
+        }
+        return false;
+    }
+
     // std::map::operator[] is non-const and inserts a default element on a miss, so a map
     // reached through a const reference neither compiles nor keeps today's behaviour. A
     // parameter whose type contains a map anywhere therefore may not be indexed.
@@ -1666,6 +1703,22 @@ private:
             auto it = passGlobalTypes_.find(root);
             return it == passGlobalTypes_.end() ? std::string() : it->second;
         };
+        // Names that hold a pointer: what is stored through one with a plain dot
+        // can be the caller's, as with ->.
+        std::set<std::string> pointerNames;
+        for (size_t i = 0; i < fn.paramNames.size(); i++) {
+            if (isPointerType(canonicalParamType(fn, i))) pointerNames.insert(fn.paramNames[i]);
+        }
+        std::function<void(const AstNode&)> lets = [&](const AstNode& n) {
+            if (n.type != AstNode::Type::Variable) return;
+            bool ptr = isPointerType(n.declType);
+            if (!ptr && !n.children.empty()) {
+                const AstNode::Type t = n.children[0].type;
+                ptr = t == AstNode::Type::ExprAddrOf || t == AstNode::Type::ExprNew;
+            }
+            if (ptr) pointerNames.insert(n.value);
+        };
+        for (const AstNode& s : fn.children) walkAstNode(s, lets);
         std::function<void(const AstNode&)> visit = [&](const AstNode& n) {
             if (hit) return;
             if (isAssignStmtType(n.type)) {
@@ -1679,8 +1732,10 @@ private:
                     break;
                 case AstNode::Type::AssnMember:
                     if (!n.children.empty()) {
+                        const std::string root = exprRootVarName(n.children[0]);
                         if (n.children[0].isArrowMember) hit = true;
-                        else if (aliasable(exprRootVarName(n.children[0]))) hit = true;
+                        else if (aliasable(root)) hit = true;
+                        else if (pointerNames.count(root)) hit = true;  // p.x = v through a pointer
                     }
                     break;
                 case AstNode::Type::FnCall:
@@ -1692,6 +1747,8 @@ private:
                                                              : exprRootVarName(n.children[0]);
                         if (aliasable(root) && methodCallMutatesReceiver(n, root, rootTypeOf(root))) {
                             hit = true;
+                        } else if (pointerNames.count(root) && !isReadOnlyBuiltinMethod(n.value)) {
+                            hit = true;  // p.push(x), p.items.push(x) through a pointer
                         }
                     } else if (!isUserFunctionName(n.value)) {
                         for (const AstNode& a : n.children) {
@@ -2061,10 +2118,27 @@ private:
         std::map<std::string, bool> spawnEnum;
         emitBlockStatements(body, e.children, spawnVarMap, spawnVarIdx, spawnStr, spawnConst,
             spawnFloat, spawnChar, spawnBool, spawnEnum, "", false);
+        // Arguments are copied into the job, but &x in one is the caller's x, not the
+        // copy's: a variable whose address the job takes is captured by reference.
+        // (A global is not captured at all; only locals and parameters are listed.)
+        std::set<std::string> byRef;
+        std::function<void(const AstNode&)> addrs = [&](const AstNode& n) {
+            if (n.type == AstNode::Type::ExprAddrOf && !n.children.empty()) {
+                auto it = varMap.find(exprRootVarName(n.children[0]));
+                if (it != varMap.end() && (it->second.rfind("__nexa_var_", 0) == 0 ||
+                                           it->second.rfind("__nexa_param_", 0) == 0)) {
+                    byRef.insert(it->second);
+                }
+            }
+        };
+        for (const AstNode& c : e.children) walkAstNode(c, addrs);
+        std::string capture = "[=";
+        for (const std::string& v : byRef) capture += ", &" + v;
+        capture += "]";
         // This lambda is spliced into the middle of an expression, so the body's first statement
         // would otherwise start on the same line as the `{`. A `#line` marker there could not be
         // rewritten (directives must start a line), so debug builds break the line first.
-        return std::string("[=]() {") + (lineDirectives_ ? "\n" : " ") + body.str() + "}";
+        return capture + "() {" + (lineDirectives_ ? "\n" : " ") + body.str() + "}";
     }
 
     std::string cppFnNameForAstIndex(size_t astIndex) const {
@@ -2357,6 +2431,17 @@ private:
                                 auto mit = sit->second.find(e.value);
                                 if (mit != sit->second.end() && mit->second) {
                                     return inferReturnNexaType(*mit->second);
+                                }
+                            }
+                            // c.run(x) with run a field holding a closure: what the closure returns
+                            auto fit = structFields_.find(sn);
+                            if (fit != structFields_.end()) {
+                                auto ft = fit->second.find(e.value);
+                                std::vector<std::string> params;
+                                std::string ret;
+                                if (ft != fit->second.end() && nexaIsFnType(ft->second) &&
+                                    nexaSplitFnType(ft->second, params, ret)) {
+                                    return ret;
                                 }
                             }
                         }
@@ -2821,7 +2906,8 @@ private:
                 std::string sn = structNameFromDecl(recvBare);
                 auto sit = structMethods_.find(sn);
                 if (sit != structMethods_.end() && sit->second.count(e.value)) {
-                    std::string s = recv + "." + e.value + "(";
+                    // g.log(m) and g->log(m) with g a *Game: the method of what it points at
+                    std::string s = recv + (isPointerType(recvT) ? "->" : ".") + e.value + "(";
                     for (size_t i = 1; i < e.children.size(); i++) {
                         if (i > 1) s += ", ";
                         s += emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
@@ -3242,10 +3328,19 @@ private:
             return std::string();
         }
         if (isStructDeclType(recv)) {
+            const size_t p0 = argIdx - 1;
             auto mit = structMethods_.find(structNameFromDecl(recv));
-            if (mit == structMethods_.end()) return std::string();
-            auto fit = mit->second.find(method);
-            if (fit == mit->second.end() || fit->second == nullptr) return std::string();
+            auto fit = mit == structMethods_.end() ? decltype(mit->second.find(method))() : mit->second.find(method);
+            if (mit == structMethods_.end() || fit == mit->second.end() || fit->second == nullptr) {
+                // c.run([]) with run a field holding a closure: its parameter's type
+                auto sf = structFields_.find(structNameFromDecl(recv));
+                if (sf == structFields_.end()) return std::string();
+                auto ft = sf->second.find(method);
+                std::vector<std::string> params;
+                std::string ret;
+                if (ft == sf->second.end() || !nexaSplitFnType(ft->second, params, ret)) return std::string();
+                return p0 < params.size() ? params[p0] : std::string();
+            }
             const AstNode& fn = *fit->second;
             const size_t p = argIdx - 1;
             return p < fn.paramNames.size() ? canonicalParamType(fn, p) : std::string();
@@ -5403,13 +5498,26 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         out << ");\n";
     }
 
-    void emitStructMethodBody(std::ostringstream& out, const AstNode& node, const std::string& cppStruct) {
+    // The file-scope names a function body starts from.
+    struct GlobalScope {
+        const std::map<std::string, std::string>* varMap;
+        const std::map<std::string, bool>* isString;
+        const std::map<std::string, bool>* isConst;
+        const std::map<std::string, bool>* isFloat;
+        const std::map<std::string, bool>* isChar;
+        const std::map<std::string, bool>* isBool;
+        const std::map<std::string, bool>* isEnum;
+    };
+
+    void emitStructMethodBody(std::ostringstream& out, const AstNode& node, const std::string& cppStruct,
+                              const GlobalScope* globals = nullptr) {
         bool voidFn = false;
         std::string retCpp = structMethodReturnCpp(node, &voidFn);
         bool hasValRet = false, hasVoidRet = false;
         stmtsClassifyReturns(node.children, hasValRet, hasVoidRet);
         out << retCpp << " " << cppStruct << "::" << node.value << "(";
         std::map<std::string, std::string> varMap;
+        if (globals) varMap = *globals->varMap;
         int varIdx = 0;
         for (size_t i = 0; i < node.paramNames.size(); i++) {
             if (i > 0) out << ", ";
@@ -5420,6 +5528,14 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         out << ") {\n";
         varIdx = static_cast<int>(node.paramNames.size());
         std::map<std::string, bool> varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum;
+        if (globals) {
+            varIsString = *globals->isString;
+            varIsConst = *globals->isConst;
+            varIsFloat = *globals->isFloat;
+            varIsChar = *globals->isChar;
+            varIsBool = *globals->isBool;
+            varIsEnum = *globals->isEnum;
+        }
         for (size_t i = 0; i < node.paramNames.size(); i++) {
             const std::string& pt = canonicalParamType(node, i);
             varIsString[node.paramNames[i]] = (pt == "string");
@@ -6328,19 +6444,30 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     if (!nexaDeclStack_.empty()) nexaDeclStack_.back()[valueName] = mapValT;
                 }
                 std::string collTmp = "__nexa_forin_" + std::to_string(varIdx++);
+                // The loop variable is each element; a body that calls a method on it,
+                // changes it or indexes a map in it gets its own copy, as a const
+                // reference allows none of those.
+                auto ownCopy = [&](const std::string& name, const std::string& t) {
+                    std::set<std::string> seen;
+                    return bodyMutatesName(child.children[1].children, name, t, !typeMentionsMap(t, seen));
+                };
                 out << indent << "{\n";
                 if (mapKeys) {
                     out << indent << "    const " << nexaTypeToCpp(collT) << "& " << collTmp << " = " << collExpr << ";\n";
                     out << indent << "    for (const auto& __nexa_kv : " << collTmp << ") {\n";
                     out << indent << "        const " << nexaTypeToCpp(mapKeyT) << "& " << loopVar << " = __nexa_kv.first;\n";
                     if (kv) {
-                        out << indent << "        const " << nexaTypeToCpp(mapValT) << "& " << loopVal << " = __nexa_kv.second;\n";
+                        const bool copy = ownCopy(valueName, mapValT);
+                        out << indent << "        " << (copy ? "" : "const ") << nexaTypeToCpp(mapValT)
+                            << (copy ? " " : "& ") << loopVal << " = __nexa_kv.second;\n";
                     }
                 } else {
                     const std::string heldT = nexaIsSliceType(collT) || collT == "string" ? collT : ("[]" + elemT);
+                    const bool copy = ownCopy(child.value, elemT);
                     out << indent << "    const " << nexaTypeToCpp(heldT)
                         << "& " << collTmp << " = " << collExpr << ";\n";
-                    out << indent << "    for (const " << nexaTypeToCpp(elemT) << "& " << loopVar << " : " << collTmp << ") {\n";
+                    out << indent << "    for (" << (copy ? "" : "const ") << nexaTypeToCpp(elemT)
+                        << (copy ? " " : "& ") << loopVar << " : " << collTmp << ") {\n";
                 }
                 emitBlock(out, child.children[1].children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "        ", inStringSwitchCase);
                 out << indent << "    }\n";
@@ -6547,26 +6674,34 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             }
         }
         if (useStringSwitch) {
-            std::vector<const AstNode*> cases, defaults;
+            // The text picks a case number once, and a C++ switch on that number
+            // does the rest: stacked labels, fall-through, break and continue all
+            // behave as they do in an int switch.
+            const std::string text = "__nexa_sws_" + std::to_string(varIdx++);
+            const std::string pick = "__nexa_swi_" + std::to_string(varIdx++);
+            out << indent << "{\n";
+            out << indent << "    const std::string& " << text << " = " << expr << ";\n";
+            out << indent << "    int " << pick << " = -1;\n";
+            bool first = true;
+            for (size_t i = 1; i < node.children.size(); i++) {
+                const AstNode& c = node.children[i];
+                if (c.type != AstNode::Type::SwitchCase || c.value == "default") continue;
+                out << indent << "    " << (first ? "" : "else ") << "if (" << text << " == "
+                    << emitCppStringValue(c.initValue) << ") " << pick << " = " << i << ";\n";
+                first = false;
+            }
+            out << indent << "    switch (" << pick << ") {\n";
             for (size_t i = 1; i < node.children.size(); i++) {
                 const AstNode& c = node.children[i];
                 if (c.type != AstNode::Type::SwitchCase) continue;
-                if (c.value == "default") defaults.push_back(&c);
-                else cases.push_back(&c);
+                if (c.value == "default") out << indent << "    default: {\n";
+                else out << indent << "    case " << i << ": {\n";
+                emitBlock(out, c.children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar,
+                          varIsBool, varIsEnum, indent + "        ");
+                out << indent << "    }\n";
             }
-            bool first = true;
-            for (const AstNode* c : cases) {
-                out << indent << (first ? "" : "else ") << "if (" << expr << " == " << emitCppStringValue(c->initValue) << ") {\n";
-                first = false;
-                emitBlock(out, c->children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "    ", true);
-                out << indent << "}\n";
-            }
-            for (const AstNode* c : defaults) {
-                out << indent << (first ? "" : "else ") << "{\n";
-                first = false;
-                emitBlock(out, c->children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "    ", true);
-                out << indent << "}\n";
-            }
+            out << indent << "    }\n";
+            out << indent << "}\n";
         } else {
             out << indent << "switch (" << expr << ") {\n";
             for (size_t i = 1; i < node.children.size(); i++) {
@@ -7944,8 +8079,12 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                         }
                     }
                 }
+                // store.todos with store a *Store: a field through a pointer reads
+                // the same with a dot as with ->
+                bool arrow = e.isArrowMember;
+                if (!arrow && isPointerType(inferExprNexaType(e.children[0]))) arrow = true;
                 return emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool)
-                    + (e.isArrowMember ? "->" : ".") + e.value;
+                    + (arrow ? "->" : ".") + e.value;
             }
             case AstNode::Type::FnCall:
                 return emitFnCallCpp(e, varMap, varIsString, varIsFloat, varIsChar, varIsBool);

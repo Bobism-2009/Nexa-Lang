@@ -1,0 +1,51 @@
+// A field or method of a struct through a pointer, written with a plain dot:
+// the same as ->. A function that changes the caller's struct through one still
+// gets its own copy of a struct passed beside it by value.
+#include <std/io>
+
+struct Todo {
+    title: string;
+    done: bool;
+}
+
+struct Store {
+    todos: []Todo;
+    next_id: int;
+    log: []string;
+
+    fn note(msg: string) { self.log.push(msg); }
+    fn open(): int {
+        let n = 0;
+        for (t in self.todos) { if (!t.done) { n++; } }
+        return n;
+    }
+}
+
+fn add(store: *Store, title: string) {
+    store.todos.push(Todo { title: title });
+    store.next_id++;
+    store.note("added " + title);
+}
+
+fn finish(store: *Store, i: int) {
+    store.todos[i].done = true;
+    store.note(f"finished {i}, {store.open()} open");
+}
+
+fn rename(p: *Todo, v: Todo) {
+    p.title = "changed";
+    io.println(v.title);
+}
+
+fn main() {
+    let s = Store { next_id: 1 };
+    add(&s, "milk");
+    add(&s, "tests");
+    finish(&s, 0);
+    let p = &s;
+    p.next_id += 10;
+    io.println(s.next_id, " ", p.open(), " ", s.log);
+    let t = Todo { title: "orig" };
+    rename(&t, t);
+    io.println(t.title);
+}

@@ -1,0 +1,56 @@
+// A switch on text flows as one on numbers does: stacked labels share a body,
+// a case without break falls into the next, continue goes to the loop around
+// the switch, a break in a loop inside a case leaves only that loop, and the
+// text is worked out once.
+#include <std/io>
+
+let calls = 0;
+
+fn word(s: string): string {
+    calls++;
+    return s;
+}
+
+fn kind(s: string): string {
+    switch (s) {
+        case "a":
+        case "b":
+            return "ab";
+        case "c":
+            return "c";
+        default:
+            return "?";
+    }
+    return "";
+}
+
+fn main() {
+    io.println(kind("a"), kind("b"), kind("c"), kind("z"));
+    let out = "";
+    for (w in ["x", "skip", "fall", "loop", "other", "y"]) {
+        switch (word(w)) {
+            case "skip":
+                continue;
+            case "fall":
+                out += "F";
+            case "x":
+                out += "X";
+                break;
+            default:
+                out += "D";
+            case "y":
+                out += "Y";
+                break;
+            case "loop":
+                for (i, 10) {
+                    if (i == 3) { break; }
+                    out += f"{i}";
+                }
+                out += "L";
+                break;
+        }
+        out += "|";
+    }
+    io.println(out);
+    io.println(calls);
+}

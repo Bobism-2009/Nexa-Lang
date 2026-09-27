@@ -1,0 +1,43 @@
+// A struct can hold a closure, and calling it through the field gives what the
+// closure returns: text, a Result, a number.
+#include <std/io>
+
+struct Command {
+    name: string;
+    run: fn([]string): Result[string];
+}
+
+struct Op {
+    apply: fn(int): int;
+    label: fn(int): string;
+}
+
+struct Registry {
+    commands: []Command;
+}
+
+fn shout(args: []string): Result[string] {
+    if (len(args) == 0) { return err("nothing to shout"); }
+    return ok(args.join(" ").upper());
+}
+
+fn main() {
+    let cmds: map[string]Command;
+    cmds["shout"] = Command { name: "shout", run: shout };
+    let r = cmds["shout"].run(["hi", "there"]);
+    io.println(r.value());
+    let bad = cmds["shout"].run([]);
+    io.println(bad.ok(), " ", bad.error());
+
+    let k = 3;
+    let op = Op {
+        apply: fn (x: int): int { return x * k; },
+        label: fn (x: int): string { return f"<{x}>"; },
+    };
+    let n = op.apply(4);
+    let s = op.label(n);
+    io.println(n + 1, " ", s.upper());
+
+    let reg = Registry { commands: [cmds["shout"]] };
+    io.println(reg.commands[0].run(["x"]).value());
+}

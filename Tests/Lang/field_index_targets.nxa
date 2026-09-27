@@ -1,0 +1,45 @@
+// Assignment and calls whose target runs past a field into an index, or past
+// an index into a field and on: s.m[k] = v, s.counts[k]++, m["a"].cells.push(c).
+#include <std/io>
+
+struct Cell {
+    v: int;
+    tags: []string;
+}
+
+struct Row {
+    cells: []Cell;
+}
+
+struct Sheet {
+    rows: []Row;
+    counts: map[int]int;
+    xs: []int;
+}
+
+fn main() {
+    let s = Sheet { xs: [1, 2] };
+    s.counts[3] = 5;
+    s.counts[3]++;
+    s.counts[7] += 2;
+    s.xs[0] += 10;
+    s.xs[1]--;
+    s.rows.push(Row { cells: [Cell { v: 1 }, Cell { v: 2 }] });
+    s.rows[0].cells[1].v = 20;
+    s.rows[0].cells[1].v *= 2;
+    s.rows[0].cells[0].tags.push("a");
+    s.rows[0].cells[0].tags[0] = "b";
+    io.println(s.counts, " ", s.xs, " ", s.rows[0].cells[1].v, " ", s.rows[0].cells[0].tags);
+
+    let m: map[string]Row;
+    m["a"] = Row { cells: [] };
+    m["a"].cells.push(Cell { v: 1 });
+    m["a"].cells[0].v = 7;
+    m["a"].cells[0].tags.push("x");
+    io.println(m["a"].cells[0].v, " ", m["a"].cells[0].tags);
+
+    let rows = [Row { cells: [Cell { v: 3 }] }];
+    rows[0].cells[0].v++;
+    rows[0].cells.push(Cell { v: 9 });
+    io.println(rows[0].cells[0].v, " ", len(rows[0].cells));
+}

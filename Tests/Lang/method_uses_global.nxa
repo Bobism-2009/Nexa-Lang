@@ -1,0 +1,21 @@
+// A struct method reads and changes a file-scope let, as a function does.
+#include <std/io>
+
+let const SCALE = 2.5;
+let calls = 0;
+
+struct Box {
+    w: float;
+
+    fn scaled(): float {
+        calls++;
+        return SCALE * self.w;
+    }
+}
+
+fn main() {
+    let b = Box { w: 2.0 };
+    let a = b.scaled();
+    let c = b.scaled();
+    io.println(a + c, " ", calls);
+}

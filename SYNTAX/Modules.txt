@@ -465,6 +465,7 @@ ARGUMENT TYPES
   Use: let t = thread.spawn(os.notify("Hi", "There"));
   Use: let w = thread.worker(); thread.run(w, os.notify("Hi", "There")); thread.worker_join(w);
   Notes: spawn(fn_name) supports only zero-argument functions. spawn(call) captures arguments by value.
+         &x in one is the caller's x: thread.spawn(count(&total, 5)) adds into total.
 
 #include <std/gfx>
   Pixel window (Win32, Cocoa, X11, or Emscripten canvas). No extra libraries on Windows.

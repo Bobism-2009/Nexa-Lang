@@ -909,6 +909,7 @@ private:
     }
 
     AstNode parseMemberAssignment() {
+        const size_t start = pos_;
         size_t line = peek().line;
         const Token& nameTok = peek();
         if (nameTok.type != TokenType::Identifier) {
@@ -928,6 +929,12 @@ private:
             AstNode mem{AstNode::Type::ExprMember, ftok.value, {std::move(cur)}};
             mem.isArrowMember = arrow;
             cur = std::move(mem);
+        }
+        // s.items[i] = v, b.cells[r][c]++, s.m[k].name = n: the target goes on
+        // past the fields, so read all of it as an expression
+        if (peek().type == TokenType::LBracket) {
+            pos_ = start;
+            return parseExprStatement();
         }
         if (cur.type != AstNode::Type::ExprMember) {
             throw std::runtime_error("Expected member assignment (e.g. obj.field = ... or ptr->field = ...) at line " + std::to_string(line));
@@ -1219,7 +1226,7 @@ private:
                     hasDefault.push_back(false);
                     defaults.push_back(AstNode{AstNode::Type::ExprIntLiteral, "0", {}});
                 }
-                if (!match(TokenType::Comma)) break;
+                if (!match(TokenType::Comma) || peek().type == TokenType::RParen) break;  // a trailing comma is fine
             }
         }
         if (!match(TokenType::RParen)) {
@@ -1650,7 +1657,7 @@ private:
             if (peek().type != TokenType::RParen) {
                 for (;;) {
                     call.children.push_back(parseValueExpr());
-                    if (!match(TokenType::Comma)) break;
+                    if (!match(TokenType::Comma) || peek().type == TokenType::RParen) break;  // a trailing comma is fine
                 }
             }
             if (!match(TokenType::RParen)) {
@@ -1670,7 +1677,7 @@ private:
         if (peek().type != TokenType::RParen) {
             for (;;) {
                 args.push_back(parseValueExpr());
-                if (!match(TokenType::Comma)) break;
+                if (!match(TokenType::Comma) || peek().type == TokenType::RParen) break;  // a trailing comma is fine
             }
         }
         if (!match(TokenType::RParen)) {
@@ -1825,6 +1832,7 @@ private:
     }
 
     AstNode parseIndexedAssignment() {
+        const size_t start = pos_;
         const Token& nameTok = peek();
         if (nameTok.type != TokenType::Identifier) {
             throw std::runtime_error("Expected array name at line " + std::to_string(nameTok.line));
@@ -1868,6 +1876,12 @@ private:
                 AstNode mem{AstNode::Type::ExprMember, ftok.value, {std::move(cur)}};
                 mem.isArrowMember = arrow;
                 cur = std::move(mem);
+            }
+            // m["a"].cells.push(c), xs[0].items[1] = v: the statement goes on
+            // past the field, so read all of it as an expression
+            if (peek().type == TokenType::LParen || peek().type == TokenType::LBracket) {
+                pos_ = start;
+                return parseExprStatement();
             }
             std::string op = "=";
             if (match(TokenType::Assign)) op = "=";
@@ -2511,7 +2525,7 @@ private:
                     if (peek().type != TokenType::RParen) {
                         for (;;) {
                             call.children.push_back(parseValueExpr());
-                            if (!match(TokenType::Comma)) break;
+                            if (!match(TokenType::Comma) || peek().type == TokenType::RParen) break;  // a trailing comma is fine
                         }
                     }
                     if (!match(TokenType::RParen)) {
@@ -2532,7 +2546,7 @@ private:
                 if (peek().type != TokenType::RParen) {
                     for (;;) {
                         call.children.push_back(parseValueExpr());
-                        if (!match(TokenType::Comma)) break;
+                        if (!match(TokenType::Comma) || peek().type == TokenType::RParen) break;  // a trailing comma is fine
                     }
                 }
                 if (!match(TokenType::RParen)) {
@@ -2710,6 +2724,8 @@ private:
             for (;;) {
                 node.children.push_back(parseValueExpr());
                 if (!match(TokenType::Comma)) break;
+                // a comma after the last element, as a list one per line has
+                if (peek().type == TokenType::RBracket) break;
             }
         }
         if (!match(TokenType::RBracket)) {

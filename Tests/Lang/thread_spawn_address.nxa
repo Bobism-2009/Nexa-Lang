@@ -1,0 +1,30 @@
+// thread.spawn(f(&x)): the job's other arguments are copies, but &x is the
+// caller's x, so what the thread writes through it is there after the join.
+#include <std/io>
+#include <std/thread>
+
+struct Tally {
+    n: int;
+    seen: []int;
+}
+
+fn count(total: *int, upto: int) {
+    for (i, upto) { *total += i; }
+}
+
+fn record(t: *Tally, v: int) {
+    t.n++;
+    t.seen.push(v);
+}
+
+fn main() {
+    let total = 0;
+    let t = thread.spawn(count(&total, 5));
+    thread.join(t);
+    let tally = Tally { n: 0 };
+    let v = 7;
+    let u = thread.spawn(record(&tally, v));
+    v = 8;
+    thread.join(u);
+    io.println(total, " ", tally.n, " ", tally.seen);
+}

@@ -1,0 +1,33 @@
+// The loop variable of a for-in can have its methods called and be changed;
+// it is each element, so changing it leaves the collection as it was.
+#include <std/io>
+
+struct Shape {
+    w: float;
+    h: float;
+
+    fn area(): float { return self.w * self.h; }
+    fn grow() { self.w += 1; }
+}
+
+struct Stats {
+    by_code: map[int]int;
+}
+
+fn main() {
+    let shapes = [Shape { w: 1.0, h: 2.0 }, Shape { w: 3.0, h: 3.0 }];
+    let total = 0.0;
+    for (s in shapes) { total += s.area(); }
+    for (s in shapes) {
+        s.grow();
+        io.println(s.area());
+    }
+    io.println(total, " ", shapes[0].w);
+
+    let stats: map[string]Stats;
+    stats["/"].by_code[200] = 3;
+    for (path, st in stats) {
+        io.println(path, " ", st.by_code[200], " ", st.by_code[404]);
+    }
+    io.println(len(stats["/"].by_code));
+}

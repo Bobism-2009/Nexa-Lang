@@ -24,7 +24,8 @@ STRUCTS
     other: string;
     nested: InnerStruct;   // InnerStruct must be declared earlier in the file
   }
-  - Field types: int, unsigned int, short, unsigned short, long, unsigned long, size_t, string, bool, float, char, unsigned char, *T pointers, []T, map[K]V, Result[T], or another struct name
+  - Field types: int, unsigned int, short, unsigned short, long, unsigned long, size_t, string, bool, float, char, unsigned char, *T pointers, []T, map[K]V, Result[T], fn(T): R closures
+    (call one as c.run(x)), or another struct name. A struct holding a closure has no ==.
   - Methods: `fn name(args): Ret { ... }` inside the struct. Use `self.field` (self is the receiver).
     Call as `p.name(args)`. Return type is required when it is not int/void.
   - Optional semicolon after the closing }
@@ -37,12 +38,14 @@ STRUCTS
   Field access (expression):  p.x   p.label
   Field assignment:           p.x = 10;   p.label += "suffix";
   Through pointer:            ptr->x   ptr->x = 10;   (same as (*ptr).x)
+                              ptr.x    ptr.x = 10;    (a dot works too; methods: ptr.m())
+  Past a field into an index: s.items[i] = v;   s.counts[k]++;   m["a"].cells.push(c);
   Function parameters:       fn use(pt: Point) { ... }
 
   Struct literals:
     Point { x: 1, y: 2 }
     Point { y: 2, x: 1 }     - field order does not matter
-    Point { x: 1, }          - trailing comma allowed
+    Point { x: 1, }          - trailing comma allowed (also in [a, b,], f(a, b,), fn f(a: int,))
     Point {}                 - all fields zeroed / empty
     Rect { origin: Point { x: 0, y: 0 }, w: 10 }
     pts.push(Point { x: 1, y: 2 });
@@ -217,6 +220,7 @@ POINTERS (no GC — manual, C-style)
     if (q != null) { ... }
     fn bump(p: *int) { *p = *p + 1; }
   Struct fields via pointer:  let p: *Point = &pt;  p->x = 1;  io.println(p->x);
+    or with a dot, as for the struct itself: p.x = 1; p.label(); store.todos.push(t);
   Struct fields may be pointers:  field: *int;
   A slice or map through a pointer: index it as (*p)[i], and call its methods
   with a plain dot, as for a struct:

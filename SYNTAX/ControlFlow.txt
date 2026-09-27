@@ -85,6 +85,9 @@ LOOPS
   for (x in arr) { ... }   - iterate each element of a slice
   for (c in s) { ... }     - iterate each character (a char) of a string
   for (k, v in m) { ... }  - iterate map keys and values (std::map order)
+                             The variable is each element: call its methods, change it
+                             (for (s in shapes) { s.grow(); }) -- the slice or map keeps
+                             its own; change xs[i] to change the collection.
   while (cond) { ... }
   while (true) { ... }   - infinite loop
   while (false) { ... }  - never runs
