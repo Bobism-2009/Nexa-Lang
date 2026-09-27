@@ -8,7 +8,7 @@ This folder contains syntax documentation for the Nexa language.
 Files:
   README.txt    - This file
   Core.txt      - Entry point, functions, variables, expressions, Result[T]
-  ControlFlow.txt - if/else, while, comparisons, logical operators
+  ControlFlow.txt - if/else, loops, switch, try/catch/throw, goto
   Modules.txt   - std/io, std/os, std/dll, std/file, std/random, std/math, std/crypto, std/network, std/json, std/time, std/thread, std/gfx, std/inline
   Inline.txt    - inline_cpp! and #include <std/inline>
   (Editor: nexa-vscode/ — VS Code/Cursor extension v0.2.0)

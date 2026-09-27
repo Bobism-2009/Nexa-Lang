@@ -109,6 +109,57 @@ LOOPS
       i = i + 1;
     }
 
+ERRORS: TRY / CATCH / THROW
+  throw "message";                  - stop here and hand the message to the
+                                      nearest enclosing catch
+  try { ... } catch (e) { ... }     - run the try block; if anything in it throws,
+                                      jump to the catch block with e = the message
+  try { ... } catch { ... }         - the same, when the message is not needed
+
+  - What you throw is a string, and e is that string. An expression is fine:
+    throw "negative: " + n;
+  - A throw leaves every function between it and the catch, so the try can be
+    in main and the throw deep in a function it calls. The rest of the try block
+    is skipped; the program carries on after the catch block.
+  - e exists only inside the catch block, and hides an outer variable with the
+    same name until the block ends.
+  - A catch block can throw, and so pass the error to a try further out:
+      catch (e) { io.println("cleanup"); throw "load failed: " + e; }
+  - break, continue and return work inside try and catch blocks as anywhere else.
+  - Throwing a number or anything other than a string compiles, but the catch
+    receives it as "" -- throw a string.
+
+  What throws besides throw:
+  - r.value() on a Result that holds an error, when the program has a try/catch
+    anywhere; e is the Result's error text (see Result[T] in Core.txt).
+  Nothing else does. The std modules report failure through Result, a return
+  value or ok(); io.to_int("zz") returns 0. An index past the end of a slice is
+  not an error that can be caught either -- check len(xs) first.
+
+  An error nothing catches ends the program. What it printed before is kept,
+  stderr gets "Uncaught error: <message>", and it exits non-zero.
+
+  throw or Result? A Result is for a failure the caller is expected to handle
+  -- a missing file, bad input -- and it shows in the function's type. throw is
+  for giving up on a whole piece of work from deep inside it. A program with no
+  try, catch or throw is also smaller (CLI.txt, OUTPUT SIZE).
+
+  Example:
+    fn half(n: int): int {
+      if (n % 2 != 0) { throw "odd: " + n; }
+      return n / 2;
+    }
+    fn main() {
+      for (n in [8, 3, 6]) {
+        try {
+          io.println(half(n));
+        } catch (e) {
+          io.println("skipped " + e);
+        }
+      }
+    }
+  prints 4, "skipped odd: 3", 3.
+
 GOTO / LABELS
   label:        - define a label (an identifier followed by ':')
   goto label;   - jump to a label in the same function

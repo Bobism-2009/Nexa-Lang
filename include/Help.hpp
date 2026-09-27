@@ -95,6 +95,7 @@ CONTROL FLOW
   for (k, v in m) { }     map keys and values
   switch (e) { case 0: ... break; default: ... }   int, string or enum cases
   cond ? a : b            goto label;   label:
+  try { } catch (e) { }   throw "message";      e is the message
 
 OPERATORS
   + - * / %      & | ^ ~ << >>      ! && ||      == != < <= > >=
