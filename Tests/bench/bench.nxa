@@ -1,0 +1,113 @@
+// Everyday workloads, each timed on its own. Tests/bench/bench.sh builds this
+// twice and compares the times; run it by hand with a workload name to time one.
+// The last line is a checksum of the work done, so the work cannot be optimized
+// away and both builds can be shown to have computed the same thing.
+#include <std/io>
+#include <std/time>
+#include <std/json>
+#include <std/thread>
+
+fn bump(total: *int, n: int) { *total += n; }
+
+fn main(args: []string) {
+    let which = len(args) > 1 ? args[1] : "all";
+    let check = 0;
+
+    if (which == "all" || which == "strings") {
+        let t0 = time.now_ms();
+        let s = "";
+        for (i, 4000000) {
+            s += "x" + i;
+            if (len(s) > 4000) { check += len(s); s = ""; }
+        }
+        io.println(f"strings {time.now_ms() - t0:.1}");
+    }
+    if (which == "all" || which == "slices") {
+        let t0 = time.now_ms();
+        for (r, 60) {
+            let xs: []int = [];
+            for (i, 50000) { xs.push((i * 7919) % 10007); }
+            xs.sort();
+            check += xs[25000];
+        }
+        io.println(f"slices {time.now_ms() - t0:.1}");
+    }
+    // Reading and writing by index in tight loops, each pattern timed on its own:
+    // they differ in what a compiler can do with them (a sum vectorizes, a
+    // scattered walk cannot), so one can move while another stays put.
+    let n = 100000;
+    let xs: []int = [];
+    for (i, n) { xs.push(i % 1000); }
+    if (which == "all" || which == "sum") {
+        let t0 = time.now_ms();
+        for (r, 3000) {
+            let sum = 0;
+            for (i, n) { sum += xs[i]; }
+            check += sum % 1000 + r;
+        }
+        io.println(f"sum {time.now_ms() - t0:.1}");
+    }
+    if (which == "all" || which == "walk") {
+        let t0 = time.now_ms();
+        for (r, 50) {
+            let at = r;
+            for (i, n) { at = (at * 31 + xs[at]) % n; }
+            check += at;
+        }
+        io.println(f"walk {time.now_ms() - t0:.1}");
+    }
+    if (which == "all" || which == "grid") {
+        let t0 = time.now_ms();
+        let grid: [][]int = [];
+        for (y, 300) {
+            let row: []int = [];
+            for (x, 300) { row.push(x ^ y); }
+            grid.push(row);
+        }
+        for (r, 2000) {
+            for (y, 299) {
+                for (x, 299) { grid[y][x] = (grid[y][x] + grid[y + 1][x + 1]) & 1023; }
+            }
+        }
+        check += grid[150][150];
+        io.println(f"grid {time.now_ms() - t0:.1}");
+    }
+    if (which == "all" || which == "chars") {
+        let t0 = time.now_ms();
+        let text = "the quick brown fox jumps over the lazy dog ".repeat(2000);
+        for (r, 2000) {
+            let spaces = 0;
+            for (i, len(text)) { if (text[i] == ' ') { spaces++; } }
+            check += spaces + r;
+        }
+        io.println(f"chars {time.now_ms() - t0:.1}");
+    }
+    if (which == "all" || which == "maps") {
+        let t0 = time.now_ms();
+        let m: map[string]int;
+        for (i, 200000) { m[f"k{i % 5000}"] += i; }
+        for (k, v in m) { check += v % 7; }
+        io.println(f"maps {time.now_ms() - t0:.1}");
+    }
+    if (which == "all" || which == "json") {
+        let t0 = time.now_ms();
+        for (r, 300) {
+            let o = json.object();
+            for (i, 50) { o.set(f"f{i}", json.float(i * 1.5)); }
+            let back = json.parse(json.stringify(o));
+            check += back.len();
+        }
+        io.println(f"json {time.now_ms() - t0:.1}");
+    }
+    if (which == "all" || which == "threads") {
+        let t0 = time.now_ms();
+        let total = 0;
+        for (r, 200) {
+            let t = thread.spawn(bump(&total, r));
+            thread.join(t);
+        }
+        check += total;
+        io.println(f"threads {time.now_ms() - t0:.1}");
+    }
+    io.println(f"check {check}");
+}
