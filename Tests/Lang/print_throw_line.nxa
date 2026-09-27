@@ -1,0 +1,16 @@
+// A print of several values, one of which throws: nothing of that line is printed.
+#include <std/io>
+
+fn check(n: int): int {
+    if (n < 0) { throw "negative"; }
+    return n;
+}
+
+fn main() {
+    try {
+        io.println("value ", check(3), " ok");
+        io.println("value ", check(-1));
+    } catch (e) {
+        io.println("caught " + e);
+    }
+}

@@ -1,0 +1,20 @@
+// Values a C/C++ header returns, used directly: printed, added to a string, put in
+// an f-string, stored in a string (a NULL const char* is ""). A []string passed to a
+// header, and a header's namespaced constant and enum value.
+#include "header_values.hpp"
+#include <std/io>
+
+fn main() {
+    io.println(half(5), " ", half(5) * 2);
+    io.println("h=" + half(3), " ", f"{half(7)}");
+    io.println(word(), " ", cword());
+    io.println("w=" + word() + " c=" + cword());
+    let s: string = lookup(1);
+    let z: string = lookup(0);
+    io.println("[", s, "] ", len(s), " ", z);
+    let words = ["a", "b", "c"];
+    let j: string = join_words(words);
+    io.println(j);
+    let n: int = cfg::limit;
+    io.println(n * 2, " ", code(cfg::Color::Green));
+}

@@ -336,7 +336,8 @@ fi
 # double, a function called count, a let over a parameter -- and each failed to
 # build with --debug, or printed the wrong thing, while the default build was fine.
 LANG_DIR=$(cd "$(dirname "$0")" && pwd)/Lang
-for t in preserved_names scoping int_literals let_from_fields thread_spawn_address; do
+for t in preserved_names scoping int_literals let_from_fields thread_spawn_address member_names \
+         shadow_types header_values inline_names thread_jobs collections_more results_and_parsing; do
     out=$("$NEXAC" "$LANG_DIR/$t.nxa" --debug -o "$WORK/$t$EXE" 2>&1)
     if [ $? -ne 0 ]; then
         fail "debug $t" "does not build with --debug" "$(echo "$out" | grep -m2 -i error)"

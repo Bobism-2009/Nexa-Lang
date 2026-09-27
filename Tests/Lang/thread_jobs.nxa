@@ -1,0 +1,57 @@
+// A thread job gets its arguments' values from when it was started, even if the
+// thread runs later; threads started from inside threads; a function that returns
+// a value, spawned for its effect.
+#include <std/io>
+#include <std/thread>
+#include <std/time>
+
+let calls = 0;
+let mode = "fast";
+let hits = 0;
+
+fn next_id(): int { calls++; return calls; }
+fn nap() { time.sleep(50); }
+fn show(what: string) { io.println(what); }
+fn show_n(n: int) { io.println(f"job got {n}"); }
+fn tick(): int { hits++; return hits; }
+
+struct Task {
+    name: string;
+    fn queue(w: int) {
+        thread.run(w, show("task " + self.name));
+        self.name = "renamed";
+    }
+}
+
+fn enqueue(w: int) {
+    let t = Task { name: "build" };
+    t.queue(w);
+}
+
+fn inner(slot: *int) { *slot = 1; }
+fn outer(slot: *int) {
+    let t = thread.spawn(inner(slot));
+    thread.join(t);
+}
+
+fn main() {
+    let w = thread.worker();
+    thread.run(w, nap());
+    thread.run(w, show_n(next_id()));
+    thread.run(w, show("mode " + mode));
+    mode = "slow";
+    calls = 41;
+    enqueue(w);
+    thread.worker_join(w);
+
+    let done: []int;
+    for (i, 40) { done.push(0); }
+    let hs: []int;
+    for (i, 40) { hs.push(thread.spawn(outer(&done[i]))); }
+    for (h in hs) { thread.join(h); }
+    io.println(done.sum());
+
+    let t = thread.spawn(tick());
+    thread.join(t);
+    io.println(hits);
+}

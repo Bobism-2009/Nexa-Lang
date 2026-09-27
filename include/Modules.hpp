@@ -1807,27 +1807,50 @@ public:
             out += "#endif\n";
             out += "  r->joined = true;\n";
             out += "}\n";
+            // The handle tables are shared by every thread -- a thread may spawn and join
+            // threads of its own -- so each look-up or change holds this lock.
+            out += "#ifdef _WIN32\n";
+            out += "static SRWLOCK __nexa_threads_mu = SRWLOCK_INIT;\n";
+            out += "static void __nexa_threads_lock() { AcquireSRWLockExclusive(&__nexa_threads_mu); }\n";
+            out += "static void __nexa_threads_unlock() { ReleaseSRWLockExclusive(&__nexa_threads_mu); }\n";
+            out += "#else\n";
+            out += "static pthread_mutex_t __nexa_threads_mu = PTHREAD_MUTEX_INITIALIZER;\n";
+            out += "static void __nexa_threads_lock() { pthread_mutex_lock(&__nexa_threads_mu); }\n";
+            out += "static void __nexa_threads_unlock() { pthread_mutex_unlock(&__nexa_threads_mu); }\n";
+            out += "#endif\n";
             out += "static std::vector<__nexa_thread_rec*> __nexa_threads;\n";
             out += "static int __nexa_thread_spawn_rec(std::function<void()> fn) {\n";
             out += "  __nexa_thread_rec* r = new __nexa_thread_rec();\n";
             out += "  r->fn = std::move(fn);\n";
+            out += "  __nexa_threads_lock();\n";
             out += "  __nexa_threads.push_back(r);\n";
+            out += "  const int idx = static_cast<int>(__nexa_threads.size()) - 1;\n";
+            out += "  __nexa_threads_unlock();\n";
             out += "  __nexa_thread_start(r);\n";
-            out += "  return static_cast<int>(__nexa_threads.size()) - 1;\n";
+            out += "  return idx;\n";
             out += "}\n";
             // A program that only ever spawns a call -- thread.spawn(f(x)) --
             // reaches the lambda form below and never this one.
-            out += "[[maybe_unused]] static int __nexa_thread_spawn(void (*fn)()) { return __nexa_thread_spawn_rec(fn); }\n";
+            // Any return type: a function that returns a value runs for its effects.
+            out += "template <class __R> [[maybe_unused]] static int __nexa_thread_spawn(__R (*fn)()) {\n";
+            out += "  return __nexa_thread_spawn_rec([fn]() { (void)fn(); });\n";
+            out += "}\n";
             if (usage.threadLambda) {
                 out += "static int __nexa_thread_spawn_fn(std::function<void()> fn) { return __nexa_thread_spawn_rec(std::move(fn)); }\n";
             }
             // A joined thread's record is freed there (joining it again does nothing); left
             // to the vector, every one showed as a leak in a --debug build's LeakSanitizer.
             out += "static void __nexa_thread_join(int idx) {\n";
-            out += "  if (idx < 0 || static_cast<size_t>(idx) >= __nexa_threads.size() || !__nexa_threads[idx]) return;\n";
-            out += "  __nexa_thread_wait(__nexa_threads[idx]);\n";
-            out += "  delete __nexa_threads[idx];\n";
-            out += "  __nexa_threads[idx] = nullptr;\n";
+            out += "  __nexa_thread_rec* r = nullptr;\n";
+            out += "  __nexa_threads_lock();\n";
+            out += "  if (idx >= 0 && static_cast<size_t>(idx) < __nexa_threads.size()) {\n";
+            out += "    r = __nexa_threads[idx];\n";
+            out += "    __nexa_threads[idx] = nullptr;\n";
+            out += "  }\n";
+            out += "  __nexa_threads_unlock();\n";
+            out += "  if (!r) return;\n";
+            out += "  __nexa_thread_wait(r);\n";
+            out += "  delete r;\n";
             out += "}\n";
             if (usage.threadWorker) {
                 out += "#include <deque>\n";
@@ -1869,28 +1892,41 @@ public:
                 out += "    }\n";
                 out += "  };\n";
                 out += "  __nexa_thread_start(&wp->t);\n";
+                out += "  __nexa_threads_lock();\n";
                 out += "  __nexa_workers.push_back(wp);\n";
-                out += "  return static_cast<int>(__nexa_workers.size()) - 1;\n";
+                out += "  const int idx = static_cast<int>(__nexa_workers.size()) - 1;\n";
+                out += "  __nexa_threads_unlock();\n";
+                out += "  return idx;\n";
                 out += "}\n";
+                // Queued under the table lock, so a join elsewhere cannot free the worker
+                // in between; the worker thread itself never takes that lock.
                 out += "static void __nexa_thread_worker_run(int idx, std::function<void()> fn) {\n";
-                out += "  if (idx < 0 || static_cast<size_t>(idx) >= __nexa_workers.size() || !__nexa_workers[idx]) return;\n";
-                out += "  __nexa_worker& wp = *__nexa_workers[idx];\n";
-                out += "  wp.lock();\n";
-                out += "  wp.jobs.push_back(std::move(fn));\n";
-                out += "  wp.unlock();\n";
-                out += "  wp.wake();\n";
+                out += "  __nexa_threads_lock();\n";
+                out += "  if (idx >= 0 && static_cast<size_t>(idx) < __nexa_workers.size() && __nexa_workers[idx]) {\n";
+                out += "    __nexa_worker& wp = *__nexa_workers[idx];\n";
+                out += "    wp.lock();\n";
+                out += "    wp.jobs.push_back(std::move(fn));\n";
+                out += "    wp.unlock();\n";
+                out += "    wp.wake();\n";
+                out += "  }\n";
+                out += "  __nexa_threads_unlock();\n";
                 out += "}\n";
-                out += "static void __nexa_thread_worker_join(int idx) {\n";
-                out += "  if (idx < 0 || static_cast<size_t>(idx) >= __nexa_workers.size() || !__nexa_workers[idx]) return;\n";
-                out += "  __nexa_worker& wp = *__nexa_workers[idx];\n";
-                out += "  wp.lock();\n";
-                out += "  wp.stop = true;\n";
-                out += "  wp.unlock();\n";
-                out += "  wp.wake();\n";
-                out += "  __nexa_thread_wait(&wp.t);\n";
                 // Freed once stopped, as a joined thread is; run or join on it after does nothing.
-                out += "  delete __nexa_workers[idx];\n";
-                out += "  __nexa_workers[idx] = nullptr;\n";
+                out += "static void __nexa_thread_worker_join(int idx) {\n";
+                out += "  __nexa_worker* w = nullptr;\n";
+                out += "  __nexa_threads_lock();\n";
+                out += "  if (idx >= 0 && static_cast<size_t>(idx) < __nexa_workers.size()) {\n";
+                out += "    w = __nexa_workers[idx];\n";
+                out += "    __nexa_workers[idx] = nullptr;\n";
+                out += "  }\n";
+                out += "  __nexa_threads_unlock();\n";
+                out += "  if (!w) return;\n";
+                out += "  w->lock();\n";
+                out += "  w->stop = true;\n";
+                out += "  w->unlock();\n";
+                out += "  w->wake();\n";
+                out += "  __nexa_thread_wait(&w->t);\n";
+                out += "  delete w;\n";
                 out += "}\n";
             }
         }

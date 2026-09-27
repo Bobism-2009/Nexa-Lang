@@ -1,0 +1,35 @@
+// A let that hides an outer variable of another type, made from that variable:
+// the initializer reads the outer one, with the outer one's type.
+#include <std/io>
+
+struct P { x: int; }
+
+fn apply(p: P, f: fn(P): int): int { return f(p); }
+
+fn label(n: int): string {
+    let n = "#" + n;
+    return n;
+}
+
+fn main() {
+    let xs = [1, 2, 3];
+    if (len(xs) > 0) {
+        let xs = xs.sum();
+        io.println(xs);
+    }
+    let r: Result[int] = ok(5);
+    if (r.ok()) {
+        let r = r.value() * 3;
+        io.println(r);
+    }
+    let flag = true;
+    if (flag) {
+        let flag = f"on={flag}";
+        io.println(flag);
+    }
+    io.println(label(4));
+    let f = fn (n: int): int { let n = n + 1; return n * 2; };
+    io.println(f(3));
+    let n = apply(P { x: 4 }, fn (e: P): int { return e.x * 2; });
+    io.println(n);
+}

@@ -1,0 +1,41 @@
+// Changing a collection while a for-in walks it (the loop walks it as it was when
+// the loop began), structs as map keys, a closure out of a slice or map called
+// straight away, and a parameter that stays a copy while a closure changes the
+// caller's variable.
+#include <std/io>
+
+struct Pt { x: int; y: int; }
+
+fn count_after(xs: []int, g: fn(): void): int {
+    g();
+    return len(xs);
+}
+
+fn main() {
+    let stock: map[string]int;
+    stock["apple"] = 0; stock["banana"] = 4; stock["cherry"] = 0; stock["date"] = 2;
+    for (k, v in stock) { if (v == 0) { stock.remove(k); } }
+    io.println(stock);
+
+    let xs = [1, 2, 3];
+    let seen = 0;
+    for (x in xs) { seen++; if (x < 3) { xs.push(x + 10); } }
+    io.println(seen, " ", xs);
+
+    let at: map[Pt]string;
+    at[Pt { x: 2, y: 1 }] = "b";
+    at[Pt { x: 1, y: 9 }] = "a";
+    at[Pt { x: 2, y: 1 }] += "!";
+    for (k, v in at) { io.println(k.x, ",", k.y, " ", v); }
+
+    let ops: map[string]fn(int): int;
+    ops["dbl"] = fn (x: int): int { return x * 2; };
+    let fs = [fn (x: int): int { return x + 1; }];
+    io.println(ops["dbl"](21), " ", fs[0](4) * 2);
+
+    let local = [1, 2];
+    io.println(count_after(local, fn () { local.push(3); }), " ", len(local));
+
+    io.println(f"{1234567.0:,} {1234.5:,} {-9876543.25:,}");
+    let z = "a\0b";
+}

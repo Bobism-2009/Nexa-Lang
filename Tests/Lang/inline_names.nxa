@@ -1,0 +1,13 @@
+// inline_cpp! names the program's variables and functions as they were written.
+#include <std/io>
+#include <std/inline>
+
+fn square(n: int): int { return n * n; }
+
+fn main() {
+    let total = 20;
+    inline_cpp! {
+        total = square(total) + 1;
+    }
+    io.println(total);
+}

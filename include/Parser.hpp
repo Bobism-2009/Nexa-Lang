@@ -1847,7 +1847,7 @@ private:
             if (peek().type == TokenType::Colon) {
                 throw std::runtime_error("Cannot assign to a slice xs[a:b] at line " + std::to_string(peek().line));
             }
-            AstNode idx = parseExpression();
+            AstNode idx = parseValueExpr();
             if (peek().type == TokenType::Colon) {
                 throw std::runtime_error("Cannot assign to a slice xs[a:b] at line " + std::to_string(peek().line));
             }
@@ -2119,7 +2119,7 @@ private:
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after switch at line " + std::to_string(peek().line));
         }
-        AstNode expr = parseExpression();
+        AstNode expr = parseValueExpr();
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
         }
@@ -2446,7 +2446,9 @@ private:
             }
             return node;
         }
-        AstNode start = parseExpression();
+        // A full expression, so xs[flag ? 1 : 0] reads as an index: the ternary takes
+        // its own ':' and only a ':' left over makes xs[a:b] a slice.
+        AstNode start = parseValueExpr();
         if (match(TokenType::Colon)) {
             AstNode node{AstNode::Type::ExprSlice, "", {}};
             node.children.push_back(std::move(base));
@@ -2485,6 +2487,10 @@ private:
         for (;;) {
             if (match(TokenType::LBracket)) {
                 cur = parseIndexOrSliceOn(std::move(cur));
+                // ops["dbl"](21), fs[0](4): a closure out of a map or slice, called.
+                if (cur.type == AstNode::Type::ExprArrayIndex && peek().type == TokenType::LParen) {
+                    return parsePostfixCalls(std::move(cur));
+                }
                 continue;
             }
             if (peek().type == TokenType::Dot || peek().type == TokenType::Arrow) {
@@ -2903,6 +2909,13 @@ private:
             (peek().type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
              tokens_[pos_ + 1].type == TokenType::LParen)) {
             return applyIndexAndDotPostfix(parseFnCallExpr());
+        }
+        // cfg::limit, ns::Color::Green: a C++ header's value, named the C++ way.
+        if ((peek().type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
+             tokens_[pos_ + 1].type == TokenType::ColonColon) ||
+            (peek().type == TokenType::ColonColon && pos_ + 1 < tokens_.size() &&
+             tokens_[pos_ + 1].type == TokenType::Identifier)) {
+            return applyIndexAndDotPostfix({AstNode::Type::ExprVarRef, parseCppQualifiedName(), {}});
         }
         if (match(TokenType::Identifier)) {
             std::string name = tokens_[pos_ - 1].value;
@@ -5154,6 +5167,12 @@ private:
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
         }
         AstNode job = parseThreadJob();
+        if (peek().type == TokenType::Dot || peek().type == TokenType::Arrow) {
+            throw std::runtime_error(
+                "thread.spawn runs a function call, f(x), not a method call; call the method from a "
+                "function and spawn that: fn run(a: *T) { a.work(); } ... thread.spawn(run(&a)) at line " +
+                std::to_string(peek().line));
+        }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' after thread.spawn(...) at line " + std::to_string(peek().line));
         }

@@ -1,0 +1,45 @@
+// Results used as values: a for over f().value() (the Result is a temporary), a
+// struct with Result fields (compared, too), slice literals that start with err(),
+// and ternaries where the parser used to want parentheses.
+#include <std/io>
+
+struct Box {
+    r: Result[int];
+    rs: []Result[int];
+    m: map[string]Result[int];
+}
+
+fn words(): Result[[]string] { return ok(["alpha", "beta"]); }
+
+fn table(): Result[map[string]string] {
+    let t: map[string]string;
+    t["k"] = "a long enough value that the string lives on the heap";
+    return ok(t);
+}
+
+fn count(rs: []Result[int]): int { return len(rs); }
+
+fn main() {
+    for (w in words().value()) { io.println(w); }
+    for (k, v in table().value()) { io.println(k, "=", len(v)); }
+
+    let a = Box { r: ok(5), rs: [err("x")] };
+    let b: Box;
+    io.println(a.r.value(), " ", len(a.rs), " ", a == a, " ", a == b);
+
+    let rs: []Result[int] = [err("bad"), ok(7)];
+    io.println(rs[1].value(), " ", rs[0].error());
+    rs = [err("y")];
+    io.println(len(rs), " ", count([err("z"), err("w")]), " ", [err("q"), ok(2)][1].value());
+
+    let flag = true;
+    let xs = [10, 20];
+    io.println(xs[flag ? 1 : 0]);
+    let hits: map[string]int;
+    for (i, 3) { hits[i % 2 == 0 ? "even" : "odd"] += 1; }
+    io.println(hits);
+    switch (flag ? 1 : 0) {
+        case 1: io.println("one"); break;
+        default: io.println("other");
+    }
+}

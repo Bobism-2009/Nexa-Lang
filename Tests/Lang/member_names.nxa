@@ -1,0 +1,47 @@
+// Names C++ or the C library already use, as fields, methods, enum variants,
+// functions, globals and struct names; a global a method reads while its struct
+// has a field of the same name; a global and a function sharing a name. Built
+// with --debug too (Tests/debug_flag_cases.sh), which keeps names as written.
+#include <std/io>
+
+let total = 0;
+let log: []string;
+let tag = "A";
+
+struct Opt {
+    template: bool;
+    private: string;
+    total: int;
+
+    fn operator(n: int): int { return n * 3; }
+    fn add(n: int) {
+        total += n;
+        self.total += 1;
+    }
+}
+
+struct class {
+    n: int;
+}
+
+enum Mode { virtual; typename; }
+
+fn atoi(s: string): int { return 7; }
+fn abs(x: int): int { return x + 100; }
+fn tag(): string { return "fn " + tag; }
+
+fn main() {
+    let o = Opt { template: true, private: "k", total: 0 };
+    o.add(5);
+    o.add(7);
+    io.println(o.template, " ", o.private, " ", o.operator(1), " ", total, " ", o.total);
+    let m: enum Mode = Mode.typename;
+    switch (m) {
+        case Mode.virtual: io.println("virtual"); break;
+        case Mode.typename: io.println("typename"); break;
+    }
+    let c = class { n: 3 };
+    log.push("a");
+    let printf = 4;
+    io.println(atoi("3"), " ", abs(-9), " ", c.n, " ", len(log), " ", printf, " ", tag());
+}

@@ -2259,6 +2259,22 @@ int main(int argc, char* argv[]) {
     buf << in.rdbuf();
     std::string source = buf.str();
     in.close();
+#ifdef _WIN32
+    // nul.nxa, con.nxa, com1.nxa: Windows opens the device of that name, whatever
+    // the extension, and the program reads as empty -- "No fn main() found".
+    if (source.empty()) {
+        std::string stem = std::filesystem::path(inputPath).stem().string();
+        for (char& ch : stem) ch = (char)std::tolower((unsigned char)ch);
+        static const std::set<std::string> devices = {
+            "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7",
+            "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"};
+        if (devices.count(stem)) {
+            std::cerr << "[Nexa] Error: " << inputPath << ": '" << stem
+                      << "' names a Windows device, so a file called that cannot be read; rename the file\n";
+            return 1;
+        }
+    }
+#endif
 
     try {
         std::cout << "[Nexa] Parsing...\n";
@@ -2306,7 +2322,9 @@ int main(int argc, char* argv[]) {
         std::string absCppPath = cppPath.empty()
             ? cppPath
             : std::filesystem::absolute(std::filesystem::path(cppPath)).string();
-        nexa::Transpiler transpiler(ast, modules, preserveNames || isLib, isLib, cppTarget,
+        // inline_cpp! names the program's variables and functions as written, so a program
+        // with any keeps them (it changes the C++ names only; the binary is the same).
+        nexa::Transpiler transpiler(ast, modules, preserveNames || isLib || modules.hasInlineCpp(), isLib, cppTarget,
                                     debugBuild, absCppPath);  // library: preserve + export C names
         // Name the source file the way parse errors do -- a transpile-stage
         // complaint is still about the program the user handed us.

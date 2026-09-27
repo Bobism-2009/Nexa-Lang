@@ -22,6 +22,23 @@ emitted at translation-unit scope with no extra wrapping braces, so you can past
 C++ functions, globals, or int main() as needed. The C++ compiler (Clang) must
 accept the pasted code.
 
+Nexa names
+----------
+The C++ in a block sees the program's variables, parameters and functions by the
+names they were written with:
+
+  fn square(n: int): int { return n * n; }
+  fn main() {
+    let total = 20;
+    inline_cpp! { total = square(total) + 1; }
+    io.println(total);   // 401
+  }
+
+A program with inline_cpp! is built as --preserve-names builds are (the C++ names
+change, the program does not). Two cases get a different C++ name: a name C++ or
+the C library already uses (a variable `class` is class_, a function `atoi` is
+atoi_), and a let that hides another variable of the same name in scope (x_2).
+
 #include hoisting
 -----------------
 Any line in the block that starts with #include (after leading whitespace) is

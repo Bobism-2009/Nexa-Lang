@@ -118,7 +118,7 @@ fn main() {
 # that, io.println would pick "%d" for a std::string and the user would get a
 # C++ diagnostic about a file they never wrote.
 expect_source "gfx.typed prints as a string" \
-    'printf\("%s\\n", __nexa_gfx_typed\(\)\.c_str\(\)\)' \
+    '__nexa_s = __nexa_gfx_typed\(\); fwrite\(__nexa_s\.data\(\)' \
     '#include <std/io>
 #include <std/gfx>
 fn main() {

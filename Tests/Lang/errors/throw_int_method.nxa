@@ -1,0 +1,11 @@
+// A method's int is as known as a variable's: refused, as throw 5; is.
+#include <std/io>
+
+fn main() {
+    let s = "abc";
+    try {
+        throw s.len();
+    } catch (e) {
+        io.println(e);
+    }
+}
