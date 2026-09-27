@@ -1725,77 +1725,132 @@ public:
             out += "}\n";
         }
         if (hasThread() && usage.thread) {
-            out += "#include <thread>\n";
+            // Threads on the OS's own calls -- CreateThread / pthread_create, SRW locks /
+            // pthread mutexes -- rather than std::thread, std::mutex and
+            // std::condition_variable. Those wrap the same calls, but their prebuilt code
+            // throws system_error, which linked the whole C++ exception runtime into every
+            // threaded program (~50KB). Same threads, same default stack, same blocking.
+            // A record stays put for the program's life: a handle is an index into the list.
             out += "#include <vector>\n";
             out += "#include <functional>\n";
-            out += "static std::vector<std::thread> __nexa_threads;\n";
-            // A program that only ever spawns a call -- thread.spawn(f(x)) --
-            // reaches the lambda form below and never this one.
-            out += "[[maybe_unused]] static int __nexa_thread_spawn(void (*fn)()) {\n";
-            out += "  __nexa_threads.emplace_back(fn);\n";
+            out += "#ifdef _WIN32\n";
+            out += "#ifndef WIN32_LEAN_AND_MEAN\n";
+            out += "#define WIN32_LEAN_AND_MEAN\n";
+            out += "#endif\n";
+            out += "#include <windows.h>\n";
+            out += "#else\n";
+            out += "#include <pthread.h>\n";
+            out += "#endif\n";
+            out += "struct __nexa_thread_rec {\n";
+            out += "  std::function<void()> fn;\n";
+            out += "#ifdef _WIN32\n";
+            out += "  HANDLE h = nullptr;\n";
+            out += "#else\n";
+            out += "  pthread_t h{};\n";
+            out += "#endif\n";
+            out += "  bool started = false;\n";
+            out += "  bool joined = false;\n";
+            out += "};\n";
+            out += "#ifdef _WIN32\n";
+            out += "static DWORD WINAPI __nexa_thread_entry(LPVOID p) { static_cast<__nexa_thread_rec*>(p)->fn(); return 0; }\n";
+            out += "#else\n";
+            out += "static void* __nexa_thread_entry(void* p) { static_cast<__nexa_thread_rec*>(p)->fn(); return nullptr; }\n";
+            out += "#endif\n";
+            out += "static bool __nexa_thread_start(__nexa_thread_rec* r) {\n";
+            out += "#ifdef _WIN32\n";
+            out += "  r->h = CreateThread(nullptr, 0, __nexa_thread_entry, r, 0, nullptr);\n";
+            out += "  r->started = r->h != nullptr;\n";
+            out += "#else\n";
+            out += "  r->started = pthread_create(&r->h, nullptr, __nexa_thread_entry, r) == 0;\n";
+            out += "#endif\n";
+            out += "  return r->started;\n";
+            out += "}\n";
+            out += "static void __nexa_thread_wait(__nexa_thread_rec* r) {\n";
+            out += "  if (!r->started || r->joined) return;\n";
+            out += "#ifdef _WIN32\n";
+            out += "  WaitForSingleObject(r->h, INFINITE);\n";
+            out += "  CloseHandle(r->h);\n";
+            out += "#else\n";
+            out += "  pthread_join(r->h, nullptr);\n";
+            out += "#endif\n";
+            out += "  r->joined = true;\n";
+            out += "}\n";
+            out += "static std::vector<__nexa_thread_rec*> __nexa_threads;\n";
+            out += "static int __nexa_thread_spawn_rec(std::function<void()> fn) {\n";
+            out += "  __nexa_thread_rec* r = new __nexa_thread_rec();\n";
+            out += "  r->fn = std::move(fn);\n";
+            out += "  __nexa_threads.push_back(r);\n";
+            out += "  __nexa_thread_start(r);\n";
             out += "  return static_cast<int>(__nexa_threads.size()) - 1;\n";
             out += "}\n";
+            // A program that only ever spawns a call -- thread.spawn(f(x)) --
+            // reaches the lambda form below and never this one.
+            out += "[[maybe_unused]] static int __nexa_thread_spawn(void (*fn)()) { return __nexa_thread_spawn_rec(fn); }\n";
             if (usage.threadLambda) {
-                out += "static int __nexa_thread_spawn_fn(std::function<void()> fn) {\n";
-                out += "  __nexa_threads.emplace_back(std::move(fn));\n";
-                out += "  return static_cast<int>(__nexa_threads.size()) - 1;\n";
-                out += "}\n";
+                out += "static int __nexa_thread_spawn_fn(std::function<void()> fn) { return __nexa_thread_spawn_rec(std::move(fn)); }\n";
             }
             out += "static void __nexa_thread_join(int idx) {\n";
-            out += "  if (idx >= 0 && static_cast<size_t>(idx) < __nexa_threads.size() && __nexa_threads[idx].joinable()) {\n";
-            out += "    __nexa_threads[idx].join();\n";
-            out += "  }\n";
+            out += "  if (idx >= 0 && static_cast<size_t>(idx) < __nexa_threads.size()) __nexa_thread_wait(__nexa_threads[idx]);\n";
             out += "}\n";
             if (usage.threadWorker) {
                 out += "#include <deque>\n";
-                out += "#include <mutex>\n";
-                out += "#include <condition_variable>\n";
-                out += "#include <memory>\n";
                 out += "struct __nexa_worker {\n";
-                out += "  std::thread t;\n";
-                out += "  std::mutex mu;\n";
-                out += "  std::condition_variable cv;\n";
+                out += "  __nexa_thread_rec t;\n";
+                out += "#ifdef _WIN32\n";
+                out += "  SRWLOCK mu = SRWLOCK_INIT;\n";
+                out += "  CONDITION_VARIABLE cv = CONDITION_VARIABLE_INIT;\n";
+                out += "#else\n";
+                out += "  pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;\n";
+                out += "  pthread_cond_t cv = PTHREAD_COND_INITIALIZER;\n";
+                out += "#endif\n";
                 out += "  std::deque<std::function<void()>> jobs;\n";
                 out += "  bool stop = false;\n";
+                out += "#ifdef _WIN32\n";
+                out += "  void lock() { AcquireSRWLockExclusive(&mu); }\n";
+                out += "  void unlock() { ReleaseSRWLockExclusive(&mu); }\n";
+                out += "  void wait() { SleepConditionVariableSRW(&cv, &mu, INFINITE, 0); }\n";
+                out += "  void wake() { WakeConditionVariable(&cv); }\n";
+                out += "#else\n";
+                out += "  void lock() { pthread_mutex_lock(&mu); }\n";
+                out += "  void unlock() { pthread_mutex_unlock(&mu); }\n";
+                out += "  void wait() { pthread_cond_wait(&cv, &mu); }\n";
+                out += "  void wake() { pthread_cond_signal(&cv); }\n";
+                out += "#endif\n";
                 out += "};\n";
-                out += "static std::vector<std::unique_ptr<__nexa_worker>> __nexa_workers;\n";
+                out += "static std::vector<__nexa_worker*> __nexa_workers;\n";
                 out += "static int __nexa_thread_worker_create() {\n";
-                out += "  auto w = std::make_unique<__nexa_worker>();\n";
-                out += "  __nexa_worker* wp = w.get();\n";
-                out += "  wp->t = std::thread([wp]() {\n";
+                out += "  __nexa_worker* wp = new __nexa_worker();\n";
+                out += "  wp->t.fn = [wp]() {\n";
                 out += "    while (true) {\n";
-                out += "      std::function<void()> job;\n";
-                out += "      {\n";
-                out += "        std::unique_lock<std::mutex> lock(wp->mu);\n";
-                out += "        wp->cv.wait(lock, [&]{ return wp->stop || !wp->jobs.empty(); });\n";
-                out += "        if (wp->stop && wp->jobs.empty()) return;\n";
-                out += "        job = std::move(wp->jobs.front());\n";
-                out += "        wp->jobs.pop_front();\n";
-                out += "      }\n";
+                out += "      wp->lock();\n";
+                out += "      while (!wp->stop && wp->jobs.empty()) wp->wait();\n";
+                out += "      if (wp->stop && wp->jobs.empty()) { wp->unlock(); return; }\n";
+                out += "      std::function<void()> job = std::move(wp->jobs.front());\n";
+                out += "      wp->jobs.pop_front();\n";
+                out += "      wp->unlock();\n";
                 out += "      if (job) job();\n";
                 out += "    }\n";
-                out += "  });\n";
-                out += "  __nexa_workers.push_back(std::move(w));\n";
+                out += "  };\n";
+                out += "  __nexa_thread_start(&wp->t);\n";
+                out += "  __nexa_workers.push_back(wp);\n";
                 out += "  return static_cast<int>(__nexa_workers.size()) - 1;\n";
                 out += "}\n";
                 out += "static void __nexa_thread_worker_run(int idx, std::function<void()> fn) {\n";
                 out += "  if (idx < 0 || static_cast<size_t>(idx) >= __nexa_workers.size()) return;\n";
-                out += "  auto& wp = *__nexa_workers[idx];\n";
-                out += "  {\n";
-                out += "    std::lock_guard<std::mutex> lock(wp.mu);\n";
-                out += "    wp.jobs.push_back(std::move(fn));\n";
-                out += "  }\n";
-                out += "  wp.cv.notify_one();\n";
+                out += "  __nexa_worker& wp = *__nexa_workers[idx];\n";
+                out += "  wp.lock();\n";
+                out += "  wp.jobs.push_back(std::move(fn));\n";
+                out += "  wp.unlock();\n";
+                out += "  wp.wake();\n";
                 out += "}\n";
                 out += "static void __nexa_thread_worker_join(int idx) {\n";
                 out += "  if (idx < 0 || static_cast<size_t>(idx) >= __nexa_workers.size()) return;\n";
-                out += "  auto& wp = *__nexa_workers[idx];\n";
-                out += "  {\n";
-                out += "    std::lock_guard<std::mutex> lock(wp.mu);\n";
-                out += "    wp.stop = true;\n";
-                out += "  }\n";
-                out += "  wp.cv.notify_one();\n";
-                out += "  if (wp.t.joinable()) wp.t.join();\n";
+                out += "  __nexa_worker& wp = *__nexa_workers[idx];\n";
+                out += "  wp.lock();\n";
+                out += "  wp.stop = true;\n";
+                out += "  wp.unlock();\n";
+                out += "  wp.wake();\n";
+                out += "  __nexa_thread_wait(&wp.t);\n";
                 out += "}\n";
             }
         }

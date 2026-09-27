@@ -1091,7 +1091,8 @@ static bool nexaWriteWasmHtml(const std::filesystem::path& htmlPath,
 // Linux has the same shape with libstdc++ (138KB against 14KB), closed the same way through
 // its own hooks. Each half is guarded by the library it was measured on (llvm-mingw's libc++,
 // libstdc++ off Windows); any other gets only the to_string stand-in.
-static const char* kNexaSlimRuntime = R"NEXASLIM(#include <cstdio>
+static const char* kNexaSlimRuntime = R"NEXASLIM(#include <charconv>
+#include <cstdio>
 #include <cstdlib>
 #include <new>
 #include <string>
@@ -1115,6 +1116,7 @@ _LIBCPP_BEGIN_NAMESPACE_STD
 }
 _LIBCPP_END_NAMESPACE_STD
 template class std::basic_string<char>;
+template class std::basic_string<wchar_t>;  // WinHTTP and the file APIs take wide text
 // A function-local static is initialised under __cxa_guard_acquire, whose failure path in
 // libc++abi reports through fprintf and the exception runtime. The same protocol without it:
 // the guard's first byte says done (the Itanium layout the compiler's own fast path reads),
@@ -1190,7 +1192,18 @@ __NEXA_W void __throw_underflow_error(const char* __s) { __nexa_cxx_fail(__s); }
 __NEXA_W void __throw_system_error(int) { __nexa_cxx_fail("system error"); }
 __NEXA_W void __throw_bad_function_call() { __nexa_cxx_fail("bad function call"); }
 }
-template class std::basic_string<char>;
+// libstdc++'s own prebuilt string code stays (it is faster than a copy compiled here: 23%
+// on string building). It was built with exceptions, so its cleanup landing pads name
+// the unwinder and the personality routine; every throw above aborts, so those pads can
+// never run, and these stand-ins keep the linker from bringing the real ones.
+extern "C" {
+__NEXA_W void* __cxa_begin_catch(void*) noexcept { std::abort(); }
+__NEXA_W void __cxa_end_catch() { std::abort(); }
+__NEXA_W void __cxa_rethrow() { std::abort(); }
+__NEXA_W void _Unwind_Resume(void*) { std::abort(); }
+__NEXA_W int __gxx_personality_v0(int, int, unsigned long long, void*, void*) { std::abort(); }
+__NEXA_W const void* _ZTIN10__cxxabiv115__forced_unwindE[2] = {nullptr, nullptr};
+}
 // A function-local static is initialised under __cxa_guard_acquire, whose error path in
 // libstdc++ throws. The same protocol without it: the first byte of the guard says done,
 // and one recursive lock (as libstdc++'s own slow path uses) serialises first runs, so a
@@ -1218,24 +1231,20 @@ extern "C" __NEXA_W void __cxa_guard_abort(long long*) { pthread_mutex_unlock(&_
 #endif
 #undef __NEXA_W
 #endif
-template <class __T> static std::string __nexa_to_string_u(__T __u, bool __neg) {
+#if !defined(__GLIBCXX__)
+// Integers through std::to_chars: header-only, cannot throw, and the same table-driven
+// conversion std::to_string itself uses, so this is no slower.
+template <class __T> static std::string __nexa_to_string_i(__T __v) {
     char __b[24];
-    char* __e = __b + sizeof(__b);
-    char* __p = __e;
-    do { *--__p = (char)('0' + (int)(__u % 10)); __u /= 10; } while (__u);
-    if (__neg) *--__p = '-';
-    return std::string(__p, __e);
+    const std::to_chars_result __r = std::to_chars(__b, __b + sizeof(__b), __v);
+    return std::string(__b, __r.ptr);
 }
-template <class __T> static std::string __nexa_to_string_s(__T __v) {
-    const unsigned long long __u = __v < 0 ? 0ull - (unsigned long long)__v : (unsigned long long)__v;
-    return __nexa_to_string_u(__u, __v < 0);
-}
-[[maybe_unused]] static std::string __nexa_to_string(int __v) { return __nexa_to_string_s(__v); }
-[[maybe_unused]] static std::string __nexa_to_string(long __v) { return __nexa_to_string_s(__v); }
-[[maybe_unused]] static std::string __nexa_to_string(long long __v) { return __nexa_to_string_s(__v); }
-[[maybe_unused]] static std::string __nexa_to_string(unsigned __v) { return __nexa_to_string_u(__v, false); }
-[[maybe_unused]] static std::string __nexa_to_string(unsigned long __v) { return __nexa_to_string_u(__v, false); }
-[[maybe_unused]] static std::string __nexa_to_string(unsigned long long __v) { return __nexa_to_string_u(__v, false); }
+[[maybe_unused]] static std::string __nexa_to_string(int __v) { return __nexa_to_string_i(__v); }
+[[maybe_unused]] static std::string __nexa_to_string(long __v) { return __nexa_to_string_i(__v); }
+[[maybe_unused]] static std::string __nexa_to_string(long long __v) { return __nexa_to_string_i(__v); }
+[[maybe_unused]] static std::string __nexa_to_string(unsigned __v) { return __nexa_to_string_i(__v); }
+[[maybe_unused]] static std::string __nexa_to_string(unsigned long __v) { return __nexa_to_string_i(__v); }
+[[maybe_unused]] static std::string __nexa_to_string(unsigned long long __v) { return __nexa_to_string_i(__v); }
 [[maybe_unused]] static std::string __nexa_to_string(long double __v) {
     const int __n = std::snprintf(nullptr, 0, "%Lf", __v);
     std::string __s(__n > 0 ? (size_t)__n : 0, '\0');
@@ -1249,6 +1258,7 @@ template <class __T> static std::string __nexa_to_string_s(__T __v) {
     return __s;
 }
 [[maybe_unused]] static std::string __nexa_to_string(float __v) { return __nexa_to_string((double)__v); }
+#endif
 )NEXASLIM";
 
 // std::to_string( -> __nexa_to_string( in generated C++, outside string and char literals
@@ -2308,7 +2318,11 @@ int main(int argc, char* argv[]) {
         if (noExceptions && !sourceOnly && !debugBuild && !isLib && !buildWasm && !buildTarget &&
             (cppTarget == nexa::CppTarget::Windows || cppTarget == nexa::CppTarget::Linux) &&
             std::getenv("NEXA_NO_SLIM") == nullptr) {
-            cpp = std::string(kNexaSlimRuntime) + nexaRewriteToString(cpp);
+            // std::to_string is rewritten only on Windows, where libc++ keeps it in the
+            // prebuilt object the slimming avoids. libstdc++'s is header code already, and a
+            // wrapper around it measured 14% slower on string building (it was outlined).
+            cpp = std::string(kNexaSlimRuntime) +
+                  (cppTarget == nexa::CppTarget::Windows ? nexaRewriteToString(cpp) : cpp);
         }
 
         std::ofstream out(cppPath);
