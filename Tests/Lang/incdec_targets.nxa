@@ -1,0 +1,29 @@
+// ++ and -- on an element, a field, a map entry and through a pointer, the
+// same as += 1 and -= 1 there.
+#include <std/io>
+
+struct Counter {
+    n: int;
+
+    fn tick() { self.n++; }
+}
+
+fn main() {
+    let xs = [1, 2, 3];
+    xs[0]++;
+    xs[2]--;
+    let c = Counter { n: 5 };
+    c.n++;
+    c.tick();
+    let m: map[string]int;
+    m["seen"]++;
+    m["seen"]++;
+    let p: *Counter = &c;
+    p->n--;
+    let cs = [Counter { n: 1 }];
+    cs[0].n++;
+    io.println(xs);
+    io.println(c.n);
+    io.println(m["seen"]);
+    io.println(cs[0].n);
+}

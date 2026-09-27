@@ -98,6 +98,8 @@ struct AstNode {
     std::string initValue;       // for Variable: literal initializer value
     bool initIsInt = false;     // for Variable: true = int, false = string
     bool initFromReadln = false; // for Variable: true = io.readln()
+    bool typeFromFields = false; // for Variable: no type written and the value reads a field;
+                                 // the semantic pass types it from the struct declarations
     bool initFromDllLoad = false; // for Variable: true = dll.load("path")
     bool initFromArray = false;   // for Variable: true = array literal
     bool initFromFileRead = false; // for Variable: true = file.read()
@@ -318,7 +320,7 @@ public:
                 ast.push_back(std::move(node));
                 if (peek().type == TokenType::Semicolon) advance();
             } else {
-                throw std::runtime_error("Unexpected token at line " + std::to_string(t.line));
+                throw std::runtime_error(unexpectedToken(t));
             }
             for (size_t i = stampFrom; i < ast.size(); ++i) stampSourceLoc(ast[i], stmtLine);
         }
@@ -875,6 +877,31 @@ private:
 
     AstNode parseExprStatement() {
         AstNode expr = parseExpression();
+        // An assignment to something that is not a plain name -- (*xs)[i] = v,
+        // (*shop)[k] += 1, (*p).x = 2: the target was read as an expression.
+        if (expr.type == AstNode::Type::ExprArrayIndex || expr.type == AstNode::Type::ExprMember ||
+            expr.type == AstNode::Type::ExprDeref) {
+            static const std::pair<TokenType, const char*> ops[] = {
+                {TokenType::Assign, "="}, {TokenType::PlusAssign, "+="}, {TokenType::MinusAssign, "-="},
+                {TokenType::StarAssign, "*="}, {TokenType::SlashAssign, "/="}, {TokenType::PercentAssign, "%="},
+                {TokenType::BitAndAssign, "&="}, {TokenType::BitOrAssign, "|="}, {TokenType::BitXorAssign, "^="},
+                {TokenType::ShlAssign, "<<="}, {TokenType::ShrAssign, ">>="},
+                {TokenType::PlusPlus, "++"}, {TokenType::MinusMinus, "--"},
+            };
+            for (const auto& op : ops) {
+                if (peek().type != op.first) continue;
+                advance();
+                std::string o = op.second;
+                AstNode value = incDecOrValue(o);
+                if (!match(TokenType::Semicolon)) {
+                    throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
+                }
+                AstNode assign{AstNode::Type::AssnMember, o, {}};
+                assign.children.push_back(std::move(expr));
+                assign.children.push_back(std::move(value));
+                return assign;
+            }
+        }
         if (!match(TokenType::Semicolon)) {
             throw std::runtime_error("Expected ';' after expression at line " + std::to_string(peek().line));
         }
@@ -928,10 +955,14 @@ private:
             op = "<<=";
         } else if (match(TokenType::ShrAssign)) {
             op = ">>=";
+        } else if (peek().type == TokenType::PlusPlus || peek().type == TokenType::MinusMinus) {
+            op = peek().type == TokenType::PlusPlus ? "++" : "--";
+            advance();
         } else {
             throw std::runtime_error("Expected '=' or compound assignment at line " + std::to_string(peek().line));
         }
-        AstNode expr = parseValueExpr();
+        // p.x++ and xs[i]-- are += 1 and -= 1, as they are on a variable
+        AstNode expr = incDecOrValue(op);
         if (!match(TokenType::Semicolon)) {
             throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
         }
@@ -1416,7 +1447,7 @@ private:
                 throw std::runtime_error("Unexpected end of file inside block (missing '}') at line " +
                                          std::to_string(t.line));
             } else {
-                throw std::runtime_error("Unexpected token at line " + std::to_string(t.line));
+                throw std::runtime_error(unexpectedToken(t));
             }
             for (size_t i = before; i < stmts.size(); ++i) stampSourceLoc(stmts[i], stmtLine);
             if (singleStatement && stmts.size() > before) break;
@@ -1850,10 +1881,14 @@ private:
             else if (match(TokenType::BitXorAssign)) op = "^=";
             else if (match(TokenType::ShlAssign)) op = "<<=";
             else if (match(TokenType::ShrAssign)) op = ">>=";
+            else if (peek().type == TokenType::PlusPlus || peek().type == TokenType::MinusMinus) {
+                op = peek().type == TokenType::PlusPlus ? "++" : "--";
+                advance();
+            }
             else {
                 throw std::runtime_error("Expected '=' or compound assignment at line " + std::to_string(peek().line));
             }
-            AstNode expr = parseValueExpr();
+            AstNode expr = incDecOrValue(op);
             if (!match(TokenType::Semicolon)) {
                 throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
             }
@@ -1871,10 +1906,14 @@ private:
         else if (match(TokenType::BitXorAssign)) idxOp = "^=";
         else if (match(TokenType::ShlAssign)) idxOp = "<<=";
         else if (match(TokenType::ShrAssign)) idxOp = ">>=";
+        else if (peek().type == TokenType::PlusPlus || peek().type == TokenType::MinusMinus) {
+            idxOp = peek().type == TokenType::PlusPlus ? "++" : "--";
+            advance();
+        }
         else {
             throw std::runtime_error("Expected '=' or compound assignment at line " + std::to_string(peek().line));
         }
-        AstNode expr = parseValueExpr();
+        AstNode expr = incDecOrValue(idxOp);
         if (!match(TokenType::Semicolon)) {
             throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
         }
@@ -2283,7 +2322,7 @@ private:
             } else if (t.type == TokenType::Continue) {
                 stmts.push_back(parseContinue());
             } else if (t.type != TokenType::Eof) {
-                throw std::runtime_error("Unexpected token at line " + std::to_string(t.line));
+                throw std::runtime_error(unexpectedToken(t));
             } else {
                 break;
             }
@@ -2310,6 +2349,15 @@ private:
         return {AstNode::Type::While, "", {cond, block}};
     }
 
+    // A statement that starts with a token no statement starts with; a hint
+    // where the token says what was meant.
+    static std::string unexpectedToken(const Token& t) {
+        if (t.type == TokenType::Const) {
+            return "a constant is written with let: let const NAME = value; at line " + std::to_string(t.line);
+        }
+        return "Unexpected token at line " + std::to_string(t.line);
+    }
+
     AstNode parseFor() {
         size_t line = peek().line;
         if (!match(TokenType::For)) {
@@ -2320,6 +2368,12 @@ private:
         }
         const Token& nameTok = peek();
         if (nameTok.type != TokenType::Identifier) {
+            // for (;;) and for (let i = 0; ...) are C's; say what Nexa's are
+            if (nameTok.type == TokenType::Semicolon || nameTok.type == TokenType::Let) {
+                throw std::runtime_error("Nexa's loops are for (i, n) (i from 0 to n - 1), for (x in xs) and "
+                                         "while (cond); for (;;) is while (true) at line " +
+                                         std::to_string(nameTok.line));
+            }
             throw std::runtime_error("Expected loop variable name at line " + std::to_string(nameTok.line));
         }
         advance();
@@ -2401,6 +2455,16 @@ private:
         indexed.children.push_back(std::move(base));
         indexed.children.push_back(std::move(start));
         return indexed;
+    }
+
+    // After an assignment target: "++"/"--" (already consumed) become += 1 /
+    // -= 1 with no right-hand side to read; anything else reads the value.
+    AstNode incDecOrValue(std::string& op) {
+        if (op == "++" || op == "--") {
+            op = op == "++" ? "+=" : "-=";
+            return {AstNode::Type::ExprIntLiteral, "1", {}};
+        }
+        return parseValueExpr();
     }
 
     AstNode applyIndexAndDotPostfix(AstNode cur) {
@@ -2892,7 +2956,7 @@ private:
             argTok.type == TokenType::Star || argTok.type == TokenType::BitAnd ||
             argTok.type == TokenType::Minus || argTok.type == TokenType::Not ||
             argTok.type == TokenType::BitNot || argTok.type == TokenType::New ||
-            argTok.type == TokenType::Sizeof) {
+            argTok.type == TokenType::Sizeof || argTok.type == TokenType::LBracket) {
             result.children.push_back(parseValueExpr());
             while (match(TokenType::Comma)) {
                 result.children.push_back(parseValueExpr());
@@ -4952,6 +5016,10 @@ private:
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
         }
+        if (peek().type == TokenType::RParen) {
+            throw std::runtime_error("time.seconds(n) takes how many seconds: time.sleep(time.seconds(1)) at line " +
+                                     std::to_string(peek().line));
+        }
         AstNode arg = parseValueExpr();
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
@@ -4975,6 +5043,10 @@ private:
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
+        }
+        if (peek().type == TokenType::RParen) {
+            throw std::runtime_error("time.milliseconds(n) takes how many milliseconds: time.sleep(time.milliseconds(1)) at line " +
+                                     std::to_string(peek().line));
         }
         AstNode arg = parseValueExpr();
         if (!match(TokenType::RParen)) {
@@ -5293,10 +5365,12 @@ private:
                 node.initIsInt = !exprProducesString(b);
             }
         }
+        // `let n = p.x`: the parser does not track what type each field has, so
+        // the semantic pass, which does, gives the variable its type.
         if (declType.empty() && !node.children.empty() && astHasMemberAccess(node.children.back()) &&
             node.children.back().type != AstNode::Type::ExprStructLit &&
             node.children.back().type != AstNode::Type::ExprLambda) {
-            throw std::runtime_error("let with '.' access requires an explicit type (e.g. let x: int = s.field or let x: enum E = E.A) at line " + std::to_string(line));
+            node.typeFromFields = true;
         }
         if (!declType.empty()) {
             node.declType = declType;

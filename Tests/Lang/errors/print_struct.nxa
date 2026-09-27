@@ -1,0 +1,11 @@
+// A struct has no printed form of its own.
+#include <std/io>
+
+struct Point {
+    x: int;
+}
+
+fn main() {
+    let p = Point { x: 1 };
+    io.println(p);
+}

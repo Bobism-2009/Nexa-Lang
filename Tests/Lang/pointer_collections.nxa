@@ -1,0 +1,34 @@
+// A slice or map changed through a pointer: its elements assigned with
+// (*p)[i] = v, its methods called with p.method().
+#include <std/io>
+
+fn swap_ends(xs: *[]int) {
+    let first = (*xs)[0];
+    (*xs)[0] = (*xs)[len(*xs) - 1];
+    (*xs)[len(*xs) - 1] = first;
+    (*xs)[1] += 10;
+}
+
+fn fill(out: *[]string, n: int) {
+    for (i, n) { out.push(f"item{i}"); }
+    out.sort_desc();
+}
+
+fn tally(counts: *map[string]int, word: string) {
+    if (!counts.has(word)) { (*counts)[word] = 0; }
+    (*counts)[word]++;
+}
+
+fn main() {
+    let xs = [1, 2, 3];
+    swap_ends(&xs);
+    io.println(xs);
+    let names: []string;
+    fill(&names, 3);
+    io.println(names);
+    let p = &names;
+    io.println(p.contains("item1"));
+    let counts: map[string]int;
+    for (w in ["a", "b", "a"]) { tally(&counts, w); }
+    io.println(counts);
+}

@@ -1,0 +1,18 @@
+// for (c in s) walks the characters of a string.
+#include <std/io>
+
+fn vowels(s: string): int {
+    let n = 0;
+    for (c in s) {
+        if (c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u') { n++; }
+    }
+    return n;
+}
+
+fn main() {
+    io.println(vowels("education"));
+    let out = "";
+    for (c in "Hello") { out = c + out; }
+    io.println(out);
+    for (c in "ab") { io.println(c); }
+}

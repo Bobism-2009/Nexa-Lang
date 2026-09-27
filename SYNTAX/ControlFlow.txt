@@ -83,6 +83,7 @@ SWITCH
 LOOPS
   for (i, n) { ... }       - loop i from 0 to n-1
   for (x in arr) { ... }   - iterate each element of a slice
+  for (c in s) { ... }     - iterate each character (a char) of a string
   for (k, v in m) { ... }  - iterate map keys and values (std::map order)
   while (cond) { ... }
   while (true) { ... }   - infinite loop

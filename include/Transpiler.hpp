@@ -436,6 +436,10 @@ public:
         }
         std::string moduleCppIncludes = modules_.getCppIncludes(cppUsage);
         out << moduleCppIncludes;
+        // Where __nexa_show goes if a slice or map is printed; known only once
+        // the program has been written out, so the line is filled in (or
+        // dropped) then.
+        out << kShowMarker << "\n";
         std::vector<std::string> inlineCppHoisted;
         std::set<std::string> inlineCppSeen;
         for (const AstNode& node : ast_) walkAstForInlineCppIncludes(node, inlineCppHoisted, inlineCppSeen);
@@ -1265,6 +1269,10 @@ public:
         // second goes. On a build where only one branch survives, only one copy
         // was ever there to keep.
         std::string src = dedupUnconditionalIncludes(stripInactivePlatformGuards(out.str(), target_));
+        {
+            size_t at = src.find(kShowMarker);
+            if (at != std::string::npos) src.replace(at, std::string(kShowMarker).size(), needShow_ ? kShowRuntime : "");
+        }
         if (cppUsage_.gfx && cppUsage_.gfxImage &&
             (target_ == CppTarget::Linux || target_ == CppTarget::Wasm)) {
             // ~8,000 lines of stb, so only a program that can reach the decoder gets it.
@@ -2653,6 +2661,12 @@ private:
             std::string recvBare = recvT;
             if (isPointerType(recvBare)) recvBare = pointerPointeeType(recvBare);
             std::string recv = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+            // Through a pointer, out.push(x) calls the method on what it points at,
+            // as p.method() does for a struct.
+            if (isPointerType(recvT) && (nexaIsSliceType(recvBare) || nexaIsMapType(recvBare) || recvBare == "json" ||
+                                         nexaIsResultType(recvBare) || recvBare == "string")) {
+                recv = "(*" + recv + ")";
+            }
             if (nexaIsResultType(recvBare)) {
                 if (e.value == "ok" || e.value == "value" || e.value == "error") {
                     if (e.children.size() != 1) throw std::runtime_error(e.value + " expects no arguments");
@@ -2827,7 +2841,12 @@ private:
             s += ")";
             if (!modules_.hasCppHeader() && !isStructDeclType(recvBare) && !nexaIsSliceType(recvBare) &&
                 !nexaIsMapType(recvBare)) {
-                throw std::runtime_error("Unknown method '." + e.value + "()'");
+                const size_t at = e.line ? e.line : e.children[0].line;
+                std::string what = recvBare.empty() ? std::string() : " on a " + semTypeLabel(recvBare);
+                std::string hint;
+                if (e.value == "to_int") hint = "; to read a number from text, use io.to_int(s)";
+                throw std::runtime_error("Unknown method '." + e.value + "()'" + what + hint +
+                                         (at ? " at line " + std::to_string(at) : std::string()));
             }
             return s;
         }
@@ -3234,6 +3253,47 @@ private:
         return std::string();
     }
 
+    // A type name that is no struct, enum or built-in type. The parser reads any
+    // unknown name as a struct -- a C/C++ header's types are written that way --
+    // so only a program with no header or inline C++ (see semNameChecks_) can
+    // be told the name means nothing. Common names from other languages get the
+    // one Nexa uses.
+    void semCheckTypeNames() {
+        // std/http's types are structs the runtime declares
+        std::set<std::string> structs = {"HttpRequest", "HttpResponse", "HttpServer"};
+        for (const AstNode& n : ast_) {
+            if (n.type == AstNode::Type::StructDef) structs.insert(n.value);
+        }
+        static const std::map<std::string, std::string> nexaName = {
+            {"i8", "char"}, {"i16", "short"}, {"i32", "int"}, {"i64", "long"}, {"int32", "int"}, {"int64", "long"},
+            {"u8", "unsigned char"}, {"u16", "unsigned short"}, {"u32", "unsigned int"}, {"u64", "unsigned long"},
+            {"uint", "unsigned int"}, {"uint32", "unsigned int"}, {"uint64", "unsigned long"}, {"byte", "unsigned char"},
+            {"usize", "size_t"}, {"isize", "long"}, {"f32", "float"}, {"f64", "float"}, {"double", "float"},
+            {"str", "string"}, {"String", "string"}, {"boolean", "bool"}, {"Bool", "bool"}, {"Int", "int"},
+        };
+        auto check = [&](const std::string& t, const AstNode& at) {
+            for (size_t p = t.find("struct:"); p != std::string::npos; p = t.find("struct:", p + 1)) {
+                size_t b = p + 7, e = b;
+                while (e < t.size() && (std::isalnum((unsigned char)t[e]) || t[e] == '_')) e++;
+                const std::string name = t.substr(b, e - b);
+                if (name.empty() || structs.count(name) || (e < t.size() && t[e] == ':')) continue;
+                auto it = nexaName.find(name);
+                semError(at, "unknown type '" + name + "'" +
+                                 (it != nexaName.end() ? "; Nexa calls it " + it->second
+                                                       : ": no struct, enum or built-in type has that name"));
+            }
+        };
+        std::function<void(const AstNode&)> visit = [&](const AstNode& n) {
+            if (n.type == AstNode::Type::Variable) check(n.declType, n);
+            if (n.type == AstNode::Type::Function || n.type == AstNode::Type::MainFunction) {
+                for (const std::string& pt : n.paramTypes) check(pt, n);
+                check(n.fnReturnType, n);
+            }
+            for (const AstNode& c : n.children) visit(c);
+        };
+        for (const AstNode& n : ast_) visit(n);
+    }
+
     void checkSemantics() {
         semNameChecks_ = !modules_.hasInlineCpp();
         if (semNameChecks_) {
@@ -3247,6 +3307,7 @@ private:
         semLoc_ = nullptr;
         semLoopDepth_ = 0;
         semSwitchDepth_ = 0;
+        if (semNameChecks_) semCheckTypeNames();
 
         std::set<std::string> seenGlobals;
         for (const AstNode& n : ast_) {
@@ -3344,6 +3405,8 @@ private:
                 for (const AstNode& c : s.children) semExpr(c);
                 if (initWasStrMethod && s.children.back().type == AstNode::Type::FnCall) {
                     semRetypeLetFromMethod(s);
+                } else if (s.typeFromFields && s.declType.empty()) {
+                    semTypeLetFromFields(s);
                 }
                 semCheckVariableInit(s);
                 semDeclare(s.value, nexaDeclFromVariableAst(s));
@@ -3451,6 +3514,18 @@ private:
                 semCheckNameUse(s, s.value);
                 for (const AstNode& c : s.children) semExpr(c);
                 break;
+            case AstNode::Type::IoPrint:
+            case AstNode::Type::IoPrintln:
+                // Slices and maps print as [1, 2] and {"a": 1}; a struct has no
+                // form of its own to print in.
+                for (const AstNode& c : s.children) {
+                    semExpr(c);
+                    const std::string t = inferExprNexaType(c);
+                    if (isStructDeclType(t)) {
+                        semError(c, "a " + structNameFromDecl(t) + " struct has no printed form -- print its fields");
+                    }
+                }
+                break;
             default:
                 semExpr(s);
                 break;
@@ -3482,6 +3557,40 @@ private:
         if (!v.declType.empty() && !(v.declType == "[]string" && v.children.back().value == "split")) return;
         const std::string t = inferExprNexaType(v.children.back());
         if (t.empty()) return;
+        AstNode& n = const_cast<AstNode&>(v);
+        n.declType = t;
+        const bool structOrEnum = isStructDeclType(t) || isEnumDeclType(t);
+        n.initIsInt = !structOrEnum && nexaIsNumericIntType(t);
+        n.initIsBool = (t == "bool");
+        n.initIsFloat = (t == "float");
+        n.initIsChar = (t == "char");
+        n.initFromArray = nexaIsSliceType(t);
+    }
+
+    // `let n = p.x * 2` with no type written. Every field read in the value must
+    // be one the struct declarations name (or an enum's variant, Colour.Red);
+    // then the value's type is known, and the variable gets it the way an
+    // explicit `let n: T` would. A field of a C/C++ header type is not known to
+    // Nexa, and that still needs the type written.
+    void semTypeLetFromFields(const AstNode& v) {
+        const AstNode& init = v.children.back();
+        bool known = true;
+        std::function<void(const AstNode&)> visit = [&](const AstNode& e) {
+            if (!known) return;
+            if (e.type == AstNode::Type::ExprMember) {
+                const bool enumVariant = !e.children.empty() && e.children[0].type == AstNode::Type::ExprVarRef &&
+                                         lookupNexaDecl(e.children[0].value).empty() &&
+                                         enumCppNames_.count(e.children[0].value);
+                if (!enumVariant && fieldTypeOfMemberExpr(e).empty()) known = false;
+            }
+            for (const AstNode& ch : e.children) visit(ch);
+        };
+        visit(init);
+        const std::string t = known ? inferExprNexaType(init) : std::string();
+        if (t.empty() || t == "void" || t == "null") {
+            semError(v, "can't tell the type of '" + v.value + "' from the fields it reads; write it: let " + v.value +
+                            ": T = ...");
+        }
         AstNode& n = const_cast<AstNode&>(v);
         n.declType = t;
         const bool structOrEnum = isStructDeclType(t) || isEnumDeclType(t);
@@ -4586,6 +4695,58 @@ private:
         return expr;
     }
 
+    // io.println of a slice or map: [1, 2, 3], ["a", "b"], {"k": 1}, nested as
+    // deep as the value is. Text inside is quoted, so ["a b"] is one element.
+    mutable bool needShow_ = false;
+    static constexpr const char* kShowMarker = "// [nexa:show]";
+    static constexpr const char* kShowRuntime = R"NEXA_SHOW(#include <cstdio>
+#include <map>
+#include <string>
+#include <type_traits>
+#include <vector>
+static std::string __nexa_show(const std::string& s) {
+    std::string o = "\"";
+    for (char c : s) {
+        if (c == '"' || c == '\\') o += '\\';
+        o += c;
+    }
+    return o + "\"";
+}
+static std::string __nexa_show(bool b) { return b ? "true" : "false"; }
+static std::string __nexa_show(char c) { return std::string("'") + c + "'"; }
+static std::string __nexa_show(double d) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%g", d);
+    return buf;
+}
+template <class T> static std::string __nexa_show(const std::vector<T>& v);
+template <class K, class V> static std::string __nexa_show(const std::map<K, V>& m);
+template <class T>
+static typename std::enable_if<std::is_integral<T>::value, std::string>::type __nexa_show(T v) {
+    return std::to_string(v);
+}
+template <class T>
+static std::string __nexa_show(const std::vector<T>& v) {
+    std::string o = "[";
+    for (size_t i = 0; i < v.size(); i++) {
+        if (i) o += ", ";
+        o += __nexa_show((T)v[i]);
+    }
+    return o + "]";
+}
+template <class K, class V>
+static std::string __nexa_show(const std::map<K, V>& m) {
+    std::string o = "{";
+    bool first = true;
+    for (const auto& kv : m) {
+        if (!first) o += ", ";
+        first = false;
+        o += __nexa_show(kv.first) + ": " + __nexa_show(kv.second);
+    }
+    return o + "}";
+}
+)NEXA_SHOW";
+
     void emitIoPrintArg(std::ostringstream& out, const std::string& indent, const AstNode& arg,
                         std::map<std::string, std::string>& varMap,
                         std::map<std::string, bool>& varIsString,
@@ -4615,6 +4776,13 @@ private:
             return;
         }
         std::string ntype = inferExprNexaType(arg);
+        if (nexaIsSliceType(ntype) || nexaIsMapType(ntype)) {
+            needShow_ = true;
+            out << indent << "fputs(__nexa_show(" << emitExpr(arg, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool)
+                << ").c_str(), stdout);\n";
+            if (newline) out << indent << "fputc('\\n', stdout);\n";
+            return;
+        }
         bool exprIsStr = (ntype == "string");
         bool exprIsF = (ntype == "float");
         bool exprIsC = (ntype == "char");
@@ -5578,7 +5746,10 @@ private:
                     bool isF = (ntype == "float");
                     bool isC = (ntype == "char");
                     bool isNexaEnum = !ntype.empty() && ntype.size() >= 5 && ntype.compare(0, 5, "enum:") == 0;
-                    if (isStr) {
+                    if (nexaIsSliceType(ntype) || nexaIsMapType(ntype)) {
+                        needShow_ = true;
+                        out << indent << "puts(__nexa_show(" << v << ").c_str());\n";
+                    } else if (isStr) {
                         out << indent << "puts(" << v << ".c_str());\n";
                     } else if (isF) {
                         out << indent << "printf(\"%g\\n\", " << v << ");\n";
@@ -6105,6 +6276,8 @@ private:
                     mapKeyT = mk;
                     mapValT = mv;
                     elemT = mk;
+                } else if (collT == "string") {
+                    elemT = "char";  // for (c in s): each character of a string
                 } else if (forInElementIsString(child.children[0])) {
                     elemT = "string";
                 }
@@ -6164,7 +6337,8 @@ private:
                         out << indent << "        const " << nexaTypeToCpp(mapValT) << "& " << loopVal << " = __nexa_kv.second;\n";
                     }
                 } else {
-                    out << indent << "    const " << nexaTypeToCpp(nexaIsSliceType(collT) ? collT : ("[]" + elemT))
+                    const std::string heldT = nexaIsSliceType(collT) || collT == "string" ? collT : ("[]" + elemT);
+                    out << indent << "    const " << nexaTypeToCpp(heldT)
                         << "& " << collTmp << " = " << collExpr << ";\n";
                     out << indent << "    for (const " << nexaTypeToCpp(elemT) << "& " << loopVar << " : " << collTmp << ") {\n";
                 }
@@ -7584,6 +7758,15 @@ private:
                 throw std::runtime_error("Internal: unknown gfx method '" + fn + "'");
             }
             case AstNode::Type::StrMethod: {
+                // Through a pointer (p.contains(x) with p a *[]string): the method of
+                // what it points at.
+                if (!e.children.empty() && isPointerType(inferExprNexaType(e.children[0]))) {
+                    AstNode through = e;
+                    AstNode deref{AstNode::Type::ExprDeref, "", {e.children[0]}};
+                    deref.line = e.children[0].line;
+                    through.children[0] = std::move(deref);
+                    return emitExpr(through, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                }
                 if (auto folded = tryFoldStrMethodToExpr(e, varIsString)) return *folded;
                 const std::string& m = e.value;
                 std::string R = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);

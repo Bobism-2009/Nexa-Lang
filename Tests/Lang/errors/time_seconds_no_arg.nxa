@@ -1,0 +1,6 @@
+// time.seconds takes how many.
+#include <std/time>
+
+fn main() {
+    time.sleep(time.seconds());
+}

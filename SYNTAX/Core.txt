@@ -51,8 +51,9 @@ STRUCTS
     Unknown or duplicate field names are errors. Nested structs must already
     be declared. Omitted fields are value-initialized (0, "", empty slice/map).
 
-  - Reading a struct field in a let initializer requires an explicit type:
-    let n: int = p.x;
+  - A let that reads a field takes the field's type, as with any value:
+    let n = p.x;   let name = items[0].name.upper();   let d = p.at.x * 2.5;
+    (A field of a type from a C/C++ header is not known to Nexa: write the type.)
   - Fixed-size arrays of structs:
     let pts: Point[10];
     pts[0].x = 1;
@@ -217,6 +218,10 @@ POINTERS (no GC — manual, C-style)
     fn bump(p: *int) { *p = *p + 1; }
   Struct fields via pointer:  let p: *Point = &pt;  p->x = 1;  io.println(p->x);
   Struct fields may be pointers:  field: *int;
+  A slice or map through a pointer: index it as (*p)[i], and call its methods
+  with a plain dot, as for a struct:
+    fn add(out: *[]string, s: string) { out.push(s); (*out)[0] = s; }
+    fn count(m: *map[string]int, k: string) { (*m)[k]++; if (m.has("x")) { ... } }
   An element of a slice has an address -- bump(&xs[1]) -- except in a []bool,
   which keeps its bools packed together: pass the slice and an index instead,
   or keep the flags in a []int.
@@ -282,7 +287,7 @@ HEAP ALLOCATION (no GC — manual, C-style)
 
   Reassignment:
     x = expr;   (variable must be declared first; const variables cannot be reassigned)
-    x++;  x--;  (increment/decrement by 1)
+    x++;  x--;  (increment/decrement by 1; also xs[i]++  p.x--  m["k"]++  ptr->n++)
     x += n;  x -= n;  x *= n;  x /= n;  x %= n;  (compound assignment)
     x &= n;  x |= n;  x ^= n;  x <<= n;  x >>= n;  (bitwise compound assignment)
     s += "x";  (string concatenation - += works for strings)

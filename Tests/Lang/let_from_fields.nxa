@@ -1,0 +1,49 @@
+// A let with no type written whose value reads struct fields: its type comes
+// from the fields, as it would from any other value.
+#include <std/io>
+
+enum Colour {
+    Red;
+    Green;
+}
+
+struct Point {
+    x: int;
+    y: int;
+}
+
+struct Item {
+    name: string;
+    price: float;
+    tags: []string;
+    at: Point;
+    colour: enum Colour;
+    next: *Item;
+}
+
+fn chain(p: *Item): int {
+    if (p == null) { return 0; }
+    let rest = chain(p->next);
+    return rest + 1;
+}
+
+fn main() {
+    let a = Item { name: "lamp", price: 30.25, tags: ["home", "light"], at: Point { x: 3, y: 4 }, colour: Colour.Green };
+    let b = Item { name: "pen", price: 1.5, next: &a };
+    let name = a.name;
+    let double = a.price * 2;
+    let first = a.tags[0];
+    let tags = a.tags;
+    let pt = a.at;
+    let sum = a.at.x + pt.y;
+    let colour = a.colour;
+    let label = len(a.tags) > 2 ? a.tags[2] : "-";
+    tags.push("new");
+    io.println(name.upper());
+    io.println(double);
+    io.println(first + " " + label);
+    io.println(len(tags));
+    io.println(sum);
+    io.println(colour == Colour.Green);
+    io.println(chain(&b));
+}

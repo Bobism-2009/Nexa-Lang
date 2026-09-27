@@ -1,0 +1,24 @@
+// io.println and io.print show a slice or a map as its elements: text quoted,
+// nested collections nested.
+#include <std/io>
+
+fn main() {
+    let xs = [1, 2, 3];
+    io.println(xs);
+    io.println(["ada", "say \"hi\""]);
+    io.println([1.5, 2.25]);
+    io.println([true, false]);
+    io.println([[1, 2], [3]]);
+    let m: map[string]int;
+    m["b"] = 2;
+    m["a"] = 1;
+    io.println(m);
+    let groups: map[string][]int;
+    groups["odd"] = [1, 3];
+    groups["even"] = [2];
+    io.println(groups);
+    let none: []string;
+    io.println(none);
+    io.print(xs);
+    io.println(" and ", len(xs));
+}

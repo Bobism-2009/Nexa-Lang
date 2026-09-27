@@ -1,0 +1,6 @@
+// const on its own is not a statement: a constant is a let.
+#include <std/io>
+
+const LIMIT = 10;
+
+fn main() { }

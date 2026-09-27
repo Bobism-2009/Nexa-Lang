@@ -1,0 +1,6 @@
+// A C for loop: say what Nexa's loops are.
+#include <std/io>
+
+fn main() {
+    for (let i = 0; i < 3; i++) { }
+}

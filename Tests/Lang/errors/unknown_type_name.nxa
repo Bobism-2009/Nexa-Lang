@@ -1,0 +1,6 @@
+// A type name that is nothing: say so, and give Nexa's name for a common one.
+#include <std/io>
+
+fn main() {
+    let big: i64 = 1;
+}
