@@ -1,0 +1,15 @@
+// What a builtin returns takes methods and indexing like any value, and
+// file.delete is file.remove's other name, although delete is a keyword.
+#include <std/io>
+#include <std/file>
+
+fn main() {
+    let path = "nexa_builtin_methods.tmp";
+    file.write(path, "ada,alan,grace");
+    io.println(file.read(path).split(",")[1]);
+    io.println(file.read(path).upper().len());
+    io.println(file.read(path).contains("grace"));
+    io.println(file.read(path).split(",")[2].upper());
+    file.delete(path);
+    io.println(file.exists(path));
+}

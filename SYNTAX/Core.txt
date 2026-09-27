@@ -217,6 +217,9 @@ POINTERS (no GC — manual, C-style)
     fn bump(p: *int) { *p = *p + 1; }
   Struct fields via pointer:  let p: *Point = &pt;  p->x = 1;  io.println(p->x);
   Struct fields may be pointers:  field: *int;
+  An element of a slice has an address -- bump(&xs[1]) -- except in a []bool,
+  which keeps its bools packed together: pass the slice and an index instead,
+  or keep the flags in a []int.
   There is no garbage collector; dangling pointers are undefined behavior (same as C/C++).
 
 HEAP ALLOCATION (no GC — manual, C-style)
@@ -346,10 +349,14 @@ STRING METHODS (core; no #include required)
     for (p in parts) { io.println(p); }  // same, range-for
     io.println("Hello".upper());          // HELLO
     io.println(name.trim().lower());      // chaining is allowed
+    io.println(os.getenv("USER").upper()); // on what a builtin returns, too
+    let first = file.read(path).split("\n")[0];
     if (line.starts_with("#")) { ... }
     s = s.lower();                        // methods return a new string; assign to keep it
     s.lower();                            // valid statement; result is discarded
     Literal receivers (and literal args) fold at compile time, like crypto.hex_encode.
+  They are text (and slice) methods: on a number or a bool they are an error.
+  Turn a number into text first:  ("" + n).repeat(3)
 
     Every match of a substring, with index_of's start:
       let at = path.index_of("/");

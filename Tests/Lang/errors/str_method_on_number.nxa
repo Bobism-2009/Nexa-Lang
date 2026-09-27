@@ -1,0 +1,7 @@
+// A text method on a number is an error, not something for C++ to reject.
+#include <std/io>
+
+fn main() {
+    let price = 4.5;
+    io.println(price.upper());
+}

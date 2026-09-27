@@ -1,0 +1,9 @@
+// A []bool keeps its bools packed together: one has no address.
+#include <std/io>
+
+fn flip(p: *bool) { *p = !*p; }
+
+fn main() {
+    let flags = [true, false];
+    flip(&flags[1]);
+}

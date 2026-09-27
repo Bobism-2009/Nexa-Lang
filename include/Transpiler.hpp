@@ -3505,6 +3505,22 @@ private:
         };
         auto it = shapes.find(e.value);
         if (it == shapes.end()) return;
+        // Text methods on a number or a bool: say so, rather than leave it to the
+        // C++ compiler. Inference falls back to int for what it cannot type, so an
+        // int is believed only from a declared variable or a literal; float and
+        // bool are never the fallback.
+        if (!e.children.empty()) {
+            const AstNode& r = e.children[0];
+            const std::string t = inferExprNexaType(r);
+            const bool sure = t == "float" || t == "bool" ||
+                (nexaIsNumericIntType(t) && (r.type == AstNode::Type::ExprIntLiteral ||
+                                              (r.type == AstNode::Type::ExprVarRef && !lookupNexaDecl(r.value).empty())));
+            if (sure) {
+                const std::string sig = it->second.sig;
+                semError(e, sig + " works on text (or a slice), not on " + (t == "bool" ? "a bool" : "a number") +
+                            "; turn it into text first: (\"\" + n)" + sig.substr(1));
+            }
+        }
         const size_t got = e.children.empty() ? 0 : e.children.size() - 1;
         if (got < it->second.min || got > it->second.max) {
             semError(e, std::string(it->second.sig) + " takes " +
@@ -3522,6 +3538,18 @@ private:
             semResolveStrMethod(e);
             if (e.type == AstNode::Type::StrMethod) semCheckStrMethodArity(e);
             if (e.type == AstNode::Type::StrMethod && e.value == "__fmt") semCheckFmt(e);
+        }
+        // &flags[i] on a []bool: the bools in a slice are packed into bits, and a
+        // bit has no address to point at.
+        if (e.type == AstNode::Type::ExprAddrOf && !e.children.empty() &&
+            e.children[0].type == AstNode::Type::ExprArrayIndex) {
+            const AstNode& ix = e.children[0];
+            const std::string base = ix.children.size() < 2 ? lookupNexaDecl(ix.value) : inferExprNexaType(ix.children[0]);
+            if (base == "[]bool") {
+                semError(e, "you can't take the address of one element of a []bool: a slice keeps its bools "
+                            "packed together, so one has no address of its own; pass the slice and the index "
+                            "instead, or keep the flags in a []int");
+            }
         }
         switch (e.type) {
             case AstNode::Type::ExprVarRef:

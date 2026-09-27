@@ -2698,17 +2698,13 @@ private:
         if (peek().type == TokenType::Identifier && peek().value == "io" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
             std::string method = tokens_[pos_ + 2].value;
-            if (method == "readln") {
-                AstNode n = parseIoReadlnExpr();
-                if (peek().type == TokenType::Dot || peek().type == TokenType::Arrow) {
-                    return parseDotChain(std::move(n));
-                }
-                return n;
-            }
-            if (method == "read_int") return parseIoReadIntExpr();
-            if (method == "getline") return parseIoGetlineExpr();
-            if (method == "to_int") return parseIoToIntExpr();
-            if (method == "trim") return parseIoTrimExpr();
+            // A builtin's result takes methods and indexing like any value:
+            // io.readln().trim(), os.getenv("HOME").upper(), file.read(p).split(",")[0].
+            if (method == "readln") return applyIndexAndDotPostfix(parseIoReadlnExpr());
+            if (method == "read_int") return applyIndexAndDotPostfix(parseIoReadIntExpr());
+            if (method == "getline") return applyIndexAndDotPostfix(parseIoGetlineExpr());
+            if (method == "to_int") return applyIndexAndDotPostfix(parseIoToIntExpr());
+            if (method == "trim") return applyIndexAndDotPostfix(parseIoTrimExpr());
             // Any other io.<method>(...) call would fall through to the plain
             // identifier path and die as "Undefined variable 'io'", which
             // blames the wrong word. Bare io.<field> (no call) still falls
@@ -2729,51 +2725,51 @@ private:
         if (peek().type == TokenType::Identifier && peek().value == "os" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
             std::string method = tokens_[pos_ + 2].value;
-            if (method == "getenv") return parseOsGetenv();
-            if (method == "system") return parseOsExec();
-            if (method == "platform") return parseOsPlatform();
-            if (method == "exe_dir") return parseOsExeDir();
-            if (method == "hostname") return parseOsHostname();
-            if (method == "username" || method == "user") return parseOsUsername();
-            if (method == "home") return parseOsHome();
-            if (method == "getprocessid" || method == "getpid" || method == "GetProcessID") return parseOsGetProcessId();
-            if (method == "grepkeys" || method == "getkey") return parseOsGrepKeys();
-            if (method == "keypressed") return parseOsKeyPressed();
-            if (method == "get_volume") return parseOsGetVolume();
-            if (method == "get_brightness") return parseOsGetBrightness();
-            if (method == "clip_get") return parseOsClipGet();
+            if (method == "getenv") return applyIndexAndDotPostfix(parseOsGetenv());
+            if (method == "system") return applyIndexAndDotPostfix(parseOsExec());
+            if (method == "platform") return applyIndexAndDotPostfix(parseOsPlatform());
+            if (method == "exe_dir") return applyIndexAndDotPostfix(parseOsExeDir());
+            if (method == "hostname") return applyIndexAndDotPostfix(parseOsHostname());
+            if (method == "username" || method == "user") return applyIndexAndDotPostfix(parseOsUsername());
+            if (method == "home") return applyIndexAndDotPostfix(parseOsHome());
+            if (method == "getprocessid" || method == "getpid" || method == "GetProcessID") return applyIndexAndDotPostfix(parseOsGetProcessId());
+            if (method == "grepkeys" || method == "getkey") return applyIndexAndDotPostfix(parseOsGrepKeys());
+            if (method == "keypressed") return applyIndexAndDotPostfix(parseOsKeyPressed());
+            if (method == "get_volume") return applyIndexAndDotPostfix(parseOsGetVolume());
+            if (method == "get_brightness") return applyIndexAndDotPostfix(parseOsGetBrightness());
+            if (method == "clip_get") return applyIndexAndDotPostfix(parseOsClipGet());
             // Any other os.* expression (load, play, spawn, cwd, ...) goes through parseOsCall.
             // Do not fall through to identifier + parseDotChain — that treats os.load as a string method.
-            return parseOsCall(false, true);
+            return applyIndexAndDotPostfix(parseOsCall(false, true));
         }
         if (peek().type == TokenType::Identifier && (peek().value == "getprocessid" || peek().value == "getpid") &&
             pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::LParen) {
-            return parseOsGetProcessIdBareExpr();
+            return applyIndexAndDotPostfix(parseOsGetProcessIdBareExpr());
         }
         if (peek().type == TokenType::Identifier && peek().value == "file" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
-            return parseFileExpr();
+            return applyIndexAndDotPostfix(parseFileExpr());
         }
         if (peek().type == TokenType::Identifier && peek().value == "random" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier &&
             tokens_[pos_ + 2].value == "int") {
-            return parseRandomInt();
+            return applyIndexAndDotPostfix(parseRandomInt());
         }
         if (peek().type == TokenType::Identifier && peek().value == "math" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
-            return parseMathCall();
+            return applyIndexAndDotPostfix(parseMathCall());
         }
         if (peek().type == TokenType::Identifier && peek().value == "crypto" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
-            return parseCryptoCall();
+            return applyIndexAndDotPostfix(parseCryptoCall());
         }
         if (peek().type == TokenType::Identifier && peek().value == "gfx" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
-            return parseGfxCall(false, true);
+            return applyIndexAndDotPostfix(parseGfxCall(false, true));
         }
         if (peek().type == TokenType::Identifier && peek().value == "gfx3d" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
-            return parseGfx3dCall(false, true);
+            return applyIndexAndDotPostfix(parseGfx3dCall(false, true));
         }
         if (peek().type == TokenType::Identifier && peek().value == "http" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot &&
@@ -2795,19 +2791,19 @@ private:
         if (peek().type == TokenType::Identifier && peek().value == "time" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
             std::string method = tokens_[pos_ + 2].value;
-            if (method == "seconds") return parseTimeSeconds();
-            if (method == "milliseconds") return parseTimeMilliseconds();
-            if (method == "now_ms") return parseTimeNowMs();
+            if (method == "seconds") return applyIndexAndDotPostfix(parseTimeSeconds());
+            if (method == "milliseconds") return applyIndexAndDotPostfix(parseTimeMilliseconds());
+            if (method == "now_ms") return applyIndexAndDotPostfix(parseTimeNowMs());
         }
         if (peek().type == TokenType::Identifier && peek().value == "thread" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
             std::string method = tokens_[pos_ + 2].value;
-            if (method == "worker") return parseThreadWorkerExpr();
-            if (method == "spawn") return parseThreadSpawnExpr();
+            if (method == "worker") return applyIndexAndDotPostfix(parseThreadWorkerExpr());
+            if (method == "spawn") return applyIndexAndDotPostfix(parseThreadSpawnExpr());
         }
         if (peek().type == TokenType::Identifier && peek().value == "ui" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
-            return parseUiCall(false, true);
+            return applyIndexAndDotPostfix(parseUiCall(false, true));
         }
         if (peek().type == TokenType::Identifier &&
             (peek().value == "ok" || peek().value == "err") &&
@@ -2816,11 +2812,11 @@ private:
         }
         if (peek().type == TokenType::Identifier && peek().value == "len" && pos_ + 1 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::LParen) {
-            return parseLenExpr();
+            return applyIndexAndDotPostfix(parseLenExpr());
         }
         if (peek().type == TokenType::Identifier && peek().value == "trim" && pos_ + 1 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::LParen) {
-            return parseTrimExpr();
+            return applyIndexAndDotPostfix(parseTrimExpr());
         }
         if (looksLikeQualifiedFnCall() ||
             (peek().type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
@@ -3781,10 +3777,12 @@ private:
             throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
         }
         const Token& methodTok = peek();
-        if (methodTok.type != TokenType::Identifier) {
+        // `delete` is a keyword, but after `file.` it can only be the method
+        // (file.remove's other name), as with http.delete.
+        if (methodTok.type != TokenType::Identifier && methodTok.type != TokenType::Delete) {
             throw std::runtime_error("Expected file method at line " + std::to_string(methodTok.line));
         }
-        std::string method = canonicalizeFileMethod(methodTok.value);
+        std::string method = canonicalizeFileMethod(methodTok.type == TokenType::Delete ? std::string("delete") : methodTok.value);
         advance();
         if (!isLegacyFileMethod(method) && !isExtendedFileMethod(method)) {
             throw std::runtime_error("Unknown file method 'file." + methodTok.value + "' at line " + std::to_string(methodTok.line));
@@ -3838,10 +3836,12 @@ private:
             throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
         }
         const Token& methodTok = peek();
-        if (methodTok.type != TokenType::Identifier) {
+        // `delete` is a keyword, but after `file.` it can only be the method
+        // (file.remove's other name), as with http.delete.
+        if (methodTok.type != TokenType::Identifier && methodTok.type != TokenType::Delete) {
             throw std::runtime_error("Expected file method at line " + std::to_string(methodTok.line));
         }
-        std::string method = canonicalizeFileMethod(methodTok.value);
+        std::string method = canonicalizeFileMethod(methodTok.type == TokenType::Delete ? std::string("delete") : methodTok.value);
         if (!isLegacyFileMethod(method) && !isExtendedFileMethod(method)) {
             throw std::runtime_error("Unknown file method 'file." + methodTok.value + "' at line " + std::to_string(methodTok.line));
         }

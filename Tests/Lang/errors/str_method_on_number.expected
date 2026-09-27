@@ -1,0 +1,2 @@
+s.upper() works on text (or a slice), not on a number
+at line 6
