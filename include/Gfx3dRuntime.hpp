@@ -136,6 +136,7 @@ typedef long          __nexa_GLsizeiptr;
 #define NEXA_GL_FLOAT            0x1406u
 #define NEXA_GL_ARRAY_BUFFER     0x8892u
 #define NEXA_GL_DYNAMIC_DRAW     0x88E8u
+#define NEXA_GL_STATIC_DRAW      0x88E4u
 #define NEXA_GL_FRAGMENT_SHADER  0x8B30u
 #define NEXA_GL_VERTEX_SHADER    0x8B31u
 #define NEXA_GL_COMPILE_STATUS   0x8B81u
@@ -1173,15 +1174,23 @@ static void __nexa_g3_platform_poll(void) {
     if (ch > 0) __nexa_g3.h = ch;
 }
 
+// Resolves on the browser's next animation frame: its vsync, and nothing at all
+// while the tab is hidden, so a program in a background tab costs nothing.
+EM_ASYNC_JS(void, __nexa_g3_next_frame, (), {
+    await new Promise(function(r) { requestAnimationFrame(r); });
+});
+
+static int __nexa_g3_wasm_vsync = 1;
+
 static void __nexa_g3_platform_swap(void) {
     // A browser presents the canvas when the frame yields, so there is no
     // buffer to swap; what matters is giving the page a chance to composite.
     // NexaC links --wasm gfx3d builds with -sASYNCIFY so this can suspend.
-    emscripten_sleep(0);
+    if (__nexa_g3_wasm_vsync) __nexa_g3_next_frame();
+    else emscripten_sleep(0);
 }
 
-// The browser paces the canvas itself.
-static void __nexa_g3_platform_vsync(int) {}
+static void __nexa_g3_platform_vsync(int on) { __nexa_g3_wasm_vsync = on; }
 
 static void __nexa_g3_platform_close(void) {
     // The canvas belongs to the page, not to the program: there is nothing to
@@ -1685,10 +1694,13 @@ struct __nexa_G3Mesh {
         float key[19];
         std::vector<float> col;  // r, g, b a corner, 0..1
         unsigned used = 0;
+        unsigned gl_col = 0;     // WebGL: col, uploaded; stale when col is redone
+        int gl_stale = 1;
     };
     Lit lit[4];              // a few colours of one shape, e.g. red and blue balls
     int n_lit = 0;
     unsigned clock = 0;
+    unsigned gl_pos = 0;     // WebGL: pos, uploaded once
 };
 
 // While a mesh is being built, the shape code below writes its corners here
@@ -1904,14 +1916,14 @@ static void __nexa_g3_cap(const float* c, float rad,
     }
 }
 
-// Draws a cached mesh with its corners' colours and one matrix, M, taking its
-// own space to world space. Answers 0 where the backend cannot, and the shape
-// is then drawn the way it always was. Defined with each backend below.
-static int __nexa_g3_mesh_submit(const __nexa_G3Mesh& m, const float* col, const float* M);
+// Draws a cached mesh with one set of its corners' colours and one matrix, M,
+// taking its own space to world space. Answers 0 where the backend cannot, and
+// the shape is then drawn the way it always was. Defined with each backend below.
+static int __nexa_g3_mesh_submit(__nexa_G3Mesh& m, __nexa_G3Mesh::Lit& L, const float* M);
 
 // The colours of a mesh's corners for this colour, light and rotation, from a
 // small cache: worked out again only when one of those has changed.
-static const float* __nexa_g3_mesh_colors(__nexa_G3Mesh& m, float r, float g, float b) {
+static __nexa_G3Mesh::Lit& __nexa_g3_mesh_colors(__nexa_G3Mesh& m, float r, float g, float b) {
     float key[19] = {r, g, b, __nexa_g3_lx, __nexa_g3_ly, __nexa_g3_lz,
                      __nexa_g3_lr, __nexa_g3_lg, __nexa_g3_lb, __nexa_g3_ambient,
                      1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
@@ -1925,7 +1937,7 @@ static const float* __nexa_g3_mesh_colors(__nexa_G3Mesh& m, float r, float g, fl
     for (int i = 0; i < m.n_lit; i++) {
         if (std::memcmp(m.lit[i].key, key, sizeof(key)) == 0) {
             m.lit[i].used = m.clock;
-            return m.lit[i].col.data();
+            return m.lit[i];
         }
     }
     int slot = 0;
@@ -1937,6 +1949,7 @@ static const float* __nexa_g3_mesh_colors(__nexa_G3Mesh& m, float r, float g, fl
     __nexa_G3Mesh::Lit& L = m.lit[slot];
     std::memcpy(L.key, key, sizeof(key));
     L.used = m.clock;
+    L.gl_stale = 1;
     const size_t n = m.nrm.size() / 3;
     L.col.resize(n * 3);
     const int saved = __nexa_g3_two_sided;
@@ -1951,7 +1964,7 @@ static const float* __nexa_g3_mesh_colors(__nexa_G3Mesh& m, float r, float g, fl
         L.col[i * 3 + 2] = (b * kb) * (1.0f / 255.0f);
     }
     __nexa_g3_two_sided = saved;
-    return L.col.data();
+    return L;
 }
 
 // Draws m scaled by (sx, sy, sz) and moved to (tx, ty, tz), inside whatever
@@ -2064,8 +2077,46 @@ static void __nexa_g3_batch_submit(void) {
     if (__nexa_g3_two_sided) glEnable(NEXA_GL_CULL_FACE);
 }
 
-// Not here yet: a cached shape goes through the batch as it always has.
-static int __nexa_g3_mesh_submit(const __nexa_G3Mesh&, const float*, const float*) { return 0; }
+// A cached mesh: its corners live in a buffer of their own, sent once, and each
+// set of colours in another, sent again only when the light or colour changed.
+// A frame then sends the browser one matrix and one draw call per shape, where
+// the batch sent every corner of every shape through JavaScript every frame.
+static int __nexa_g3_mesh_submit(__nexa_G3Mesh& m, __nexa_G3Mesh::Lit& L, const float* M) {
+    if (!__nexa_g3_prog || __nexa_g3_a_pos < 0 || __nexa_g3_a_col < 0) return 0;
+    if (!m.gl_pos) {
+        glGenBuffers(1, &m.gl_pos);
+        if (!m.gl_pos) return 0;
+        glBindBuffer(NEXA_GL_ARRAY_BUFFER, m.gl_pos);
+        glBufferData(NEXA_GL_ARRAY_BUFFER, (__nexa_GLsizeiptr)(m.pos.size() * sizeof(float)),
+                     m.pos.data(), NEXA_GL_STATIC_DRAW);
+    }
+    if (!L.gl_col) {
+        glGenBuffers(1, &L.gl_col);
+        if (!L.gl_col) return 0;
+        L.gl_stale = 1;
+    }
+    glBindBuffer(NEXA_GL_ARRAY_BUFFER, L.gl_col);
+    if (L.gl_stale) {
+        glBufferData(NEXA_GL_ARRAY_BUFFER, (__nexa_GLsizeiptr)(L.col.size() * sizeof(float)),
+                     L.col.data(), NEXA_GL_DYNAMIC_DRAW);
+        L.gl_stale = 0;
+    }
+    glEnableVertexAttribArray((__nexa_GLuint)__nexa_g3_a_col);
+    glVertexAttribPointer((__nexa_GLuint)__nexa_g3_a_col, 3, NEXA_GL_FLOAT, 0, 0, (const void*)0);
+    glBindBuffer(NEXA_GL_ARRAY_BUFFER, m.gl_pos);
+    glEnableVertexAttribArray((__nexa_GLuint)__nexa_g3_a_pos);
+    glVertexAttribPointer((__nexa_GLuint)__nexa_g3_a_pos, 3, NEXA_GL_FLOAT, 0, 0, (const void*)0);
+
+    float vp[16], mvp[16];
+    __nexa_g3_mul4(vp, __nexa_g3.proj, __nexa_g3.view);
+    __nexa_g3_mul4(mvp, vp, M);
+    glUseProgram(__nexa_g3_prog);
+    glUniformMatrix4fv(__nexa_g3_u_mvp, 1, 0, mvp);
+    if (m.two_sided) glDisable(NEXA_GL_CULL_FACE);
+    glDrawArrays(NEXA_GL_TRIANGLES, 0, (__nexa_GLsizei)(m.pos.size() / 3));
+    if (m.two_sided) glEnable(NEXA_GL_CULL_FACE);
+    return 1;
+}
 
 #else
 
@@ -2082,7 +2133,8 @@ static void __nexa_g3_platform_camera(void) {
 
 // A cached mesh: its own arrays, placed by M on top of the camera. The camera
 // is what gfx3d.clear left on the modelview stack, and is put back after.
-static int __nexa_g3_mesh_submit(const __nexa_G3Mesh& m, const float* col, const float* M) {
+static int __nexa_g3_mesh_submit(__nexa_G3Mesh& m, __nexa_G3Mesh::Lit& L, const float* M) {
+    const float* col = L.col.data();
     if (!__nexa_gl.loaded || !__nexa_gl.DrawArrays || !__nexa_gl.VertexPointer ||
         !__nexa_gl.ColorPointer || !__nexa_gl.EnableClientState || !__nexa_gl.DisableClientState ||
         !__nexa_gl.PushMatrix || !__nexa_gl.PopMatrix || !__nexa_gl.MultMatrixf) return 0;
@@ -2496,8 +2548,11 @@ static void __nexa_gfx3d_present(void) {
     // With vsync on, the swap is what waits. A driver or a remote desktop can
     // ignore the request, though, and then nothing would: so vsync also keeps
     // a ceiling of 240 frames a second, which a working vsync never reaches.
+    // A browser's animation frame is never ignored, so it needs no ceiling.
     double period = __nexa_g3.frame_ms;
+#if !defined(NEXA_WASM)
     if (period <= 0.0 && __nexa_g3.vsync) period = 1000.0 / 240.0;
+#endif
     if (period <= 0.0) return;
 
     // The wait is on a deadline, not a duration, so pacing does not drift by
@@ -2513,6 +2568,10 @@ static void __nexa_gfx3d_present(void) {
     if (wait > 0.0) {
 #if defined(_WIN32)
         Sleep((DWORD)wait);
+#elif defined(NEXA_WASM)
+        // nanosleep on a browser's main thread spins until the time is up;
+        // this hands the thread back to the page instead.
+        emscripten_sleep((unsigned)wait);
 #else
         struct timespec ts;
         ts.tv_sec = (time_t)(wait / 1000.0);

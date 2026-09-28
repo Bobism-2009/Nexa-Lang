@@ -1009,7 +1009,9 @@ ARGUMENT TYPES
                                    remote desktops and virtual machines do), vsync
                                    still keeps the loop under 240 frames a second.
                                    gfx3d.vsync() answers which it is. In the browser
-                                   the page paces the canvas either way
+                                   on waits for the page's next animation frame, so
+                                   a hidden tab pauses the loop; off only yields to
+                                   the page between frames
   gfx3d.clear(r, g, b)           - fill the window and reset the depth buffer, then
                                    apply the camera for this frame. Colours are
                                    0..255, as everywhere in gfx
