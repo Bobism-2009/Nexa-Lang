@@ -1765,14 +1765,14 @@ static std::string nexaBuildCompileCmd(
     if (linkHttp || linkGfx || linkGfx3d) {
         cmd += " -ldl";
     }
-    if (linkGfx3d && !linkGfx) {
-        // Same X11 as std/gfx, for the same reason: the window. GLX and GL
-        // itself are dlopened, so libGL is never a build dependency.
-        const bool elfExe = !buildWin && !buildDll && !buildShared;
-        if (elfExe) cmd += nexaLinuxGfxEmbedFlags();
-        else cmd += " -lX11";
-    }
-    if (linkGfx) {
+    if (linkGfx3d) {
+        // The window is X11, and here X11 is the system's shared libX11, never
+        // the copy std/gfx bakes in: GLX (dlopened with libGL) is built on the
+        // shared one, and a Display* from a second, embedded Xlib is not one it
+        // can use -- the window never opened. Any machine with GLX has libX11.so.
+        // GL itself is dlopened, so libGL is never a build dependency.
+        cmd += " -lX11";
+    } else if (linkGfx) {
         const bool elfExe = !buildWin && !buildDll && !buildShared;
         if (elfExe) {
             // Bake X11 into the binary so the program runs without libX11.so.

@@ -4369,6 +4369,7 @@ private:
             {"cylinder",    "gfx3d.cylinder(x1, y1, z1, x2, y2, z2, radius, r, g, b)","nnnnnnnnnn"},
             {"cone",        "gfx3d.cone(x1, y1, z1, x2, y2, z2, radius, r, g, b)",    "nnnnnnnnnn"},
             {"maxfps",      "gfx3d.maxfps(fps)",                                      "n"},
+            {"vsync",       "gfx3d.vsync([on])",                                      "n"},
             {"renderer",    "gfx3d.renderer(name)",                                   "t"},
             {"key",         "gfx3d.key(name)",                                        "t"},
             {"pressed",     "gfx3d.pressed(name)",                                    "t"},
@@ -8170,6 +8171,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (fn == "ambient" && e.children.empty()) {
                     return "__nexa_gfx3d_ambient_get()";
                 }
+                if (fn == "vsync" && e.children.empty()) return "__nexa_gfx3d_vsync_get()";
                 // Sound goes to the shared mixer, so these are the only gfx3d
                 // calls that do not emit a __nexa_gfx3d_ name. There is one
                 // mixer for gfx and gfx3d -- see soundStackCpp in

@@ -989,15 +989,27 @@ ARGUMENT TYPES
   gfx3d.poll()                   - process events (call each frame)
   gfx3d.closed()                 - 1 if the user closed the window; 0 before the
                                    first gfx3d.open()
-  gfx3d.present()                - show the frame (swap buffers), then wait out
-                                   whatever the frame did not use of its gfx3d.maxfps
-                                   budget
+  gfx3d.present()                - show the frame (swap buffers). With vsync on (the
+                                   default) that waits for the monitor's next refresh;
+                                   then it waits out whatever the frame did not use of
+                                   its gfx3d.maxfps budget
   gfx3d.width() / height()       - current drawable size in pixels (0 if closed).
                                    These follow the window: a resize changes them,
                                    and the projection follows with no call needed
   gfx3d.maxfps(n)                - cap the loop at n frames a second. gfx3d.maxfps(0),
-                                   or any n below it, removes the cap; no cap is the
-                                   default. Deadline-based, exactly as gfx.maxfps is
+                                   or any n below it, removes the cap, which is the
+                                   default. Deadline-based, exactly as gfx.maxfps is.
+                                   With vsync on, the refresh rate caps it as well
+  gfx3d.vsync(on)                - whether a frame waits for the monitor's refresh:
+  gfx3d.vsync()                    1 (the default) or 0. On, a scene draws as many
+                                   frames as the screen shows -- 60 a second on most
+                                   monitors -- and a still one uses next to no CPU.
+                                   Off, the loop runs as fast as it can, for timing a
+                                   scene. Where the driver ignores the request (some
+                                   remote desktops and virtual machines do), vsync
+                                   still keeps the loop under 240 frames a second.
+                                   gfx3d.vsync() answers which it is. In the browser
+                                   the page paces the canvas either way
   gfx3d.clear(r, g, b)           - fill the window and reset the depth buffer, then
                                    apply the camera for this frame. Colours are
                                    0..255, as everywhere in gfx

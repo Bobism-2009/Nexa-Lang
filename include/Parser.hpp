@@ -4837,6 +4837,7 @@ private:
                  || method == "wheel" || method == "wheel_x" || method == "typed") argc = 0;
         else if (method == "scale") argc = 1;
         else if (method == "ambient") { argc = 0; argcMax = 1; }
+        else if (method == "vsync") { argc = 0; argcMax = 1; }
         else if (method == "light") { argc = 3; argcMax = 6; }
         // Sound. The same names and the same arities as std/gfx, down to which
         // argument may be left off, because it is the same mixer underneath --
@@ -4872,7 +4873,7 @@ private:
                 " (use open, close, poll, closed, present, width, height, clear, camera,"
                 " perspective, tri, cube, box, sphere, capsule, cylinder, cone,"
                 " line3, grid, translate, rotate, scale, reset, light, ambient,"
-                " maxfps, renderer, backend, key, pressed,"
+                " maxfps, vsync, renderer, backend, key, pressed,"
                 " released, typed, wheel, wheel_x, mouse, mouse_x, mouse_y,"
                 " model, draw, model_tris,"
                 " sound, play, loop, stop, volume,"
@@ -4926,6 +4927,7 @@ private:
             else if (method == "light") sig = "gfx3d.light(x, y, z) or gfx3d.light(x, y, z, r, g, b)";
             else if (method == "tri") sig = "gfx3d.tri(x1, y1, z1, x2, y2, z2, x3, y3, z3, r, g, b)";
             else if (method == "maxfps") sig = "gfx3d.maxfps(fps)";
+            else if (method == "vsync") sig = "gfx3d.vsync() or gfx3d.vsync(on)";
             else if (method == "renderer") sig = "gfx3d.renderer(name)";
             else if (method == "key") sig = "gfx3d.key(name)";
             else if (method == "pressed") sig = "gfx3d.pressed(name)";

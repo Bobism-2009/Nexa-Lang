@@ -586,6 +586,7 @@ no array of pixels to read back.
   window    gfx3d.open(title, w, h)   gfx3d.close()   gfx3d.poll()
             gfx3d.closed()            gfx3d.present() gfx3d.maxfps(n)
             gfx3d.width()             gfx3d.height()
+            gfx3d.vsync([on])         wait for the monitor; on by default
   camera    gfx3d.camera(ex, ey, ez, tx, ty, tz)     eye, then what it looks at
             gfx3d.perspective(fov, near, far)        fov in degrees
   draw      gfx3d.clear(r, g, b)

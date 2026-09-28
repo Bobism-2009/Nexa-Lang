@@ -78,6 +78,7 @@ inline std::string gfx3dRuntimeCpp() {
 #include <cmath>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #if defined(_WIN32)
   #include <windows.h>
@@ -124,6 +125,8 @@ typedef long          __nexa_GLsizeiptr;
 #define NEXA_GL_COLOR_BUFFER_BIT 0x00004000u
 #define NEXA_GL_LINES            0x0001u
 #define NEXA_GL_TRIANGLES        0x0004u
+#define NEXA_GL_VERTEX_ARRAY     0x8074u
+#define NEXA_GL_COLOR_ARRAY      0x8076u
 #define NEXA_GL_DEPTH_TEST       0x0B71u
 #define NEXA_GL_CULL_FACE        0x0B44u
 #define NEXA_GL_BACK             0x0405u
@@ -183,6 +186,16 @@ typedef void (NEXA_GLAPI *__nexa_pfn_glTexSubImage2D)(__nexa_GLenum, __nexa_GLin
 typedef void (NEXA_GLAPI *__nexa_pfn_glTexParameteri)(__nexa_GLenum, __nexa_GLenum, __nexa_GLint);
 typedef void (NEXA_GLAPI *__nexa_pfn_glBlendFunc)(__nexa_GLenum, __nexa_GLenum);
 typedef void (NEXA_GLAPI *__nexa_pfn_glTexCoord2f)(__nexa_GLfloat, __nexa_GLfloat);
+// Vertex arrays: OpenGL 1.1 as well, and the difference between one call a
+// batch and two calls a vertex.
+typedef void (NEXA_GLAPI *__nexa_pfn_glEnableClientState)(__nexa_GLenum);
+typedef void (NEXA_GLAPI *__nexa_pfn_glDisableClientState)(__nexa_GLenum);
+typedef void (NEXA_GLAPI *__nexa_pfn_glVertexPointer)(__nexa_GLint, __nexa_GLenum, __nexa_GLsizei, const void*);
+typedef void (NEXA_GLAPI *__nexa_pfn_glColorPointer)(__nexa_GLint, __nexa_GLenum, __nexa_GLsizei, const void*);
+typedef void (NEXA_GLAPI *__nexa_pfn_glDrawArrays)(__nexa_GLenum, __nexa_GLint, __nexa_GLsizei);
+typedef void (NEXA_GLAPI *__nexa_pfn_glPushMatrix)(void);
+typedef void (NEXA_GLAPI *__nexa_pfn_glPopMatrix)(void);
+typedef void (NEXA_GLAPI *__nexa_pfn_glMultMatrixf)(const __nexa_GLfloat*);
 
 // The GLES2 entry points the WebGL backend calls. Emscripten links these in
 // itself, so unlike the desktop table they are ordinary symbols rather than
@@ -260,6 +273,17 @@ struct __nexa_GL {
     __nexa_pfn_glTexParameteri  TexParameteri  = nullptr;
     __nexa_pfn_glBlendFunc      BlendFunc      = nullptr;
     __nexa_pfn_glTexCoord2f     TexCoord2f     = nullptr;
+    // Soft too: without all five, batches go vertex by vertex as they used to.
+    __nexa_pfn_glEnableClientState  EnableClientState  = nullptr;
+    __nexa_pfn_glDisableClientState DisableClientState = nullptr;
+    __nexa_pfn_glVertexPointer      VertexPointer      = nullptr;
+    __nexa_pfn_glColorPointer       ColorPointer       = nullptr;
+    __nexa_pfn_glDrawArrays         DrawArrays         = nullptr;
+    // And these three for a cached mesh, which is placed by a matrix rather
+    // than by moving every vertex of it on the CPU.
+    __nexa_pfn_glPushMatrix         PushMatrix         = nullptr;
+    __nexa_pfn_glPopMatrix          PopMatrix          = nullptr;
+    __nexa_pfn_glMultMatrixf        MultMatrixf        = nullptr;
     int loaded = 0;
 };
 static __nexa_GL __nexa_gl;
@@ -292,9 +316,13 @@ struct __nexa_G3State {
     // there is a renderer that is not built yet.
     std::string requested = "opengl";
 
-    // Frame cap: 0 is uncapped, which is where every program starts.
+    // Frame cap from gfx3d.maxfps: 0 is none.
     double frame_ms = 0.0;
     double next_deadline = 0.0;
+    // Whether a frame waits for the monitor's refresh (gfx3d.vsync). On from the
+    // start: uncapped, a scene with nothing moving drew thousands of frames a
+    // second and kept a CPU core and the GPU busy doing it.
+    int vsync = 1;
 
     // --- input ---------------------------------------------------------
     // Two snapshots of every nameable key, taken once per gfx3d.poll. key()
@@ -470,7 +498,7 @@ static void __nexa_g3_xf_dir(float* x, float* y, float* z) {
 // __nexa_g3_prim_size is for: half a triangle drawn on its own is worse
 // than the truncation it replaced.
 
-#define NEXA_G3_MAXVERTS 3072
+#define NEXA_G3_MAXVERTS 16384
 
 static float __nexa_g3_vb[NEXA_G3_MAXVERTS * 6];  // x, y, z, r, g, b
 static int   __nexa_g3_vn = 0;
@@ -658,6 +686,14 @@ static int __nexa_g3_load_gl(void) {
     __nexa_gl.TexParameteri  = (__nexa_pfn_glTexParameteri)__nexa_g3_sym("glTexParameteri");
     __nexa_gl.BlendFunc      = (__nexa_pfn_glBlendFunc)__nexa_g3_sym("glBlendFunc");
     __nexa_gl.TexCoord2f     = (__nexa_pfn_glTexCoord2f)__nexa_g3_sym("glTexCoord2f");
+    __nexa_gl.EnableClientState  = (__nexa_pfn_glEnableClientState)__nexa_g3_sym("glEnableClientState");
+    __nexa_gl.DisableClientState = (__nexa_pfn_glDisableClientState)__nexa_g3_sym("glDisableClientState");
+    __nexa_gl.VertexPointer      = (__nexa_pfn_glVertexPointer)__nexa_g3_sym("glVertexPointer");
+    __nexa_gl.ColorPointer       = (__nexa_pfn_glColorPointer)__nexa_g3_sym("glColorPointer");
+    __nexa_gl.DrawArrays         = (__nexa_pfn_glDrawArrays)__nexa_g3_sym("glDrawArrays");
+    __nexa_gl.PushMatrix         = (__nexa_pfn_glPushMatrix)__nexa_g3_sym("glPushMatrix");
+    __nexa_gl.PopMatrix          = (__nexa_pfn_glPopMatrix)__nexa_g3_sym("glPopMatrix");
+    __nexa_gl.MultMatrixf        = (__nexa_pfn_glMultMatrixf)__nexa_g3_sym("glMultMatrixf");
     __nexa_gl.loaded = 1;
     return 1;
 }
@@ -779,6 +815,17 @@ static void __nexa_g3_platform_poll(void) {
 
 static void __nexa_g3_platform_swap(void) {
     if (__nexa_g3.hdc) SwapBuffers(__nexa_g3.hdc);
+}
+
+// Whether SwapBuffers waits for the monitor's refresh. An extension, found
+// through the context that has to be current by now.
+static void __nexa_g3_platform_vsync(int on) {
+    typedef PROC (WINAPI *__nexa_pfn_wglGetProcAddress)(LPCSTR);
+    typedef BOOL (WINAPI *__nexa_pfn_wglSwapIntervalEXT)(int);
+    __nexa_pfn_wglGetProcAddress gpa = (__nexa_pfn_wglGetProcAddress)__nexa_g3_sym("wglGetProcAddress");
+    if (!gpa) return;
+    __nexa_pfn_wglSwapIntervalEXT si = (__nexa_pfn_wglSwapIntervalEXT)gpa("wglSwapIntervalEXT");
+    if (si) si(on ? 1 : 0);
 }
 
 static void __nexa_g3_platform_close(void) {
@@ -947,6 +994,14 @@ static void __nexa_g3_platform_poll(void) {
 
 static void __nexa_g3_platform_swap(void) {
     if (__nexa_g3_nsctx) [__nexa_g3_nsctx flushBuffer];
+}
+
+// NSOpenGLContextParameterSwapInterval, spelled as its number (222) so the
+// older and newer SDK names both compile.
+static void __nexa_g3_platform_vsync(int on) {
+    if (!__nexa_g3_nsctx) return;
+    GLint v = on ? 1 : 0;
+    [__nexa_g3_nsctx setValues:&v forParameter:(NSOpenGLContextParameter)222];
 }
 
 static void __nexa_g3_platform_close(void) {
@@ -1125,6 +1180,9 @@ static void __nexa_g3_platform_swap(void) {
     emscripten_sleep(0);
 }
 
+// The browser paces the canvas itself.
+static void __nexa_g3_platform_vsync(int) {}
+
 static void __nexa_g3_platform_close(void) {
     // The canvas belongs to the page, not to the program: there is nothing to
     // destroy, and a closed gfx3d window on wasm simply stops being drawn to.
@@ -1222,6 +1280,46 @@ static void __nexa_g3_platform_swap(void) {
     if (glXSwapBuffers && __nexa_g3.dpy && __nexa_g3.win) glXSwapBuffers(__nexa_g3.dpy, __nexa_g3.win);
 }
 
+// Three extensions do this, depending on the driver; only one the server
+// actually lists is called, since glXGetProcAddress answers for any name.
+static void __nexa_g3_platform_vsync(int on) {
+    if (!__nexa_g3.dpy || !__nexa_g3.win) return;
+    typedef const char* (*__nexa_pfn_glXQueryExtensionsString)(Display*, int);
+    typedef void* (*__nexa_pfn_glXGetProcAddressARB)(const unsigned char*);
+    __nexa_pfn_glXQueryExtensionsString qes =
+        (__nexa_pfn_glXQueryExtensionsString)__nexa_g3_sym("glXQueryExtensionsString");
+    __nexa_pfn_glXGetProcAddressARB gpa = (__nexa_pfn_glXGetProcAddressARB)__nexa_g3_sym("glXGetProcAddressARB");
+    const char* ext = qes ? qes(__nexa_g3.dpy, DefaultScreen(__nexa_g3.dpy)) : nullptr;
+    if (!ext) return;
+    auto has = [&](const char* name) {
+        const size_t n = std::strlen(name);
+        for (const char* p = std::strstr(ext, name); p; p = std::strstr(p + 1, name)) {
+            if ((p == ext || p[-1] == ' ') && (p[n] == ' ' || p[n] == '\0')) return true;
+        }
+        return false;
+    };
+    auto get = [&](const char* name) -> void* {
+        void* f = gpa ? gpa((const unsigned char*)name) : nullptr;
+        return f ? f : __nexa_g3_sym(name);
+    };
+    if (has("GLX_EXT_swap_control")) {
+        typedef void (*__nexa_pfn_glXSwapIntervalEXT)(Display*, unsigned long, int);
+        if (void* f = get("glXSwapIntervalEXT")) {
+            ((__nexa_pfn_glXSwapIntervalEXT)f)(__nexa_g3.dpy, (unsigned long)__nexa_g3.win, on ? 1 : 0);
+            return;
+        }
+    }
+    if (has("GLX_MESA_swap_control")) {
+        typedef int (*__nexa_pfn_glXSwapIntervalMESA)(unsigned int);
+        if (void* f = get("glXSwapIntervalMESA")) { ((__nexa_pfn_glXSwapIntervalMESA)f)(on ? 1u : 0u); return; }
+    }
+    // SGI's cannot switch it off, only on.
+    if (on && has("GLX_SGI_swap_control")) {
+        typedef int (*__nexa_pfn_glXSwapIntervalSGI)(int);
+        if (void* f = get("glXSwapIntervalSGI")) ((__nexa_pfn_glXSwapIntervalSGI)f)(1);
+    }
+}
+
 static void __nexa_g3_platform_close(void) {
     __nexa_pfn_glXMakeCurrent    glXMakeCurrent    = (__nexa_pfn_glXMakeCurrent)__nexa_g3_sym("glXMakeCurrent");
     __nexa_pfn_glXDestroyContext glXDestroyContext = (__nexa_pfn_glXDestroyContext)__nexa_g3_sym("glXDestroyContext");
@@ -1251,6 +1349,7 @@ static int  __nexa_g3_platform_open(const std::string& title, int w, int h) {
 }
 static void __nexa_g3_platform_poll(void) {}
 static void __nexa_g3_platform_swap(void) {}
+static void __nexa_g3_platform_vsync(int) {}
 static void __nexa_g3_platform_close(void) {}
 
 
@@ -1569,11 +1668,46 @@ static void __nexa_g3_shade_rgb(float nx, float ny, float nz,
     *kb = a + lit * __nexa_g3_lb;
 }
 
+// --- cached meshes ----------------------------------------------------------
+//
+// A sphere, a box or a model has the same shape every frame; only where it is,
+// how big and how it is lit change. So its triangles are built once, in its
+// own space, and drawn with one matrix and one call. The colour of each corner
+// still comes from __nexa_g3_shade_rgb -- the same light, the same numbers --
+// but only when something it depends on changes: the colour asked for, the
+// light, the ambient level, or the turn gfx3d.rotate gives the normals. A
+// scene that is not re-lit costs nothing per vertex on the CPU.
+struct __nexa_G3Mesh {
+    std::vector<float> pos;  // x, y, z a corner, in the shape's own space
+    std::vector<float> nrm;  // its unit normal (0, 0, 0 where there is none)
+    int two_sided = 0;
+    struct Lit {
+        float key[19];
+        std::vector<float> col;  // r, g, b a corner, 0..1
+        unsigned used = 0;
+    };
+    Lit lit[4];              // a few colours of one shape, e.g. red and blue balls
+    int n_lit = 0;
+    unsigned clock = 0;
+};
+
+// While a mesh is being built, the shape code below writes its corners here
+// instead of lighting and sending them.
+static __nexa_G3Mesh* __nexa_g3_capture = nullptr;
+
 // One vertex, shaded by the direction the surface points THERE. Curved
 // surfaces pass the true normal at the point and come out smooth.
 static void __nexa_g3_vert_n(float x, float y, float z,
                              float nx, float ny, float nz,
                              float r, float g, float b) {
+    if (__nexa_g3_capture) {
+        __nexa_G3Mesh& m = *__nexa_g3_capture;
+        m.pos.push_back(x); m.pos.push_back(y); m.pos.push_back(z);
+        float len = std::sqrt(nx * nx + ny * ny + nz * nz);
+        if (len < 1e-8f) len = 0.0f; else len = 1.0f / len;
+        m.nrm.push_back(nx * len); m.nrm.push_back(ny * len); m.nrm.push_back(nz * len);
+        return;
+    }
     // The position is transformed inside batch_vert; the normal has to be
     // turned here, before it decides how lit this corner is. Scaling is
     // uniform, so the length it picks up washes out in the normalise.
@@ -1610,6 +1744,31 @@ static void __nexa_g3_face(float ax, float ay, float az,
 // around its axis, and half as many rings along it, which is the trade a
 // module with no level of detail has to pick once.
 #define NEXA_G3_SEG 24
+
+// The angles every curved shape is cut at never change, so their sines and
+// cosines are worked out once, from the same expressions the shapes used to
+// evaluate for every segment of every shape of every frame: around the axis
+// (SEG + 1 entries, so i + 1 needs no wrap) and up a hemisphere (rings + 1).
+struct __nexa_G3Trig {
+    float ca[NEXA_G3_SEG + 1], sa[NEXA_G3_SEG + 1];
+    float ct[NEXA_G3_SEG / 2 + 1], st[NEXA_G3_SEG / 2 + 1];
+    __nexa_G3Trig() {
+        const float twopi = 6.28318530717958647692f;
+        const float halfpi = 1.57079632679489661923f;
+        for (int i = 0; i <= NEXA_G3_SEG; i++) {
+            float a = twopi * (float)i / (float)NEXA_G3_SEG;
+            ca[i] = std::cos(a);
+            sa[i] = std::sin(a);
+        }
+        const int rings = NEXA_G3_SEG / 2;
+        for (int j = 0; j <= rings; j++) {
+            float t = halfpi * (float)j / (float)rings;
+            ct[j] = std::cos(t);
+            st[j] = std::sin(t);
+        }
+    }
+};
+static const __nexa_G3Trig __nexa_g3_trig;
 
 // Two unit vectors perpendicular to d and to each other. Any pair will do --
 // a surface of revolution has no preferred seam -- so this takes the axis
@@ -1656,12 +1815,10 @@ static void __nexa_g3_band(const float* c0, float r0, const float* c1, float r1,
                            const float* u, const float* v, const float* d,
                            float nlean0, float nlean1,
                            float r, float g, float b) {
-    const float twopi = 6.28318530717958647692f;
+    const __nexa_G3Trig& T = __nexa_g3_trig;
     for (int i = 0; i < NEXA_G3_SEG; i++) {
-        float a0 = twopi * (float)i / (float)NEXA_G3_SEG;
-        float a1 = twopi * (float)(i + 1) / (float)NEXA_G3_SEG;
-        float ca0 = std::cos(a0), sa0 = std::sin(a0);
-        float ca1 = std::cos(a1), sa1 = std::sin(a1);
+        float ca0 = T.ca[i], sa0 = T.sa[i];
+        float ca1 = T.ca[i + 1], sa1 = T.sa[i + 1];
 
         float ra0[3] = {u[0] * ca0 + v[0] * sa0, u[1] * ca0 + v[1] * sa0, u[2] * ca0 + v[2] * sa0};
         float ra1[3] = {u[0] * ca1 + v[0] * sa1, u[1] * ca1 + v[1] * sa1, u[2] * ca1 + v[2] * sa1};
@@ -1697,13 +1854,11 @@ static void __nexa_g3_band(const float* c0, float r0, const float* c1, float r1,
 static void __nexa_g3_disc(const float* c, float rad,
                            const float* u, const float* v, const float* d, float sign,
                            float r, float g, float b) {
-    const float twopi = 6.28318530717958647692f;
+    const __nexa_G3Trig& T = __nexa_g3_trig;
     float n[3] = {d[0] * sign, d[1] * sign, d[2] * sign};
     for (int i = 0; i < NEXA_G3_SEG; i++) {
-        float a0 = twopi * (float)i / (float)NEXA_G3_SEG;
-        float a1 = twopi * (float)(i + 1) / (float)NEXA_G3_SEG;
-        float ca0 = std::cos(a0), sa0 = std::sin(a0);
-        float ca1 = std::cos(a1), sa1 = std::sin(a1);
+        float ca0 = T.ca[i], sa0 = T.sa[i];
+        float ca1 = T.ca[i + 1], sa1 = T.sa[i + 1];
         float p0[3], p1[3];
         for (int k = 0; k < 3; k++) {
             p0[k] = c[k] + (u[k] * ca0 + v[k] * sa0) * rad;
@@ -1727,7 +1882,7 @@ static void __nexa_g3_cap(const float* c, float rad,
                           const float* u, const float* v, const float* d, float sign,
                           float r, float g, float b) {
     const int rings = NEXA_G3_SEG / 2;
-    const float halfpi = 1.57079632679489661923f;
+    const __nexa_G3Trig& T = __nexa_g3_trig;
     float dd[3] = {d[0] * sign, d[1] * sign, d[2] * sign};
     // (u, v, d) is right-handed, so (u, v, -d) is not: a cap bulging the
     // other way has to swap the two ring vectors to stay wound outward.
@@ -1737,10 +1892,8 @@ static void __nexa_g3_cap(const float* c, float rad,
     const float* cu = (sign > 0.0f) ? u : v;
     const float* cv = (sign > 0.0f) ? v : u;
     for (int j = 0; j < rings; j++) {
-        float t0 = halfpi * (float)j / (float)rings;
-        float t1 = halfpi * (float)(j + 1) / (float)rings;
-        float r0 = rad * std::cos(t0), r1 = rad * std::cos(t1);
-        float h0 = rad * std::sin(t0), h1 = rad * std::sin(t1);
+        float r0 = rad * T.ct[j], r1 = rad * T.ct[j + 1];
+        float h0 = rad * T.st[j], h1 = rad * T.st[j + 1];
         float c0[3] = {c[0] + dd[0] * h0, c[1] + dd[1] * h0, c[2] + dd[2] * h0};
         float c1[3] = {c[0] + dd[0] * h1, c[1] + dd[1] * h1, c[2] + dd[2] * h1};
         // On a sphere the normal is the direction from the centre, which is
@@ -1749,6 +1902,123 @@ static void __nexa_g3_cap(const float* c, float rad,
         float l1 = (r1 > 1e-6f) ? (h1 / r1) : 1e6f;
         __nexa_g3_band(c0, r0, c1, r1, cu, cv, dd, l0, l1, r, g, b);
     }
+}
+
+// Draws a cached mesh with its corners' colours and one matrix, M, taking its
+// own space to world space. Answers 0 where the backend cannot, and the shape
+// is then drawn the way it always was. Defined with each backend below.
+static int __nexa_g3_mesh_submit(const __nexa_G3Mesh& m, const float* col, const float* M);
+
+// The colours of a mesh's corners for this colour, light and rotation, from a
+// small cache: worked out again only when one of those has changed.
+static const float* __nexa_g3_mesh_colors(__nexa_G3Mesh& m, float r, float g, float b) {
+    float key[19] = {r, g, b, __nexa_g3_lx, __nexa_g3_ly, __nexa_g3_lz,
+                     __nexa_g3_lr, __nexa_g3_lg, __nexa_g3_lb, __nexa_g3_ambient,
+                     1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+    if (!__nexa_g3.xf_id) {
+        // Only the part of the transform that turns a normal decides the light.
+        const float* x = __nexa_g3.xf;
+        const float lin[9] = {x[0], x[1], x[2], x[4], x[5], x[6], x[8], x[9], x[10]};
+        for (int i = 0; i < 9; i++) key[10 + i] = lin[i];
+    }
+    m.clock++;
+    for (int i = 0; i < m.n_lit; i++) {
+        if (std::memcmp(m.lit[i].key, key, sizeof(key)) == 0) {
+            m.lit[i].used = m.clock;
+            return m.lit[i].col.data();
+        }
+    }
+    int slot = 0;
+    if (m.n_lit < 4) {
+        slot = m.n_lit++;
+    } else {
+        for (int i = 1; i < 4; i++) if (m.lit[i].used < m.lit[slot].used) slot = i;
+    }
+    __nexa_G3Mesh::Lit& L = m.lit[slot];
+    std::memcpy(L.key, key, sizeof(key));
+    L.used = m.clock;
+    const size_t n = m.nrm.size() / 3;
+    L.col.resize(n * 3);
+    const int saved = __nexa_g3_two_sided;
+    __nexa_g3_two_sided = m.two_sided;
+    for (size_t i = 0; i < n; i++) {
+        float nx = m.nrm[i * 3], ny = m.nrm[i * 3 + 1], nz = m.nrm[i * 3 + 2];
+        __nexa_g3_xf_dir(&nx, &ny, &nz);
+        float kr, kg, kb;
+        __nexa_g3_shade_rgb(nx, ny, nz, &kr, &kg, &kb);
+        L.col[i * 3]     = (r * kr) * (1.0f / 255.0f);
+        L.col[i * 3 + 1] = (g * kg) * (1.0f / 255.0f);
+        L.col[i * 3 + 2] = (b * kb) * (1.0f / 255.0f);
+    }
+    __nexa_g3_two_sided = saved;
+    return L.col.data();
+}
+
+// Draws m scaled by (sx, sy, sz) and moved to (tx, ty, tz), inside whatever
+// gfx3d.translate / rotate / scale set up -- the order a vertex went through on
+// the CPU. 1 if it was drawn this way; 0 means use the shape's own code.
+static int __nexa_g3_mesh_draw(__nexa_G3Mesh& m, float r, float g, float b,
+                               float tx, float ty, float tz, float sx, float sy, float sz) {
+    if (m.pos.empty()) return 0;
+    float ts[16] = {sx, 0.0f, 0.0f, 0.0f,
+                    0.0f, sy, 0.0f, 0.0f,
+                    0.0f, 0.0f, sz, 0.0f,
+                    tx, ty, tz, 1.0f};
+    float M[16];
+    if (__nexa_g3.xf_id) std::memcpy(M, ts, sizeof(M));
+    else __nexa_g3_mul4(M, __nexa_g3.xf, ts);
+    return __nexa_g3_mesh_submit(m, __nexa_g3_mesh_colors(m, r, g, b), M);
+}
+
+// The unit sphere: radius 1 about the origin, built by the same caps a sphere
+// has always been drawn with.
+static __nexa_G3Mesh& __nexa_g3_sphere_mesh(void) {
+    static __nexa_G3Mesh m;
+    if (m.pos.empty()) {
+        const float c[3] = {0.0f, 0.0f, 0.0f};
+        float d[3] = {0.0f, 1.0f, 0.0f};
+        float u[3], v[3];
+        __nexa_g3_basis(d, u, v);
+        __nexa_g3_capture = &m;
+        __nexa_g3_cap(c, 1.0f, u, v, d,  1.0f, 0.0f, 0.0f, 0.0f);
+        __nexa_g3_cap(c, 1.0f, u, v, d, -1.0f, 0.0f, 0.0f, 0.0f);
+        __nexa_g3_capture = nullptr;
+    }
+    return m;
+}
+
+// The unit box: 1 on a side about the origin, a normal per face so its edges
+// stay sharp. Scaled to w, h, d it keeps those normals, which are along the axes.
+static __nexa_G3Mesh& __nexa_g3_box_mesh(void) {
+    static __nexa_G3Mesh m;
+    if (m.pos.empty()) {
+        const float sx[8] = {-1, 1, 1, -1, -1, 1, 1, -1};
+        const float sy[8] = {-1, -1, 1, 1, -1, -1, 1, 1};
+        const float sz[8] = { 1, 1, 1,  1, -1, -1, -1, -1};
+        static const int face[6][6] = {
+            {0, 1, 2, 0, 2, 3}, {1, 5, 6, 1, 6, 2}, {5, 4, 7, 5, 7, 6},
+            {4, 0, 3, 4, 3, 7}, {3, 2, 6, 3, 6, 7}, {4, 5, 1, 4, 1, 0},
+        };
+        for (int f = 0; f < 6; f++) {
+            for (int t = 0; t < 2; t++) {
+                const int* q = &face[f][t * 3];
+                float a[3] = {sx[q[0]] * 0.5f, sy[q[0]] * 0.5f, sz[q[0]] * 0.5f};
+                float b[3] = {sx[q[1]] * 0.5f, sy[q[1]] * 0.5f, sz[q[1]] * 0.5f};
+                float c[3] = {sx[q[2]] * 0.5f, sy[q[2]] * 0.5f, sz[q[2]] * 0.5f};
+                float ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+                float vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+                float nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+                float len = std::sqrt(nx * nx + ny * ny + nz * nz);
+                nx /= len; ny /= len; nz /= len;
+                const float* pts[3] = {a, b, c};
+                for (int k = 0; k < 3; k++) {
+                    m.pos.push_back(pts[k][0]); m.pos.push_back(pts[k][1]); m.pos.push_back(pts[k][2]);
+                    m.nrm.push_back(nx); m.nrm.push_back(ny); m.nrm.push_back(nz);
+                }
+            }
+        }
+    }
+    return m;
 }
 
 // --- submitting the batch ---------------------------------------------------
@@ -1794,6 +2064,9 @@ static void __nexa_g3_batch_submit(void) {
     if (__nexa_g3_two_sided) glEnable(NEXA_GL_CULL_FACE);
 }
 
+// Not here yet: a cached shape goes through the batch as it always has.
+static int __nexa_g3_mesh_submit(const __nexa_G3Mesh&, const float*, const float*) { return 0; }
+
 #else
 
 // The fixed-function pipeline takes the camera as two matrices and keeps it,
@@ -1807,9 +2080,45 @@ static void __nexa_g3_platform_camera(void) {
     __nexa_gl.LoadMatrixf(__nexa_g3.view);
 }
 
+// A cached mesh: its own arrays, placed by M on top of the camera. The camera
+// is what gfx3d.clear left on the modelview stack, and is put back after.
+static int __nexa_g3_mesh_submit(const __nexa_G3Mesh& m, const float* col, const float* M) {
+    if (!__nexa_gl.loaded || !__nexa_gl.DrawArrays || !__nexa_gl.VertexPointer ||
+        !__nexa_gl.ColorPointer || !__nexa_gl.EnableClientState || !__nexa_gl.DisableClientState ||
+        !__nexa_gl.PushMatrix || !__nexa_gl.PopMatrix || !__nexa_gl.MultMatrixf) return 0;
+    if (m.two_sided) __nexa_gl.Disable(NEXA_GL_CULL_FACE);
+    __nexa_gl.PushMatrix();
+    __nexa_gl.MultMatrixf(M);
+    __nexa_gl.EnableClientState(NEXA_GL_VERTEX_ARRAY);
+    __nexa_gl.EnableClientState(NEXA_GL_COLOR_ARRAY);
+    __nexa_gl.VertexPointer(3, NEXA_GL_FLOAT, 0, m.pos.data());
+    __nexa_gl.ColorPointer(3, NEXA_GL_FLOAT, 0, col);
+    __nexa_gl.DrawArrays(NEXA_GL_TRIANGLES, 0, (__nexa_GLsizei)(m.pos.size() / 3));
+    __nexa_gl.DisableClientState(NEXA_GL_COLOR_ARRAY);
+    __nexa_gl.DisableClientState(NEXA_GL_VERTEX_ARRAY);
+    __nexa_gl.PopMatrix();
+    if (m.two_sided) __nexa_gl.Enable(NEXA_GL_CULL_FACE);
+    return 1;
+}
+
 static void __nexa_g3_batch_submit(void) {
     if (!__nexa_gl.loaded) return;
     if (__nexa_g3_two_sided) __nexa_gl.Disable(NEXA_GL_CULL_FACE);
+    // The whole batch in one call, straight out of the buffer it was written
+    // to. Vertex by vertex it was two calls a corner -- a few hundred thousand a
+    // frame for a scene of spheres -- and the driver's time went on the calls.
+    if (__nexa_gl.DrawArrays && __nexa_gl.VertexPointer && __nexa_gl.ColorPointer &&
+        __nexa_gl.EnableClientState && __nexa_gl.DisableClientState) {
+        __nexa_gl.EnableClientState(NEXA_GL_VERTEX_ARRAY);
+        __nexa_gl.EnableClientState(NEXA_GL_COLOR_ARRAY);
+        __nexa_gl.VertexPointer(3, NEXA_GL_FLOAT, 6 * (int)sizeof(float), &__nexa_g3_vb[0]);
+        __nexa_gl.ColorPointer(3, NEXA_GL_FLOAT, 6 * (int)sizeof(float), &__nexa_g3_vb[3]);
+        __nexa_gl.DrawArrays(__nexa_g3_prim ? NEXA_GL_LINES : NEXA_GL_TRIANGLES, 0, __nexa_g3_vn);
+        __nexa_gl.DisableClientState(NEXA_GL_COLOR_ARRAY);
+        __nexa_gl.DisableClientState(NEXA_GL_VERTEX_ARRAY);
+        if (__nexa_g3_two_sided) __nexa_gl.Enable(NEXA_GL_CULL_FACE);
+        return;
+    }
     __nexa_gl.Begin(__nexa_g3_prim ? NEXA_GL_LINES : NEXA_GL_TRIANGLES);
     for (int i = 0; i < __nexa_g3_vn; i++) {
         const float* v = &__nexa_g3_vb[i * 6];
@@ -1866,6 +2175,7 @@ static int __nexa_gfx3d_open(const std::string& title, int w, int h) {
     __nexa_gl.FrontFace(NEXA_GL_CCW);
     __nexa_gfx3d_reset();
     __nexa_g3.ready = 1;
+    __nexa_g3_platform_vsync(__nexa_g3.vsync);
     __nexa_g3_overlay_open(__nexa_g3.w, __nexa_g3.h);
     return 1;
 }
@@ -1987,6 +2297,8 @@ static void __nexa_gfx3d_box(double cx, double cy, double cz,
     if (w < 0.0) w = -w;
     if (h < 0.0) h = -h;
     if (d < 0.0) d = -d;
+    if (__nexa_g3_mesh_draw(__nexa_g3_box_mesh(), (float)r, (float)g, (float)b,
+                            (float)cx, (float)cy, (float)cz, (float)w, (float)h, (float)d)) return;
     float hx = (float)w * 0.5f, hy = (float)h * 0.5f, hz = (float)d * 0.5f;
     float x = (float)cx, y = (float)cy, z = (float)cz;
 
@@ -2035,6 +2347,9 @@ static void __nexa_gfx3d_sphere(double cx, double cy, double cz, double rad,
     if (g < 0) g = 0; if (g > 255) g = 255;
     if (b < 0) b = 0; if (b > 255) b = 255;
     if (rad < 0.0) rad = -rad;
+    const float fr = (float)rad;
+    if (__nexa_g3_mesh_draw(__nexa_g3_sphere_mesh(), (float)r, (float)g, (float)b,
+                            (float)cx, (float)cy, (float)cz, fr, fr, fr)) return;
     float c[3] = {(float)cx, (float)cy, (float)cz};
     float d[3] = {0.0f, 1.0f, 0.0f};
     float u[3], v[3];
@@ -2178,7 +2493,12 @@ static void __nexa_gfx3d_present(void) {
     // Last thing before the swap, so it is over everything the frame drew.
     __nexa_g3_overlay_present();
     __nexa_g3_platform_swap();
-    if (__nexa_g3.frame_ms <= 0.0) return;
+    // With vsync on, the swap is what waits. A driver or a remote desktop can
+    // ignore the request, though, and then nothing would: so vsync also keeps
+    // a ceiling of 240 frames a second, which a working vsync never reaches.
+    double period = __nexa_g3.frame_ms;
+    if (period <= 0.0 && __nexa_g3.vsync) period = 1000.0 / 240.0;
+    if (period <= 0.0) return;
 
     // The wait is on a deadline, not a duration, so pacing does not drift by
     // however long the frame's drawing took. A frame that overruns by more
@@ -2186,7 +2506,7 @@ static void __nexa_gfx3d_present(void) {
     // firing off the frames it owes. Same rule as gfx.maxfps.
     double now = __nexa_g3_now_ms();
     if (__nexa_g3.next_deadline == 0.0) {
-        __nexa_g3.next_deadline = now + __nexa_g3.frame_ms;
+        __nexa_g3.next_deadline = now + period;
         return;
     }
     double wait = __nexa_g3.next_deadline - now;
@@ -2199,12 +2519,24 @@ static void __nexa_gfx3d_present(void) {
         ts.tv_nsec = (long)((wait - (double)ts.tv_sec * 1000.0) * 1000000.0);
         nanosleep(&ts, nullptr);
 #endif
-        __nexa_g3.next_deadline += __nexa_g3.frame_ms;
-    } else if (-wait > __nexa_g3.frame_ms) {
-        __nexa_g3.next_deadline = __nexa_g3_now_ms() + __nexa_g3.frame_ms;
+        __nexa_g3.next_deadline += period;
+    } else if (-wait > period) {
+        __nexa_g3.next_deadline = __nexa_g3_now_ms() + period;
     } else {
-        __nexa_g3.next_deadline += __nexa_g3.frame_ms;
+        __nexa_g3.next_deadline += period;
     }
+}
+
+// gfx3d.vsync(on) and gfx3d.vsync(): whether a frame waits for the monitor.
+static int __nexa_gfx3d_vsync(int on) {
+    __nexa_g3.vsync = on ? 1 : 0;
+    __nexa_g3.next_deadline = 0.0;
+    if (__nexa_g3.ready) __nexa_g3_platform_vsync(__nexa_g3.vsync);
+    return __nexa_g3.vsync;
+}
+
+static int __nexa_gfx3d_vsync_get(void) {
+    return __nexa_g3.vsync;
 }
 
 
@@ -2421,6 +2753,9 @@ struct __nexa_G3Model {
     std::vector<float> n;
     float cx, cy, cz;
     float inv;
+    // The same triangles centred and sized to 1, with unit normals, built the
+    // first time the model is drawn; gfx3d.draw places them with a matrix.
+    __nexa_G3Mesh mesh;
 };
 
 // Slot 0 is the reserved "no model" entry, so handles start at 1 and 0 is
@@ -2614,7 +2949,26 @@ static void __nexa_gfx3d_draw(int id, double x, double y, double z, double scale
     if (r < 0) r = 0; if (r > 255) r = 255;
     if (g < 0) g = 0; if (g > 255) g = 255;
     if (b < 0) b = 0; if (b > 255) b = 255;
-    const __nexa_G3Model& m = __nexa_g3_models[(size_t)id];
+    __nexa_G3Model& mm = __nexa_g3_models[(size_t)id];
+    if (mm.mesh.pos.empty() && !mm.p.empty()) {
+        mm.mesh.two_sided = 1;
+        const size_t nv = mm.p.size() / 3;
+        mm.mesh.pos.resize(nv * 3);
+        mm.mesh.nrm.resize(nv * 3);
+        for (size_t i = 0; i < nv; i++) {
+            mm.mesh.pos[i * 3]     = (mm.p[i * 3] - mm.cx) * mm.inv;
+            mm.mesh.pos[i * 3 + 1] = (mm.p[i * 3 + 1] - mm.cy) * mm.inv;
+            mm.mesh.pos[i * 3 + 2] = (mm.p[i * 3 + 2] - mm.cz) * mm.inv;
+            float nx = mm.n[i * 3], ny = mm.n[i * 3 + 1], nz = mm.n[i * 3 + 2];
+            float len = std::sqrt(nx * nx + ny * ny + nz * nz);
+            len = (len < 1e-8f) ? 0.0f : 1.0f / len;
+            mm.mesh.nrm[i * 3] = nx * len; mm.mesh.nrm[i * 3 + 1] = ny * len; mm.mesh.nrm[i * 3 + 2] = nz * len;
+        }
+    }
+    const float fs = (float)scale;
+    if (__nexa_g3_mesh_draw(mm.mesh, (float)r, (float)g, (float)b,
+                            (float)x, (float)y, (float)z, fs, fs, fs)) return;
+    const __nexa_G3Model& m = mm;
     const float s = (float)scale * m.inv;
     // Two-sided, for the reason gfx3d.tri is: which way a face is wound is the
     // file's decision and plenty of exporters are inconsistent about it. Culled
