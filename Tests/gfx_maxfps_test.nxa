@@ -33,11 +33,11 @@ fn check(label: string, ok: int) {
 fn main() {
     gfx.open("maxfps", 8, 8, 1);
 
-    // Thirty frames of nothing. Uncapped this is the default and costs
-    // microseconds; it is the baseline the cap is measured against.
+    // Thirty frames of nothing, under the cap every window starts with: 60 a
+    // second, so 29 waits of 16.7 ms.
     let t0 = time.now_ms();
     frames(30);
-    let uncapped = time.now_ms() - t0;
+    let default_cap = time.now_ms() - t0;
 
     // The same thirty frames at 50 fps: 29 waits of 20 ms.
     gfx.maxfps(50);
@@ -55,7 +55,7 @@ fn main() {
     frames(10);
     let after_overrun = time.now_ms() - t2;
 
-    // And zero puts things back exactly as they started.
+    // And zero takes the cap off altogether.
     gfx.maxfps(0);
     let t3 = time.now_ms();
     frames(30);
@@ -63,7 +63,7 @@ fn main() {
 
     gfx.close();
 
-    check("uncapped_is_the_speed_of_the_machine", (uncapped < 200.0) ? 1 : 0);
+    check("every_window_starts_at_sixty", (default_cap >= 440.0) ? 1 : 0);
     check("fifty_fps_takes_the_time_fifty_fps_takes", (capped >= 500.0) ? 1 : 0);
     check("an_overrun_frame_is_not_paid_back_in_a_burst", (after_overrun >= 150.0) ? 1 : 0);
     check("zero_removes_the_cap", (released < 200.0) ? 1 : 0);

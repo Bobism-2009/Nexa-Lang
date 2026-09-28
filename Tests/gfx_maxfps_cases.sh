@@ -6,9 +6,9 @@
 #
 #   codegen   gfx.maxfps(n) must reach __nexa_gfx_maxfps(n), the pacing must be
 #             the last thing present() does, and a program that never asks for
-#             a cap must carry none of it -- the runtime is sliced to the gfx
-#             builtins a program calls (BOB-25). Transpile only (--source), so
-#             this layer runs anywhere NexaC does.
+#             a cap must carry it all the same: every window starts capped at
+#             60. Transpile only (--source), so this layer runs anywhere NexaC
+#             does.
 #
 #   timing    The limiter changes nothing you can look at: no pixel moves and
 #             nothing is returned. The only thing it produces is time, so the
@@ -52,7 +52,7 @@ transpile() {
     return 0
 }
 
-echo "-- codegen: what a cap emits, and what no cap does not"
+echo "-- codegen: a cap is emitted whether or not the program asks for one"
 
 CAPPED='    gfx.open("t", 8, 8, 1);
     gfx.maxfps(60);
@@ -60,24 +60,20 @@ CAPPED='    gfx.open("t", 8, 8, 1);
 UNCAPPED='    gfx.open("t", 8, 8, 1);
     gfx.present();'
 
-# emits <label> <grep-ERE> <flags...>  -- present in the capped program, absent
-# from the uncapped one. Matching a definition rather than a call means the
-# program's own main() cannot satisfy it.
+# emits <label> <grep-ERE>  -- in both programs: the one that sets a cap, and
+# the one that never mentions it and gets the default. Matching a definition
+# rather than a call means the program's own main() cannot satisfy it.
 emits() {
     label=$1
     want=$2
-    shift 2
-    if grep -Eq "$want" "$WORK/capped$SUFFIX.cpp"; then
-        if grep -Eq "$want" "$WORK/uncapped$SUFFIX.cpp"; then
-            echo "FAIL $label: a program with no cap carried /$want/ anyway"
+    for f in capped uncapped; do
+        if ! grep -Eq "$want" "$WORK/$f$SUFFIX.cpp"; then
+            echo "FAIL $label: the $f program did not carry /$want/"
             fails=$((fails + 1))
             return
         fi
-        echo "ok $label"
-        return
-    fi
-    echo "FAIL $label: a program with a cap did not carry /$want/"
-    fails=$((fails + 1))
+    done
+    echo "ok $label"
 }
 
 run_codegen() {

@@ -622,9 +622,10 @@ ARGUMENT TYPES
                                    back buffer, then one BitBlt; letterboxed integer scale.
                                    wasm: putImageData, then yield so the tab can composite)
   gfx.maxfps(n)                  - cap the loop at n frames a second; gfx.present() waits
-                                   out whatever the frame did not use. gfx.maxfps(0), or
-                                   any n below it, removes the cap; no cap is the default
-                                   and is where every program starts.
+                                   out whatever the frame did not use. Every window starts
+                                   capped at 60, which std/ui windows share; gfx.maxfps(0),
+                                   or any n below it, removes the cap. The wait sleeps, so
+                                   a capped program that draws little uses little CPU.
                                    Uncapped, a loop that draws a few shapes runs at
                                    thousands of frames a second, and a key that goes down
                                    and up between two of them was never seen down -- so a

@@ -9125,8 +9125,6 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         } else if (fn == "resize" || fn == "width" || fn == "height" ||
                    fn == "scale" || fn == "title") {
             cppUsage.gfxWindow = true;
-        } else if (fn == "maxfps") {
-            cppUsage.gfxMaxfps = true;
         } else if (fn == "borderless") {
             // Both forms: unlike gfx.alpha, the reader is the only thing that
             // can answer, because nothing else in the runtime takes a frame

@@ -264,10 +264,8 @@ run_groups() {
         '    let n: int = gfx.sound("b.wav");' "$@"
     group "window$suffix" '^static int __nexa_gfx_resize' \
         '    gfx.resize(4, 4);' "$@"
-    # The frame limiter is a clock and a wait, and present() is core, so a
-    # draw loop that never asks for a cap must not carry either.
-    group "maxfps$suffix" '^static void __nexa_gfx_pace' \
-        '    gfx.maxfps(60);' "$@"
+    # The frame limiter is core, not a group: every window is capped at 60
+    # unless it asks otherwise. Tests/gfx_maxfps_cases.sh covers it.
     # Nothing but the call itself takes a window's frame off -- unlike
     # fullscreen, which maximising a window also reaches -- so a program that
     # never says gfx.borderless cannot get there and must not carry it.

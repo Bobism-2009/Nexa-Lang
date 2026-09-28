@@ -148,7 +148,6 @@ public:
         bool gfxSound = false;
         bool gfxCursor = false;
         bool gfxWindow = false;
-        bool gfxMaxfps = false;
         bool gfxBorderless = false;
         bool gfxOntop = false;
         bool gfxTransparent = false;
@@ -1664,7 +1663,6 @@ public:
             need.sound = wantSound;
             need.cursor = usage.gfxCursor;
             need.window = usage.gfxWindow;
-            need.maxfps = usage.gfxMaxfps;
             need.borderless = usage.gfxBorderless;
             need.ontop = usage.gfxOntop;
             need.transparent = usage.gfxTransparent;
