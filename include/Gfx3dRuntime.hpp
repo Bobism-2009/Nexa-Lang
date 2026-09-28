@@ -1691,7 +1691,7 @@ struct __nexa_G3Mesh {
     std::vector<float> nrm;  // its unit normal (0, 0, 0 where there is none)
     int two_sided = 0;
     struct Lit {
-        float key[19];
+        float key[28];
         std::vector<float> col;  // r, g, b a corner, 0..1
         unsigned used = 0;
         unsigned gl_col = 0;     // WebGL: col, uploaded; stale when col is redone
@@ -1922,11 +1922,17 @@ static void __nexa_g3_cap(const float* c, float rad,
 static int __nexa_g3_mesh_submit(__nexa_G3Mesh& m, __nexa_G3Mesh::Lit& L, const float* M);
 
 // The colours of a mesh's corners for this colour, light and rotation, from a
-// small cache: worked out again only when one of those has changed.
-static __nexa_G3Mesh::Lit& __nexa_g3_mesh_colors(__nexa_G3Mesh& m, float r, float g, float b) {
-    float key[19] = {r, g, b, __nexa_g3_lx, __nexa_g3_ly, __nexa_g3_lz,
+// small cache: worked out again only when one of those has changed. nm, when
+// there is one, turns the mesh's own normals into the shape's before the
+// transform does: the rotation that lays a cylinder along its axis, and the
+// inverse of the stretch that gives a cone its slope.
+static __nexa_G3Mesh::Lit& __nexa_g3_mesh_colors(__nexa_G3Mesh& m, float r, float g, float b,
+                                                 const float* nm) {
+    float key[28] = {r, g, b, __nexa_g3_lx, __nexa_g3_ly, __nexa_g3_lz,
                      __nexa_g3_lr, __nexa_g3_lg, __nexa_g3_lb, __nexa_g3_ambient,
+                     1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f,
                      1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+    if (nm) for (int i = 0; i < 9; i++) key[19 + i] = nm[i];
     if (!__nexa_g3.xf_id) {
         // Only the part of the transform that turns a normal decides the light.
         const float* x = __nexa_g3.xf;
@@ -1956,6 +1962,12 @@ static __nexa_G3Mesh::Lit& __nexa_g3_mesh_colors(__nexa_G3Mesh& m, float r, floa
     __nexa_g3_two_sided = m.two_sided;
     for (size_t i = 0; i < n; i++) {
         float nx = m.nrm[i * 3], ny = m.nrm[i * 3 + 1], nz = m.nrm[i * 3 + 2];
+        if (nm) {
+            float px = nx, py = ny, pz = nz;
+            nx = nm[0] * px + nm[3] * py + nm[6] * pz;
+            ny = nm[1] * px + nm[4] * py + nm[7] * pz;
+            nz = nm[2] * px + nm[5] * py + nm[8] * pz;
+        }
         __nexa_g3_xf_dir(&nx, &ny, &nz);
         float kr, kg, kb;
         __nexa_g3_shade_rgb(nx, ny, nz, &kr, &kg, &kb);
@@ -1980,7 +1992,38 @@ static int __nexa_g3_mesh_draw(__nexa_G3Mesh& m, float r, float g, float b,
     float M[16];
     if (__nexa_g3.xf_id) std::memcpy(M, ts, sizeof(M));
     else __nexa_g3_mul4(M, __nexa_g3.xf, ts);
-    return __nexa_g3_mesh_submit(m, __nexa_g3_mesh_colors(m, r, g, b), M);
+    return __nexa_g3_mesh_submit(m, __nexa_g3_mesh_colors(m, r, g, b, nullptr), M);
+}
+
+// The same, for a shape laid along an axis: the mesh's (u0, v0, d0) -- the
+// frame __nexa_g3_basis gives +Y -- goes to (u, v, d) at `o`, stretched by sr
+// across the axis and sd along it. The vertices land where the shape's own
+// code would put them, and the normals turn with them.
+static int __nexa_g3_mesh_draw_axis(__nexa_G3Mesh& m, float r, float g, float b,
+                                    const float* o, const float* u, const float* v,
+                                    const float* d, float sr, float sd) {
+    if (m.pos.empty() || sr < 1e-6f || sd < 1e-6f) return 0;
+    const float y[3] = {0.0f, 1.0f, 0.0f};
+    float u0[3], v0[3];
+    __nexa_g3_basis(y, u0, v0);
+    // Column j of the frame is where local axis j goes: sr * (u u0[j] + v
+    // v0[j]) + sd * d y[j]. The normals take the inverse stretch, scaled by sr
+    // so that shapes of the same proportions share a cache entry.
+    const float k = sr / sd;
+    float L[16], nm[9];
+    for (int j = 0; j < 3; j++) {
+        for (int i = 0; i < 3; i++) {
+            float across = u[i] * u0[j] + v[i] * v0[j];
+            L[j * 4 + i] = sr * across + sd * d[i] * y[j];
+            nm[j * 3 + i] = across + k * d[i] * y[j];
+        }
+        L[j * 4 + 3] = 0.0f;
+    }
+    L[12] = o[0]; L[13] = o[1]; L[14] = o[2]; L[15] = 1.0f;
+    float M[16];
+    if (__nexa_g3.xf_id) std::memcpy(M, L, sizeof(M));
+    else __nexa_g3_mul4(M, __nexa_g3.xf, L);
+    return __nexa_g3_mesh_submit(m, __nexa_g3_mesh_colors(m, r, g, b, nm), M);
 }
 
 // The unit sphere: radius 1 about the origin, built by the same caps a sphere
@@ -1995,6 +2038,35 @@ static __nexa_G3Mesh& __nexa_g3_sphere_mesh(void) {
         __nexa_g3_capture = &m;
         __nexa_g3_cap(c, 1.0f, u, v, d,  1.0f, 0.0f, 0.0f, 0.0f);
         __nexa_g3_cap(c, 1.0f, u, v, d, -1.0f, 0.0f, 0.0f, 0.0f);
+        __nexa_g3_capture = nullptr;
+    }
+    return m;
+}
+
+// The unit shapes laid along +Y from 0 to 1, radius 1, built by the same calls
+// the shapes have always been drawn with. which: 0 a cylinder, 1 a cone, 2 a
+// cylinder's side alone, 3 and 4 the hemispheres bulging up and down.
+static __nexa_G3Mesh& __nexa_g3_axis_mesh(int which) {
+    static __nexa_G3Mesh meshes[5];
+    __nexa_G3Mesh& m = meshes[which];
+    if (m.pos.empty()) {
+        const float a[3] = {0.0f, 0.0f, 0.0f};
+        const float b[3] = {0.0f, 1.0f, 0.0f};
+        float d[3] = {0.0f, 1.0f, 0.0f};
+        float u[3], v[3];
+        __nexa_g3_basis(d, u, v);
+        __nexa_g3_capture = &m;
+        if (which == 0 || which == 2) __nexa_g3_band(a, 1.0f, b, 1.0f, u, v, d, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+        if (which == 0) {
+            __nexa_g3_disc(b, 1.0f, u, v, d,  1.0f, 0.0f, 0.0f, 0.0f);
+            __nexa_g3_disc(a, 1.0f, u, v, d, -1.0f, 0.0f, 0.0f, 0.0f);
+        }
+        if (which == 1) {
+            __nexa_g3_band(a, 1.0f, b, 0.0f, u, v, d, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f);
+            __nexa_g3_disc(a, 1.0f, u, v, d, -1.0f, 0.0f, 0.0f, 0.0f);
+        }
+        if (which == 3) __nexa_g3_cap(a, 1.0f, u, v, d,  1.0f, 0.0f, 0.0f, 0.0f);
+        if (which == 4) __nexa_g3_cap(a, 1.0f, u, v, d, -1.0f, 0.0f, 0.0f, 0.0f);
         __nexa_g3_capture = nullptr;
     }
     return m;
@@ -2425,8 +2497,10 @@ static void __nexa_gfx3d_cylinder(double ax, double ay, double az,
     float a[3] = {(float)ax, (float)ay, (float)az};
     float bb[3] = {(float)bx, (float)by, (float)bz};
     float d[3], u[3], v[3];
-    __nexa_g3_axis(a, bb, d);
+    float len = __nexa_g3_axis(a, bb, d);
     __nexa_g3_basis(d, u, v);
+    if (__nexa_g3_mesh_draw_axis(__nexa_g3_axis_mesh(0), (float)r, (float)g, (float)b,
+                                 a, u, v, d, (float)rad, len)) return;
     __nexa_g3_batch_begin(0);
     __nexa_g3_band(a, (float)rad, bb, (float)rad, u, v, d, 0.0f, 0.0f,
                    (float)r, (float)g, (float)b);
@@ -2453,6 +2527,15 @@ static void __nexa_gfx3d_capsule(double ax, double ay, double az,
     float d[3], u[3], v[3];
     float len = __nexa_g3_axis(a, bb, d);
     __nexa_g3_basis(d, u, v);
+    // Three cached pieces: the side, stretched to the length, and a
+    // hemisphere at each end, which only the radius scales.
+    if (len > 1e-6f && rad > 1e-6) {
+        const float fr = (float)rad;
+        const float fc[3] = {(float)r, (float)g, (float)b};
+        if (__nexa_g3_mesh_draw_axis(__nexa_g3_axis_mesh(2), fc[0], fc[1], fc[2], a, u, v, d, fr, len) &&
+            __nexa_g3_mesh_draw_axis(__nexa_g3_axis_mesh(3), fc[0], fc[1], fc[2], bb, u, v, d, fr, fr) &&
+            __nexa_g3_mesh_draw_axis(__nexa_g3_axis_mesh(4), fc[0], fc[1], fc[2], a, u, v, d, fr, fr)) return;
+    }
     __nexa_g3_batch_begin(0);
     // A capsule whose ends meet is a sphere, and falls out of this without a
     // special case: the side has no length and the two caps are the halves.
@@ -2482,6 +2565,8 @@ static void __nexa_gfx3d_cone(double ax, double ay, double az,
     // The side leans away from the axis by the slope of the slant, which is
     // what stops a squat cone being shaded like a tall one.
     float lean = (len > 1e-6f) ? ((float)rad / len) : 0.0f;
+    if (__nexa_g3_mesh_draw_axis(__nexa_g3_axis_mesh(1), (float)r, (float)g, (float)b,
+                                 a, u, v, d, (float)rad, len)) return;
     __nexa_g3_batch_begin(0);
     __nexa_g3_band(a, (float)rad, bb, 0.0f, u, v, d, lean, lean,
                    (float)r, (float)g, (float)b);
