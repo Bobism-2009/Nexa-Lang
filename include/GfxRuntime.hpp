@@ -3831,14 +3831,37 @@ static void __nexa_gfx_x11_present() {
     const int sw = __nexa_g.w;
     const int sh = __nexa_g.h;
     const int lsb = (__nexa_g.img->byte_order != MSBFirst);
+    // Scaled up, most window pixels repeat a neighbour: each source row is
+    // converted once, into `row`, and spread across the window through a table
+    // of which source column each window column shows; a window row that shows
+    // the same source row as the one above it is a copy of that row. At scale
+    // 2 that converts a quarter of the pixels, and no pixel does a division.
+    static std::vector<int> xsrc;
+    static std::vector<unsigned char> row;
+    static int tab_dw = 0, tab_sw = 0;
+    if (tab_dw != dw || tab_sw != sw) {
+        tab_dw = dw;
+        tab_sw = sw;
+        xsrc.resize((size_t)dw);
+        for (int x = 0; x < dw; x++) {
+            int sx = x * sw / dw;
+            xsrc[(size_t)x] = (sx >= sw) ? sw - 1 : sx;
+        }
+        row.resize((size_t)sw * 4);
+    }
+    int prev_sy = -1;
     for (int y = 0; y < dh; y++) {
         int sy = y * sh / dh;
         if (sy >= sh) sy = sh - 1;
-        for (int x = 0; x < dw; x++) {
-            int sx = x * sw / dw;
-            if (sx >= sw) sx = sw - 1;
+        unsigned char* drow = __nexa_g.xbuf + (size_t)y * dw * 4;
+        if (sy == prev_sy) {
+            std::memcpy(drow, drow - (size_t)dw * 4, (size_t)dw * 4);
+            continue;
+        }
+        prev_sy = sy;
+        for (int sx = 0; sx < sw; sx++) {
             const unsigned char* s = __nexa_g.fb + (size_t)(sy * sw + sx) * 4;
-            unsigned char* d = __nexa_g.xbuf + (size_t)(y * dw + x) * 4;
+            unsigned char* d = &row[(size_t)sx * 4];
             unsigned char a = s[3];
             // A 32-bit window's pixels are ARGB, and a compositor reads them
             // premultiplied -- so a colour goes out scaled by its own alpha.
@@ -3876,6 +3899,9 @@ static void __nexa_gfx_x11_present() {
                 }
             }
         }
+        const unsigned char* r0 = row.data();
+        const int* xs = xsrc.data();
+        for (int x = 0; x < dw; x++) std::memcpy(drow + (size_t)x * 4, r0 + (size_t)xs[x] * 4, 4);
     }
     XPutImage(__nexa_g.dpy, __nexa_g.win, __nexa_g.gc, __nexa_g.img, 0, 0, 0, 0,
         (unsigned)dw, (unsigned)dh);
