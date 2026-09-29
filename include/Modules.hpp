@@ -49,7 +49,8 @@ public:
         bool osAudio = false;
         bool osBrightness = false;
         bool osClipboard = false;
-        bool osDesktop = false;
+        bool osDesktop = false;   // os.open
+        bool osNotify = false;    // os.notify
         bool osLoad = false;
         bool osSave = false;
         bool osPlay = false;
@@ -400,7 +401,7 @@ public:
         if (hasOs() && (usage.osSystem || usage.osExec || usage.osGetenv || usage.osLock ||
                         usage.osShutdown || usage.osReboot || usage.osSuspend ||
                         usage.osLogout || usage.osAudio || usage.osBrightness ||
-                        usage.osClipboard || usage.osDesktop || usage.osPlay || usage.osExit ||
+                        usage.osClipboard || usage.osDesktop || usage.osNotify || usage.osPlay || usage.osExit ||
                         usage.osSetenv || usage.osHome || usage.osUsername || usage.osSpawn ||
                         usage.osTempDir || usage.osWhich || usage.osInfo)) {
             out += "#include <cstdlib>\n";
@@ -1368,14 +1369,11 @@ public:
                 out += "}\n";
             }
         }
-        if (hasOs() && (usage.osDesktop || usage.osType || usage.osPlay)) {
+        if (hasOs() && (usage.osDesktop || usage.osNotify || usage.osType || usage.osPlay)) {
             out += "#include <string>\n";
             out += "#ifdef _WIN32\n";
             out += "#include <windows.h>\n";
             out += "#include <shellapi.h>\n";
-            out += "static std::string __nexa_ps_quote(const std::string& s) {\n";
-            out += "  std::string r; for (char c : s) { if (c == '\\'') r += \"''\"; else r += c; } return r;\n";
-            out += "}\n";
             out += "#elif defined(NEXA_WASM)\n";
             out += "static int __nexa_spawn(const char* const argv[]) { (void)argv; return -1; }\n";
             out += "#else\n";
@@ -1439,11 +1437,65 @@ public:
             out += "#endif\n";
             out += "}\n";
         }
-        if (hasOs() && usage.osDesktop) {
+        if (hasOs() && usage.osNotify) {
+            // Windows: the shell's own notification. A tray icon's balloon is what
+            // Windows 10 and 11 show as a toast, and it needs no PowerShell, no .NET
+            // and no console flashing up. Each one runs on a thread of its own, which
+            // owns the hidden window the icon hangs off and takes the icon down once
+            // the toast has had its time -- the toast goes with its icon, so the icon
+            // has to outlive it. os.notify itself returns at once; a program that
+            // ends sooner waits at exit for what it showed, instead of leaving a dead
+            // icon in the tray.
+            out += R"NEXA_OS(
+#ifdef _WIN32
+struct __nexa_Notify { wchar_t title[64]; wchar_t msg[256]; };
+static volatile LONG __nexa_notify_live = 0;
+static void __nexa_notify_wide(const std::string& s, wchar_t* out, int cap) {
+  int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), out, cap - 1);
+  if (n <= 0) n = MultiByteToWideChar(CP_ACP, 0, s.data(), (int)s.size(), out, cap - 1);
+  out[n > 0 ? n : 0] = 0;
+}
+static LRESULT CALLBACK __nexa_notify_proc(HWND h, UINT m, WPARAM w, LPARAM l) { return DefWindowProcW(h, m, w, l); }
+static DWORD WINAPI __nexa_notify_run(LPVOID p) {
+  __nexa_Notify* n = (__nexa_Notify*)p;
+  HINSTANCE inst = GetModuleHandleW(NULL);
+  WNDCLASSW wc; ZeroMemory(&wc, sizeof wc);
+  wc.lpfnWndProc = __nexa_notify_proc; wc.hInstance = inst; wc.lpszClassName = L"NexaNotify";
+  RegisterClassW(&wc);  // a second thread finds it already there, which is fine
+  HWND wnd = CreateWindowExW(0, L"NexaNotify", L"", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, inst, NULL);
+  NOTIFYICONDATAW nid; ZeroMemory(&nid, sizeof nid);
+  nid.cbSize = sizeof nid; nid.hWnd = wnd; nid.uID = 1;
+  nid.uFlags = NIF_ICON | NIF_TIP | NIF_INFO;
+  // The program's own icon if it has one, the standard application icon if not.
+  nid.hIcon = LoadIconW(inst, MAKEINTRESOURCEW(1));
+  if (!nid.hIcon) nid.hIcon = LoadIconW(NULL, MAKEINTRESOURCEW(32512));
+  lstrcpynW(nid.szTip, n->title, 128);
+  lstrcpynW(nid.szInfoTitle, n->title, 64);
+  lstrcpynW(nid.szInfo, n->msg[0] ? n->msg : L" ", 256);
+  nid.dwInfoFlags = NIIF_INFO;
+  if (wnd && Shell_NotifyIconW(NIM_ADD, &nid)) {
+    Sleep(6000);
+    Shell_NotifyIconW(NIM_DELETE, &nid);
+  }
+  if (wnd) DestroyWindow(wnd);
+  delete n;
+  InterlockedDecrement(&__nexa_notify_live);
+  return 0;
+}
+static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
+#endif
+)NEXA_OS";
             out += "static void __nexa_os_notify(const std::string& title, const std::string& msg) {\n";
             out += "#ifdef _WIN32\n";
-            out += "  std::string cmd = \"powershell -NoProfile -Command \\\"Add-Type -AssemblyName System.Windows.Forms; $n=New-Object System.Windows.Forms.NotifyIcon; $n.Icon=[System.Drawing.SystemIcons]::Information; $n.Visible=$true; $n.ShowBalloonTip(5000,'\" + __nexa_ps_quote(title) + \"','\" + __nexa_ps_quote(msg) + \"',[System.Windows.Forms.ToolTipIcon]::Info); Start-Sleep -Milliseconds 6000; $n.Dispose()\\\" >nul 2>&1\";\n";
-            out += "  (void)system(cmd.c_str());\n";
+            out += R"NEXA_OS(  static volatile LONG hooked = 0;
+  if (InterlockedCompareExchange(&hooked, 1, 0) == 0) atexit(__nexa_notify_wait);
+  __nexa_Notify* n = new __nexa_Notify;
+  __nexa_notify_wide(title, n->title, 64);
+  __nexa_notify_wide(msg, n->msg, 256);
+  InterlockedIncrement(&__nexa_notify_live);
+  HANDLE t = CreateThread(NULL, 0, __nexa_notify_run, n, 0, NULL);
+  if (t) CloseHandle(t); else { delete n; InterlockedDecrement(&__nexa_notify_live); }
+)NEXA_OS";
             out += "#elif defined(__APPLE__)\n";
             out += "  std::string et, em; for (char c : title) { if (c=='\\\\'||c=='\"') et += '\\\\'; et += c; } for (char c : msg) { if (c=='\\\\'||c=='\"') em += '\\\\'; em += c; }\n";
             out += "  std::string script = \"display notification \\\"\" + em + \"\\\" with title \\\"\" + et + \"\\\"\";\n";
@@ -1459,6 +1511,8 @@ public:
             out += "  (void)__nexa_spawn(a3);\n";
             out += "#endif\n";
             out += "}\n";
+        }
+        if (hasOs() && usage.osDesktop) {
             out += "static void __nexa_os_open(const std::string& target) {\n";
             out += "#ifdef _WIN32\n";
             out += "  ShellExecuteA(NULL, \"open\", target.c_str(), NULL, NULL, SW_SHOWNORMAL);\n";
@@ -1996,7 +2050,7 @@ public:
         all.osAudio = true;
         all.osBrightness = true;
         all.osClipboard = true;
-        all.osDesktop = true;
+        all.osDesktop = all.osNotify = true;
         all.osLoad = true;
         all.osSave = true;
         all.osPlay = true;

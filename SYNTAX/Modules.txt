@@ -155,9 +155,13 @@ ARGUMENT TYPES
                       Returns 0 if the file cannot be played (or on wasm).
                       Linux notify: notify-send, then zenity, then kdialog.
                       Linux open: xdg-open, then gio, then gvfs-open.
-                      macOS uses osascript/open; Windows uses a tray balloon /
-                      ShellExecute. Arguments are passed without a shell (execvp),
-                      so spaces, quotes, and ;/&& in titles or URLs are safe.
+                      macOS uses osascript/open. Windows notify is the shell's own
+                      notification (a toast on Windows 10 and 11), shown straight
+                      from the program -- no PowerShell. os.notify returns at once;
+                      the notification stays up about 6 seconds, and a program that
+                      ends sooner waits for it at exit. Windows open is ShellExecute.
+                      Arguments are passed without a shell (execvp), so spaces,
+                      quotes, and ;/&& in titles or URLs are safe.
   os.hideconsolewindow()     - Hide console window (Windows)
   os.showconsolewindow()     - Show console window (Windows)
   os.minimizeconsolewindow() - Minimize console window (Windows)

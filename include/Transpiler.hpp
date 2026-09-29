@@ -351,7 +351,7 @@ public:
                 case AstNode::Type::OsClipSet:
                 case AstNode::Type::OsClipGet: cppUsage.osClipboard = true; break;
                 case AstNode::Type::OsType: cppUsage.osType = true; break;
-                case AstNode::Type::OsNotify:
+                case AstNode::Type::OsNotify: cppUsage.osNotify = true; break;
                 case AstNode::Type::OsOpen: cppUsage.osDesktop = true; break;
                 case AstNode::Type::OsLoad: cppUsage.osLoad = true; break;
                 case AstNode::Type::OsSave: cppUsage.osSave = true; break;
