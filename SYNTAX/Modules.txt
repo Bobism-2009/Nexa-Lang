@@ -1219,8 +1219,15 @@ ARGUMENT TYPES
                                    uses, so a file that loads in one loads in the
                                    other. Resized to a power of two on each side,
                                    at most 2048, and mipmapped, so it stays
-                                   smooth far away. Alpha is ignored: a texture
-                                   is opaque. Cached by path, like gfx3d.model,
+                                   smooth far away. Alpha cuts holes: a pixel
+                                   under half opacity is not drawn, and one at
+                                   or over it is drawn solid -- leaves, fences,
+                                   grates, sprites. A shape wearing a texture
+                                   with holes is drawn from both sides, so the
+                                   far side shows through them. There is no
+                                   half-see-through glass: that needs shapes
+                                   drawn back to front, which gfx3d does not
+                                   sort. Cached by path, like gfx3d.model,
                                    and no window is needed to load one
                                    In the browser the file has to be in the
                                    page's file system, as a model's does

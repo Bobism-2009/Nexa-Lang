@@ -163,6 +163,9 @@ typedef long          __nexa_GLsizeiptr;
 #define NEXA_GL_TEXTURE_WRAP_T      0x2803u
 #define NEXA_GL_REPEAT              0x2901u
 #define NEXA_GL_TEXTURE_COORD_ARRAY 0x8078u
+// A see-through texture: fragments under half opacity are dropped.
+#define NEXA_GL_ALPHA_TEST          0x0BC0u
+#define NEXA_GL_GREATER             0x0204u
 
 #if defined(_WIN32)
   #define NEXA_GLAPI __stdcall
@@ -206,6 +209,7 @@ typedef void (NEXA_GLAPI *__nexa_pfn_glPushMatrix)(void);
 typedef void (NEXA_GLAPI *__nexa_pfn_glPopMatrix)(void);
 typedef void (NEXA_GLAPI *__nexa_pfn_glMultMatrixf)(const __nexa_GLfloat*);
 typedef void (NEXA_GLAPI *__nexa_pfn_glTexCoordPointer)(__nexa_GLint, __nexa_GLenum, __nexa_GLsizei, const void*);
+typedef void (NEXA_GLAPI *__nexa_pfn_glAlphaFunc)(__nexa_GLenum, __nexa_GLfloat);
 
 // The GLES2 entry points the WebGL backend calls. Emscripten links these in
 // itself, so unlike the desktop table they are ordinary symbols rather than
@@ -297,6 +301,7 @@ struct __nexa_GL {
     __nexa_pfn_glMultMatrixf        MultMatrixf        = nullptr;
     // And the texture coordinates of a cached mesh, for gfx3d.use.
     __nexa_pfn_glTexCoordPointer    TexCoordPointer    = nullptr;
+    __nexa_pfn_glAlphaFunc          AlphaFunc          = nullptr;
     int loaded = 0;
 };
 static __nexa_GL __nexa_gl;
@@ -708,6 +713,7 @@ static int __nexa_g3_load_gl(void) {
     __nexa_gl.PopMatrix          = (__nexa_pfn_glPopMatrix)__nexa_g3_sym("glPopMatrix");
     __nexa_gl.MultMatrixf        = (__nexa_pfn_glMultMatrixf)__nexa_g3_sym("glMultMatrixf");
     __nexa_gl.TexCoordPointer    = (__nexa_pfn_glTexCoordPointer)__nexa_g3_sym("glTexCoordPointer");
+    __nexa_gl.AlphaFunc          = (__nexa_pfn_glAlphaFunc)__nexa_g3_sym("glAlphaFunc");
     __nexa_gl.loaded = 1;
     return 1;
 }
@@ -1080,7 +1086,11 @@ static const char* __nexa_g3_fs =
     "varying vec2 vUV;\n"
     "void main() {\n"
     "  vec3 c = vCol;\n"
-    "  if (uTexOn > 0.5) c *= texture2D(uTex, vUV).rgb;\n"
+    "  if (uTexOn > 0.5) {\n"
+    "    vec4 t = texture2D(uTex, vUV);\n"
+    "    if (t.a < 0.5) discard;\n"
+    "    c *= t.rgb;\n"
+    "  }\n"
     "  gl_FragColor = vec4(c, 1.0);\n"
     "}\n";
 
@@ -1992,6 +2002,10 @@ struct __nexa_G3Tex {
     int w = 0, h = 0;
     std::vector<unsigned char> px;
     unsigned gl = 0;
+    // Any pixel under half opacity: a cutout -- leaves, a fence, a sprite.
+    // Its holes are not drawn, and a shape wearing it is drawn from both
+    // sides, since the far side shows through them.
+    int cutout = 0;
 };
 static std::vector<__nexa_G3Tex> __nexa_g3_texs;  // slot 0 is "none"
 static std::vector<std::string> __nexa_g3_tex_paths;
@@ -2350,9 +2364,10 @@ static int __nexa_g3_mesh_submit(__nexa_G3Mesh& m, __nexa_G3Mesh::Lit& L, const 
     glUseProgram(__nexa_g3_prog);
     glUniformMatrix4fv(__nexa_g3_u_mvp, 1, 0, mvp);
     glUniform1f(__nexa_g3_u_texon, tex ? 1.0f : 0.0f);
-    if (m.two_sided) glDisable(NEXA_GL_CULL_FACE);
+    const int both = m.two_sided || (tex && __nexa_g3_texs[(size_t)__nexa_g3_tex_cur].cutout);
+    if (both) glDisable(NEXA_GL_CULL_FACE);
     glDrawArrays(NEXA_GL_TRIANGLES, 0, (__nexa_GLsizei)(m.pos.size() / 3));
-    if (m.two_sided) glEnable(NEXA_GL_CULL_FACE);
+    if (both) glEnable(NEXA_GL_CULL_FACE);
     return 1;
 }
 
@@ -2405,13 +2420,23 @@ static int __nexa_g3_mesh_submit(__nexa_G3Mesh& m, __nexa_G3Mesh::Lit& L, const 
     __nexa_gl.ColorPointer(3, NEXA_GL_FLOAT, 0, col);
     // The texture is multiplied by the lit colour: GL_MODULATE, the default.
     const unsigned tex = m.uv.empty() ? 0 : __nexa_g3_tex_gl();
+    const int cut = tex && __nexa_g3_texs[(size_t)__nexa_g3_tex_cur].cutout && __nexa_gl.AlphaFunc;
     if (tex) {
         __nexa_gl.Enable(NEXA_GL_TEXTURE_2D);
         __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, tex);
         __nexa_gl.EnableClientState(NEXA_GL_TEXTURE_COORD_ARRAY);
         __nexa_gl.TexCoordPointer(2, NEXA_GL_FLOAT, 0, m.uv.data());
     }
+    if (cut) {
+        __nexa_gl.AlphaFunc(NEXA_GL_GREATER, 0.5f);
+        __nexa_gl.Enable(NEXA_GL_ALPHA_TEST);
+        if (!m.two_sided) __nexa_gl.Disable(NEXA_GL_CULL_FACE);
+    }
     __nexa_gl.DrawArrays(NEXA_GL_TRIANGLES, 0, (__nexa_GLsizei)(m.pos.size() / 3));
+    if (cut) {
+        __nexa_gl.Disable(NEXA_GL_ALPHA_TEST);
+        if (!m.two_sided) __nexa_gl.Enable(NEXA_GL_CULL_FACE);
+    }
     if (tex) {
         __nexa_gl.DisableClientState(NEXA_GL_TEXTURE_COORD_ARRAY);
         __nexa_gl.Disable(NEXA_GL_TEXTURE_2D);
@@ -3156,6 +3181,9 @@ static int __nexa_gfx3d_texture(const std::string& path) {
         }
     }
     delete[] px;
+    for (size_t i = 3; i < t.px.size(); i += 4) {
+        if (t.px[i] < 128) { t.cutout = 1; break; }
+    }
     __nexa_g3_texs.push_back(std::move(t));
     __nexa_g3_tex_paths.push_back(path);
     return (int)__nexa_g3_texs.size() - 1;

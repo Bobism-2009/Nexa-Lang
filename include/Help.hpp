@@ -618,7 +618,7 @@ no array of pixels to read back.
                                       was authored at
   texture   gfx3d.texture(path)       load a PNG / JPEG / BMP; handle, or 0
             gfx3d.use(t)              shapes after it wear t; gfx3d.use(0) stops
-                                      the shape's colour tints it; 255s show it as is
+                                      the shape's colour tints it; alpha cuts holes
   2D layer  #include <std/gfx> too, and gfx.rect / gfx.text / gfx.fill / ...
             draw over the 3D window -- no gfx.open. Cleared each gfx3d.clear;
             read input with gfx3d.mouse / gfx3d.key
