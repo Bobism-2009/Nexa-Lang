@@ -1,0 +1,6 @@
+// io.parse_int reads text; a number has nothing to parse.
+#include <std/io>
+
+fn main() {
+    let r = io.parse_int(5);
+}

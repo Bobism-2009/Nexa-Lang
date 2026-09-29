@@ -1,0 +1,32 @@
+// io.eprint / io.eprintln (stderr, formatted as println is, after stdout is
+// flushed so the two stay in order), io.to_float, and the Result-returning
+// io.parse_int / io.parse_float, which tell a bad number from a 0.
+#include <std/io>
+
+enum Color { Red; Green; }
+
+fn main() {
+    let n = 42;
+    let f = 2.5;
+    let c = 'x';
+    let b = true;
+    let xs = [1, 2, 3];
+    let col = Color.Green;
+    io.println("n=", n, " f=", f, " c=", c, " b=", b, " xs=", xs, " col=", col);
+    io.eprintln("n=", n, " f=", f, " c=", c, " b=", b, " xs=", xs, " col=", col);
+    io.eprint(7);
+    io.eprintln("");
+    io.eprintln(f);
+    io.println(f);
+    io.println(io.to_float("3.75"), " ", io.to_float("1e3x"), " ", io.to_float("abc"), " ", io.to_int("12abc"));
+    let inputs = ["17", " -4 ", "12abc", "", "99999999999", "3.5"];
+    for (s in inputs) {
+        let r = io.parse_int(s);
+        if (r.ok()) { io.println("int ok ", r.value()); } else { io.println("int err ", r.error()); }
+        let g = io.parse_float(s);
+        if (g.ok()) { io.println("float ok ", g.value()); } else { io.println("float err ", g.error()); }
+    }
+    let bad = io.parse_float("1e999");
+    io.println(bad.error());
+    io.println(io.parse_int("8").value() + 1);
+}

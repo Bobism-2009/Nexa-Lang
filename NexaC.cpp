@@ -1117,6 +1117,10 @@ _LIBCPP_BEGIN_NAMESPACE_STD
 _LIBCPP_END_NAMESPACE_STD
 template class std::basic_string<char>;
 template class std::basic_string<wchar_t>;  // WinHTTP and the file APIs take wide text
+// The one free function libc++ also keeps prebuilt: "text" + s. A single use of it
+// brought the exception runtime and mingw's printf back (16KB -> 90KB).
+template std::basic_string<char> std::operator+(const char*, const std::basic_string<char>&);
+template std::basic_string<wchar_t> std::operator+(const wchar_t*, const std::basic_string<wchar_t>&);
 // A function-local static is initialised under __cxa_guard_acquire, whose failure path in
 // libc++abi reports through fprintf and the exception runtime. The same protocol without it:
 // the guard's first byte says done (the Itanium layout the compiler's own fast path reads),

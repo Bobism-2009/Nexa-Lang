@@ -1,0 +1,2 @@
+io.parse_int(s) takes text, not an int
+at line 5

@@ -27,6 +27,9 @@ public:
         bool ioReadln = false;
         bool ioGetline = false;
         bool ioToInt = false;
+        bool ioToFloat = false;
+        bool ioParseInt = false;    // io.parse_int / io.parse_float, which answer a Result
+        bool ioParseFloat = false;
         bool osSystem = false;
         bool osExec = false;
         bool osGetenv = false;
@@ -377,13 +380,22 @@ public:
             out += "  return \"\";\n";
             out += "}\n";
         }
-        if (hasIo() && usage.ioToInt) {
+        if (hasIo() && (usage.ioToInt || usage.ioToFloat || usage.ioParseInt || usage.ioParseFloat)) {
             out += "#include <string>\n";
-            // std::stoi without its exceptions: the same strtol and range checks, 0 on failure
             out += "#include <cerrno>\n#include <climits>\n#include <cstdlib>\n";
+        }
+        if (hasIo() && usage.ioToInt) {
+            // std::stoi without its exceptions: the same strtol and range checks, 0 on failure
             out += "static int __nexa_to_int(const std::string& s) { errno = 0; char* e = nullptr; "
                    "long v = std::strtol(s.c_str(), &e, 10); "
                    "if (e == s.c_str() || errno == ERANGE || v < INT_MIN || v > INT_MAX) return 0; return (int)v; }\n";
+        }
+        if (hasIo() && usage.ioToFloat) {
+            // io.to_float: the same leniency -- a leading number is read, 0.0 when
+            // there is none or it does not fit.
+            out += "static double __nexa_to_float(const std::string& s) { errno = 0; char* e = nullptr; "
+                   "double v = std::strtod(s.c_str(), &e); "
+                   "if (e == s.c_str() || errno == ERANGE) return 0.0; return v; }\n";
         }
         if (hasOs() && (usage.osSystem || usage.osExec || usage.osGetenv || usage.osLock ||
                         usage.osShutdown || usage.osReboot || usage.osSuspend ||
@@ -1595,6 +1607,28 @@ public:
         if (usage.result || (hasHttp() && usage.http)) {
             out += resultRuntimeCpp();
         }
+        // io.parse_int / io.parse_float: strict where to_int is lenient. The whole
+        // text has to be the number (surrounding whitespace aside), and anything
+        // else is an error saying what the text was.
+        if (hasIo() && (usage.ioParseInt || usage.ioParseFloat)) {
+            out += "static bool __nexa_parse_rest(const char* e) { while (*e == ' ' || *e == '\\t' || *e == '\\r' || *e == '\\n') e++; return *e == 0; }\n";
+        }
+        if (hasIo() && usage.ioParseInt) {
+            out += "static __nexa_result<int> __nexa_parse_int(const std::string& s) { errno = 0; char* e = nullptr; "
+                   "long v = std::strtol(s.c_str(), &e, 10); "
+                   "if (e == s.c_str() || !__nexa_parse_rest(e)) return __nexa_result<int>::make_err(std::string(\"not an int: \\\"\") + s + \"\\\"\"); "
+                   "if (errno == ERANGE || v < INT_MIN || v > INT_MAX) return __nexa_result<int>::make_err(std::string(\"out of range for an int: \\\"\") + s + \"\\\"\"); "
+                   "return __nexa_result<int>::make_ok((int)v); }\n";
+        }
+        if (hasIo() && usage.ioParseFloat) {
+            // A NaN or infinity is a number strtod reads but not one a program asked for.
+            out += "static bool __nexa_finite(double v) { return v == v && v - v == 0.0; }\n";
+            out += "static __nexa_result<double> __nexa_parse_float(const std::string& s) { errno = 0; char* e = nullptr; "
+                   "double v = std::strtod(s.c_str(), &e); "
+                   "if (e == s.c_str() || !__nexa_parse_rest(e)) return __nexa_result<double>::make_err(std::string(\"not a number: \\\"\") + s + \"\\\"\"); "
+                   "if (errno == ERANGE || !__nexa_finite(v)) return __nexa_result<double>::make_err(std::string(\"out of range for a float: \\\"\") + s + \"\\\"\"); "
+                   "return __nexa_result<double>::make_ok(v); }\n";
+        }
         if (hasHttp() && usage.http) {
             out += httpRuntimeCpp(usage.httpSimple, usage.httpResponse, usage.httpServer);
         }
@@ -1953,7 +1987,7 @@ public:
 
     std::string getCppIncludes() const {
         CppUsage all;
-        all.ioPrint = all.ioReadln = all.ioGetline = all.ioToInt = all.ioFlush = true;
+        all.ioPrint = all.ioReadln = all.ioGetline = all.ioToInt = all.ioToFloat = all.ioFlush = true;
         all.osSystem = all.osExec = all.osGetenv = all.osPlatform = all.osExeDir = true;
         all.osGetProcessId = true;
         all.osWindowControl = all.osMessageBox = all.osGrepKeys = all.osKeyPressed = true;

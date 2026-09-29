@@ -214,11 +214,15 @@ ENVIRONMENT
 
   out     io.print(a[, ...])       write, no newline
           io.println(a[, ...])     write, then a newline
+          io.eprint / io.eprintln  the same, to stderr
           io.flush()               flush stdout
   in      io.readln()              one line from stdin, as a string
           io.eof()                 true once readln has run out of input
           io.read_int()            one line from stdin, as an int
   text    io.to_int(s)             parse a decimal int (failure is 0)
+          io.to_float(s)           parse a float (failure is 0.0)
+          io.parse_int(s)          Result[int]: an error, not 0, for bad text
+          io.parse_float(s)        Result[float], the same
           io.getline(text[, n])    line n of a buffer, 1-based
           io.getline(text, "key")  the line starting "key:", from the key on
           io.trim(s[, prefix])     strip whitespace, then the prefix once

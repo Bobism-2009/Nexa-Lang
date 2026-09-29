@@ -24,6 +24,10 @@ ARGUMENT TYPES
   io.print(arg[, ...])     - Print to stdout, no newline
   io.println(arg[, ...])  - Print args in order, then a newline
                     - Multiple args are written back-to-back (no extra spaces)
+  io.eprint(arg[, ...])   - The same, to stderr: for errors and diagnostics, which
+  io.eprintln(arg[, ...])   stay out of a program's piped output. Formats exactly as
+                            print/println do. stdout is flushed first, so what was
+                            printed before an error still comes out before it
   io.flush()        - Flush stdout (fflush); use when output must appear immediately
   Strings support escapes: \n \t \r \a \b \f \v \0 \\ \" \' \xHH (hex ASCII); see SYNTAX/Core.txt.
   Any other escape is a compile error, not a silently dropped backslash.
@@ -46,6 +50,16 @@ ARGUMENT TYPES
                        }
   io.read_int()    - Same as io.to_int(io.readln()); read one line from stdin as int (no temporary string binding)
   io.to_int(s)      - Parse string expression as decimal int (failure -> 0)
+  io.to_float(s)    - The same for a float: "2.5", "-1e3" (failure -> 0.0). Like to_int
+                      it reads a leading number and ignores what follows: "12abc" is 12
+  io.parse_int(s)   - Result[int]: the int, or an error when s is not one. Strict: the
+  io.parse_float(s)   whole text must be the number (surrounding whitespace aside), so
+                      "12abc", "" and "3.5" are errors for parse_int, and a number too
+                      big for its type is "out of range". Use these where 0 is a real
+                      answer and a typo must not become one:
+                        let r = io.parse_int(io.readln());
+                        if (!r.ok()) { io.eprintln(r.error()); return 1; }
+                        let n = r.value();
   io.getline(text[, lineNo]) - Return lineNo (1-based, default 1) from string buffer
   io.getline(text, "key")    - Line matching key: (leading ws ok); returns from key through line end
   arg: one or more expressions (literal, variable, or + chain). Comma-separated args print

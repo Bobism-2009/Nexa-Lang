@@ -1,0 +1,6 @@
+// io.eprintln writes to stderr and hands nothing back.
+#include <std/io>
+
+fn main() {
+    let x = io.eprintln("oops");
+}

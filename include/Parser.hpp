@@ -2790,7 +2790,8 @@ private:
             if (method == "read_int") return applyIndexAndDotPostfix(parseIoReadIntExpr());
             if (method == "eof") return parseIoEofExpr();
             if (method == "getline") return applyIndexAndDotPostfix(parseIoGetlineExpr());
-            if (method == "to_int") return applyIndexAndDotPostfix(parseIoToIntExpr());
+            if (method == "to_int" || method == "to_float" || method == "parse_int" ||
+                method == "parse_float") return applyIndexAndDotPostfix(parseIoToIntExpr());
             if (method == "trim") return applyIndexAndDotPostfix(parseIoTrimExpr());
             // Any other io.<method>(...) call would fall through to the plain
             // identifier path and die as "Undefined variable 'io'", which
@@ -2800,6 +2801,8 @@ private:
                 std::string what;
                 if (method == "print") what = "io.print(text) writes the text";
                 else if (method == "println") what = "io.println(text) writes the text and ends the line";
+                else if (method == "eprint") what = "io.eprint(text) writes the text to stderr";
+                else if (method == "eprintln") what = "io.eprintln(text) writes the text to stderr and ends the line";
                 else if (method == "flush") what = "io.flush() pushes the buffered output out";
                 if (!what.empty()) {
                     throw std::runtime_error(what + "; you aren't allowed to turn it into a variable at line " +
@@ -2963,6 +2966,10 @@ private:
             }
             return {AstNode::Type::IoFlush, "", {}};
         }
+        // io.eprint / io.eprintln are print / println to stderr: the same
+        // node, marked, so they format exactly the same way.
+        const bool toStderr = (method == "eprint" || method == "eprintln");
+        if (toStderr) method = method.substr(1);
         bool isPrintln = (method == "println");
         if (method != "print" && !isPrintln) {
             std::string hint = ioValueCallHint(method);
@@ -2978,6 +2985,7 @@ private:
         }
         const Token& argTok = peek();
         AstNode result{isPrintln ? AstNode::Type::IoPrintln : AstNode::Type::IoPrint, "", {}};
+        if (toStderr) result.initValue = "stderr";
         if (argTok.type == TokenType::String || argTok.type == TokenType::Number ||
             argTok.type == TokenType::Identifier || argTok.type == TokenType::LParen ||
             argTok.type == TokenType::True || argTok.type == TokenType::False ||
@@ -3018,6 +3026,9 @@ private:
         if (m == "read_int") return "io.read_int() reads a line as an int and hands it back";
         if (m == "getline") return "io.getline(text, at) picks a line out of the text";
         if (m == "to_int") return "io.to_int(s) turns the text into an int";
+        if (m == "to_float") return "io.to_float(s) turns the text into a float";
+        if (m == "parse_int") return "io.parse_int(s) turns the text into a Result[int]";
+        if (m == "parse_float") return "io.parse_float(s) turns the text into a Result[float]";
         if (m == "trim") return "io.trim(s) trims the whitespace off";
         return std::string();
     }
@@ -3795,10 +3806,14 @@ private:
         return node;
     }
 
+    // io.to_int, and its three relatives: io.to_float, and io.parse_int /
+    // io.parse_float, which answer a Result so a failed parse is not a 0.
+    // One node, the method in its value ("" for to_int, as it always was).
     AstNode parseIoToIntExpr() {
         size_t line = peek().line;
+        const std::string which = (pos_ + 2 < tokens_.size()) ? tokens_[pos_ + 2].value : std::string("to_int");
         if (!modules_.hasIo()) {
-            throw std::runtime_error("io.to_int requires #include <std/io> at line " + std::to_string(line));
+            throw std::runtime_error("io." + which + " requires #include <std/io> at line " + std::to_string(line));
         }
         if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "io") {
             throw std::runtime_error("Expected 'io' at line " + std::to_string(peek().line));
@@ -3806,8 +3821,8 @@ private:
         if (!match(TokenType::Dot)) {
             throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
         }
-        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "to_int") {
-            throw std::runtime_error("Expected io.to_int at line " + std::to_string(peek().line));
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != which) {
+            throw std::runtime_error("Expected io." + which + " at line " + std::to_string(peek().line));
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
@@ -3821,7 +3836,7 @@ private:
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
         }
-        return {AstNode::Type::IoToInt, "", {arg}};
+        return {AstNode::Type::IoToInt, which == "to_int" ? std::string() : which, {arg}};
     }
 
     AstNode parseIoTrimExpr() {

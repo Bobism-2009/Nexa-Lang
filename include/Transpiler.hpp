@@ -317,7 +317,14 @@ public:
                 case AstNode::Type::IoReadln:
                 case AstNode::Type::IoEof: cppUsage.ioReadln = true; break;
                 case AstNode::Type::IoGetline: cppUsage.ioGetline = true; break;
-                case AstNode::Type::IoToInt: cppUsage.ioToInt = true; break;
+                case AstNode::Type::IoToInt:
+                    // Each of the four brings only its own helper.
+                    if (n.value.empty()) cppUsage.ioToInt = true;
+                    else if (n.value == "to_float") cppUsage.ioToFloat = true;
+                    else if (n.value == "parse_int") cppUsage.ioParseInt = true;
+                    else if (n.value == "parse_float") cppUsage.ioParseFloat = true;
+                    if (n.value == "parse_int" || n.value == "parse_float") cppUsage.result = true;
+                    break;
                 case AstNode::Type::OsSystem: cppUsage.osSystem = true; break;
                 case AstNode::Type::OsExec: cppUsage.osExec = true; break;
                 case AstNode::Type::OsGetenv: cppUsage.osGetenv = true; break;
@@ -2885,7 +2892,11 @@ private:
                 return e.value.empty() ? "int" : e.value;
             case AstNode::Type::ExprSizeof:
                 return "int";
-            case AstNode::Type::IoToInt: return "int";
+            case AstNode::Type::IoToInt:
+                if (e.value == "to_float") return "float";
+                if (e.value == "parse_int") return nexaMakeResultType("int");
+                if (e.value == "parse_float") return nexaMakeResultType("float");
+                return "int";
             case AstNode::Type::IoEof: return "bool";
             case AstNode::Type::RandomInt: return "int";
             case AstNode::Type::MathCall:
@@ -5338,12 +5349,16 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                         std::map<std::string, bool>& varIsChar,
                         std::map<std::string, bool>& varIsBool,
                         const std::map<std::string, bool>& varIsEnum,
-                        bool newline) {
+                        bool newline, const std::string& stream = "stdout") {
+        // io.eprint / io.eprintln come through here too, with stream "stderr":
+        // the same calls, each pointed at the other stream.
+        const bool so = (stream == "stdout");
+        const std::string pf = so ? "printf(" : "fprintf(" + stream + ", ";
         if (arg.type == AstNode::Type::ExprStringLiteral) {
-            if (newline) {
+            if (newline && so) {
                 out << indent << "puts(\"" << escapeString(arg.value) << "\");\n";
             } else {
-                out << indent << "fputs(\"" << escapeString(arg.value) << "\", stdout);\n";
+                out << indent << "fputs(\"" << escapeString(arg.value) << (newline ? "\\n" : "") << "\", " << stream << ");\n";
             }
             return;
         }
@@ -5351,20 +5366,20 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             // The format has to follow the literal's own width, not `int`: printing a
             // literal that does not fit an int through "%d" reads the wrong number of
             // bytes off the varargs list, and io.println(9999999999) printed 1410065407.
-            emitIntLiteralPrintf(out, indent, arg.value, newline);
+            emitIntLiteralPrintf(out, indent, arg.value, newline, stream);
             return;
         }
         if (arg.type == AstNode::Type::ExprBoolLiteral) {
             out << indent << "fputs(\"" << (arg.value == "true" ? "true" : "false")
-                << (newline ? "\\n" : "") << "\", stdout);\n";
+                << (newline ? "\\n" : "") << "\", " << stream << ");\n";
             return;
         }
         std::string ntype = inferExprNexaType(arg);
         if (nexaIsSliceType(ntype) || nexaIsMapType(ntype)) {
             needShow_ = true;
             out << indent << "fputs(__nexa_show(" << emitExpr(arg, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool)
-                << ").c_str(), stdout);\n";
-            if (newline) out << indent << "fputc('\\n', stdout);\n";
+                << ").c_str(), " << stream << ");\n";
+            if (newline) out << indent << "fputc('\\n', " << stream << ");\n";
             return;
         }
         const bool foreign = foreignText(arg);
@@ -5379,36 +5394,38 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         else expr = wrapExprForPrintf(arg, expr, varMap, varIsEnum);
         if (exprIsStr) {
             if (!expr.empty() && expr[0] == '"') {
-                out << indent << (newline ? "puts(" : "fputs(") << expr << (newline ? ");\n" : ", stdout);\n");
+                if (so) out << indent << (newline ? "puts(" : "fputs(") << expr << (newline ? ");\n" : ", stdout);\n");
+                else out << indent << "fputs(" << expr << ", " << stream << ");"
+                         << (newline ? " fputc('\\n', " + stream + ");" : std::string()) << "\n";
             } else {
                 // All of it, by length: "a\0b" is three characters, and %s stopped at the \0.
                 // A variable is read in place; anything else is held by value, since it
                 // can be a piece of a temporary (s.split(",")[1]).
                 const bool inPlace = arg.type == AstNode::Type::ExprVarRef && !foreign;
                 out << indent << "{ const std::string" << (inPlace ? "& " : " ") << "__nexa_s = " << expr
-                    << "; fwrite(__nexa_s.data(), 1, __nexa_s.size(), stdout);"
-                    << (newline ? " fputc('\\n', stdout);" : "") << " }\n";
+                    << "; fwrite(__nexa_s.data(), 1, __nexa_s.size(), " << stream << ");"
+                    << (newline ? " fputc('\\n', " + stream + ");" : std::string()) << " }\n";
             }
         } else if (exprIsF) {
-            out << indent << "printf(\"%g" << (newline ? "\\n" : "") << "\", " << expr << ");\n";
+            out << indent << pf << "\"%g" << (newline ? "\\n" : "") << "\", " << expr << ");\n";
         } else if (exprIsC) {
-            out << indent << "printf(\"%c" << (newline ? "\\n" : "") << "\", " << expr << ");\n";
+            out << indent << pf << "\"%c" << (newline ? "\\n" : "") << "\", " << expr << ");\n";
         } else if (exprIsBoolT) {
             // true/false, as "..." + b and f"{b}" spell it. The ternary also reads a
             // std::vector<bool> element through its proxy reference, which varargs
             // could not -- io.println(flags[0]) once printed garbage that way.
             const char* nl = newline ? "\\n" : "";
             out << indent << "fputs((" << expr << ") ? \"true" << nl << "\" : \"false" << nl
-                << "\", stdout);\n";
+                << "\", " << stream << ");\n";
         } else if (exprIsPtr) {
-            out << indent << "printf(\"%p" << (newline ? "\\n" : "") << "\", (void*)(" << expr << "));\n";
+            out << indent << pf << "\"%p" << (newline ? "\\n" : "") << "\", (void*)(" << expr << "));\n";
         } else if (ntype == "json") {
-            out << indent << "printf(\"%s" << (newline ? "\\n" : "") << "\", (" << expr << ").stringify().c_str());\n";
+            out << indent << pf << "\"%s" << (newline ? "\\n" : "") << "\", (" << expr << ").stringify().c_str());\n";
         } else if (nexaIsNumericIntType(ntype)) {
-            emitIntegerPrintf(out, indent, ntype, expr, newline);
+            emitIntegerPrintf(out, indent, ntype, expr, newline, stream);
         } else {
             std::string carg = isNexaEnum ? ("static_cast<int>(" + expr + ")") : expr;
-            out << indent << "printf(\"%d" << (newline ? "\\n" : "") << "\", " << carg << ");\n";
+            out << indent << pf << "\"%d" << (newline ? "\\n" : "") << "\", " << carg << ");\n";
         }
     }
 
@@ -5417,7 +5434,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
     // "%d" so the common case emits exactly what it did before; wider literals are cast
     // to a fixed width so the conversion matches on every target, not just LP64.
     void emitIntLiteralPrintf(std::ostringstream& out, const std::string& indent,
-                              const std::string& text, bool newline) const {
+                              const std::string& text, bool newline,
+                              const std::string& stream = "stdout") const {
         const IntLiteralText lit = parseIntLiteralText(text);
         const unsigned long long intMax = 2147483647ULL;
         // C++ types the digits before it applies the sign, so `-2147483648` is a
@@ -5434,7 +5452,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 arg = "static_cast<long long>(" + arg + ")";
             }
         }
-        out << indent << "printf(\"" << fmt << (newline ? "\\n" : "") << "\", " << arg << ");\n";
+        out << indent << (stream == "stdout" ? std::string("printf(") : "fprintf(" + stream + ", ")
+            << "\"" << fmt << (newline ? "\\n" : "") << "\", " << arg << ");\n";
     }
 
     // printf for an integer argument whose Nexa type is known. Anything wider than an int is
@@ -5448,7 +5467,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
     // a future inference bug there still shows up as a -Wformat warning rather than silently
     // truncating behind a cast.
     void emitIntegerPrintf(std::ostringstream& out, const std::string& indent,
-                           const std::string& ntype, const std::string& expr, bool newline) const {
+                           const std::string& ntype, const std::string& expr, bool newline,
+                           const std::string& stream = "stdout") const {
         std::string fmt = "%d";
         std::string arg = expr;
         if (ntype == "unsigned int") {
@@ -5465,7 +5485,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         } else if (ntype == "short") {
             arg = "static_cast<int>(" + expr + ")";
         }
-        out << indent << "printf(\"" << fmt;
+        out << indent << (stream == "stdout" ? std::string("printf(") : "fprintf(" + stream + ", ") << "\"" << fmt;
         if (newline) out << "\\n";
         out << "\", " << arg << ");\n";
     }
@@ -6407,6 +6427,17 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 swapTypes();  // and from here on, the new variable's
                 varMap[child.value] = vname;
             } else if ((child.type == AstNode::Type::IoPrintln || child.type == AstNode::Type::IoPrint) &&
+                       child.initValue == "stderr" && !printLineFirst(child)) {
+                // io.eprint / io.eprintln: each argument written straight to stderr, as
+                // println writes to stdout -- after stdout is flushed, so what the
+                // program printed before an error comes out before it.
+                out << indent << "fflush(stdout);\n";
+                for (size_t ai = 0; ai < child.children.size(); ++ai) {
+                    const bool nl = child.type == AstNode::Type::IoPrintln && ai + 1 == child.children.size();
+                    emitIoPrintArg(out, indent, child.children[ai], varMap, varIsString, varIsFloat, varIsChar,
+                                   varIsBool, varIsEnum, nl, "stderr");
+                }
+            } else if ((child.type == AstNode::Type::IoPrintln || child.type == AstNode::Type::IoPrint) &&
                        printLineFirst(child)) {
                 // io.println("value ", check(-1)) where check can throw: nothing is printed
                 // until every argument has its value, as with one argument.
@@ -6425,9 +6456,14 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                         line += " + " + emitConcatOperand(a, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                     }
                 }
-                out << indent << "{ const std::string __nexa_line = " << line
-                    << "; fwrite(__nexa_line.data(), 1, __nexa_line.size(), stdout);"
-                    << (child.type == AstNode::Type::IoPrintln ? " fputc('\\n', stdout);" : "") << " }\n";
+                // An io.eprint whose arguments may throw comes here too, to stderr.
+                const bool err = child.initValue == "stderr";
+                const char* stream = err ? "stderr" : "stdout";
+                out << indent << "{ const std::string __nexa_line = " << line << ";"
+                    << (err ? " fflush(stdout);" : "")
+                    << " fwrite(__nexa_line.data(), 1, __nexa_line.size(), " << stream << ");"
+                    << (child.type == AstNode::Type::IoPrintln ? std::string(" fputc('\\n', ") + stream + ");" : std::string())
+                    << " }\n";
             } else if (child.type == AstNode::Type::IoPrintln) {
                 if (!child.children.empty()) {
                     for (size_t ai = 0; ai < child.children.size(); ++ai) {
@@ -7897,7 +7933,32 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 return "__nexa_io_getline(" + src + ", 1)";
             }
             case AstNode::Type::IoToInt: {
+                {
+                    // Text in, number out: a number handed in has nothing to parse,
+                    // and used to reach the C++ compiler as a call it could not match.
+                    // A bare variable is judged by what it was emitted as: an
+                    // untyped `let x;` later given a line of text is a string,
+                    // whatever its declaration alone would say.
+                    const AstNode& arg = e.children[0];
+                    bool sure = true;
+                    if (arg.type == AstNode::Type::ExprVarRef) {
+                        auto it = varIsString ? varIsString->find(arg.value) : std::map<std::string, bool>::const_iterator();
+                        sure = varIsString && it != varIsString->end() && !it->second;
+                    }
+                    const std::string at = inferExprNexaType(arg);
+                    if (sure && !at.empty() && at != "string") {
+                        const std::string name = "io." + (e.value.empty() ? std::string("to_int") : e.value);
+                        std::string msg = name + "(s) takes text, not " +
+                            (at == "int" || at == "float" ? "a" + std::string(at == "int" ? "n " : " ") + at : at) +
+                            "; to turn a value into text first, use \"\" + value";
+                        if (e.line) msg += " at line " + std::to_string(e.line);
+                        throw std::runtime_error(msg);
+                    }
+                }
                 std::string s = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                if (e.value == "to_float") return "__nexa_to_float(" + s + ")";
+                if (e.value == "parse_int") return "__nexa_parse_int(" + s + ")";
+                if (e.value == "parse_float") return "__nexa_parse_float(" + s + ")";
                 return "__nexa_to_int(" + s + ")";
             }
             case AstNode::Type::FileRead: {
