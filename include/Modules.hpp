@@ -48,7 +48,8 @@ public:
         bool osLogout = false;
         bool osAudio = false;
         bool osBrightness = false;
-        bool osClipboard = false;
+        bool osClipSet = false;
+        bool osClipGet = false;
         bool osDesktop = false;   // os.open
         bool osNotify = false;    // os.notify
         bool osLoad = false;
@@ -404,7 +405,7 @@ public:
         if (hasOs() && (usage.osSystem || usage.osExec || usage.osGetenv || usage.osLock ||
                         usage.osShutdown || usage.osReboot || usage.osSuspend ||
                         usage.osLogout || usage.osAudio || usage.osBrightness ||
-                        usage.osClipboard || usage.osDesktop || usage.osNotify || usage.osPlay || usage.osExit ||
+                        usage.osClipSet || usage.osClipGet || usage.osDesktop || usage.osNotify || usage.osPlay || usage.osExit ||
                         usage.osSetenv || usage.osHome || usage.osUsername || usage.osSpawn ||
                         usage.osTempDir || usage.osWhich || usage.osInfo)) {
             out += "#include <cstdlib>\n";
@@ -1291,62 +1292,119 @@ public:
             out += "#endif\n";
             out += "}\n";
         }
-        if (hasOs() && usage.osClipboard) {
+        if (hasOs() && (usage.osClipSet || usage.osClipGet)) {
             out += "#include <string>\n";
             out += "#include <cstdio>\n";
-            out += "static void __nexa_os_clip_set(const std::string& text) {\n";
-            out += "  const char* cmd = NULL;\n";
-            out += "#ifdef _WIN32\n";
-            out += "  cmd = \"clip\";\n";
-            out += "#elif defined(__APPLE__)\n";
-            out += "  cmd = \"pbcopy\";\n";
-            out += "#else\n";
-            out += "  if (getenv(\"WAYLAND_DISPLAY\") && system(\"command -v wl-copy >/dev/null 2>&1\") == 0) cmd = \"wl-copy\";\n";
-            out += "  else if (system(\"command -v xclip >/dev/null 2>&1\") == 0) cmd = \"xclip -selection clipboard\";\n";
-            out += "  else if (system(\"command -v xsel >/dev/null 2>&1\") == 0) cmd = \"xsel --clipboard --input\";\n";
-            out += "#endif\n";
-            out += "  if (!cmd) return;\n";
-            out += "#ifdef _WIN32\n";
-            out += "  FILE* p = _popen(cmd, \"w\");\n";
-            out += "#else\n";
-            out += "  FILE* p = popen(cmd, \"w\");\n";
-            out += "#endif\n";
-            out += "  if (!p) return;\n";
-            out += "  fwrite(text.data(), 1, text.size(), p);\n";
-            out += "#ifdef _WIN32\n";
-            out += "  _pclose(p);\n";
-            out += "#else\n";
-            out += "  pclose(p);\n";
-            out += "#endif\n";
-            out += "}\n";
-            out += "static std::string __nexa_os_clip_get() {\n";
-            out += "  const char* cmd = NULL;\n";
-            out += "#ifdef _WIN32\n";
-            out += "  cmd = \"powershell -NoProfile -Command Get-Clipboard\";\n";
-            out += "#elif defined(__APPLE__)\n";
-            out += "  cmd = \"pbpaste\";\n";
-            out += "#else\n";
-            out += "  if (getenv(\"WAYLAND_DISPLAY\") && system(\"command -v wl-paste >/dev/null 2>&1\") == 0) cmd = \"wl-paste -n\";\n";
-            out += "  else if (system(\"command -v xclip >/dev/null 2>&1\") == 0) cmd = \"xclip -selection clipboard -o\";\n";
-            out += "  else if (system(\"command -v xsel >/dev/null 2>&1\") == 0) cmd = \"xsel --clipboard --output\";\n";
-            out += "#endif\n";
-            out += "  if (!cmd) return std::string();\n";
-            out += "  std::string out; char buf[4096]; size_t n;\n";
-            out += "#ifdef _WIN32\n";
-            out += "  FILE* p = _popen(cmd, \"r\");\n";
-            out += "#else\n";
-            out += "  FILE* p = popen(cmd, \"r\");\n";
-            out += "#endif\n";
-            out += "  if (!p) return std::string();\n";
-            out += "  while ((n = fread(buf, 1, sizeof(buf), p)) > 0) out.append(buf, n);\n";
-            out += "#ifdef _WIN32\n";
-            out += "  _pclose(p);\n";
-            out += "  while (!out.empty() && (out.back() == '\\n' || out.back() == '\\r')) out.pop_back();\n";
-            out += "#else\n";
-            out += "  pclose(p);\n";
-            out += "#endif\n";
-            out += "  return out;\n";
-            out += "}\n";
+            // Windows: the clipboard API itself, with the text as UTF-16 the way
+            // Windows keeps it. It was PowerShell to read and clip.exe to write,
+            // which cost a process each and read the text in the console's old
+            // code page, so anything past ASCII came out wrong.
+            out += "#ifdef _WIN32\n#include <windows.h>\n";
+            out += R"NEXA_OS(// Another program may hold the clipboard for a moment; ask a few times.
+static bool __nexa_clip_open(HWND owner) {
+  for (int i = 0; i < 20; i++) {
+    if (OpenClipboard(owner)) return true;
+    Sleep(5);
+  }
+  return false;
+}
+#endif
+)NEXA_OS";
+            if (usage.osClipSet) {
+                out += R"NEXA_OS(static void __nexa_os_clip_set(const std::string& text) {
+#ifdef _WIN32
+  // Lines end CRLF on the Windows clipboard; what other programs paste expects it.
+  // A '\n' is one byte in UTF-8 and one unit in UTF-16, so the text is converted
+  // into the tail of the buffer and spread forward over it, a '\r' in front of
+  // each bare '\n' -- no second copy of the text.
+  const char* src = text.data();
+  const int len = (int)text.size();
+  int bare = 0;
+  for (int i = 0; i < len; i++) if (src[i] == '\n' && (i == 0 || src[i - 1] != '\r')) bare++;
+  const int n = len ? MultiByteToWideChar(CP_UTF8, 0, src, len, NULL, 0) : 0;
+  HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, (size_t)(n + bare + 1) * sizeof(wchar_t));
+  if (!h) return;
+  wchar_t* w = (wchar_t*)GlobalLock(h);
+  if (!w) { GlobalFree(h); return; }
+  if (n) MultiByteToWideChar(CP_UTF8, 0, src, len, w + bare, n);
+  int o = 0;
+  for (int i = bare; i < bare + n; i++) {
+    if (w[i] == L'\n' && (o == 0 || w[o - 1] != L'\r')) w[o++] = L'\r';
+    w[o++] = w[i];
+  }
+  w[o] = 0;
+  GlobalUnlock(h);
+  // Setting the clipboard wants an owner window; a hidden one serves, and the
+  // text stays on the clipboard after it is gone.
+  HWND owner = CreateWindowExA(0, "STATIC", "", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, NULL, NULL);
+  if (!__nexa_clip_open(owner)) { GlobalFree(h); if (owner) DestroyWindow(owner); return; }
+  EmptyClipboard();
+  if (!SetClipboardData(CF_UNICODETEXT, h)) GlobalFree(h);  // on success the clipboard owns it
+  CloseClipboard();
+  if (owner) DestroyWindow(owner);
+#else
+  const char* cmd = NULL;
+#if defined(__APPLE__)
+  cmd = "pbcopy";
+#else
+  if (getenv("WAYLAND_DISPLAY") && system("command -v wl-copy >/dev/null 2>&1") == 0) cmd = "wl-copy";
+  else if (system("command -v xclip >/dev/null 2>&1") == 0) cmd = "xclip -selection clipboard";
+  else if (system("command -v xsel >/dev/null 2>&1") == 0) cmd = "xsel --clipboard --input";
+#endif
+  if (!cmd) return;
+  FILE* p = popen(cmd, "w");
+  if (!p) return;
+  fwrite(text.data(), 1, text.size(), p);
+  pclose(p);
+#endif
+}
+)NEXA_OS";
+            }
+            if (usage.osClipGet) {
+                out += R"NEXA_OS(static std::string __nexa_os_clip_get() {
+  std::string out;
+#ifdef _WIN32
+  if (!IsClipboardFormatAvailable(CF_UNICODETEXT) || !__nexa_clip_open(NULL)) return out;
+  HANDLE h = GetClipboardData(CF_UNICODETEXT);
+  const wchar_t* w = h ? (const wchar_t*)GlobalLock(h) : NULL;
+  if (w) {
+    const int len = lstrlenW(w);
+    const int n = len ? WideCharToMultiByte(CP_UTF8, 0, w, len, NULL, 0, NULL, NULL) : 0;
+    if (n > 0) {
+      out.resize((size_t)n);
+      WideCharToMultiByte(CP_UTF8, 0, w, len, &out[0], n, NULL, NULL);
+    }
+    GlobalUnlock(h);
+  }
+  CloseClipboard();
+  // Back to "\n" line ends, as the text comes on every other platform.
+  size_t k = 0;
+  for (size_t i = 0; i < out.size(); i++) {
+    if (out[i] == '\r' && i + 1 < out.size() && out[i + 1] == '\n') continue;
+    out[k++] = out[i];
+  }
+  out.resize(k);
+#else
+  const char* cmd = NULL;
+#if defined(__APPLE__)
+  cmd = "pbpaste";
+#else
+  if (getenv("WAYLAND_DISPLAY") && system("command -v wl-paste >/dev/null 2>&1") == 0) cmd = "wl-paste -n";
+  else if (system("command -v xclip >/dev/null 2>&1") == 0) cmd = "xclip -selection clipboard -o";
+  else if (system("command -v xsel >/dev/null 2>&1") == 0) cmd = "xsel --clipboard --output";
+#endif
+  if (!cmd) return out;
+  char buf[4096];
+  size_t n;
+  FILE* p = popen(cmd, "r");
+  if (!p) return out;
+  while ((n = fread(buf, 1, sizeof(buf), p)) > 0) out.append(buf, n);
+  pclose(p);
+#endif
+  return out;
+}
+)NEXA_OS";
+            }
         }
         if (hasOs() && (usage.osLoad || usage.osSave)) {
             out += "#include <cstdio>\n";
@@ -2134,7 +2192,7 @@ static std::string __nexa_time_format(const std::string& pat, long long t, bool 
         all.osLock = all.osShutdown = all.osReboot = all.osSuspend = all.osLogout = true;
         all.osAudio = true;
         all.osBrightness = true;
-        all.osClipboard = true;
+        all.osClipSet = all.osClipGet = true;
         all.osDesktop = all.osNotify = true;
         all.osLoad = true;
         all.osSave = true;

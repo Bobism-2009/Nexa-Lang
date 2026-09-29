@@ -348,8 +348,8 @@ public:
                 case AstNode::Type::OsToggleMute: cppUsage.osAudio = true; break;
                 case AstNode::Type::OsSetBrightness:
                 case AstNode::Type::OsGetBrightness: cppUsage.osBrightness = true; break;
-                case AstNode::Type::OsClipSet:
-                case AstNode::Type::OsClipGet: cppUsage.osClipboard = true; break;
+                case AstNode::Type::OsClipSet: cppUsage.osClipSet = true; break;
+                case AstNode::Type::OsClipGet: cppUsage.osClipGet = true; break;
                 case AstNode::Type::OsType: cppUsage.osType = true; break;
                 case AstNode::Type::OsNotify: cppUsage.osNotify = true; break;
                 case AstNode::Type::OsOpen: cppUsage.osDesktop = true; break;

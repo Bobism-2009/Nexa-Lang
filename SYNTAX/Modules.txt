@@ -141,7 +141,10 @@ ARGUMENT TYPES
   os.clip_set(text)      - Copy text to the system clipboard
   os.clip_get()          - Read the system clipboard, returns string ("" if empty)
                       Linux uses wl-copy/wl-paste (Wayland), xclip or xsel (X11);
-                      macOS uses pbcopy/pbpaste; Windows uses clip/Get-Clipboard.
+                      macOS uses pbcopy/pbpaste. Windows uses the clipboard API
+                      directly (no helper process): text goes on as UTF-16 with
+                      Windows line ends (CR LF) and comes back as UTF-8 with
+                      plain newlines, like everywhere else.
   os.notify(title, message) - Show a desktop notification
   os.open(target)        - Open a file, folder, or URL with the default app
   os.load(path)          - Read an entire file as binary, returns string ("" if missing)
