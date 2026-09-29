@@ -1,0 +1,44 @@
+// thread.mutex / lock / unlock: four threads each add 50,000 under one lock and
+// none of it is lost; the lock is recursive; a handle that names no mutex does
+// nothing.
+#include <std/io>
+#include <std/thread>
+
+let guarded = 0;
+let m = 0;
+
+fn bump(times: int) {
+    for (i, times) {
+        thread.lock(m);
+        guarded = guarded + 1;
+        thread.unlock(m);
+    }
+}
+
+fn nested() {
+    thread.lock(m);
+    thread.lock(m);
+    guarded = guarded + 1;
+    thread.unlock(m);
+    thread.unlock(m);
+}
+
+fn main() {
+    m = thread.mutex();
+    let other = thread.mutex();
+    io.println(m > 0, " ", other != m);
+    let a = thread.spawn(bump(50000));
+    let b = thread.spawn(bump(50000));
+    let c = thread.spawn(bump(50000));
+    let d = thread.spawn(bump(50000));
+    thread.join(a);
+    thread.join(b);
+    thread.join(c);
+    thread.join(d);
+    nested();
+    io.println(guarded);
+    thread.lock(0);
+    thread.unlock(0);
+    thread.lock(99999);
+    io.println("done");
+}

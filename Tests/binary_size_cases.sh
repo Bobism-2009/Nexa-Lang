@@ -13,7 +13,7 @@
 #
 #   size       Windows and Linux: an everyday program -- strings, a slice, a map,
 #              an f-string, a Result, io.to_int, io.parse_int / parse_float /
-#              to_float, io.eprintln, time.unix / format -- is under 64KB, and prints
+#              to_float, io.eprintln, time.unix / format, a thread.mutex -- is under 64KB, and prints
 #              exactly what the same program built without the slimming
 #              (NEXA_NO_SLIM=1) prints.
 #
@@ -67,6 +67,7 @@ EXE=""
 cat > "$WORK/every.nxa" <<'EOF'
 #include <std/io>
 #include <std/time>
+#include <std/thread>
 
 struct Item {
     name: string;
@@ -102,6 +103,10 @@ fn main() {
     let p = io.parse_int("12x");
     if (!p.ok()) { io.eprintln(p.error(), " ", sum); }
     io.println(io.parse_float(" 2.5 ").value() + io.to_float("0.5"));
+    let m = thread.mutex();
+    thread.lock(m);
+    sum += 1;
+    thread.unlock(m);
     let when: long = 1000000000;
     io.println(time.format_utc("%F %T", when), " ", time.unix() > when, " ", time.month(when));
 }

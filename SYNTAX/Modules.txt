@@ -514,6 +514,22 @@ ARGUMENT TYPES
   Use: let w = thread.worker(); thread.run(w, os.notify("Hi", "There")); thread.worker_join(w);
   Notes: spawn(fn_name) supports only zero-argument functions. spawn(call) captures arguments by value.
          &x in one is the caller's x: thread.spawn(count(&total, 5)) adds into total.
+  thread.mutex()          - Make a lock; returns its handle (int, 0 if none could be made)
+  thread.lock(m)          - Wait until no other thread holds m, then hold it
+  thread.unlock(m)        - Let m go
+  Two threads changing the same variable at once lose updates -- each reads the
+  old value and writes its own. Change it only between lock and unlock and one
+  thread at a time gets in:
+       let m = thread.mutex();
+       ...
+       thread.lock(m);
+       total = total + 1;
+       thread.unlock(m);
+  A mutex is recursive: the thread holding it may lock it again (a function that
+  locks, called from one that already has) and lets it go after unlocking as many
+  times. Unlock only what this thread locked. A handle that names no mutex does
+  nothing. The OS's own lock (a critical section on Windows, a pthread mutex
+  elsewhere): about 16 ns a lock and unlock when no other thread wants it.
 
 #include <std/gfx>
   Pixel window (Win32, Cocoa, X11, or Emscripten canvas). No extra libraries on Windows.

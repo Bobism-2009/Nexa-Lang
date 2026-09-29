@@ -401,6 +401,8 @@ the browser can paint.
   reusable   thread.worker()              a worker thread; returns a handle
              thread.run(worker, job)      queue a job on it, same job forms
              thread.worker_join(worker)   stop it and wait
+  lock       thread.mutex()               a lock; returns a handle
+             thread.lock(m)  thread.unlock(m)   one thread at a time between
 
 spawn(fn_name) takes zero-argument functions only. spawn(call) captures the
 arguments by value.

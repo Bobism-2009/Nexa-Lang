@@ -1,0 +1,6 @@
+// thread.lock takes the handle thread.mutex() gave.
+#include <std/thread>
+
+fn main() {
+    thread.lock("m");
+}

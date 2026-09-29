@@ -1,0 +1,6 @@
+// thread.mutex() is kept, not called for nothing.
+#include <std/thread>
+
+fn main() {
+    thread.mutex();
+}

@@ -464,6 +464,8 @@ public:
                     if (!n.children.empty()) cppUsage.threadLambda = true;
                     break;
                 case AstNode::Type::ThreadJoin: cppUsage.thread = true; break;
+                case AstNode::Type::ThreadMutex:
+                case AstNode::Type::ThreadLock: cppUsage.threadMutex = true; break;
                 case AstNode::Type::ThreadWorker:
                 case AstNode::Type::ThreadWorkerJoin:
                     cppUsage.thread = true;
@@ -6605,6 +6607,14 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     out << indent << "__nexa_time_sleep_ms("
                         << emitExpr(dur, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ");\n";
                 }
+            } else if (child.type == AstNode::Type::ThreadLock) {
+                const std::string ht = inferExprNexaType(child.children[0]);
+                if (!ht.empty() && !nexaIsNumericIntType(ht)) {
+                    throw std::runtime_error("thread." + child.value + "(m) takes the mutex thread.mutex() gave, not a " + ht +
+                                             (child.line ? " at line " + std::to_string(child.line) : std::string()));
+                }
+                out << indent << "__nexa_thread_" << child.value << "("
+                    << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ");\n";
             } else if (child.type == AstNode::Type::ThreadJoin) {
                 std::string idxExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 out << indent << "__nexa_thread_join(" << idxExpr << ");\n";
@@ -8708,6 +8718,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             }
             case AstNode::Type::ThreadWorker:
                 return "__nexa_thread_worker_create()";
+            case AstNode::Type::ThreadMutex:
+                return "__nexa_thread_mutex()";
             case AstNode::Type::ExprVarRef: {
                 if (e.value == "self" && !methodSelfType_.empty()) return "(*this)";
                 auto it = varMap.find(e.value);

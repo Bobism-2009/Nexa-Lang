@@ -1,0 +1,2 @@
+thread.lock(m) takes the mutex thread.mutex() gave, not a string
+at line 5

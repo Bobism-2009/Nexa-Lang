@@ -35,7 +35,7 @@ struct AstNode {
                       ResultMake,
                       StrMethod,
                       TimeSleep, TimeSeconds, TimeMilliseconds, TimeNowMs, TimeCall,
-                      ThreadSpawn, ThreadJoin, ThreadWorker, ThreadRun, ThreadWorkerJoin,
+                      ThreadSpawn, ThreadJoin, ThreadWorker, ThreadRun, ThreadWorkerJoin, ThreadMutex, ThreadLock,
                       IfElse,
                       Switch,
                       SwitchCase,
@@ -2957,6 +2957,25 @@ private:
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
             std::string method = tokens_[pos_ + 2].value;
             if (method == "worker") return applyIndexAndDotPostfix(parseThreadWorkerExpr());
+            if (method == "mutex") {
+                const size_t line = peek().line;
+                if (!modules_.hasThread()) {
+                    throw std::runtime_error("thread.mutex requires #include <std/thread> at line " + std::to_string(line));
+                }
+                advance(); advance(); advance();  // thread . mutex
+                if (!match(TokenType::LParen) || !match(TokenType::RParen)) {
+                    throw std::runtime_error("thread.mutex() takes nothing at line " + std::to_string(line));
+                }
+                AstNode m{AstNode::Type::ThreadMutex, "", {}};
+                m.line = line;
+                return m;
+            }
+            if ((method == "lock" || method == "unlock") && pos_ + 3 < tokens_.size() &&
+                tokens_[pos_ + 3].type == TokenType::LParen) {
+                throw std::runtime_error("thread." + method + "(m) " + (method == "lock" ? "waits for the mutex and takes it" : "lets the mutex go") +
+                                         "; it hands nothing back, so it stands on its own: thread." + method +
+                                         "(m); at line " + std::to_string(peek().line));
+            }
             if (method == "spawn") return applyIndexAndDotPostfix(parseThreadSpawnExpr());
         }
         if (peek().type == TokenType::Identifier && peek().value == "ui" && pos_ + 2 < tokens_.size() &&
@@ -5337,6 +5356,30 @@ private:
         }
         std::string method = methodTok.value;
         advance();
+        // thread.lock(m) / thread.unlock(m): one thread at a time between them.
+        if (method == "lock" || method == "unlock") {
+            if (!match(TokenType::LParen)) {
+                throw std::runtime_error("Expected '(' after thread." + method + " at line " + std::to_string(peek().line));
+            }
+            if (peek().type == TokenType::RParen) {
+                throw std::runtime_error("thread." + method + "(m) takes the mutex: let m = thread.mutex(); at line " +
+                                         std::to_string(peek().line));
+            }
+            AstNode handleArg = parseValueExpr();
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("thread." + method + "(m) takes one mutex at line " + std::to_string(peek().line));
+            }
+            if (!match(TokenType::Semicolon)) {
+                throw std::runtime_error("Expected ';' after thread." + method + "(...) at line " + std::to_string(peek().line));
+            }
+            AstNode n{AstNode::Type::ThreadLock, method, {handleArg}};
+            n.line = line;
+            return n;
+        }
+        if (method == "mutex") {
+            throw std::runtime_error("thread.mutex() makes a mutex and hands it back; keep it: let m = thread.mutex(); at line " +
+                                     std::to_string(methodTok.line));
+        }
         if (method == "run") {
             if (!match(TokenType::LParen)) {
                 throw std::runtime_error("Expected '(' after thread.run at line " + std::to_string(peek().line));
@@ -5368,7 +5411,8 @@ private:
             return {AstNode::Type::ThreadWorkerJoin, "", {handleArg}};
         }
         if (method != "join") {
-            throw std::runtime_error("Expected thread.join, thread.run, or thread.worker_join at line " + std::to_string(methodTok.line));
+            throw std::runtime_error("Expected thread.join, thread.run, thread.worker_join, thread.lock or thread.unlock at line " +
+                                     std::to_string(methodTok.line));
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));

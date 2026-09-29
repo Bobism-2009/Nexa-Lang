@@ -1,0 +1,2 @@
+thread.mutex() makes a mutex and hands it back
+at line 5

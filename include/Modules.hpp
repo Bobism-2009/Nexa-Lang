@@ -116,6 +116,7 @@ public:
         bool timeFormat = false;    // time.format / format_utc
         bool thread = false;
         bool threadLambda = false;
+        bool threadMutex = false;   // thread.mutex / lock / unlock
         bool threadWorker = false;
         bool dll = false;
         bool exceptions = false;
@@ -2137,6 +2138,66 @@ static std::string __nexa_time_format(const std::string& pat, long long t, bool 
             out += "  return (double)__ts.tv_sec * 1000.0 + (double)__ts.tv_nsec / 1000000.0;\n";
             out += "#endif\n";
             out += "}\n";
+        }
+        if (hasThread() && usage.threadMutex) {
+            // thread.mutex(): the OS's own lock, recursive -- a thread that holds it
+            // can take it again (a function that locks, called from one that already
+            // has), and gives it up when it has unlocked as often as it locked. A
+            // handle indexes a fixed table written once per mutex, so lock and unlock
+            // read it with no lock of their own: the only cost is the mutex's.
+            out += R"NEXA_THREAD(#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+typedef CRITICAL_SECTION __nexa_mutex_t;
+#else
+#include <pthread.h>
+typedef pthread_mutex_t __nexa_mutex_t;
+#endif
+#include <cstdlib>
+#define NEXA_MUTEX_MAX 4096
+static __nexa_mutex_t* __nexa_mutexes[NEXA_MUTEX_MAX];
+static int __nexa_mutex_count = 0;
+static int __nexa_thread_mutex() {
+  __nexa_mutex_t* m = (__nexa_mutex_t*)std::malloc(sizeof(__nexa_mutex_t));
+  if (!m) return 0;
+  const int id = __atomic_add_fetch(&__nexa_mutex_count, 1, __ATOMIC_ACQ_REL);
+  if (id >= NEXA_MUTEX_MAX) { std::free(m); return 0; }  // 0 names no mutex
+#ifdef _WIN32
+  InitializeCriticalSection(m);
+#else
+  pthread_mutexattr_t a;
+  pthread_mutexattr_init(&a);
+  pthread_mutexattr_settype(&a, PTHREAD_MUTEX_RECURSIVE);
+  pthread_mutex_init(m, &a);
+  pthread_mutexattr_destroy(&a);
+#endif
+  __atomic_store_n(&__nexa_mutexes[id], m, __ATOMIC_RELEASE);
+  return id;
+}
+static __nexa_mutex_t* __nexa_mutex_at(int id) {
+  return (id > 0 && id < NEXA_MUTEX_MAX) ? __atomic_load_n(&__nexa_mutexes[id], __ATOMIC_ACQUIRE) : nullptr;
+}
+[[maybe_unused]] static void __nexa_thread_lock(int id) {
+  __nexa_mutex_t* m = __nexa_mutex_at(id);
+  if (!m) return;
+#ifdef _WIN32
+  EnterCriticalSection(m);
+#else
+  pthread_mutex_lock(m);
+#endif
+}
+[[maybe_unused]] static void __nexa_thread_unlock(int id) {
+  __nexa_mutex_t* m = __nexa_mutex_at(id);
+  if (!m) return;
+#ifdef _WIN32
+  LeaveCriticalSection(m);
+#else
+  pthread_mutex_unlock(m);
+#endif
+}
+)NEXA_THREAD";
         }
         if (hasThread() && usage.thread) {
             // Threads on the OS's own calls -- CreateThread / pthread_create, SRW locks /
