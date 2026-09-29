@@ -1544,6 +1544,38 @@ static NexaSanitizer nexaProbeSanitizer(const std::string& cxx, const std::strin
     return chosen;
 }
 
+// A compile command with its link-only options taken out, for building a precompiled header:
+// clang reads a -Xlinker argument or a library as one more input, and a header build with
+// more than one input refuses its -o. What stays is every option the PCH must agree with.
+static std::string nexaCompileOnly(const std::string& cmd) {
+    std::vector<std::string> toks;
+    std::string cur;
+    bool quoted = false, any = false;
+    for (char c : cmd) {
+        if (c == '"') { quoted = !quoted; cur += c; any = true; continue; }
+        if (c == ' ' && !quoted) {
+            if (any) toks.push_back(cur);
+            cur.clear();
+            any = false;
+            continue;
+        }
+        cur += c;
+        any = true;
+    }
+    if (any) toks.push_back(cur);
+    std::string out;
+    for (size_t i = 0; i < toks.size(); i++) {
+        const std::string& t = toks[i];
+        if (t == "-Xlinker" || t == "-framework") { i++; continue; }
+        // -static and -shared stay: on mingw they set __STATIC__ / __DYNAMIC__, which a
+        // PCH has to agree on too.
+        if (t.rfind("-Wl,", 0) == 0 || (t.size() > 2 && t[0] == '-' && t[1] == 'l')) continue;
+        if (!out.empty()) out += ' ';
+        out += t;
+    }
+    return out;
+}
+
 // Build the shell command for clang/g++/gcc. Linker flags are selected per object format:
 // PE/COFF on Windows, Mach-O on macOS, and ELF on Linux.
 static std::string nexaBuildCompileCmd(
@@ -2399,7 +2431,25 @@ int main(int argc, char* argv[]) {
             // prebuilt object the slimming avoids. libstdc++'s is header code already, and a
             // wrapper around it measured 14% slower on string building (it was outlined).
             const bool win = cppTarget == nexa::CppTarget::Windows;
-            cpp = std::string(noExceptions ? kNexaSlimRuntime : kNexaSlimExceptRuntime) +
+            std::string slim = noExceptions ? kNexaSlimRuntime : kNexaSlimExceptRuntime;
+            // The wide string is instantiated here whole -- every member, compiled and
+            // optimised -- which is a large part of every build's time. Only WinHTTP,
+            // std::filesystem's paths and the odd wide file API use it; a program that
+            // names none of them has nothing that could reach the library's copy.
+            if (cpp.find("wstring") == std::string::npos && cpp.find("basic_string<wchar_t") == std::string::npos &&
+                cpp.find("filesystem") == std::string::npos) {
+                std::string kept;
+                size_t at = 0;
+                while (at < slim.size()) {
+                    size_t nl = slim.find('\n', at);
+                    const size_t end = nl == std::string::npos ? slim.size() : nl + 1;
+                    const std::string line = slim.substr(at, end - at);
+                    if (line.find("basic_string<wchar_t>") == std::string::npos) kept += line;
+                    at = end;
+                }
+                slim = kept;
+            }
+            cpp = slim +
                   (win ? std::string(kNexaToStringHelpers) + nexaRewriteToString(cpp) : cpp);
         }
 
@@ -2670,8 +2720,77 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 
-        std::string cmd = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, linkGfx3d, noExceptions, noRtti, debugBuild, linkInputs);
+        // A precompiled header for the standard headers every slim build opens with. Parsing
+        // <string> and <charconv> was most of a small program's build (0.65 s of hello
+        // world's 1.5 s); loaded from a PCH it is a few milliseconds. Built once per
+        // compiler, flags and header set -- by the very command the program is built with,
+        // since clang refuses a PCH made with different options -- and kept in
+        // ~/.nexa/cache/pch. clang only (gcc's .gch works differently), and not with --link
+        // inputs, which the header build would try to compile. Anything that goes wrong
+        // costs nothing but the saving: no PCH, or one clang rejects, and the build is the
+        // one it always was.
+        std::string pchFlag;
+        std::string pchFile;
+        if (slimTarget && linkInputs.empty() && cxx.find("clang") != std::string::npos &&
+            std::getenv("NEXA_NO_PCH") == nullptr) {
+            std::string hdr;
+            size_t at = 0;
+            while (cpp.compare(at, 10, "#include <") == 0) {
+                const size_t nl = cpp.find('\n', at);
+                if (nl == std::string::npos) break;
+                hdr += cpp.substr(at, nl - at + 1);
+                at = nl + 1;
+            }
+            if (!hdr.empty()) {
+                const std::string hflags = targetFlags + " -x c++-header -Wno-unused-command-line-argument";
+                const std::string probe = nexaCompileOnly(nexaBuildCompileCmd(cxx, hflags, "@", "@", opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, linkGfx3d, noExceptions, noRtti, debugBuild, linkInputs));
+                unsigned long long h = 1469598103934665603ULL;  // FNV-1a over what the PCH depends on
+                for (char c : probe + "\n" + hdr + "\n" + NEXAC_VERSION) { h ^= (unsigned char)c; h *= 1099511628211ULL; }
+                char name[32];
+                std::snprintf(name, sizeof name, "%016llx", h);
+                std::error_code ec;
+                const std::filesystem::path dir = std::filesystem::path(nexa::pkg::getHome()) / ".nexa" / "cache" / "pch";
+                const std::filesystem::path hpath = dir / (std::string(name) + ".hpp");
+                const std::filesystem::path ppath = dir / (std::string(name) + ".pch");
+                if (!std::filesystem::exists(ppath, ec)) {
+                    std::filesystem::create_directories(dir, ec);
+                    { std::ofstream hf(hpath, std::ios::binary); hf << hdr; }
+                    // Written beside the final name and moved into place, so a build running
+                    // alongside never reads half a PCH.
+                    const std::filesystem::path tmp = dir / (std::string(name) + "." + std::filesystem::path(cppPath).stem().string() + ".tmp");
+                    std::string pcmd = nexaCompileOnly(nexaBuildCompileCmd(cxx, hflags, hpath.string(), tmp.string(), opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, linkGfx3d, noExceptions, noRtti, debugBuild, linkInputs));
+                    if (std::getenv("NEXA_PCH_DEBUG")) {
+                        std::cout << "[Nexa] PCH: " << pcmd << "\n";
+                        std::cout.flush();
+                    } else {
+#ifdef _WIN32
+                        pcmd += " >nul 2>&1";
+#else
+                        pcmd += " >/dev/null 2>&1";
+#endif
+                    }
+                    if (std::system(pcmd.c_str()) == 0) std::filesystem::rename(tmp, ppath, ec);
+                    std::filesystem::remove(tmp, ec);
+                }
+                if (std::filesystem::exists(ppath, ec)) {
+                    pchFile = ppath.string();
+                    pchFlag = " -include-pch \"" + pchFile + "\"";
+                }
+            }
+        }
+
+        std::string cmd = nexaBuildCompileCmd(cxx, targetFlags + pchFlag, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, linkGfx3d, noExceptions, noRtti, debugBuild, linkInputs);
         int ret = std::system(cmd.c_str());
+        if (ret != 0 && !pchFlag.empty()) {
+            // Whatever clang had against the PCH (a compiler update, a header that moved),
+            // the program is built the plain way, and the next build makes a fresh PCH.
+            std::error_code ec;
+            std::filesystem::remove(pchFile, ec);
+            std::cout << "[Nexa] Retrying without the precompiled header (it is rebuilt next time)...\n";
+            std::cout.flush();
+            cmd = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, linkGfx3d, noExceptions, noRtti, debugBuild, linkInputs);
+            ret = std::system(cmd.c_str());
+        }
 
         if (ret != 0 && sanitizeThisBuild && sanitizer != NexaSanitizer::None) {
             // The probe links a 3-line program; the real link adds -static-libstdc++, gfx/http

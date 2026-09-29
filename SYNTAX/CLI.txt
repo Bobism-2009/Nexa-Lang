@@ -38,6 +38,15 @@ OPTIONS
   NEXA_NO_SLIM=1 in the environment builds with the stock runtime instead, to
   compare or to rule it out.
 
+  BUILD SPEED
+  With clang, the standard headers every program opens with are parsed once and
+  kept as a precompiled header in ~/.nexa/cache/pch (about 9MB for each set of
+  build options), so the next build starts from there: hello world builds in about
+  1s instead of 1.8s on Windows. The first build with new options makes it, and
+  one clang turns down (after a compiler update, say) is dropped and made again.
+  Deleting the folder is always safe. NEXA_NO_PCH=1 builds without it;
+  NEXA_PCH_DEBUG=1 shows the command that makes it.
+
   --debug, -g     Build a debuggable binary instead of the stripped release build:
                     * -g -O0 and frame pointers (line info, readable backtraces)
                     * nothing stripped: symbol table, sections and build-id all kept
