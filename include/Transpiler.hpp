@@ -346,8 +346,8 @@ public:
                 case AstNode::Type::OsMute:
                 case AstNode::Type::OsUnmute:
                 case AstNode::Type::OsToggleMute: cppUsage.osAudio = true; break;
-                case AstNode::Type::OsSetBrightness:
-                case AstNode::Type::OsGetBrightness: cppUsage.osBrightness = true; break;
+                case AstNode::Type::OsSetBrightness: cppUsage.osBrightnessSet = true; break;
+                case AstNode::Type::OsGetBrightness: cppUsage.osBrightnessGet = true; break;
                 case AstNode::Type::OsClipSet: cppUsage.osClipSet = true; break;
                 case AstNode::Type::OsClipGet: cppUsage.osClipGet = true; break;
                 case AstNode::Type::OsType: cppUsage.osType = true; break;

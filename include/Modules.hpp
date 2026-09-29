@@ -47,7 +47,8 @@ public:
         bool osSuspend = false;
         bool osLogout = false;
         bool osAudio = false;
-        bool osBrightness = false;
+        bool osBrightnessSet = false;
+        bool osBrightnessGet = false;
         bool osClipSet = false;
         bool osClipGet = false;
         bool osDesktop = false;   // os.open
@@ -404,7 +405,7 @@ public:
         }
         if (hasOs() && (usage.osSystem || usage.osExec || usage.osGetenv || usage.osLock ||
                         usage.osShutdown || usage.osReboot || usage.osSuspend ||
-                        usage.osLogout || usage.osAudio || usage.osBrightness ||
+                        usage.osLogout || usage.osAudio || usage.osBrightnessSet || usage.osBrightnessGet ||
                         usage.osClipSet || usage.osClipGet || usage.osDesktop || usage.osNotify || usage.osPlay || usage.osExit ||
                         usage.osSetenv || usage.osHome || usage.osUsername || usage.osSpawn ||
                         usage.osTempDir || usage.osWhich || usage.osInfo)) {
@@ -1251,46 +1252,188 @@ public:
             out += "#endif\n";
             out += "}\n";
         }
-        if (hasOs() && usage.osBrightness) {
+        if (hasOs() && (usage.osBrightnessSet || usage.osBrightnessGet)) {
             out += "#include <string>\n";
             out += "#include <cstdio>\n";
-            out += "static void __nexa_os_set_brightness(int p) {\n";
-            out += "  if (p < 0) p = 0; if (p > 100) p = 100;\n";
-            out += "  std::string s = std::to_string(p);\n";
-            out += "#ifdef _WIN32\n";
-            out += "  (void)system((\"powershell -NoProfile -Command \\\"(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1,\" + s + \")\\\" >nul 2>&1\").c_str());\n";
-            out += "#elif defined(__APPLE__)\n";
-            out += "  char b[32]; snprintf(b, sizeof(b), \"%.2f\", p / 100.0);\n";
-            out += "  (void)system((std::string(\"brightness \") + b + \" 2>/dev/null\").c_str());\n";
-            out += "#else\n";
-            out += "  if (system((\"brightnessctl set \" + s + \"% 2>/dev/null >/dev/null\").c_str()) == 0) return;\n";
-            out += "  if (system((\"test -n \\\"$(ls /sys/class/backlight 2>/dev/null)\\\" && for d in /sys/class/backlight/*; do m=$(cat \\\"$d/max_brightness\\\"); echo $((m * \" + s + \" / 100)) > \\\"$d/brightness\\\"; done 2>/dev/null\").c_str()) == 0) return;\n";
-            out += "  char fb[16]; snprintf(fb, sizeof(fb), \"%.2f\", p / 100.0);\n";
-            out += "  (void)system((std::string(\"o=$(xrandr 2>/dev/null | awk '/ connected/{print $1; exit}'); [ -n \\\"$o\\\" ] && xrandr --output \\\"$o\\\" --brightness \") + fb + \" 2>/dev/null\").c_str());\n";
-            out += "#endif\n";
-            out += "}\n";
-            out += "static int __nexa_os_get_brightness() {\n";
-            out += "  char buf[256]; int v = -1; FILE* p = NULL;\n";
-            out += "#ifdef _WIN32\n";
-            out += "  p = popen(\"powershell -NoProfile -Command \\\"(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightness).CurrentBrightness\\\" 2>nul\", \"r\");\n";
-            out += "  if (p) { if (fgets(buf, sizeof(buf), p)) v = atoi(buf); pclose(p); }\n";
-            out += "  return v;\n";
-            out += "#elif defined(__APPLE__)\n";
-            out += "  p = popen(\"brightness -l 2>/dev/null | awk '/brightness/{print int($NF*100)}' | tail -1\", \"r\");\n";
-            out += "  if (p) { if (fgets(buf, sizeof(buf), p)) v = atoi(buf); pclose(p); }\n";
-            out += "  return v;\n";
-            out += "#else\n";
-            out += "  p = popen(\"brightnessctl -m 2>/dev/null | cut -d, -f4 | tr -d '%'\", \"r\");\n";
-            out += "  if (p) { if (fgets(buf, sizeof(buf), p)) v = atoi(buf); pclose(p); }\n";
-            out += "  if (v > 0) return v;\n";
-            out += "  p = popen(\"test -n \\\"$(ls /sys/class/backlight 2>/dev/null)\\\" && for d in /sys/class/backlight/*; do c=$(cat \\\"$d/brightness\\\"); m=$(cat \\\"$d/max_brightness\\\"); echo $((c * 100 / m)); break; done 2>/dev/null\", \"r\");\n";
-            out += "  if (p) { buf[0] = 0; if (fgets(buf, sizeof(buf), p) && buf[0] >= '0' && buf[0] <= '9') v = atoi(buf); pclose(p); }\n";
-            out += "  if (v >= 0) return v;\n";
-            out += "  p = popen(\"xrandr --verbose 2>/dev/null | awk '/Brightness/{print int($2*100); exit}'\", \"r\");\n";
-            out += "  if (p) { if (fgets(buf, sizeof(buf), p)) v = atoi(buf); pclose(p); }\n";
-            out += "  return v;\n";
-            out += "#endif\n";
-            out += "}\n";
+            // Windows: no helper process. A laptop's own panel is WMI's -- the
+            // same call PowerShell made, made directly through its COM interface.
+            // An external monitor is not WMI's at all, so after it comes DDC/CI,
+            // the monitor's own control channel, through dxva2 (loaded only when
+            // it is needed). Either may be missing; -1 / nothing then, as before.
+            out += R"NEXA_OS(#ifdef _WIN32
+#include <windows.h>
+#include <objbase.h>
+#include <oleauto.h>
+#include <wbemcli.h>
+static const GUID __nexa_CLSID_WbemLocator = {0x4590f811, 0x1d3a, 0x11d0, {0x89, 0x1f, 0x00, 0xaa, 0x00, 0x4b, 0x2e, 0x24}};
+static const GUID __nexa_IID_IWbemLocator = {0xdc12a687, 0x737f, 0x11cf, {0x88, 0x4d, 0x00, 0xaa, 0x00, 0x4b, 0xdf, 0x24}};
+// f with ROOT\WMI connected: what f answers, or -1.
+static int __nexa_wmi(int (*f)(IWbemServices*, int), int arg) {
+  const HRESULT ci = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+  int r = -1;
+  IWbemLocator* loc = NULL;
+  if (SUCCEEDED(CoCreateInstance(__nexa_CLSID_WbemLocator, NULL, CLSCTX_INPROC_SERVER,
+                                 __nexa_IID_IWbemLocator, (void**)&loc)) && loc) {
+    IWbemServices* svc = NULL;
+    BSTR ns = SysAllocString(L"ROOT\\WMI");
+    if (SUCCEEDED(loc->ConnectServer(ns, NULL, NULL, NULL, 0, NULL, NULL, &svc)) && svc) {
+      CoSetProxyBlanket(svc, RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE, NULL, RPC_C_AUTHN_LEVEL_CALL,
+                        RPC_C_IMP_LEVEL_IMPERSONATE, NULL, EOAC_NONE);
+      r = f(svc, arg);
+      svc->Release();
+    }
+    SysFreeString(ns);
+    loc->Release();
+  }
+  if (SUCCEEDED(ci)) CoUninitialize();  // only what this call started
+  return r;
+}
+// The first object a WQL query finds, or NULL.
+static IWbemClassObject* __nexa_wmi_first(IWbemServices* svc, const wchar_t* query) {
+  IWbemClassObject* o = NULL;
+  BSTR lang = SysAllocString(L"WQL"), q = SysAllocString(query);
+  IEnumWbemClassObject* en = NULL;
+  if (SUCCEEDED(svc->ExecQuery(lang, q, WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY, NULL, &en)) && en) {
+    ULONG got = 0;
+    if (en->Next(WBEM_INFINITE, 1, &o, &got) != S_OK || !got) o = NULL;
+    en->Release();
+  }
+  SysFreeString(lang);
+  SysFreeString(q);
+  return o;
+}
+// Every monitor that speaks DDC/CI: its brightness read (set < 0) or written.
+typedef struct { HANDLE h; WCHAR d[128]; } __nexa_PhysMon;
+struct __nexa_Ddc { int set; int result; HMODULE lib; };
+static BOOL CALLBACK __nexa_ddc_each(HMONITOR mon, HDC, LPRECT, LPARAM lp) {
+  __nexa_Ddc* st = (__nexa_Ddc*)lp;
+  typedef BOOL (WINAPI *count_fn)(HMONITOR, DWORD*);
+  typedef BOOL (WINAPI *list_fn)(HMONITOR, DWORD, __nexa_PhysMon*);
+  typedef BOOL (WINAPI *done_fn)(DWORD, __nexa_PhysMon*);
+  typedef BOOL (WINAPI *get_fn)(HANDLE, DWORD*, DWORD*, DWORD*);
+  typedef BOOL (WINAPI *set_fn)(HANDLE, DWORD);
+  count_fn cnt = (count_fn)(void*)GetProcAddress(st->lib, "GetNumberOfPhysicalMonitorsFromHMONITOR");
+  list_fn list = (list_fn)(void*)GetProcAddress(st->lib, "GetPhysicalMonitorsFromHMONITOR");
+  done_fn done = (done_fn)(void*)GetProcAddress(st->lib, "DestroyPhysicalMonitors");
+  get_fn get = (get_fn)(void*)GetProcAddress(st->lib, "GetMonitorBrightness");
+  set_fn put = (set_fn)(void*)GetProcAddress(st->lib, "SetMonitorBrightness");
+  DWORD n = 0;
+  if (!cnt || !list || !done || !get || !put || !cnt(mon, &n) || n == 0 || n > 16) return TRUE;
+  __nexa_PhysMon pm[16];
+  if (!list(mon, n, pm)) return TRUE;
+  for (DWORD i = 0; i < n; i++) {
+    DWORD lo = 0, cur = 0, hi = 0;
+    if (!get(pm[i].h, &lo, &cur, &hi) || hi <= lo) continue;
+    if (st->set < 0) {
+      if (st->result < 0) st->result = (int)((cur - lo) * 100 / (hi - lo));
+    } else if (put(pm[i].h, lo + (DWORD)st->set * (hi - lo) / 100)) {
+      st->result = 1;
+    }
+  }
+  done(n, pm);
+  return TRUE;
+}
+static int __nexa_ddc(int set) {
+  __nexa_Ddc st = {set, -1, LoadLibraryA("dxva2.dll")};
+  if (!st.lib) return -1;
+  EnumDisplayMonitors(NULL, NULL, __nexa_ddc_each, (LPARAM)&st);
+  FreeLibrary(st.lib);
+  return st.result;
+}
+#endif
+)NEXA_OS";
+            if (usage.osBrightnessSet) {
+                out += R"NEXA_OS(#ifdef _WIN32
+static int __nexa_wmi_set(IWbemServices* svc, int p) {
+  int r = -1;
+  IWbemClassObject* inst = __nexa_wmi_first(svc, L"SELECT __PATH FROM WmiMonitorBrightnessMethods");
+  if (!inst) return r;
+  VARIANT path;
+  VariantInit(&path);
+  BSTR cls = SysAllocString(L"WmiMonitorBrightnessMethods"), meth = SysAllocString(L"WmiSetBrightness");
+  IWbemClassObject *c = NULL, *def = NULL, *in = NULL;
+  if (SUCCEEDED(inst->Get(L"__PATH", 0, &path, NULL, NULL)) && path.vt == VT_BSTR &&
+      SUCCEEDED(svc->GetObject(cls, 0, NULL, &c, NULL)) && c &&
+      SUCCEEDED(c->GetMethod(meth, 0, &def, NULL)) && def &&
+      SUCCEEDED(def->SpawnInstance(0, &in)) && in) {
+    VARIANT t, b;
+    VariantInit(&t); t.vt = VT_I4; t.lVal = 1;             // Timeout, as the PowerShell call gave it
+    VariantInit(&b); b.vt = VT_UI1; b.bVal = (BYTE)p;      // Brightness, 0..100
+    in->Put(L"Timeout", 0, &t, 0);
+    in->Put(L"Brightness", 0, &b, 0);
+    if (SUCCEEDED(svc->ExecMethod(path.bstrVal, meth, 0, NULL, in, NULL, NULL))) r = 1;
+  }
+  if (in) in->Release();
+  if (def) def->Release();
+  if (c) c->Release();
+  VariantClear(&path);
+  SysFreeString(cls);
+  SysFreeString(meth);
+  inst->Release();
+  return r;
+}
+#endif
+)NEXA_OS";
+                out += "static void __nexa_os_set_brightness(int p) {\n";
+                out += "  if (p < 0) p = 0; if (p > 100) p = 100;\n";
+                out += "#ifdef _WIN32\n";
+                out += "  if (__nexa_wmi(__nexa_wmi_set, p) < 0) (void)__nexa_ddc(p);\n";
+                out += "#else\n";
+                out += "  std::string s = std::to_string(p);\n";
+                out += "#if defined(__APPLE__)\n";
+                out += "  char b[32]; snprintf(b, sizeof(b), \"%.2f\", p / 100.0);\n";
+                out += "  (void)system((std::string(\"brightness \") + b + \" 2>/dev/null\").c_str());\n";
+                out += "#else\n";
+                out += "  if (system((\"brightnessctl set \" + s + \"% 2>/dev/null >/dev/null\").c_str()) == 0) return;\n";
+                out += "  if (system((\"test -n \\\"$(ls /sys/class/backlight 2>/dev/null)\\\" && for d in /sys/class/backlight/*; do m=$(cat \\\"$d/max_brightness\\\"); echo $((m * \" + s + \" / 100)) > \\\"$d/brightness\\\"; done 2>/dev/null\").c_str()) == 0) return;\n";
+                out += "  char fb[16]; snprintf(fb, sizeof(fb), \"%.2f\", p / 100.0);\n";
+                out += "  (void)system((std::string(\"o=$(xrandr 2>/dev/null | awk '/ connected/{print $1; exit}'); [ -n \\\"$o\\\" ] && xrandr --output \\\"$o\\\" --brightness \") + fb + \" 2>/dev/null\").c_str());\n";
+                out += "#endif\n";
+                out += "#endif\n";
+                out += "}\n";
+            }
+            if (usage.osBrightnessGet) {
+                out += R"NEXA_OS(#ifdef _WIN32
+static int __nexa_wmi_get(IWbemServices* svc, int) {
+  int r = -1;
+  IWbemClassObject* o = __nexa_wmi_first(svc, L"SELECT CurrentBrightness FROM WmiMonitorBrightness");
+  if (!o) return r;
+  VARIANT v;
+  VariantInit(&v);
+  if (SUCCEEDED(o->Get(L"CurrentBrightness", 0, &v, NULL, NULL))) {
+    if (v.vt == VT_UI1) r = v.bVal;
+    else if (v.vt == VT_I4) r = (int)v.lVal;
+  }
+  VariantClear(&v);
+  o->Release();
+  return r;
+}
+#endif
+)NEXA_OS";
+                out += "static int __nexa_os_get_brightness() {\n";
+                out += "#ifdef _WIN32\n";
+                out += "  const int v = __nexa_wmi(__nexa_wmi_get, 0);\n";
+                out += "  return v >= 0 ? v : __nexa_ddc(-1);\n";
+                out += "#else\n";
+                out += "  char buf[256]; int v = -1; FILE* p = NULL;\n";
+                out += "#if defined(__APPLE__)\n";
+                out += "  p = popen(\"brightness -l 2>/dev/null | awk '/brightness/{print int($NF*100)}' | tail -1\", \"r\");\n";
+                out += "  if (p) { if (fgets(buf, sizeof(buf), p)) v = atoi(buf); pclose(p); }\n";
+                out += "  return v;\n";
+                out += "#else\n";
+                out += "  p = popen(\"brightnessctl -m 2>/dev/null | cut -d, -f4 | tr -d '%'\", \"r\");\n";
+                out += "  if (p) { if (fgets(buf, sizeof(buf), p)) v = atoi(buf); pclose(p); }\n";
+                out += "  if (v > 0) return v;\n";
+                out += "  p = popen(\"test -n \\\"$(ls /sys/class/backlight 2>/dev/null)\\\" && for d in /sys/class/backlight/*; do c=$(cat \\\"$d/brightness\\\"); m=$(cat \\\"$d/max_brightness\\\"); echo $((c * 100 / m)); break; done 2>/dev/null\", \"r\");\n";
+                out += "  if (p) { buf[0] = 0; if (fgets(buf, sizeof(buf), p) && buf[0] >= '0' && buf[0] <= '9') v = atoi(buf); pclose(p); }\n";
+                out += "  if (v >= 0) return v;\n";
+                out += "  p = popen(\"xrandr --verbose 2>/dev/null | awk '/Brightness/{print int($2*100); exit}'\", \"r\");\n";
+                out += "  if (p) { if (fgets(buf, sizeof(buf), p)) v = atoi(buf); pclose(p); }\n";
+                out += "  return v;\n";
+                out += "#endif\n";
+                out += "#endif\n";
+                out += "}\n";
+            }
         }
         if (hasOs() && (usage.osClipSet || usage.osClipGet)) {
             out += "#include <string>\n";
@@ -2191,7 +2334,7 @@ static std::string __nexa_time_format(const std::string& pat, long long t, bool 
         all.osType = true;
         all.osLock = all.osShutdown = all.osReboot = all.osSuspend = all.osLogout = true;
         all.osAudio = true;
-        all.osBrightness = true;
+        all.osBrightnessSet = all.osBrightnessGet = true;
         all.osClipSet = all.osClipGet = true;
         all.osDesktop = all.osNotify = true;
         all.osLoad = true;

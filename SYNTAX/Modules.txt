@@ -136,7 +136,10 @@ ARGUMENT TYPES
   os.get_brightness()        - Current brightness 0-100 (int, -1 if unavailable)
                       Linux tries brightnessctl, then /sys/class/backlight, then
                       xrandr (software/gamma dimming on X11). macOS uses the
-                      'brightness' tool; Windows uses WMI. Returns -1 if no
+                      'brightness' tool. Windows asks WMI (a laptop's own panel),
+                      then DDC/CI (an external monitor that supports it, which
+                      most do), directly -- no helper process. set changes every
+                      DDC/CI monitor; get reads the first. Returns -1 if no
                       controllable display is found.
   os.clip_set(text)      - Copy text to the system clipboard
   os.clip_get()          - Read the system clipboard, returns string ("" if empty)

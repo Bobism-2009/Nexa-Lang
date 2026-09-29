@@ -1713,6 +1713,8 @@ static std::string nexaBuildCompileCmd(
         cmd += " -luser32";
         // std/os audio (os.set_volume/get_volume/mute) uses the Core Audio COM API.
         cmd += " -lole32";
+        // std/os brightness talks to WMI, whose strings and values are oleaut32's.
+        cmd += " -loleaut32";
         // std/os open uses ShellExecuteA.
         cmd += " -lshell32";
     }
