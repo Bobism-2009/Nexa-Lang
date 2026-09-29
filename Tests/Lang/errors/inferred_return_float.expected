@@ -1,0 +1,3 @@
+function 'half' returns a float, but a function with no return type returns int
+declare it: fn half(...): float
+at line 5

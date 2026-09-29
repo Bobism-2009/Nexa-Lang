@@ -91,6 +91,9 @@ FUNCTIONS
     has a default, every following parameter must also have a default.
   - Defaults are filled in at the call site (omitted args use the default expressions).
   - Return type inferred: int if any `return expr;` appears (including inside if/while/for), else void
+  - Returning anything else needs the type written: fn name(a: int): string { ... }. Returning a
+    string, float, slice, map or struct from a function without one is an error that says so
+    (a float would otherwise lose its fraction on the way out)
   - Do not mix `return;` and `return expr;` in the same function; main() only uses value returns (`return expr;` or implicit exit)
   - In main(), `return;` is compiled as `return 0;`
   - Use --preserve-names to keep names in output (default: mangle)

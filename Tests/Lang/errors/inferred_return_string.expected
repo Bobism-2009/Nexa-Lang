@@ -1,0 +1,3 @@
+function 'tag' returns a string, but a function with no return type returns int
+declare it: fn tag(...): string
+at line 6

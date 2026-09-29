@@ -1,0 +1,11 @@
+// A function with no return type returns int, so returning text from one
+// has to say so rather than leave it to the C++ compiler.
+#include <std/io>
+
+fn tag(n: int) {
+    return "#" + n;
+}
+
+fn main() {
+    io.println(tag(1));
+}

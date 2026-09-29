@@ -1,0 +1,10 @@
+// A float returned from an int function would lose its fraction silently.
+#include <std/io>
+
+fn half(n: int) {
+    return (float)n / 2.0;
+}
+
+fn main() {
+    io.println(half(3));
+}

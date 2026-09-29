@@ -1076,9 +1076,11 @@ public:
                     nexaDeclStack_.back()[node.paramNames[i]] = canonicalParamType(node, i);
                 }
                 emitFnRet_ = voidFn ? EmitFnRet::VoidFn : EmitFnRet::IntFn;
+                inferredIntFn_ = (node.fnReturnType.empty() && hasValRet) ? node.value : std::string();
                 emitBlockStatements(out, node.children, varMap, varIdx, varIsString, varIsConst, varIsFloat,
                                     varIsChar, varIsBool, varIsEnum);
                 emitFnRet_ = EmitFnRet::Main;
+                inferredIntFn_.clear();
                 nexaDeclStack_.pop_back();
                 varStructPop();
                 emitImplicitFnTail(out, node, hasValRet);
@@ -1524,6 +1526,10 @@ private:
     // While emitting a function or main body: how bare `return;` / value returns are interpreted
     enum class EmitFnRet { Main, IntFn, VoidFn };
     mutable EmitFnRet emitFnRet_ = EmitFnRet::Main;
+    // Set while emitting a function that wrote no return type and returns a
+    // value, so is an int function by inference: its name, for the error a
+    // `return` of something that is not a number gets. Empty otherwise.
+    std::string inferredIntFn_;
     std::map<std::string, std::map<std::string, std::string>> structFields_;
     std::map<std::string, std::vector<std::string>> structFieldOrder_;
     std::map<std::string, std::string> structCppNames_;
@@ -5905,6 +5911,23 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         }
     }
 
+    // A function with no return type that returns a value is an int function.
+    // Returning anything else from one used to reach the C++ compiler as a
+    // conversion it refused -- or, for a float, one it made silently, dropping
+    // the fraction. Said here instead, with the one-word fix.
+    void checkInferredIntReturn(const AstNode& ret) const {
+        if (inferredIntFn_.empty() || ret.children.empty()) return;
+        const std::string t = inferExprNexaType(ret.children[0]);
+        if (t.empty() || nexaIsNumericIntType(t) || t == "bool" || t == "char") return;
+        const bool literal = inferredIntFn_ == "a function literal";
+        std::string msg = (literal ? std::string("a function literal") : "function '" + inferredIntFn_ + "'") +
+            " returns " + ((t == "float" || t == "string") ? "a " + t : t) +
+            ", but a function with no return type returns int; declare it: " +
+            (literal ? std::string("fn (...): ") : "fn " + inferredIntFn_ + "(...): ") + t;
+        if (ret.line) msg += " at line " + std::to_string(ret.line);
+        throw std::runtime_error(msg);
+    }
+
     static void astClassifyReturns(const AstNode& n, bool& hasValueReturn, bool& hasVoidReturn) {
         if (n.type == AstNode::Type::Return) {
             if (n.children.empty()) hasVoidReturn = true;
@@ -6045,9 +6068,11 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         }
         methodSelfType_ = node.receiverType;
         emitFnRet_ = voidFn ? EmitFnRet::VoidFn : EmitFnRet::IntFn;
+        inferredIntFn_ = (node.fnReturnType.empty() && hasValRet) ? node.value : std::string();
         emitBlockStatements(out, node.children, varMap, varIdx, varIsString, varIsConst, varIsFloat,
                             varIsChar, varIsBool, varIsEnum);
         emitFnRet_ = EmitFnRet::Main;
+        inferredIntFn_.clear();
         methodSelfType_.clear();
         nexaDeclStack_.pop_back();
         varStructPop();
@@ -7169,6 +7194,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     if (emitFnRet_ == EmitFnRet::VoidFn) {
                         throw std::runtime_error("cannot return a value from void function");
                     }
+                    checkInferredIntReturn(child);
                     out << indent << "return " << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
                 }
             } else if (child.type == AstNode::Type::Break) {
@@ -7660,11 +7686,14 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         bool voidFn = (ret == "void");
         EmitFnRet savedRet = emitFnRet_;
         emitFnRet_ = voidFn ? EmitFnRet::VoidFn : EmitFnRet::IntFn;
+        std::string savedInferred = inferredIntFn_;
+        inferredIntFn_ = (e.fnReturnType.empty() && hasValRet) ? std::string("a function literal") : std::string();
         std::ostringstream body;
         emitBlockStatements(body, e.children, localMap, varIdx, localStr, localConst, localFloat,
                             localChar, localBool, localEnum);
         emitImplicitFnTail(body, e, hasValRet);
         emitFnRet_ = savedRet;
+        inferredIntFn_ = savedInferred;
         varStructPop();
         nexaDeclStack_.pop_back();
         return nexaTypeToCpp(ty) + "([&](" + sig + ") -> " + nexaTypeToCpp(ret) + " {\n" + body.str() + "})";
