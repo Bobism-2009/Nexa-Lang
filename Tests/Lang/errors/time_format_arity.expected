@@ -1,0 +1,2 @@
+time.format(pattern) or time.format(pattern, t)
+at line 5

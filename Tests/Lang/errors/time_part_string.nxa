@@ -1,0 +1,6 @@
+// time.hour takes a time in seconds since 1970, not text.
+#include <std/time>
+
+fn main() {
+    let h = time.hour("now");
+}

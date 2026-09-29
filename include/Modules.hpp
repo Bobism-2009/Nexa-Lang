@@ -109,6 +109,9 @@ public:
         bool time = false;
         bool timeSleep = false;
         bool timeChrono = false;
+        bool timeWall = false;      // time.unix / unix_ms: the wall clock
+        bool timeCalendar = false;  // ...broken into a date: the parts, and format
+        bool timeFormat = false;    // time.format / format_utc
         bool thread = false;
         bool threadLambda = false;
         bool threadWorker = false;
@@ -1832,6 +1835,88 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
             out += "#endif\n";
             out += "}\n";
         }
+        if (hasTime() && usage.timeWall) {
+            // The wall clock, in milliseconds since 1970 UTC. Unlike now_ms it can
+            // jump -- the user sets the clock, NTP corrects it -- so it is for
+            // saying when, and now_ms is for measuring how long.
+            out += R"NEXA_TIME(#ifdef _WIN32
+#include <windows.h>
+#else
+#include <time.h>
+#endif
+static long long __nexa_time_unix_ms() {
+#ifdef _WIN32
+  FILETIME ft;
+  GetSystemTimeAsFileTime(&ft);
+  const unsigned long long t = ((unsigned long long)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+  return (long long)(t / 10000ULL) - 11644473600000LL;  // 100 ns ticks since 1601
+#else
+  struct timespec ts;
+  if (clock_gettime(CLOCK_REALTIME, &ts) != 0) return 0;
+  return (long long)ts.tv_sec * 1000LL + ts.tv_nsec / 1000000L;
+#endif
+}
+static long long __nexa_time_unix() { return __nexa_time_unix_ms() / 1000; }
+)NEXA_TIME";
+        }
+        if (hasTime() && usage.timeCalendar) {
+            // A time broken into a local (or UTC) date, by the C library's own
+            // tables: the machine's time zone and daylight saving come with it.
+            out += R"NEXA_TIME(#include <ctime>
+static bool __nexa_time_tm(long long t, bool utc, struct tm* out) {
+  const time_t tt = (time_t)t;
+#ifdef _WIN32
+  return (utc ? gmtime_s(out, &tt) : localtime_s(out, &tt)) == 0;
+#else
+  return (utc ? gmtime_r(&tt, out) : localtime_r(&tt, out)) != nullptr;
+#endif
+}
+[[maybe_unused]] static int __nexa_time_part(long long t, int which) {
+  struct tm m;
+  if (!__nexa_time_tm(t, false, &m)) return 0;
+  switch (which) {
+    case 0: return m.tm_year + 1900;
+    case 1: return m.tm_mon + 1;
+    case 2: return m.tm_mday;
+    case 3: return m.tm_hour;
+    case 4: return m.tm_min;
+    case 5: return m.tm_sec;
+    default: return m.tm_wday;  // 0 is Sunday
+  }
+}
+)NEXA_TIME";
+        }
+        if (hasTime() && usage.timeFormat) {
+            // strftime, with the pattern checked first: an unknown %-code stops a
+            // Windows program dead (the C runtime's invalid-parameter handler),
+            // so only the C99 codes both C libraries take reach it, and anything
+            // else is printed as written.
+            out += R"NEXA_TIME(#include <string>
+#include <cstring>
+static std::string __nexa_time_format(const std::string& pat, long long t, bool utc) {
+  struct tm m;
+  if (!__nexa_time_tm(t, utc, &m)) return std::string();
+  std::string f;
+  f.reserve(pat.size() + 8);
+  for (size_t i = 0; i < pat.size(); i++) {
+    if (pat[i] != '%') { f += pat[i]; continue; }
+    if (i + 1 < pat.size() && pat[i + 1] && std::strchr("aAbBcCdDeFgGhHIjmMnprRStTuUVwWxXyYzZ%", pat[i + 1])) {
+      f += '%';
+      f += pat[++i];
+    } else {
+      f += "%%";
+    }
+  }
+  char buf[256];
+  size_t k = std::strftime(buf, sizeof buf, f.c_str(), &m);
+  if (k > 0 || f.empty()) return std::string(buf, k);
+  std::string big(4096, '\0');
+  k = std::strftime(&big[0], big.size(), f.c_str(), &m);
+  big.resize(k);
+  return big;
+}
+)NEXA_TIME";
+        }
         if (hasTime() && usage.timeChrono) {
             out += "#ifdef _WIN32\n#include <windows.h>\n#else\n#include <time.h>\n#endif\n";
             out += "static double __nexa_time_now_ms() {\n";
@@ -2057,7 +2142,7 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
         all.osSpawn = true;
         all.osTempDir = all.osArch = all.osCpuCount = all.osWhich = all.osCwd = all.osInfo = true;
         all.osExit = all.osHostname = all.osUsername = all.osHome = all.osSetenv = true;
-        all.file = all.fileIo = all.fileWrite = all.fileRead = all.fileFs = all.random = all.math = all.time = all.timeSleep = all.timeChrono = all.thread = all.dll = true;
+        all.file = all.fileIo = all.fileWrite = all.fileRead = all.fileFs = all.random = all.math = all.time = all.timeSleep = all.timeChrono = all.timeWall = all.timeCalendar = all.timeFormat = all.thread = all.dll = true;
         all.str = true;
         return getCppIncludes(all);
     }

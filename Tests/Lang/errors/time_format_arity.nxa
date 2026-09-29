@@ -1,0 +1,6 @@
+// time.format needs a pattern.
+#include <std/time>
+
+fn main() {
+    let s = time.format();
+}

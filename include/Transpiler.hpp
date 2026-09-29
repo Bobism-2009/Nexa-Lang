@@ -452,6 +452,13 @@ public:
                     break;
                 case AstNode::Type::TimeSleep: cppUsage.timeSleep = true; break;
                 case AstNode::Type::TimeNowMs: cppUsage.timeChrono = true; break;
+                case AstNode::Type::TimeCall:
+                    // The clock itself is always wanted; the calendar and the
+                    // formatter only by the calls that reach them.
+                    cppUsage.timeWall = true;
+                    if (n.value != "unix" && n.value != "unix_ms") cppUsage.timeCalendar = true;
+                    if (n.value == "format" || n.value == "format_utc") cppUsage.timeFormat = true;
+                    break;
                 case AstNode::Type::ThreadSpawn:
                     cppUsage.thread = true;
                     if (!n.children.empty()) cppUsage.threadLambda = true;
@@ -3009,6 +3016,10 @@ private:
                 return "int";
             case AstNode::Type::TimeNowMs:
                 return "float";
+            case AstNode::Type::TimeCall:
+                if (e.value == "unix" || e.value == "unix_ms") return "long";
+                if (e.value == "format" || e.value == "format_utc") return "string";
+                return "int";
             case AstNode::Type::IoReadln:
                 return "string";
             case AstNode::Type::OsClipGet:
@@ -8633,6 +8644,36 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             }
             case AstNode::Type::TimeNowMs:
                 return "__nexa_time_now_ms()";
+            case AstNode::Type::TimeCall: {
+                const std::string& fn = e.value;
+                if (fn == "unix") return "__nexa_time_unix()";
+                if (fn == "unix_ms") return "__nexa_time_unix_ms()";
+                auto where = [&]() { return e.line ? " at line " + std::to_string(e.line) : std::string(); };
+                // A time is a count of seconds; text or a truth value is a slip.
+                auto timeArg = [&](size_t i) {
+                    const std::string t = inferExprNexaType(e.children[i]);
+                    if (t == "string" || t == "bool" || t == "float") {
+                        throw std::runtime_error("time." + fn + " takes a time as seconds since 1970 -- an int or "
+                                                 "long, as time.unix() gives -- not a " + t + where());
+                    }
+                    return "(long long)(" + emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
+                };
+                if (fn == "format" || fn == "format_utc") {
+                    const std::string ft = inferExprNexaType(e.children[0]);
+                    if (!ft.empty() && ft != "string") {
+                        throw std::runtime_error("time." + fn + "(pattern[, t]) takes the pattern as text, e.g. "
+                                                 "\"%Y-%m-%d %H:%M\"" + where());
+                    }
+                    std::string pat = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    std::string t = e.children.size() > 1 ? timeArg(1) : std::string("__nexa_time_unix()");
+                    return "__nexa_time_format(" + pat + ", " + t + ", " + (fn == "format_utc" ? "true" : "false") + ")";
+                }
+                static const char* parts[] = {"year", "month", "day", "hour", "minute", "second", "weekday"};
+                int k = 0;
+                for (int i = 0; i < 7; i++) if (fn == parts[i]) k = i;
+                std::string t = e.children.empty() ? std::string("__nexa_time_unix()") : timeArg(0);
+                return "__nexa_time_part(" + t + ", " + std::to_string(k) + ")";
+            }
             case AstNode::Type::ThreadSpawn: {
                 if (e.children.empty()) {
                     size_t z = slotForZeroArgFunctionNamed(e.value);

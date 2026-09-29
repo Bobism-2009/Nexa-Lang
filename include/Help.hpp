@@ -371,6 +371,10 @@ Every math.* call returns float. Assign to an int to get one:
   time.seconds(n)           n * 1000 milliseconds
   time.milliseconds(n)      n milliseconds
   time.now_ms()             monotonic milliseconds, as a float
+  time.unix()  time.unix_ms()   the wall clock: since 1970 UTC
+  time.format(pat[, t])     local date as text: "%Y-%m-%d %H:%M"
+  time.format_utc(pat[, t]) the same in UTC
+  time.year/month/day/hour/minute/second/weekday([t])   one part, as an int
 
 now_ms is QueryPerformanceCounter on Windows and CLOCK_MONOTONIC elsewhere, so
 it measures elapsed time and never jumps when the wall clock is set. sleep is

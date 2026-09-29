@@ -1,0 +1,27 @@
+// The wall clock: time.unix / unix_ms, time.format / format_utc, and the parts
+// of a date. Fixed moments are printed in UTC so the output is the same in
+// every time zone; the local calls are checked for range only.
+#include <std/io>
+#include <std/time>
+
+fn main() {
+    let now = time.unix();
+    let ms = time.unix_ms();
+    io.println(now > 1700000000, " ", ms / 1000 - now <= 1, " ", ms / 1000 >= now);
+
+    let t: long = 1000000000;   // 2001-09-09 01:46:40 UTC, a Sunday
+    io.println(time.format_utc("%Y-%m-%d %H:%M:%S", t));
+    io.println(time.format_utc("%A %B %d, day %j of %Y", t));
+    io.println(time.format_utc("%F %T", 0));
+    io.println(time.format_utc("100%% sure; %Q and a trailing % stay as written", t));
+    io.println("[", time.format_utc("", t), "]");
+    let wide = "";
+    for (i, 60) { wide += "%Y-%m-%d "; }
+    io.println(len(time.format_utc(wide, t)));
+
+    let y = time.year(t);
+    io.println(y == 2001, " ", time.month(t) == 9, " ", time.weekday(t) == 0 || time.weekday(t) == 6);
+    io.println(time.year() >= 2026, " ", time.month() >= 1, " ", time.day() <= 31, " ",
+               time.hour() < 24, " ", time.minute() < 60, " ", time.second() <= 60, " ", time.weekday() < 7);
+    io.println(len(time.format("%H:%M")) == 5);
+}

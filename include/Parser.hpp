@@ -34,7 +34,7 @@ struct AstNode {
                       MathCall, CryptoCall, HttpCall, TcpCall, UdpCall, GfxCall, Gfx3dCall, UiCall, JsonCall,
                       ResultMake,
                       StrMethod,
-                      TimeSleep, TimeSeconds, TimeMilliseconds, TimeNowMs,
+                      TimeSleep, TimeSeconds, TimeMilliseconds, TimeNowMs, TimeCall,
                       ThreadSpawn, ThreadJoin, ThreadWorker, ThreadRun, ThreadWorkerJoin,
                       IfElse,
                       Switch,
@@ -2884,6 +2884,7 @@ private:
             if (method == "seconds") return applyIndexAndDotPostfix(parseTimeSeconds());
             if (method == "milliseconds") return applyIndexAndDotPostfix(parseTimeMilliseconds());
             if (method == "now_ms") return applyIndexAndDotPostfix(parseTimeNowMs());
+            if (timeWallArity(method) >= 0) return applyIndexAndDotPostfix(parseTimeWall(method));
         }
         if (peek().type == TokenType::Identifier && peek().value == "thread" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
@@ -5033,6 +5034,11 @@ private:
             throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
         }
         const Token& methodTok = peek();
+        if (methodTok.type == TokenType::Identifier && timeWallArity(methodTok.value) >= 0) {
+            throw std::runtime_error("time." + methodTok.value + "(...) hands back the time; use it as a value, "
+                                     "e.g. let t = time." + methodTok.value + "(...); at line " +
+                                     std::to_string(methodTok.line));
+        }
         if (methodTok.type != TokenType::Identifier || methodTok.value != "sleep") {
             throw std::runtime_error("Expected time.sleep at line " + std::to_string(peek().line));
         }
@@ -5106,6 +5112,50 @@ private:
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
         }
         return {AstNode::Type::TimeMilliseconds, "", {arg}};
+    }
+
+    // The wall clock: time.unix / unix_ms, time.format / format_utc, and the
+    // parts of a date. -1 for a name that is none of them; otherwise the most
+    // arguments it takes (each may also be called with one fewer, or none).
+    static int timeWallArity(const std::string& m) {
+        if (m == "unix" || m == "unix_ms") return 0;
+        if (m == "format" || m == "format_utc") return 2;
+        if (m == "year" || m == "month" || m == "day" || m == "hour" || m == "minute" ||
+            m == "second" || m == "weekday") return 1;
+        return -1;
+    }
+
+    AstNode parseTimeWall(const std::string& method) {
+        size_t line = peek().line;
+        if (!modules_.hasTime()) {
+            throw std::runtime_error("time." + method + " requires #include <std/time> at line " + std::to_string(line));
+        }
+        advance();  // time
+        advance();  // .
+        advance();  // the method
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after time." + method + " at line " + std::to_string(peek().line));
+        }
+        AstNode node{AstNode::Type::TimeCall, method, {}};
+        if (peek().type != TokenType::RParen) {
+            node.children.push_back(parseValueExpr());
+            while (match(TokenType::Comma)) node.children.push_back(parseValueExpr());
+        }
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' after time." + method + "(...) at line " + std::to_string(peek().line));
+        }
+        const int most = timeWallArity(method);
+        const int least = (method == "format" || method == "format_utc") ? 1 : 0;
+        const int got = (int)node.children.size();
+        if (got < least || got > most) {
+            std::string sig;
+            if (most == 0) sig = "time." + method + "()";
+            else if (least == 1) sig = "time." + method + "(pattern) or time." + method + "(pattern, t)";
+            else sig = "time." + method + "() or time." + method + "(t)";
+            throw std::runtime_error(sig + " at line " + std::to_string(line));
+        }
+        node.line = line;
+        return node;
     }
 
     AstNode parseTimeNowMs() {

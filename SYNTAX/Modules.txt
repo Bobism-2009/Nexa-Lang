@@ -470,6 +470,31 @@ ARGUMENT TYPES
   time.now_ms()             - Monotonic time in milliseconds (float); QPC on Windows, CLOCK_MONOTONIC on Linux/macOS
   Use: time.sleep(time.seconds(1));  let t0 = time.now_ms();  ...  let dt = time.now_ms() - t0;
 
+  The wall clock -- when, where now_ms is how long. It can jump (the user sets the
+  clock, the network corrects it), so time a stretch with now_ms, not with this.
+  time.unix()               - Seconds since 1970-01-01 UTC (long)
+  time.unix_ms()            - The same in milliseconds (long)
+  time.format(pattern[, t]) - The local date and time as text, by strftime codes:
+                              %Y year, %m month, %d day, %H hour, %M minute,
+                              %S second, %A weekday name, %B month name, %j day
+                              of the year, %F = %Y-%m-%d, %T = %H:%M:%S, %% a %.
+                              t is seconds since 1970 (default: now). A code the C
+                              library does not share on every platform is printed
+                              as written rather than crashing the program.
+                                time.format("%Y-%m-%d %H:%M")  -> "2026-09-29 14:05"
+  time.format_utc(pattern[, t]) - The same in UTC
+  time.year([t])  time.month([t])  time.day([t])  time.hour([t])
+  time.minute([t])  time.second([t])  time.weekday([t])
+                            - One part of the local date, as an int: month 1-12,
+                              day 1-31, hour 0-23, weekday 0-6 with 0 Sunday.
+                              t defaults to now. Take t once when reading several
+                              parts, so they all describe the same moment:
+                                let t = time.unix();
+                                io.println(time.hour(t), ":", time.minute(t));
+                              (time.second(t) is a part of a date; time.seconds(n)
+                              is a length of time -- n * 1000 milliseconds.)
+  Programs that never ask the wall clock carry none of it.
+
 #include <std/thread>
   thread.spawn(fn_name)   - Start a new OS thread running fn_name(), returns thread handle (int)
   thread.spawn(fn(a,b)) - Start a thread running a user function call with arguments
