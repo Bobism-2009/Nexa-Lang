@@ -1723,6 +1723,9 @@ static std::string nexaBuildCompileCmd(
         // is for gfx: an unreferenced import library contributes no import, so
         // a program that draws a cube in silence pays nothing for it.
         cmd += " -lwinmm";
+        // gfx3d.texture decodes through WIC, as gfx.image does; the same
+        // argument makes these free for a program that loads no texture.
+        cmd += " -lole32 -lwindowscodecs";
     }
     if (linkGfx) {
         cmd += " -lgdi32";
@@ -1751,6 +1754,8 @@ static std::string nexaBuildCompileCmd(
         // !linkGfx guard above is what keeps this from being named twice: the
         // gfx branch below already asks for it.
         cmd += " -framework AudioToolbox";
+        // gfx3d.texture decodes with CGImageSource, as gfx.image does.
+        cmd += " -framework ApplicationServices -framework ImageIO";
     }
     if (linkGfx) {
         // AudioToolbox is gfx.audio (AudioQueue); the rest is the window, the

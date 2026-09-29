@@ -1,0 +1,7 @@
+// gfx3d.use picks a texture and hands nothing back, so it cannot become a variable.
+#include <std/gfx3d>
+
+fn main() {
+    let t = gfx3d.texture("a.png");
+    let u = gfx3d.use(t);
+}

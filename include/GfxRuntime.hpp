@@ -443,6 +443,203 @@ inline std::string soundHooksCpp(bool haveAudio, bool haveSound) {
     return out;
 }
 
+// The file slurp and the image decoder behind gfx.image, as chunks of their own
+// because gfx3d.texture decodes with the same code. Each is guarded, so a
+// program that uses both modules carries one copy. The decoder names nothing a
+// platform header does not already give it: on Windows <objbase.h> and
+// <wincodec.h>, on macOS ImageIO, which the including runtime brings in.
+inline std::string gfxReadFileCpp() {
+    return R"NEXA_GFX(
+#ifndef NEXA_GFX_READ_FILE
+#define NEXA_GFX_READ_FILE
+static std::string __nexa_gfx_read_file(const std::string& path) {
+    if (path.empty()) return std::string();
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return std::string();
+    std::string out;
+    char buf[4096];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) {
+        if (out.size() + n > (size_t)80 * 1024 * 1024) {
+            std::fclose(f);
+            return std::string();
+        }
+        out.append(buf, n);
+    }
+    std::fclose(f);
+    return out;
+}
+#endif
+)NEXA_GFX";
+}
+
+inline std::string gfxImageDecoderCpp() {
+    return R"NEXA_GFX(
+#ifndef NEXA_GFX_IMAGE_DECODER
+#define NEXA_GFX_IMAGE_DECODER
+static int __nexa_gfx_pixels_ok(int w, int h) {
+    if (w < 1 || h < 1 || w > 4096 || h > 4096) return 0;
+    return 1;
+}
+
+#if defined(__linux__) || defined(__EMSCRIPTEN__)
+unsigned char* __nexa_gfx_stbi_load_rgba(const unsigned char* p, int n, int* w, int* h);
+void __nexa_gfx_stbi_free(void* p);
+#endif
+
+#ifdef _WIN32
+static void __nexa_gfx_com_once() {
+    static int once = 0;
+    if (once) return;
+    once = 1;
+    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+}
+
+static int __nexa_gfx_wic_decode(const unsigned char* data, int n, int* ow, int* oh, unsigned char** out) {
+    if (!data || n < 8 || !ow || !oh || !out) return 0;
+    __nexa_gfx_com_once();
+    IWICImagingFactory* fac = NULL;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&fac))) || !fac) {
+        return 0;
+    }
+    IWICStream* stream = NULL;
+    if (FAILED(fac->CreateStream(&stream)) || !stream) {
+        fac->Release();
+        return 0;
+    }
+    if (FAILED(stream->InitializeFromMemory((BYTE*)data, (DWORD)n))) {
+        stream->Release();
+        fac->Release();
+        return 0;
+    }
+    IWICBitmapDecoder* dec = NULL;
+    HRESULT hr = fac->CreateDecoderFromStream(stream, NULL, WICDecodeMetadataCacheOnLoad, &dec);
+    stream->Release();
+    if (FAILED(hr) || !dec) {
+        fac->Release();
+        return 0;
+    }
+    IWICBitmapFrameDecode* frame = NULL;
+    if (FAILED(dec->GetFrame(0, &frame)) || !frame) {
+        dec->Release();
+        fac->Release();
+        return 0;
+    }
+    IWICFormatConverter* conv = NULL;
+    if (FAILED(fac->CreateFormatConverter(&conv)) || !conv) {
+        frame->Release();
+        dec->Release();
+        fac->Release();
+        return 0;
+    }
+    hr = conv->Initialize(frame, GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, NULL, 0.0, WICBitmapPaletteTypeCustom);
+    UINT w = 0, h = 0;
+    if (FAILED(hr) || FAILED(conv->GetSize(&w, &h)) || !__nexa_gfx_pixels_ok((int)w, (int)h)) {
+        conv->Release();
+        frame->Release();
+        dec->Release();
+        fac->Release();
+        return 0;
+    }
+    unsigned char* px = new unsigned char[(size_t)w * (size_t)h * 4];
+    hr = conv->CopyPixels(NULL, w * 4, w * h * 4, px);
+    conv->Release();
+    frame->Release();
+    dec->Release();
+    fac->Release();
+    if (FAILED(hr)) {
+        delete[] px;
+        return 0;
+    }
+    *ow = (int)w;
+    *oh = (int)h;
+    *out = px;
+    return 1;
+}
+#endif
+
+#ifdef __APPLE__
+static int __nexa_gfx_cg_decode(const unsigned char* data, int n, int* ow, int* oh, unsigned char** out) {
+    if (!data || n < 8 || !ow || !oh || !out) return 0;
+    CFDataRef cf = CFDataCreate(kCFAllocatorDefault, data, (CFIndex)n);
+    if (!cf) return 0;
+    CGImageSourceRef src = CGImageSourceCreateWithData(cf, NULL);
+    CFRelease(cf);
+    if (!src) return 0;
+    CGImageRef img = CGImageSourceCreateImageAtIndex(src, 0, NULL);
+    CFRelease(src);
+    if (!img) return 0;
+    size_t w = CGImageGetWidth(img);
+    size_t h = CGImageGetHeight(img);
+    if (!__nexa_gfx_pixels_ok((int)w, (int)h)) {
+        CGImageRelease(img);
+        return 0;
+    }
+    unsigned char* px = new unsigned char[w * h * 4];
+    std::memset(px, 0, w * h * 4);
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    if (!cs) {
+        delete[] px;
+        CGImageRelease(img);
+        return 0;
+    }
+    CGContextRef ctx = CGBitmapContextCreate(
+        px, w, h, 8, w * 4, cs,
+        (CGBitmapInfo)kCGImageAlphaPremultipliedLast | (CGBitmapInfo)kCGBitmapByteOrder32Big);
+    CGColorSpaceRelease(cs);
+    if (!ctx) {
+        delete[] px;
+        CGImageRelease(img);
+        return 0;
+    }
+    CGContextTranslateCTM(ctx, 0, (CGFloat)h);
+    CGContextScaleCTM(ctx, 1.0, -1.0);
+    CGContextSetBlendMode(ctx, kCGBlendModeCopy);
+    CGContextDrawImage(ctx, CGRectMake(0, 0, (CGFloat)w, (CGFloat)h), img);
+    CGContextRelease(ctx);
+    CGImageRelease(img);
+    for (size_t i = 0; i < w * h; i++) {
+        unsigned char a = px[i * 4 + 3];
+        if (a == 0 || a == 255) continue;
+        px[i * 4 + 0] = (unsigned char)((px[i * 4 + 0] * 255 + a / 2) / a);
+        px[i * 4 + 1] = (unsigned char)((px[i * 4 + 1] * 255 + a / 2) / a);
+        px[i * 4 + 2] = (unsigned char)((px[i * 4 + 2] * 255 + a / 2) / a);
+    }
+    *ow = (int)w;
+    *oh = (int)h;
+    *out = px;
+    return 1;
+}
+#endif
+
+static int __nexa_gfx_decode_rgba(const unsigned char* data, int n, int* ow, int* oh, unsigned char** out) {
+#ifdef _WIN32
+    return __nexa_gfx_wic_decode(data, n, ow, oh, out);
+#elif defined(__APPLE__)
+    return __nexa_gfx_cg_decode(data, n, ow, oh, out);
+#else
+    if (!data || n < 8 || !ow || !oh || !out) return 0;
+    int w = 0, h = 0;
+    unsigned char* px = __nexa_gfx_stbi_load_rgba(data, n, &w, &h);
+    if (!px) return 0;
+    if (!__nexa_gfx_pixels_ok(w, h)) {
+        __nexa_gfx_stbi_free(px);
+        return 0;
+    }
+    unsigned char* copy = new unsigned char[(size_t)w * (size_t)h * 4];
+    std::memcpy(copy, px, (size_t)w * (size_t)h * 4);
+    __nexa_gfx_stbi_free(px);
+    *ow = w;
+    *oh = h;
+    *out = copy;
+    return 1;
+#endif
+}
+
+#endif
+)NEXA_GFX";
+}
+
 inline std::string gfxRuntimeCpp(const GfxNeed& need) {
     // Internal dependency closure: each of these is "some helper we are about
     // to emit calls it", worked out once here instead of at every use.
@@ -4310,192 +4507,11 @@ static std::vector<__nexa_GfxImg> __nexa_imgs;
 static std::vector<std::string> __nexa_img_paths;
 // [nexa:imgstore-end]
 )NEXA_GFX";
-    if (need.imageLoad) out += R"NEXA_GFX(
-static int __nexa_gfx_pixels_ok(int w, int h) {
-    if (w < 1 || h < 1 || w > 4096 || h > 4096) return 0;
-    return 1;
-}
-
-#if defined(__linux__) || defined(__EMSCRIPTEN__)
-unsigned char* __nexa_gfx_stbi_load_rgba(const unsigned char* p, int n, int* w, int* h);
-void __nexa_gfx_stbi_free(void* p);
-#endif
-
-#ifdef _WIN32
-static void __nexa_gfx_com_once() {
-    static int once = 0;
-    if (once) return;
-    once = 1;
-    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
-}
-
-static int __nexa_gfx_wic_decode(const unsigned char* data, int n, int* ow, int* oh, unsigned char** out) {
-    if (!data || n < 8 || !ow || !oh || !out) return 0;
-    __nexa_gfx_com_once();
-    IWICImagingFactory* fac = NULL;
-    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&fac))) || !fac) {
-        return 0;
-    }
-    IWICStream* stream = NULL;
-    if (FAILED(fac->CreateStream(&stream)) || !stream) {
-        fac->Release();
-        return 0;
-    }
-    if (FAILED(stream->InitializeFromMemory((BYTE*)data, (DWORD)n))) {
-        stream->Release();
-        fac->Release();
-        return 0;
-    }
-    IWICBitmapDecoder* dec = NULL;
-    HRESULT hr = fac->CreateDecoderFromStream(stream, NULL, WICDecodeMetadataCacheOnLoad, &dec);
-    stream->Release();
-    if (FAILED(hr) || !dec) {
-        fac->Release();
-        return 0;
-    }
-    IWICBitmapFrameDecode* frame = NULL;
-    if (FAILED(dec->GetFrame(0, &frame)) || !frame) {
-        dec->Release();
-        fac->Release();
-        return 0;
-    }
-    IWICFormatConverter* conv = NULL;
-    if (FAILED(fac->CreateFormatConverter(&conv)) || !conv) {
-        frame->Release();
-        dec->Release();
-        fac->Release();
-        return 0;
-    }
-    hr = conv->Initialize(frame, GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, NULL, 0.0, WICBitmapPaletteTypeCustom);
-    UINT w = 0, h = 0;
-    if (FAILED(hr) || FAILED(conv->GetSize(&w, &h)) || !__nexa_gfx_pixels_ok((int)w, (int)h)) {
-        conv->Release();
-        frame->Release();
-        dec->Release();
-        fac->Release();
-        return 0;
-    }
-    unsigned char* px = new unsigned char[(size_t)w * (size_t)h * 4];
-    hr = conv->CopyPixels(NULL, w * 4, w * h * 4, px);
-    conv->Release();
-    frame->Release();
-    dec->Release();
-    fac->Release();
-    if (FAILED(hr)) {
-        delete[] px;
-        return 0;
-    }
-    *ow = (int)w;
-    *oh = (int)h;
-    *out = px;
-    return 1;
-}
-#endif
-
-#ifdef __APPLE__
-static int __nexa_gfx_cg_decode(const unsigned char* data, int n, int* ow, int* oh, unsigned char** out) {
-    if (!data || n < 8 || !ow || !oh || !out) return 0;
-    CFDataRef cf = CFDataCreate(kCFAllocatorDefault, data, (CFIndex)n);
-    if (!cf) return 0;
-    CGImageSourceRef src = CGImageSourceCreateWithData(cf, NULL);
-    CFRelease(cf);
-    if (!src) return 0;
-    CGImageRef img = CGImageSourceCreateImageAtIndex(src, 0, NULL);
-    CFRelease(src);
-    if (!img) return 0;
-    size_t w = CGImageGetWidth(img);
-    size_t h = CGImageGetHeight(img);
-    if (!__nexa_gfx_pixels_ok((int)w, (int)h)) {
-        CGImageRelease(img);
-        return 0;
-    }
-    unsigned char* px = new unsigned char[w * h * 4];
-    std::memset(px, 0, w * h * 4);
-    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
-    if (!cs) {
-        delete[] px;
-        CGImageRelease(img);
-        return 0;
-    }
-    CGContextRef ctx = CGBitmapContextCreate(
-        px, w, h, 8, w * 4, cs,
-        (CGBitmapInfo)kCGImageAlphaPremultipliedLast | (CGBitmapInfo)kCGBitmapByteOrder32Big);
-    CGColorSpaceRelease(cs);
-    if (!ctx) {
-        delete[] px;
-        CGImageRelease(img);
-        return 0;
-    }
-    CGContextTranslateCTM(ctx, 0, (CGFloat)h);
-    CGContextScaleCTM(ctx, 1.0, -1.0);
-    CGContextSetBlendMode(ctx, kCGBlendModeCopy);
-    CGContextDrawImage(ctx, CGRectMake(0, 0, (CGFloat)w, (CGFloat)h), img);
-    CGContextRelease(ctx);
-    CGImageRelease(img);
-    for (size_t i = 0; i < w * h; i++) {
-        unsigned char a = px[i * 4 + 3];
-        if (a == 0 || a == 255) continue;
-        px[i * 4 + 0] = (unsigned char)((px[i * 4 + 0] * 255 + a / 2) / a);
-        px[i * 4 + 1] = (unsigned char)((px[i * 4 + 1] * 255 + a / 2) / a);
-        px[i * 4 + 2] = (unsigned char)((px[i * 4 + 2] * 255 + a / 2) / a);
-    }
-    *ow = (int)w;
-    *oh = (int)h;
-    *out = px;
-    return 1;
-}
-#endif
-
-static int __nexa_gfx_decode_rgba(const unsigned char* data, int n, int* ow, int* oh, unsigned char** out) {
-#ifdef _WIN32
-    return __nexa_gfx_wic_decode(data, n, ow, oh, out);
-#elif defined(__APPLE__)
-    return __nexa_gfx_cg_decode(data, n, ow, oh, out);
-#else
-    if (!data || n < 8 || !ow || !oh || !out) return 0;
-    int w = 0, h = 0;
-    unsigned char* px = __nexa_gfx_stbi_load_rgba(data, n, &w, &h);
-    if (!px) return 0;
-    if (!__nexa_gfx_pixels_ok(w, h)) {
-        __nexa_gfx_stbi_free(px);
-        return 0;
-    }
-    unsigned char* copy = new unsigned char[(size_t)w * (size_t)h * 4];
-    std::memcpy(copy, px, (size_t)w * (size_t)h * 4);
-    __nexa_gfx_stbi_free(px);
-    *ow = w;
-    *oh = h;
-    *out = copy;
-    return 1;
-#endif
-}
-
-)NEXA_GFX";
+    if (need.imageLoad) out += gfxImageDecoderCpp();
     // The WAV loader in soundStackCpp slurps a file the same way, and either
     // may be the only one present, so both emit this and the guard makes the
     // second copy harmless.
-    if (wantReadFile) out += R"NEXA_GFX(
-#ifndef NEXA_GFX_READ_FILE
-#define NEXA_GFX_READ_FILE
-static std::string __nexa_gfx_read_file(const std::string& path) {
-    if (path.empty()) return std::string();
-    FILE* f = std::fopen(path.c_str(), "rb");
-    if (!f) return std::string();
-    std::string out;
-    char buf[4096];
-    size_t n;
-    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) {
-        if (out.size() + n > (size_t)80 * 1024 * 1024) {
-            std::fclose(f);
-            return std::string();
-        }
-        out.append(buf, n);
-    }
-    std::fclose(f);
-    return out;
-}
-#endif
-)NEXA_GFX";
+    if (wantReadFile) out += gfxReadFileCpp();
     if (need.imageLoad) out += R"NEXA_GFX(
 static int __nexa_gfx_store_img(int w, int h, unsigned char* px, const std::string& key) {
     if (__nexa_imgs.empty()) {

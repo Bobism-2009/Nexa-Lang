@@ -1,0 +1,6 @@
+// One argument: the path of the image.
+#include <std/gfx3d>
+
+fn main() {
+    let t = gfx3d.texture("a.png", 1);
+}

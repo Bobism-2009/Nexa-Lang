@@ -1,0 +1,137 @@
+// std/gfx3d textures: a brick wall, a checkered floor, a spinning crate and a
+// striped ball, all from two images the program writes for itself.
+//
+//   build: NexaC Examples/texture3d_demo.nxa -o texture3d_demo && ./texture3d_demo
+//   drive: arrows orbit, W/S raise and lower, T turns the textures off and on,
+//          escape quits
+//
+// gfx3d.texture loads a PNG, JPEG or BMP and hands back a handle; gfx3d.use
+// makes every shape after it wear that texture until gfx3d.use(0). The colour a
+// shape is drawn in tints its texture -- 255, 255, 255 shows it as it is -- and
+// the light shades it the way it shades a plain one.
+//
+// The images are 24-bit BMPs written byte by byte, so the demo needs no file
+// beside it. A real program would load its own: gfx3d.texture("bricks.png").
+#include <std/gfx3d>
+#include <std/file>
+#include <std/io>
+#include <std/math>
+
+// n as four little-endian bytes, the way a BMP header stores its numbers.
+fn le32(n: int): string {
+    return "" + (char)(n % 256) + (char)((n / 256) % 256) + (char)((n / 65536) % 256) + (char)(n / 16777216);
+}
+
+// The 54-byte header of a size x size, 24-bit, bottom-up BMP.
+fn bmp_header(size: int): string {
+    let pixels = size * size * 3;
+    let h = "BM" + le32(54 + pixels) + le32(0) + le32(54);
+    h = h + le32(40) + le32(size) + le32(size) + (char)1 + (char)0 + (char)24 + (char)0;
+    h = h + le32(0) + le32(pixels) + le32(2835) + le32(2835) + le32(0) + le32(0);
+    return h;
+}
+
+// Red-brown bricks in staggered rows, grey mortar between them.
+fn write_bricks(path: string) {
+    let size = 64;
+    let s = bmp_header(size);
+    for (row, size) {
+        let y = size - 1 - row;  // a BMP's first row is the image's bottom
+        for (x, size) {
+            let course = y / 16;
+            let bx = (x + (course % 2) * 16) % 32;
+            let mortar = (y % 16 < 2 || bx < 2) ? 1 : 0;
+            let shade = ((x / 32) * 7 + course * 13) % 5 * 8;
+            if (mortar == 1) {
+                s = s + (char)150 + (char)155 + (char)160;
+            } else {
+                s = s + (char)(40 + shade) + (char)(60 + shade) + (char)(150 + shade);
+            }
+        }
+    }
+    file.write(path, s);
+}
+
+// Eight by eight squares, cream and slate.
+fn write_checker(path: string) {
+    let size = 64;
+    let s = bmp_header(size);
+    for (row, size) {
+        for (x, size) {
+            if ((x / 8 + row / 8) % 2 == 0) {
+                s = s + (char)200 + (char)225 + (char)235;
+            } else {
+                s = s + (char)90 + (char)70 + (char)60;
+            }
+        }
+    }
+    file.write(path, s);
+}
+
+fn main() {
+    write_bricks("texture3d_bricks.bmp");
+    write_checker("texture3d_checker.bmp");
+    let bricks = gfx3d.texture("texture3d_bricks.bmp");
+    let checker = gfx3d.texture("texture3d_checker.bmp");
+    if (bricks == 0 || checker == 0) {
+        io.println("could not load the demo's textures");
+        return;
+    }
+    if (gfx3d.open("Nexa 3D textures", 900, 620) != 1) {
+        io.println("no 3D window: this platform has no backend yet");
+        return;
+    }
+    gfx3d.light(-0.4, 1.0, 0.5);
+    gfx3d.ambient(80);
+
+    let angle = 0.6;
+    let height = 5.0;
+    let dist = 15.0;
+    let spin = 0.0;
+    let textured = 1;
+
+    while (gfx3d.closed() != 1) {
+        gfx3d.poll();
+        if (gfx3d.key("escape") == 1) { break; }
+        if (gfx3d.key("left") == 1) { angle = angle - 0.03; }
+        if (gfx3d.key("right") == 1) { angle = angle + 0.03; }
+        if (gfx3d.key("up") == 1) { dist = dist - 0.2; }
+        if (gfx3d.key("down") == 1) { dist = dist + 0.2; }
+        if (gfx3d.key("w") == 1) { height = height + 0.1; }
+        if (gfx3d.key("s") == 1) { height = height - 0.1; }
+        if (gfx3d.pressed("t") == 1) { textured = 1 - textured; }
+        if (dist < 5.0) { dist = 5.0; }
+        spin = spin + 1.0;
+
+        gfx3d.camera(math.sin(angle) * dist, height, math.cos(angle) * dist, 0.0, 0.5, 0.0);
+        gfx3d.clear(24, 26, 34);
+
+        // The floor and the wall: one texture each, stretched over a box.
+        gfx3d.use(textured == 1 ? checker : 0);
+        gfx3d.box(0.0, -1.1, 0.0, 12.0, 0.2, 12.0, 255, 255, 255);
+        gfx3d.use(textured == 1 ? bricks : 0);
+        gfx3d.box(0.0, 1.5, -5.0, 10.0, 5.0, 0.6, 255, 255, 255);
+
+        // A crate that spins in place, tinted by the colour it is drawn in.
+        gfx3d.translate(-2.5, 0.0, 0.0);
+        gfx3d.rotate(0.0, spin, 0.0);
+        gfx3d.box(0.0, 0.0, 0.0, 2.0, 2.0, 2.0, 255, 220, 160);
+        gfx3d.reset();
+
+        // A ball and a pillar wear the checker the way a globe wears a map.
+        gfx3d.use(textured == 1 ? checker : 0);
+        gfx3d.translate(2.5, 0.2, 0.0);
+        gfx3d.rotate(0.0, -spin * 0.5, 20.0);
+        gfx3d.sphere(0.0, 0.0, 0.0, 1.2, 255, 180, 180);
+        gfx3d.reset();
+        gfx3d.use(textured == 1 ? bricks : 0);
+        gfx3d.cylinder(5.0, -1.0, -2.0, 5.0, 3.0, -2.0, 0.7, 255, 255, 255);
+
+        // After gfx3d.use(0), shapes are plain colour again.
+        gfx3d.use(0);
+        gfx3d.cone(-5.0, -1.0, -2.0, -5.0, 1.5, -2.0, 0.8, 90, 200, 120);
+
+        gfx3d.present();
+    }
+    gfx3d.close();
+}

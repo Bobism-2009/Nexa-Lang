@@ -1406,7 +1406,7 @@ public:
             size_t at = src.find(kShowMarker);
             if (at != std::string::npos) src.replace(at, std::string(kShowMarker).size(), needShow_ ? kShowRuntime : "");
         }
-        if (cppUsage_.gfx && cppUsage_.gfxImage &&
+        if (((cppUsage_.gfx && cppUsage_.gfxImage) || (cppUsage_.gfx3d && cppUsage_.gfx3dTexture)) &&
             (target_ == CppTarget::Linux || target_ == CppTarget::Wasm)) {
             // ~8,000 lines of stb, so only a program that can reach the decoder gets it.
             // Nothing needs a stub in its place: __nexa_gfx_decode_rgba is the only caller
@@ -4378,6 +4378,8 @@ private:
             {"model",       "gfx3d.model(path)",                                      "t"},
             {"model_tris",  "gfx3d.model_tris(id)",                                   "n"},
             {"draw",        "gfx3d.draw(id, x, y, z, scale, r, g, b)",                "nnnnnnnn"},
+            {"texture",     "gfx3d.texture(path)",                                    "t"},
+            {"use",         "gfx3d.use(texture)",                                     "n"},
             // Sound, spelled as std/gfx spells it because it is the same call.
             {"audio",       "gfx3d.audio([rate])",                                    "n"},
             {"sample",      "gfx3d.sample(s)",                                        "n"},
@@ -9029,6 +9031,10 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         const std::string& fn = n.value;
         if (fn == "model" || fn == "draw" || fn == "model_tris") {
             cppUsage.gfx3dModel = true;
+        } else if (fn == "texture" || fn == "use") {
+            // The image decoder, and on Windows and macOS the system codecs
+            // behind it: a program that never loads a texture carries neither.
+            cppUsage.gfx3dTexture = true;
         } else if (fn == "audio" || fn == "sample" || fn == "audio_queued" ||
             fn == "audio_flush") {
             cppUsage.gfx3dAudio = true;

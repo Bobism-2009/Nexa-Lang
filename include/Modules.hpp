@@ -165,6 +165,8 @@ public:
         // renderer, and it brings <vector> and a file parser that nothing else
         // in the module uses.
         bool gfx3dModel = false;
+        // gfx3d.texture / use: the image decoder std/gfx uses for gfx.image.
+        bool gfx3dTexture = false;
         bool json = false;
         bool result = false;
     };
@@ -1696,6 +1698,14 @@ public:
             // After the runtime, not before: the model block draws through
             // __nexa_g3_vert_n and the vertex batch, which are defined up there.
             if (usage.gfx3dModel) out += gfx3dModelCpp();
+            // gfx3d.texture decodes with std/gfx's decoder. Both chunks are
+            // guarded, so if gfx.image already brought them they are empty here.
+            if (usage.gfx3dTexture) {
+                out += gfx3dTextureHeadersCpp();
+                out += gfxReadFileCpp();
+                out += gfxImageDecoderCpp();
+                out += gfx3dTextureCpp();
+            }
             // std/gfx drawn over the 3D window. The bridge needs both runtimes
             // in front of it -- gfx's framebuffer and gfx3d's GL table -- so it
             // comes last. Only for a program that actually draws with gfx: one

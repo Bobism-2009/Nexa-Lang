@@ -1172,9 +1172,10 @@ ARGUMENT TYPES
   backend(); one that does not is not interrupted. The switch is where
   programs will expect it when a Vulkan backend exists.
   gfx3d.model(path)              - load a Wavefront .obj; handle, or 0
-                                   Reads v, vn and f: positions, normals, and
-                                   which corners make a face. Everything else --
-                                   vt, usemtl, mtllib, o, g, s -- is skipped
+                                   Reads v, vt, vn and f: positions, texture
+                                   coordinates, normals, and which corners make
+                                   a face. Everything else -- usemtl, mtllib, o,
+                                   g, s -- is skipped
                                    without complaint, so a model naming a
                                    material this renderer cannot honour still
                                    draws. Faces of any number of corners are
@@ -1211,6 +1212,37 @@ ARGUMENT TYPES
                                    with it, so an exporter's smoothing is
                                    honoured; corners without one take the face's
                                    normal and stay sharp
+                                   Wears the gfx3d.use texture by the file's vt
+                                   coordinates; a file with none draws plain
+  gfx3d.texture(path)            - load an image to wrap shapes in; handle, or 0
+                                   PNG, JPEG and BMP -- the decoder gfx.image
+                                   uses, so a file that loads in one loads in the
+                                   other. Resized to a power of two on each side,
+                                   at most 2048, and mipmapped, so it stays
+                                   smooth far away. Alpha is ignored: a texture
+                                   is opaque. Cached by path, like gfx3d.model,
+                                   and no window is needed to load one
+                                   In the browser the file has to be in the
+                                   page's file system, as a model's does
+  gfx3d.use(t)                   - every solid shape drawn after this wears
+                                   texture t, until gfx3d.use(0). State, like
+                                   gfx3d.light: set it, draw, set the next
+                                   The shape's colour multiplies the texture and
+                                   the light shades it, so r, g, b = 255 shows
+                                   the image as it is and anything less tints it
+                                   How each shape wears it:
+                                     box, cube   the whole image on every face,
+                                                 the image's top edge upward
+                                     sphere      wrapped like a world map, the
+                                                 image's top at the top pole
+                                     cylinder,   round the side once, the top
+                                     cone        edge at the second point; flat
+                                                 on the ends
+                                     capsule     the side as a cylinder's, each
+                                                 end as half a sphere's
+                                     draw        the model's vt coordinates
+                                   gfx3d.tri, gfx3d.line3 and gfx3d.grid stay
+                                   plain. A handle that names nothing is 0
   gfx3d.sound(path)              - load a WAV file; handle, or 0
   gfx3d.play(id[, volume])       - play a sound once; voice id, or 0
   gfx3d.loop(id[, volume])       - the same, but repeating until stopped; voice id, or 0

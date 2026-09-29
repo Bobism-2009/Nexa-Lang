@@ -328,6 +328,99 @@ else
     skips=$((skips + 1))
 fi
 
+# --- texture layer ----------------------------------------------------------
+#
+# gfx3d.texture decodes with std/gfx's decoder, so it is sliced like the model
+# reader: a program that loads no texture carries no decoder. A program that
+# decodes in both modules must carry one decoder, not two -- which only a
+# compiler can see, since both chunks are written out and one is guarded away.
+# What a texture looks like on a shape is, like the winding above, beyond this
+# suite; Examples/texture3d_demo.nxa is the look.
+
+expect_emit "texture" '__nexa_gfx3d_texture\("a.png"\)' '    let t = gfx3d.texture("a.png");'
+expect_emit "use"     '__nexa_gfx3d_use\(1\)'            '    gfx3d.use(1);'
+
+printf '#include <std/gfx3d>\nfn main() {\n    gfx3d.cube(0.0, 0.0, 0.0, 1.0, 255, 0, 0);\n}\n' > "$WORK/notex.nxa"
+if "$NEXAC" "$WORK/notex.nxa" --source "$WORK/notex.cpp" > /dev/null 2>&1; then
+    if grep -qE '__nexa_gfx_decode_rgba|__nexa_gfx3d_texture|wincodec|stbi' "$WORK/notex.cpp"; then
+        echo "FAIL texture slicing: a program that loads no texture carries the decoder"
+        fails=$((fails + 1))
+    fi
+else
+    echo "FAIL texture slicing: NexaC could not transpile"
+    fails=$((fails + 1))
+fi
+
+mkdir -p "$WORK/tex"
+cp "$SUITE/gfx_2x2.png" "$WORK/tex/a.png"
+printf 'not an image\n' > "$WORK/tex/bad.png"
+cat > "$WORK/tex.nxa" <<'NXA'
+#include <std/gfx3d>
+#include <std/io>
+
+fn main() {
+    let t: int = gfx3d.texture("a.png");
+    io.println("tex=" + t);
+    io.println("cached=" + gfx3d.texture("a.png"));
+    io.println("missing=" + gfx3d.texture("no_such.png"));
+    io.println("bad=" + gfx3d.texture("bad.png"));
+    gfx3d.use(t);
+    gfx3d.use(99);
+    gfx3d.use(0);
+    // Drawing with no window is a no-op, textured or not.
+    gfx3d.use(t);
+    gfx3d.sphere(0.0, 0.0, 0.0, 1.0, 255, 255, 255);
+    io.println("done");
+}
+NXA
+cat > "$WORK/tex/tex.expected" <<'EXP'
+tex=1
+cached=1
+missing=0
+bad=0
+done
+EXP
+if "$NEXAC" "$WORK/tex.nxa" -o "$WORK/tex/tex" > "$WORK/tex.log" 2>&1; then
+    tbin="$WORK/tex/tex"
+    [ -x "$tbin" ] || tbin="$WORK/tex/tex.exe"
+    if (cd "$WORK/tex" && "$tbin" > "$WORK/tex/tex.raw" 2>&1); then
+        if ! diff -u --strip-trailing-cr "$WORK/tex/tex.expected" "$WORK/tex/tex.raw" > "$WORK/tex/tex.diff" 2>&1; then
+            echo "FAIL texture load: output moved"
+            sed 's/^/  /' "$WORK/tex/tex.diff"
+            fails=$((fails + 1))
+        fi
+    else
+        echo "FAIL texture load: the program did not run"
+        sed 's/^/  /' "$WORK/tex/tex.raw"
+        fails=$((fails + 1))
+    fi
+else
+    echo "skip texture load: could not build (no C++ toolchain)"
+    skips=$((skips + 1))
+fi
+
+# Both modules decoding: one decoder, or the build fails on a redefinition.
+cat > "$WORK/bothdecode.nxa" <<'NXA'
+#include <std/gfx>
+#include <std/gfx3d>
+
+fn main() {
+    let a: int = gfx.image("a.png");
+    let b: int = gfx3d.texture("a.png");
+    if (a + b > 100) { gfx3d.use(b); }
+}
+NXA
+if "$NEXAC" "$WORK/bothdecode.nxa" -o "$WORK/tex/both" > "$WORK/both.log" 2>&1; then
+    :
+elif grep -qiE 'redefinition|already defined|duplicate' "$WORK/both.log"; then
+    echo "FAIL texture decoder: gfx.image and gfx3d.texture carry two decoders"
+    grep -iE 'error' "$WORK/both.log" | head -n 3 | sed 's/^/  /'
+    fails=$((fails + 1))
+else
+    echo "skip texture decoder: could not build (no C++ toolchain)"
+    skips=$((skips + 1))
+fi
+
 # --- sound layer ------------------------------------------------------------
 #
 # gfx3d's sound calls are the only ones in the module that do not emit a

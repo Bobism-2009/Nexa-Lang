@@ -4802,6 +4802,7 @@ private:
         if (m == "poll") return "gfx3d.poll() takes in the window's input";
         if (m == "close") return "gfx3d.close() closes the window";
         if (m == "maxfps") return "gfx3d.maxfps(fps) sets the frame cap";
+        if (m == "use") return "gfx3d.use(texture) picks what the next shapes wear";
         return nullptr;
     }
 
@@ -4849,6 +4850,10 @@ private:
         else if (method == "model") argc = 1;
         else if (method == "model_tris") argc = 1;
         else if (method == "draw") argc = 8;
+        // Textures. gfx3d.texture loads one and hands back its handle;
+        // gfx3d.use is state, like gfx3d.light: every solid shape after it
+        // wears that texture, until gfx3d.use(0).
+        else if (method == "texture" || method == "use") argc = 1;
         else if (method == "sound" || method == "sample") argc = 1;
         else if (method == "play" || method == "loop") { argc = 1; argcMax = 2; }
         else if (method == "stop" || method == "volume"
@@ -4875,7 +4880,7 @@ private:
                 " line3, grid, translate, rotate, scale, reset, light, ambient,"
                 " maxfps, vsync, renderer, backend, key, pressed,"
                 " released, typed, wheel, wheel_x, mouse, mouse_x, mouse_y,"
-                " model, draw, model_tris,"
+                " model, draw, model_tris, texture, use,"
                 " sound, play, loop, stop, volume,"
                 " audio, sample, audio_queued, audio_flush)");
         }
@@ -4936,6 +4941,8 @@ private:
             else if (method == "model") sig = "gfx3d.model(path)";
             else if (method == "model_tris") sig = "gfx3d.model_tris(id)";
             else if (method == "draw") sig = "gfx3d.draw(id, x, y, z, scale, r, g, b)";
+            else if (method == "texture") sig = "gfx3d.texture(path)";
+            else if (method == "use") sig = "gfx3d.use(texture)";
             else if (method == "sound") sig = "gfx3d.sound(path)";
             else if (method == "play") sig = "gfx3d.play(snd) or gfx3d.play(snd, volume)";
             else if (method == "loop") sig = "gfx3d.loop(snd) or gfx3d.loop(snd, volume)";

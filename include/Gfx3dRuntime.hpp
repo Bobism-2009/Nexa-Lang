@@ -155,6 +155,14 @@ typedef long          __nexa_GLsizeiptr;
 #define NEXA_GL_TEXTURE_MAG_FILTER  0x2800u
 #define NEXA_GL_TEXTURE_MIN_FILTER  0x2801u
 #define NEXA_GL_NEAREST             0x2600u
+// gfx3d.texture: repeat, and mipmaps built here rather than asked of a driver
+// that may be OpenGL 1.1.
+#define NEXA_GL_LINEAR              0x2601u
+#define NEXA_GL_LINEAR_MIPMAP_LINEAR 0x2703u
+#define NEXA_GL_TEXTURE_WRAP_S      0x2802u
+#define NEXA_GL_TEXTURE_WRAP_T      0x2803u
+#define NEXA_GL_REPEAT              0x2901u
+#define NEXA_GL_TEXTURE_COORD_ARRAY 0x8078u
 
 #if defined(_WIN32)
   #define NEXA_GLAPI __stdcall
@@ -197,6 +205,7 @@ typedef void (NEXA_GLAPI *__nexa_pfn_glDrawArrays)(__nexa_GLenum, __nexa_GLint, 
 typedef void (NEXA_GLAPI *__nexa_pfn_glPushMatrix)(void);
 typedef void (NEXA_GLAPI *__nexa_pfn_glPopMatrix)(void);
 typedef void (NEXA_GLAPI *__nexa_pfn_glMultMatrixf)(const __nexa_GLfloat*);
+typedef void (NEXA_GLAPI *__nexa_pfn_glTexCoordPointer)(__nexa_GLint, __nexa_GLenum, __nexa_GLsizei, const void*);
 
 // The GLES2 entry points the WebGL backend calls. Emscripten links these in
 // itself, so unlike the desktop table they are ordinary symbols rather than
@@ -246,6 +255,7 @@ void glTexSubImage2D(__nexa_GLenum, __nexa_GLint, __nexa_GLint, __nexa_GLint, __
 void glTexParameteri(__nexa_GLenum, __nexa_GLenum, __nexa_GLint);
 void glBlendFunc(__nexa_GLenum, __nexa_GLenum);
 void glUniform1i(__nexa_GLint, __nexa_GLint);
+void glUniform1f(__nexa_GLint, __nexa_GLfloat);
 void glDisableVertexAttribArray(__nexa_GLuint);
 }
 #endif
@@ -285,6 +295,8 @@ struct __nexa_GL {
     __nexa_pfn_glPushMatrix         PushMatrix         = nullptr;
     __nexa_pfn_glPopMatrix          PopMatrix          = nullptr;
     __nexa_pfn_glMultMatrixf        MultMatrixf        = nullptr;
+    // And the texture coordinates of a cached mesh, for gfx3d.use.
+    __nexa_pfn_glTexCoordPointer    TexCoordPointer    = nullptr;
     int loaded = 0;
 };
 static __nexa_GL __nexa_gl;
@@ -695,6 +707,7 @@ static int __nexa_g3_load_gl(void) {
     __nexa_gl.PushMatrix         = (__nexa_pfn_glPushMatrix)__nexa_g3_sym("glPushMatrix");
     __nexa_gl.PopMatrix          = (__nexa_pfn_glPopMatrix)__nexa_g3_sym("glPopMatrix");
     __nexa_gl.MultMatrixf        = (__nexa_pfn_glMultMatrixf)__nexa_g3_sym("glMultMatrixf");
+    __nexa_gl.TexCoordPointer    = (__nexa_pfn_glTexCoordPointer)__nexa_g3_sym("glTexCoordPointer");
     __nexa_gl.loaded = 1;
     return 1;
 }
@@ -1040,22 +1053,35 @@ static __nexa_GLuint __nexa_g3_vbo = 0;
 static __nexa_GLint  __nexa_g3_u_mvp = -1;
 static __nexa_GLint  __nexa_g3_a_pos = -1;
 static __nexa_GLint  __nexa_g3_a_col = -1;
+// gfx3d.use: the corner's texture coordinate, the texture, and whether there
+// is one -- the fixed-function pipeline's GL_MODULATE, written out.
+static __nexa_GLint  __nexa_g3_a_uv = -1;
+static __nexa_GLint  __nexa_g3_u_tex = -1;
+static __nexa_GLint  __nexa_g3_u_texon = -1;
 
 static const char* __nexa_g3_vs =
     "attribute vec3 aPos;\n"
     "attribute vec3 aCol;\n"
+    "attribute vec2 aUV;\n"
     "uniform mat4 uMVP;\n"
     "varying vec3 vCol;\n"
+    "varying vec2 vUV;\n"
     "void main() {\n"
     "  vCol = aCol;\n"
+    "  vUV = aUV;\n"
     "  gl_Position = uMVP * vec4(aPos, 1.0);\n"
     "}\n";
 
 static const char* __nexa_g3_fs =
     "precision mediump float;\n"
+    "uniform sampler2D uTex;\n"
+    "uniform float uTexOn;\n"
     "varying vec3 vCol;\n"
+    "varying vec2 vUV;\n"
     "void main() {\n"
-    "  gl_FragColor = vec4(vCol, 1.0);\n"
+    "  vec3 c = vCol;\n"
+    "  if (uTexOn > 0.5) c *= texture2D(uTex, vUV).rgb;\n"
+    "  gl_FragColor = vec4(c, 1.0);\n"
     "}\n";
 
 static __nexa_GLuint __nexa_g3_compile(__nexa_GLenum kind, const char* src) {
@@ -1086,6 +1112,12 @@ static int __nexa_g3_build_program(void) {
     __nexa_g3_u_mvp = glGetUniformLocation(__nexa_g3_prog, "uMVP");
     __nexa_g3_a_pos = glGetAttribLocation(__nexa_g3_prog, "aPos");
     __nexa_g3_a_col = glGetAttribLocation(__nexa_g3_prog, "aCol");
+    __nexa_g3_a_uv = glGetAttribLocation(__nexa_g3_prog, "aUV");
+    __nexa_g3_u_tex = glGetUniformLocation(__nexa_g3_prog, "uTex");
+    __nexa_g3_u_texon = glGetUniformLocation(__nexa_g3_prog, "uTexOn");
+    glUseProgram(__nexa_g3_prog);
+    glUniform1i(__nexa_g3_u_tex, 0);
+    glUniform1f(__nexa_g3_u_texon, 0.0f);
     glGenBuffers(1, &__nexa_g3_vbo);
     return __nexa_g3_vbo != 0;
 }
@@ -1689,6 +1721,7 @@ static void __nexa_g3_shade_rgb(float nx, float ny, float nz,
 struct __nexa_G3Mesh {
     std::vector<float> pos;  // x, y, z a corner, in the shape's own space
     std::vector<float> nrm;  // its unit normal (0, 0, 0 where there is none)
+    std::vector<float> uv;   // s, t a corner, for gfx3d.use; t = 0 is the image's top
     int two_sided = 0;
     struct Lit {
         float key[28];
@@ -1701,11 +1734,14 @@ struct __nexa_G3Mesh {
     int n_lit = 0;
     unsigned clock = 0;
     unsigned gl_pos = 0;     // WebGL: pos, uploaded once
+    unsigned gl_uv = 0;      // WebGL: uv, the same
 };
 
 // While a mesh is being built, the shape code below writes its corners here
-// instead of lighting and sending them.
+// instead of lighting and sending them, each with the texture coordinate the
+// shape set just before it.
 static __nexa_G3Mesh* __nexa_g3_capture = nullptr;
+static float __nexa_g3_cap_s = 0.0f, __nexa_g3_cap_t = 0.0f;
 
 // One vertex, shaded by the direction the surface points THERE. Curved
 // surfaces pass the true normal at the point and come out smooth.
@@ -1718,6 +1754,7 @@ static void __nexa_g3_vert_n(float x, float y, float z,
         float len = std::sqrt(nx * nx + ny * ny + nz * nz);
         if (len < 1e-8f) len = 0.0f; else len = 1.0f / len;
         m.nrm.push_back(nx * len); m.nrm.push_back(ny * len); m.nrm.push_back(nz * len);
+        m.uv.push_back(__nexa_g3_cap_s); m.uv.push_back(__nexa_g3_cap_t);
         return;
     }
     // The position is transformed inside batch_vert; the normal has to be
@@ -1823,12 +1860,19 @@ static float __nexa_g3_axis(const float* a, const float* b, float* d) {
 // The normal at a vertex leans along the axis by however fast the radius is
 // changing, which is what keeps a cone's side lit like a cone rather than like
 // a cylinder that happens to be pointy.
+//
+// For a texture the band is unrolled: s runs round the ring from s0, one way or
+// the other, and t goes from t0 at the first ring to t1 at the second.
 static void __nexa_g3_band(const float* c0, float r0, const float* c1, float r1,
                            const float* u, const float* v, const float* d,
                            float nlean0, float nlean1,
-                           float r, float g, float b) {
+                           float r, float g, float b,
+                           float t0 = 1.0f, float t1 = 0.0f,
+                           float s0 = 0.0f, float sdir = 1.0f) {
     const __nexa_G3Trig& T = __nexa_g3_trig;
+    const float ds = sdir / (float)NEXA_G3_SEG;
     for (int i = 0; i < NEXA_G3_SEG; i++) {
+        const float sa = s0 + ds * (float)i, sb = sa + ds;
         float ca0 = T.ca[i], sa0 = T.sa[i];
         float ca1 = T.ca[i + 1], sa1 = T.sa[i + 1];
 
@@ -1852,12 +1896,18 @@ static void __nexa_g3_band(const float* c0, float r0, const float* c1, float r1,
         // ring1-angle0. Taken the other way round every curved shape here is
         // built inside-out, and looks it -- a sphere shows the inside of its
         // own far wall through the near one.
+        __nexa_g3_cap_s = sa; __nexa_g3_cap_t = t0;
         __nexa_g3_vert_n(p00[0], p00[1], p00[2], n00[0], n00[1], n00[2], r, g, b);
+        __nexa_g3_cap_s = sb; __nexa_g3_cap_t = t1;
         __nexa_g3_vert_n(p11[0], p11[1], p11[2], n11[0], n11[1], n11[2], r, g, b);
+        __nexa_g3_cap_s = sa; __nexa_g3_cap_t = t1;
         __nexa_g3_vert_n(p10[0], p10[1], p10[2], n10[0], n10[1], n10[2], r, g, b);
 
+        __nexa_g3_cap_s = sa; __nexa_g3_cap_t = t0;
         __nexa_g3_vert_n(p00[0], p00[1], p00[2], n00[0], n00[1], n00[2], r, g, b);
+        __nexa_g3_cap_s = sb; __nexa_g3_cap_t = t0;
         __nexa_g3_vert_n(p01[0], p01[1], p01[2], n01[0], n01[1], n01[2], r, g, b);
+        __nexa_g3_cap_s = sb; __nexa_g3_cap_t = t1;
         __nexa_g3_vert_n(p11[0], p11[1], p11[2], n11[0], n11[1], n11[2], r, g, b);
     }
 }
@@ -1877,13 +1927,21 @@ static void __nexa_g3_disc(const float* c, float rad,
             p1[k] = c[k] + (u[k] * ca1 + v[k] * sa1) * rad;
         }
         // The winding flips with the facing, so both ends of a cylinder are
-        // outward-facing and neither is culled from outside.
+        // outward-facing and neither is culled from outside. A texture lies
+        // flat on the disc, its centre at the disc's centre.
+        const float s0 = 0.5f + 0.5f * ca0, q0 = 0.5f - 0.5f * sa0;
+        const float s1 = 0.5f + 0.5f * ca1, q1 = 0.5f - 0.5f * sa1;
+        __nexa_g3_cap_s = 0.5f; __nexa_g3_cap_t = 0.5f;
         __nexa_g3_vert_n(c[0], c[1], c[2], n[0], n[1], n[2], r, g, b);
         if (sign > 0.0f) {
+            __nexa_g3_cap_s = s0; __nexa_g3_cap_t = q0;
             __nexa_g3_vert_n(p0[0], p0[1], p0[2], n[0], n[1], n[2], r, g, b);
+            __nexa_g3_cap_s = s1; __nexa_g3_cap_t = q1;
             __nexa_g3_vert_n(p1[0], p1[1], p1[2], n[0], n[1], n[2], r, g, b);
         } else {
+            __nexa_g3_cap_s = s1; __nexa_g3_cap_t = q1;
             __nexa_g3_vert_n(p1[0], p1[1], p1[2], n[0], n[1], n[2], r, g, b);
+            __nexa_g3_cap_s = s0; __nexa_g3_cap_t = q0;
             __nexa_g3_vert_n(p0[0], p0[1], p0[2], n[0], n[1], n[2], r, g, b);
         }
     }
@@ -1912,9 +1970,71 @@ static void __nexa_g3_cap(const float* c, float rad,
         // the ring direction leaned along the axis by tan of the latitude.
         float l0 = (r0 > 1e-6f) ? (h0 / r0) : 1e6f;
         float l1 = (r1 > 1e-6f) ? (h1 / r1) : 1e6f;
-        __nexa_g3_band(c0, r0, c1, r1, cu, cv, dd, l0, l1, r, g, b);
+        // A texture wraps a sphere the way a world map does: t from 0 at the
+        // top pole to 1 at the bottom, s once round. The swapped ring vectors
+        // of the lower cap walk the ring the other way from a quarter turn
+        // on, so s is walked back from there to meet the upper cap's seam.
+        const float ta = 0.5f - sign * 0.5f * (float)j / (float)rings;
+        const float tb = 0.5f - sign * 0.5f * (float)(j + 1) / (float)rings;
+        __nexa_g3_band(c0, r0, c1, r1, cu, cv, dd, l0, l1, r, g, b, ta, tb,
+                       (sign > 0.0f) ? 0.0f : 0.25f, (sign > 0.0f) ? 1.0f : -1.0f);
     }
 }
+
+// --- textures ---------------------------------------------------------------
+//
+// gfx3d.texture loads one; gfx3d.use(t) makes every cached shape after it wear
+// it. Pixels are RGBA, row 0 the image's top, and a power of two on each side --
+// resized so at load, because WebGL 1 repeats and mipmaps nothing else -- and
+// kept after upload, since a window closed and opened again is a new context
+// with none of the old one's textures in it.
+struct __nexa_G3Tex {
+    int w = 0, h = 0;
+    std::vector<unsigned char> px;
+    unsigned gl = 0;
+};
+static std::vector<__nexa_G3Tex> __nexa_g3_texs;  // slot 0 is "none"
+static std::vector<std::string> __nexa_g3_tex_paths;
+static int __nexa_g3_tex_cur = 0;
+
+static void __nexa_gfx3d_use(int id) {
+    __nexa_g3_tex_cur = (id >= 1 && (size_t)id < __nexa_g3_texs.size() &&
+                         !__nexa_g3_texs[(size_t)id].px.empty()) ? id : 0;
+}
+
+// The mip levels below a texture: each half the one above, each pixel the
+// average of the four it covers, down to one pixel. Handed to `put` a level at
+// a time, level 0 first.
+template <class Put>
+static void __nexa_g3_tex_levels(const __nexa_G3Tex& t, Put put) {
+    std::vector<unsigned char> cur(t.px), next;
+    int w = t.w, h = t.h;
+    for (int level = 0;; level++) {
+        put(level, w, h, cur.data());
+        if (w == 1 && h == 1) break;
+        const int nw = w > 1 ? w / 2 : 1, nh = h > 1 ? h / 2 : 1;
+        next.assign((size_t)nw * nh * 4, 0);
+        for (int y = 0; y < nh; y++) {
+            const int y0 = (h > 1) ? y * 2 : 0, y1 = (h > 1) ? y * 2 + 1 : 0;
+            for (int x = 0; x < nw; x++) {
+                const int x0 = (w > 1) ? x * 2 : 0, x1 = (w > 1) ? x * 2 + 1 : 0;
+                for (int c = 0; c < 4; c++) {
+                    int sum = cur[((size_t)y0 * w + x0) * 4 + c] + cur[((size_t)y0 * w + x1) * 4 + c] +
+                              cur[((size_t)y1 * w + x0) * 4 + c] + cur[((size_t)y1 * w + x1) * 4 + c];
+                    next[((size_t)y * nw + x) * 4 + c] = (unsigned char)((sum + 2) / 4);
+                }
+            }
+        }
+        cur.swap(next);
+        w = nw;
+        h = nh;
+    }
+}
+
+// The GL name of the texture gfx3d.use chose, uploaded the first time it is
+// drawn with; 0 if there is none or the context cannot take one. Defined with
+// each backend below.
+static unsigned __nexa_g3_tex_gl(void);
 
 // Draws a cached mesh with one set of its corners' colours and one matrix, M,
 // taking its own space to world space. Answers 0 where the backend cannot, and
@@ -2096,9 +2216,15 @@ static __nexa_G3Mesh& __nexa_g3_box_mesh(void) {
                 float len = std::sqrt(nx * nx + ny * ny + nz * nz);
                 nx /= len; ny /= len; nz /= len;
                 const float* pts[3] = {a, b, c};
+                // Each face shows the whole texture, corner 0 of its quad at
+                // the image's bottom left.
+                static const float qs[4] = {0.0f, 1.0f, 1.0f, 0.0f};
+                static const float qt[4] = {1.0f, 1.0f, 0.0f, 0.0f};
+                static const int qi[2][3] = {{0, 1, 2}, {0, 2, 3}};
                 for (int k = 0; k < 3; k++) {
                     m.pos.push_back(pts[k][0]); m.pos.push_back(pts[k][1]); m.pos.push_back(pts[k][2]);
                     m.nrm.push_back(nx); m.nrm.push_back(ny); m.nrm.push_back(nz);
+                    m.uv.push_back(qs[qi[t][k]]); m.uv.push_back(qt[qi[t][k]]);
                 }
             }
         }
@@ -2120,6 +2246,25 @@ static void __nexa_g3_platform_camera(void) {
     glViewport(0, 0, __nexa_g3.w, __nexa_g3.h);
 }
 
+static unsigned __nexa_g3_tex_gl(void) {
+    if (!__nexa_g3_tex_cur) return 0;
+    __nexa_G3Tex& t = __nexa_g3_texs[(size_t)__nexa_g3_tex_cur];
+    if (!t.gl) {
+        glGenTextures(1, &t.gl);
+        if (!t.gl) return 0;
+        glBindTexture(NEXA_GL_TEXTURE_2D, t.gl);
+        __nexa_g3_tex_levels(t, [](int level, int w, int h, const unsigned char* px) {
+            glTexImage2D(NEXA_GL_TEXTURE_2D, level, (__nexa_GLint)NEXA_GL_RGBA, w, h, 0,
+                         NEXA_GL_RGBA, NEXA_GL_UNSIGNED_BYTE, px);
+        });
+        glTexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_MIN_FILTER, (__nexa_GLint)NEXA_GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_MAG_FILTER, (__nexa_GLint)NEXA_GL_LINEAR);
+        glTexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_WRAP_S, (__nexa_GLint)NEXA_GL_REPEAT);
+        glTexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_WRAP_T, (__nexa_GLint)NEXA_GL_REPEAT);
+    }
+    return t.gl;
+}
+
 static void __nexa_g3_batch_submit(void) {
     if (!__nexa_g3_prog || !__nexa_g3_vbo) return;
     if (__nexa_g3_two_sided) glDisable(NEXA_GL_CULL_FACE);
@@ -2129,6 +2274,9 @@ static void __nexa_g3_batch_submit(void) {
 
     glUseProgram(__nexa_g3_prog);
     glUniformMatrix4fv(__nexa_g3_u_mvp, 1, 0, mvp);
+    // The batch is never textured: only a cached mesh has coordinates.
+    glUniform1f(__nexa_g3_u_texon, 0.0f);
+    if (__nexa_g3_a_uv >= 0) glDisableVertexAttribArray((__nexa_GLuint)__nexa_g3_a_uv);
     glBindBuffer(NEXA_GL_ARRAY_BUFFER, __nexa_g3_vbo);
     glBufferData(NEXA_GL_ARRAY_BUFFER,
                  (__nexa_GLsizeiptr)(__nexa_g3_vn * 6 * (int)sizeof(float)),
@@ -2179,11 +2327,29 @@ static int __nexa_g3_mesh_submit(__nexa_G3Mesh& m, __nexa_G3Mesh::Lit& L, const 
     glEnableVertexAttribArray((__nexa_GLuint)__nexa_g3_a_pos);
     glVertexAttribPointer((__nexa_GLuint)__nexa_g3_a_pos, 3, NEXA_GL_FLOAT, 0, 0, (const void*)0);
 
+    // The texture, when there is one and this mesh has somewhere to put it.
+    const unsigned tex = (m.uv.empty() || __nexa_g3_a_uv < 0) ? 0 : __nexa_g3_tex_gl();
+    if (tex) {
+        if (!m.gl_uv) {
+            glGenBuffers(1, &m.gl_uv);
+            glBindBuffer(NEXA_GL_ARRAY_BUFFER, m.gl_uv);
+            glBufferData(NEXA_GL_ARRAY_BUFFER, (__nexa_GLsizeiptr)(m.uv.size() * sizeof(float)),
+                         m.uv.data(), NEXA_GL_STATIC_DRAW);
+        }
+        glBindBuffer(NEXA_GL_ARRAY_BUFFER, m.gl_uv);
+        glEnableVertexAttribArray((__nexa_GLuint)__nexa_g3_a_uv);
+        glVertexAttribPointer((__nexa_GLuint)__nexa_g3_a_uv, 2, NEXA_GL_FLOAT, 0, 0, (const void*)0);
+        glBindTexture(NEXA_GL_TEXTURE_2D, tex);
+    } else if (__nexa_g3_a_uv >= 0) {
+        glDisableVertexAttribArray((__nexa_GLuint)__nexa_g3_a_uv);
+    }
+
     float vp[16], mvp[16];
     __nexa_g3_mul4(vp, __nexa_g3.proj, __nexa_g3.view);
     __nexa_g3_mul4(mvp, vp, M);
     glUseProgram(__nexa_g3_prog);
     glUniformMatrix4fv(__nexa_g3_u_mvp, 1, 0, mvp);
+    glUniform1f(__nexa_g3_u_texon, tex ? 1.0f : 0.0f);
     if (m.two_sided) glDisable(NEXA_GL_CULL_FACE);
     glDrawArrays(NEXA_GL_TRIANGLES, 0, (__nexa_GLsizei)(m.pos.size() / 3));
     if (m.two_sided) glEnable(NEXA_GL_CULL_FACE);
@@ -2203,6 +2369,26 @@ static void __nexa_g3_platform_camera(void) {
     __nexa_gl.LoadMatrixf(__nexa_g3.view);
 }
 
+static unsigned __nexa_g3_tex_gl(void) {
+    if (!__nexa_g3_tex_cur || !__nexa_gl.GenTextures || !__nexa_gl.BindTexture ||
+        !__nexa_gl.TexImage2D || !__nexa_gl.TexParameteri || !__nexa_gl.TexCoordPointer) return 0;
+    __nexa_G3Tex& t = __nexa_g3_texs[(size_t)__nexa_g3_tex_cur];
+    if (!t.gl) {
+        __nexa_gl.GenTextures(1, &t.gl);
+        if (!t.gl) return 0;
+        __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, t.gl);
+        __nexa_g3_tex_levels(t, [](int level, int w, int h, const unsigned char* px) {
+            __nexa_gl.TexImage2D(NEXA_GL_TEXTURE_2D, level, (__nexa_GLint)NEXA_GL_RGBA, w, h, 0,
+                                 NEXA_GL_RGBA, NEXA_GL_UNSIGNED_BYTE, px);
+        });
+        __nexa_gl.TexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_MIN_FILTER, (__nexa_GLint)NEXA_GL_LINEAR_MIPMAP_LINEAR);
+        __nexa_gl.TexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_MAG_FILTER, (__nexa_GLint)NEXA_GL_LINEAR);
+        __nexa_gl.TexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_WRAP_S, (__nexa_GLint)NEXA_GL_REPEAT);
+        __nexa_gl.TexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_WRAP_T, (__nexa_GLint)NEXA_GL_REPEAT);
+    }
+    return t.gl;
+}
+
 // A cached mesh: its own arrays, placed by M on top of the camera. The camera
 // is what gfx3d.clear left on the modelview stack, and is put back after.
 static int __nexa_g3_mesh_submit(__nexa_G3Mesh& m, __nexa_G3Mesh::Lit& L, const float* M) {
@@ -2217,7 +2403,19 @@ static int __nexa_g3_mesh_submit(__nexa_G3Mesh& m, __nexa_G3Mesh::Lit& L, const 
     __nexa_gl.EnableClientState(NEXA_GL_COLOR_ARRAY);
     __nexa_gl.VertexPointer(3, NEXA_GL_FLOAT, 0, m.pos.data());
     __nexa_gl.ColorPointer(3, NEXA_GL_FLOAT, 0, col);
+    // The texture is multiplied by the lit colour: GL_MODULATE, the default.
+    const unsigned tex = m.uv.empty() ? 0 : __nexa_g3_tex_gl();
+    if (tex) {
+        __nexa_gl.Enable(NEXA_GL_TEXTURE_2D);
+        __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, tex);
+        __nexa_gl.EnableClientState(NEXA_GL_TEXTURE_COORD_ARRAY);
+        __nexa_gl.TexCoordPointer(2, NEXA_GL_FLOAT, 0, m.uv.data());
+    }
     __nexa_gl.DrawArrays(NEXA_GL_TRIANGLES, 0, (__nexa_GLsizei)(m.pos.size() / 3));
+    if (tex) {
+        __nexa_gl.DisableClientState(NEXA_GL_TEXTURE_COORD_ARRAY);
+        __nexa_gl.Disable(NEXA_GL_TEXTURE_2D);
+    }
     __nexa_gl.DisableClientState(NEXA_GL_COLOR_ARRAY);
     __nexa_gl.DisableClientState(NEXA_GL_VERTEX_ARRAY);
     __nexa_gl.PopMatrix();
@@ -2314,6 +2512,11 @@ static void __nexa_gfx3d_close(void) {
     if (!__nexa_g3.ready) return;
     __nexa_g3_overlay_close();
     __nexa_g3_platform_close();
+#if !defined(NEXA_WASM)
+    // The context goes with the window, and its textures with it; each is sent
+    // again the next time one is drawn with. (A canvas keeps its context.)
+    for (__nexa_G3Tex& t : __nexa_g3_texs) t.gl = 0;
+#endif
     __nexa_g3.ready = 0;
     __nexa_g3.closed = 1;
 }
@@ -2862,8 +3065,9 @@ static std::string __nexa_gfx3d_backend(void) {
 // here: a -dev package between a user and a model on screen is the thing this
 // compiler exists to avoid.
 //
-// WHAT IS READ, and it is a short list: v, vn, and f. Positions, normals, and
-// which corners make a face. Everything else in the format -- vt, usemtl,
+// WHAT IS READ, and it is a short list: v, vt, vn, and f. Positions, texture
+// coordinates, normals, and which corners make a face. Everything else in the
+// format -- usemtl,
 // mtllib, o, g, s, and any line beginning with anything else -- is skipped
 // without complaint, because a model that names a material this renderer has
 // no way to honour is still a model whose shape can be drawn.
@@ -2872,6 +3076,93 @@ static std::string __nexa_gfx3d_backend(void) {
 // first one. That is right for the convex faces an exporter emits and wrong
 // for a concave one, which is a trade the format itself encourages: almost
 // everything real is triangles or quads already.
+// gfx3d.texture. Decoding is std/gfx's -- gfxImageDecoderCpp, the same code
+// gfx.image runs, emitted between these two -- so a PNG reads the same in a
+// 3D window as in a 2D one, and a program using both carries one decoder.
+// First the system headers that decoder is written against, which a 3D-only
+// program has not otherwise included.
+inline std::string gfx3dTextureHeadersCpp() {
+    return R"NEXA_GFX3D(
+#include <cstdio>
+#include <cstring>
+#if defined(_WIN32)
+#include <objbase.h>
+#include <wincodec.h>
+#elif defined(__APPLE__)
+#include <CoreGraphics/CoreGraphics.h>
+#include <ImageIO/ImageIO.h>
+#endif
+)NEXA_GFX3D";
+}
+
+inline std::string gfx3dTextureCpp() {
+    return R"NEXA_GFX3D(
+// --- gfx3d.texture ------------------------------------------------------------
+
+// A side length a texture can have: a power of two, at most 2048. Rounded up,
+// so a picture loses nothing to the resize unless it is bigger than that.
+static int __nexa_g3_tex_side(int n) {
+    int p = 1;
+    while (p < n && p < 2048) p <<= 1;
+    return p;
+}
+
+// Loading needs no window, as gfx3d.model needs none. The same path twice is
+// the same texture, as it is for gfx.image.
+static int __nexa_gfx3d_texture(const std::string& path) {
+    if (path.empty()) return 0;
+    if (__nexa_g3_texs.empty()) {
+        __nexa_g3_texs.emplace_back();
+        __nexa_g3_tex_paths.push_back("");
+    }
+    for (size_t i = 1; i < __nexa_g3_tex_paths.size(); i++) {
+        if (__nexa_g3_tex_paths[i] == path) return (int)i;
+    }
+    std::string bytes = __nexa_gfx_read_file(path);
+    if (bytes.empty()) return 0;
+    int w = 0, h = 0;
+    unsigned char* px = nullptr;
+    if (!__nexa_gfx_decode_rgba((const unsigned char*)bytes.data(), (int)bytes.size(), &w, &h, &px) || !px) {
+        return 0;
+    }
+    __nexa_G3Tex t;
+    t.w = __nexa_g3_tex_side(w);
+    t.h = __nexa_g3_tex_side(h);
+    t.px.resize((size_t)t.w * t.h * 4);
+    if (t.w == w && t.h == h) {
+        std::memcpy(t.px.data(), px, t.px.size());
+    } else {
+        // Bilinear, sampling the source at the centre of each new pixel.
+        for (int y = 0; y < t.h; y++) {
+            float fy = ((float)y + 0.5f) * (float)h / (float)t.h - 0.5f;
+            if (fy < 0.0f) fy = 0.0f;
+            int y0 = (int)fy;
+            if (y0 > h - 1) y0 = h - 1;
+            const int y1 = (y0 + 1 < h) ? y0 + 1 : y0;
+            const float ay = fy - (float)y0;
+            for (int x = 0; x < t.w; x++) {
+                float fx = ((float)x + 0.5f) * (float)w / (float)t.w - 0.5f;
+                if (fx < 0.0f) fx = 0.0f;
+                int x0 = (int)fx;
+                if (x0 > w - 1) x0 = w - 1;
+                const int x1 = (x0 + 1 < w) ? x0 + 1 : x0;
+                const float ax = fx - (float)x0;
+                for (int c = 0; c < 4; c++) {
+                    const float top = px[((size_t)y0 * w + x0) * 4 + c] * (1.0f - ax) + px[((size_t)y0 * w + x1) * 4 + c] * ax;
+                    const float bot = px[((size_t)y1 * w + x0) * 4 + c] * (1.0f - ax) + px[((size_t)y1 * w + x1) * 4 + c] * ax;
+                    t.px[((size_t)y * t.w + x) * 4 + c] = (unsigned char)(top * (1.0f - ay) + bot * ay + 0.5f);
+                }
+            }
+        }
+    }
+    delete[] px;
+    __nexa_g3_texs.push_back(std::move(t));
+    __nexa_g3_tex_paths.push_back(path);
+    return (int)__nexa_g3_texs.size() - 1;
+}
+)NEXA_GFX3D";
+}
+
 inline std::string gfx3dModelCpp() {
     return R"NEXA_GFX3D(
 // --- models -----------------------------------------------------------------
@@ -2895,6 +3186,9 @@ inline std::string gfx3dModelCpp() {
 struct __nexa_G3Model {
     std::vector<float> p;
     std::vector<float> n;
+    // Two floats a corner, t counted from the image's top; empty when the file
+    // gave no texture coordinates at all.
+    std::vector<float> t;
     float cx, cy, cz;
     float inv;
     // The same triangles centred and sized to 1, with unit normals, built the
@@ -2907,32 +3201,33 @@ struct __nexa_G3Model {
 static std::vector<__nexa_G3Model> __nexa_g3_models;
 static std::vector<std::string> __nexa_g3_model_paths;
 
-// One corner of a face: "12", "12/3", "12/3/4" or "12//4". Only the position
-// and the normal are wanted; the texture coordinate between them is stepped
-// over. Either index may be negative, which in .obj counts back from the end
-// of what has been read so far rather than forward from the start.
-static void __nexa_g3_obj_ref(const char* t, int* vi, int* ni) {
+// One corner of a face: "12", "12/3", "12/3/4" or "12//4" -- the position, the
+// texture coordinate and the normal. Any index may be negative, which in .obj
+// counts back from the end of what has been read so far rather than forward
+// from the start.
+static void __nexa_g3_obj_ref(const char* t, int* vi, int* ti, int* ni) {
     char* end;
     *vi = (int)std::strtol(t, &end, 10);
+    *ti = 0;
     *ni = 0;
     if (*end != '/') return;
     end++;
-    if (*end != '/') std::strtol(end, &end, 10);
+    if (*end != '/') *ti = (int)std::strtol(end, &end, 10);
     if (*end != '/') return;
     end++;
     *ni = (int)std::strtol(end, &end, 10);
 }
 
-// Resolves an .obj index against a list that holds three floats per entry.
+// Resolves an .obj index against a list that holds `per` floats an entry.
 // Returns the float offset, or -1 for an index that names nothing.
-static long __nexa_g3_obj_at(int idx, size_t have) {
+static long __nexa_g3_obj_at(int idx, size_t have, int per = 3) {
     long i;
     if (idx > 0) i = idx - 1;
-    else if (idx < 0) i = (long)(have / 3) + idx;
+    else if (idx < 0) i = (long)(have / per) + idx;
     else return -1;
     if (i < 0) return -1;
-    if ((size_t)(i * 3 + 2) >= have) return -1;
-    return i * 3;
+    if ((size_t)(i * per + per - 1) >= have) return -1;
+    return i * per;
 }
 
 static int __nexa_g3_obj_load(const char* path, __nexa_G3Model* m) {
@@ -2940,6 +3235,7 @@ static int __nexa_g3_obj_load(const char* path, __nexa_G3Model* m) {
     if (!f) return 0;
 
     std::vector<float> vs;
+    std::vector<float> vts;
     std::vector<float> vns;
     char line[4096];
 
@@ -2963,6 +3259,15 @@ static int __nexa_g3_obj_load(const char* path, __nexa_G3Model* m) {
             vs.push_back(x); vs.push_back(y); vs.push_back(z);
             continue;
         }
+        if (s[0] == 'v' && s[1] == 't' && (s[2] == ' ' || s[2] == '\t')) {
+            char* end;
+            float u = std::strtof(s + 2, &end);
+            float v = std::strtof(end, &end);
+            // .obj counts v up from the image's bottom; the textures here are
+            // kept top row first.
+            vts.push_back(u); vts.push_back(1.0f - v);
+            continue;
+        }
         if (s[0] == 'v' && s[1] == 'n' && (s[2] == ' ' || s[2] == '\t')) {
             char* end;
             float x = std::strtof(s + 2, &end);
@@ -2975,13 +3280,14 @@ static int __nexa_g3_obj_load(const char* path, __nexa_G3Model* m) {
 
         // The corners of this face, in the order written.
         int fv[64];
+        int ft[64];
         int fn[64];
         int nc = 0;
         const char* t = s + 1;
         while (*t && nc < 64) {
             while (*t == ' ' || *t == '\t' || *t == '\r' || *t == '\n') t++;
             if (!*t) break;
-            __nexa_g3_obj_ref(t, &fv[nc], &fn[nc]);
+            __nexa_g3_obj_ref(t, &fv[nc], &ft[nc], &fn[nc]);
             if (fv[nc] != 0) nc++;
             while (*t && *t != ' ' && *t != '\t' && *t != '\r' && *t != '\n') t++;
         }
@@ -3026,6 +3332,11 @@ static int __nexa_g3_obj_load(const char* path, __nexa_G3Model* m) {
                     m->n.push_back(fnx);
                     m->n.push_back(fny);
                     m->n.push_back(fnz);
+                }
+                if (!vts.empty()) {
+                    const long ta = __nexa_g3_obj_at(ft[idx[c]], vts.size(), 2);
+                    m->t.push_back(ta >= 0 ? vts[(size_t)ta] : 0.0f);
+                    m->t.push_back(ta >= 0 ? vts[(size_t)ta + 1] : 0.0f);
                 }
             }
         }
@@ -3108,6 +3419,7 @@ static void __nexa_gfx3d_draw(int id, double x, double y, double z, double scale
             len = (len < 1e-8f) ? 0.0f : 1.0f / len;
             mm.mesh.nrm[i * 3] = nx * len; mm.mesh.nrm[i * 3 + 1] = ny * len; mm.mesh.nrm[i * 3 + 2] = nz * len;
         }
+        mm.mesh.uv = mm.t;
     }
     const float fs = (float)scale;
     if (__nexa_g3_mesh_draw(mm.mesh, (float)r, (float)g, (float)b,
