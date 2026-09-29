@@ -1,0 +1,9 @@
+true 2
+false 3 is odd
+6 not an int: "x"
+ITEM4! negative
+true true too big 5 is odd
+42 not an int: "q"
+10 yes two
+-1 7 false 3 12
+main got 5

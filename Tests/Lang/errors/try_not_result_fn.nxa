@@ -1,0 +1,7 @@
+// ? passes an error up, so the function has to return a Result.
+#include <std/io>
+fn f(): Result[int] { return ok(1); }
+fn g(): int {
+    return f()?;
+}
+fn main() { io.println(g()); }

@@ -79,6 +79,10 @@ fn parse(s: string): Result[int] {
     return ok(n);
 }
 
+fn twice(s: string): Result[int] {
+    return ok(parse(s)? * 2);
+}
+
 fn main() {
     let items = [Item { name: "pen", qty: 3 }, Item { name: "cup", qty: 12 }];
     let totals: map[string]int;
@@ -88,6 +92,8 @@ fn main() {
     for (w in words) {
         let r = parse(w);
         if (r.ok()) { sum += r.value(); } else { io.println(r.error()); }
+        let t = twice(w);
+        if (t.ok()) { sum += t.value(); }
     }
     io.println(f"{len(items)} items, {totals["cup"]:>4} cups, sum {sum}, {2.5 * sum:.2}");
     io.println(totals, " ", words, " ", 1 + 2 + 3);

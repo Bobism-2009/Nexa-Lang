@@ -74,7 +74,7 @@ struct AstNode {
                       ExprSizeof,
                       CondEq, CondNe, CondLt, CondGt, CondLe, CondGe,
                       CondAnd, CondOr, CondNot,
-                      ExprTernary,
+                      ExprTernary, ExprTry,
                       ExprLambda,
                       ExprCall,
                       ExprStructLit,
@@ -1824,7 +1824,21 @@ private:
     }
 
     AstNode parseFnCall() {
+        const size_t line = peek().line;
         AstNode node = parseFnCallExpr();
+        // check(n)?; -- a call whose Result is wanted only for its error.
+        if (peek().type == TokenType::Question && pos_ + 1 < tokens_.size() &&
+            questionIsTry()) {
+            stampSourceLoc(node, line);
+            while (peek().type == TokenType::Question && pos_ + 1 < tokens_.size() &&
+                   questionIsTry()) {
+                const size_t qline = peek().line;
+                advance();
+                AstNode t{AstNode::Type::ExprTry, "", {std::move(node)}};
+                t.line = qline;
+                node = applyIndexAndDotPostfix(std::move(t));
+            }
+        }
         if (!match(TokenType::Semicolon)) {
             throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
         }
@@ -2746,7 +2760,60 @@ private:
         const size_t exprLine = peek().line;
         AstNode n = parseFactorInner();
         stampSourceLoc(n, exprLine);
+        // expr? -- pass an error up. A '?' is this rather than a ternary's when
+        // what follows it cannot start an expression: `f()?;`, `f()?)`, `f()?.x`,
+        // `f()? == 3`. A ternary's '?' is always followed by its then-value.
+        while (peek().type == TokenType::Question && pos_ + 1 < tokens_.size() &&
+               questionIsTry()) {
+            const size_t qline = peek().line;
+            advance();
+            AstNode t{AstNode::Type::ExprTry, "", {std::move(n)}};
+            t.line = qline;
+            n = applyIndexAndDotPostfix(std::move(t));
+        }
         return n;
+    }
+
+    static bool endsTryOperand(TokenType t) {
+        switch (t) {
+            case TokenType::Semicolon: case TokenType::RParen: case TokenType::RBracket:
+            case TokenType::RBrace: case TokenType::Comma: case TokenType::Colon:
+            case TokenType::Dot: case TokenType::Arrow: case TokenType::Question:
+            case TokenType::Equals: case TokenType::NotEquals: case TokenType::And: case TokenType::Or:
+            case TokenType::Less: case TokenType::LessEq: case TokenType::Greater: case TokenType::GreaterEq:
+            case TokenType::Plus: case TokenType::Slash: case TokenType::Percent:
+            case TokenType::Shl: case TokenType::Shr: case TokenType::BitOr: case TokenType::BitXor:
+            case TokenType::Assign: case TokenType::Eof:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    // The '?' at pos_: `expr?` rather than a ternary's. Past the tokens that
+    // cannot start an expression, four can be either -- `x? * 2` or `c ? *p : q`,
+    // `x? - 1` or `c ? -1 : 2` -- and a ternary is told by its ':' coming at
+    // the same depth before the expression ends.
+    bool questionIsTry() const {
+        if (pos_ + 1 >= tokens_.size()) return true;
+        const TokenType next = tokens_[pos_ + 1].type;
+        if (endsTryOperand(next)) return true;
+        if (next != TokenType::Star && next != TokenType::Minus && next != TokenType::BitAnd && next != TokenType::Not) {
+            return false;
+        }
+        int depth = 0;
+        for (size_t i = pos_ + 1; i < tokens_.size(); i++) {
+            const TokenType t = tokens_[i].type;
+            if (t == TokenType::LParen || t == TokenType::LBracket || t == TokenType::LBrace) depth++;
+            else if (t == TokenType::RParen || t == TokenType::RBracket || t == TokenType::RBrace) {
+                if (depth == 0) return true;
+                depth--;
+            } else if (depth == 0) {
+                if (t == TokenType::Colon) return false;
+                if (t == TokenType::Semicolon || t == TokenType::Comma || t == TokenType::Eof) return true;
+            }
+        }
+        return true;
     }
 
     AstNode parseFactorInner() {

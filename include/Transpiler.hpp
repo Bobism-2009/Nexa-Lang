@@ -1090,10 +1090,12 @@ public:
                     nexaDeclStack_.back()[node.paramNames[i]] = canonicalParamType(node, i);
                 }
                 emitFnRet_ = voidFn ? EmitFnRet::VoidFn : EmitFnRet::IntFn;
+                tryFnRet_ = node.fnReturnType; tryFnName_ = node.value; tryInMain_ = false;
                 inferredIntFn_ = (node.fnReturnType.empty() && hasValRet) ? node.value : std::string();
                 emitBlockStatements(out, node.children, varMap, varIdx, varIsString, varIsConst, varIsFloat,
                                     varIsChar, varIsBool, varIsEnum);
                 emitFnRet_ = EmitFnRet::Main;
+                tryInMain_ = true; tryFnRet_.clear(); tryFnName_.clear();
                 inferredIntFn_.clear();
                 nexaDeclStack_.pop_back();
                 varStructPop();
@@ -1540,6 +1542,13 @@ private:
     // While emitting a function or main body: how bare `return;` / value returns are interpreted
     enum class EmitFnRet { Main, IntFn, VoidFn };
     mutable EmitFnRet emitFnRet_ = EmitFnRet::Main;
+    // For `?`: the Nexa return type of the function being emitted ("" when it
+    // wrote none), its name, and whether it is main. `?` needs a Result to pass
+    // an error up in, or main, where the error ends the program.
+    std::string tryFnRet_;
+    std::string tryFnName_;
+    bool tryInMain_ = true;
+    mutable int tryCounter_ = 0;
     // Set while emitting a function that wrote no return type and returns a
     // value, so is an int function by inference: its name, for the error a
     // `return` of something that is not a number gets. Empty otherwise.
@@ -2376,9 +2385,11 @@ private:
     // A print of several values in a program that can throw, where a value after the
     // first comes from a call: printed piece by piece, a throw there left the pieces
     // before it on the line. (Pointers keep the piecewise print; they have no text.)
+    // A value after the first with a `?` in it is the same case in every program:
+    // its error leaves the function (or ends main) from the middle of the line.
     bool printLineFirst(const AstNode& p) const {
-        if (!cppUsage_.exceptions || p.children.size() < 2) return false;
-        bool call = false;
+        if (p.children.size() < 2) return false;
+        bool call = false, tried = false;
         for (size_t i = 0; i < p.children.size(); i++) {
             const std::string t = inferExprNexaType(p.children[i]);
             if (isPointerType(t) || t == "null") return false;
@@ -2386,11 +2397,12 @@ private:
             std::function<void(const AstNode&)> v = [&](const AstNode& n) {
                 if (n.type == AstNode::Type::FnCall || n.type == AstNode::Type::ExprCall ||
                     n.type == AstNode::Type::StrMethod) call = true;
+                if (n.type == AstNode::Type::ExprTry) tried = true;
                 for (const AstNode& c : n.children) v(c);
             };
             v(p.children[i]);
         }
-        return call;
+        return tried || (cppUsage_.exceptions && call);
     }
 
     // Whether any of these expressions reads the variable `name`.
@@ -3046,6 +3058,8 @@ private:
             case AstNode::Type::CondAnd:
             case AstNode::Type::CondOr:
                 return "bool";
+            case AstNode::Type::ExprTry:
+                return e.children.empty() ? std::string() : nexaResultInner(inferExprNexaType(e.children[0]));
             case AstNode::Type::ExprTernary:
                 if (e.children.size() >= 3) {
                     std::string t1 = inferExprNexaType(e.children[1]);
@@ -6099,10 +6113,12 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         }
         methodSelfType_ = node.receiverType;
         emitFnRet_ = voidFn ? EmitFnRet::VoidFn : EmitFnRet::IntFn;
+        tryFnRet_ = node.fnReturnType; tryFnName_ = node.value; tryInMain_ = false;
         inferredIntFn_ = (node.fnReturnType.empty() && hasValRet) ? node.value : std::string();
         emitBlockStatements(out, node.children, varMap, varIdx, varIsString, varIsConst, varIsFloat,
                             varIsChar, varIsBool, varIsEnum);
         emitFnRet_ = EmitFnRet::Main;
+        tryInMain_ = true; tryFnRet_.clear(); tryFnName_.clear();
         inferredIntFn_.clear();
         methodSelfType_.clear();
         nexaDeclStack_.pop_back();
@@ -6782,7 +6798,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 out << indent << emitFnCallCpp(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool)
                     << ";\n";
             } else if (child.type == AstNode::Type::ExprCall || child.type == AstNode::Type::ExprLambda ||
-                       child.type == AstNode::Type::ExprStructLit) {
+                       child.type == AstNode::Type::ExprStructLit || child.type == AstNode::Type::ExprTry) {
                 out << indent << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::StrMethod) {
                 out << indent << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
@@ -7571,6 +7587,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             case AstNode::Type::CondNot:
                 return "!(" + emitCond(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::ExprTernary:
+            case AstNode::Type::ExprTry:
                 return emitExpr(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::ExprBoolLiteral:
                 return c.value;
@@ -7735,12 +7752,16 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         emitFnRet_ = voidFn ? EmitFnRet::VoidFn : EmitFnRet::IntFn;
         std::string savedInferred = inferredIntFn_;
         inferredIntFn_ = (e.fnReturnType.empty() && hasValRet) ? std::string("a function literal") : std::string();
+        const std::string savedTryRet = tryFnRet_, savedTryName = tryFnName_;
+        const bool savedTryMain = tryInMain_;
+        tryFnRet_ = ret; tryFnName_ = "a function literal"; tryInMain_ = false;
         std::ostringstream body;
         emitBlockStatements(body, e.children, localMap, varIdx, localStr, localConst, localFloat,
                             localChar, localBool, localEnum);
         emitImplicitFnTail(body, e, hasValRet);
         emitFnRet_ = savedRet;
         inferredIntFn_ = savedInferred;
+        tryFnRet_ = savedTryRet; tryFnName_ = savedTryName; tryInMain_ = savedTryMain;
         varStructPop();
         nexaDeclStack_.pop_back();
         return nexaTypeToCpp(ty) + "([&](" + sig + ") -> " + nexaTypeToCpp(ret) + " {\n" + body.str() + "})";
@@ -8920,6 +8941,37 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             }
             case AstNode::Type::CondNot:
                 return "(!" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
+            case AstNode::Type::ExprTry: {
+                // expr? : the value when the Result is ok; otherwise the enclosing
+                // function returns the error (the Result converts to whatever
+                // Result it returns), or main prints it and exits 1. A statement
+                // expression, so it sits anywhere an expression does -- clang and
+                // gcc, the only compilers NexaC drives, both take it.
+                const std::string at = e.line ? " at line " + std::to_string(e.line) : std::string();
+                const std::string rt = inferExprNexaType(e.children[0]);
+                if (!nexaIsResultType(rt)) {
+                    const bool vowel = !rt.empty() && std::string("aeiou").find(rt[0]) != std::string::npos;
+                    throw std::runtime_error("? passes on the error of a Result, and this is " +
+                        (rt.empty() ? std::string("not one") : (vowel ? "an " : "a ") + rt) + at);
+                }
+                if (!tryInMain_ && !nexaIsResultType(tryFnRet_)) {
+                    const std::string who = tryFnName_ == "a function literal" ? tryFnName_ : "function '" + tryFnName_ + "'";
+                    throw std::runtime_error("? passes an error up, so " + who +
+                        " has to return a Result: declare it : Result[...]" + at);
+                }
+                const std::string q = "__nexa_q" + std::to_string(tryCounter_++);
+                const std::string inner = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                std::string fail;
+                if (tryInMain_) {
+                    fail = "{ std::fflush(stdout); std::fputs(\"error: \", stderr); std::fputs(" + q +
+                           ".error().c_str(), stderr); std::fputc('\\n', stderr); return 1; }";
+                } else {
+                    fail = "return __nexa_result_err(" + q + ".error());";
+                }
+                const bool isVoid = nexaResultInner(rt) == "void";
+                return "({ auto " + q + " = (" + inner + "); if (!" + q + ".ok()) " + fail + " " +
+                       (isVoid ? std::string("(void)0; })") : "std::move(" + q + "._value); })");
+            }
             case AstNode::Type::ExprTernary: {
                 std::string cond = emitCond(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 std::string t = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);

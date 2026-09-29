@@ -596,6 +596,22 @@ RESULT (Result[T])
                            "Result.value() on an error: <error>" to stderr and stops
                            (what it printed before still arrives). Check r.ok() first.
   r.error()              - error text ("" if ok)
+  expr?                  - the value when expr is ok; when it is an error, the
+                           function returns that error at once. So
+
+                             fn total(a: string, b: string): Result[int] {
+                                 return ok(io.parse_int(a)? + io.parse_int(b)?);
+                             }
+
+                           reads both or stops at the first bad one. The function
+                           has to return a Result (of any type: the error converts),
+                           or be main, where an error prints "error: <message>" to
+                           stderr and ends the program with exit status 1. Works
+                           anywhere a value goes -- f()?.upper(), g(f()?), if (f()?)
+                           -- and as a statement, check(x)?; for a Result[void].
+                           A '?' followed by a value is still the ternary's:
+                           c ? a : b. It costs nothing: it is the if a hand-written
+                           check would be.
 
   Write `: Result[T]` on functions that return one (return type is not inferred
   as Result). Uninitialized `let r: Result[int];` starts as not-ok.

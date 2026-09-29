@@ -1,0 +1,60 @@
+// expr? -- a Result's value, or its error passed up out of the function; in
+// main, the error printed and the program ended with exit status 1 (that
+// ending is Tests/try_cases.sh's, since this harness wants exit status 0).
+// Also: ? next to ternaries, which read as they always did.
+#include <std/io>
+
+fn half(n: int): Result[int] {
+    if (n % 2 != 0) { return err(f"{n} is odd"); }
+    return ok(n / 2);
+}
+
+fn quarter(n: int): Result[int] {
+    let h = half(n)?;
+    return ok(half(h)?);
+}
+
+fn sum3(a: string, b: string, c: string): Result[int] {
+    return ok(io.parse_int(a)? + io.parse_int(b)? + io.parse_int(c)?);
+}
+
+fn name(n: int): Result[string] {
+    if (n < 0) { return err("negative"); }
+    return ok("item" + n);
+}
+
+fn shout(n: int): Result[string] {
+    return ok(name(n)?.upper() + "!");
+}
+
+fn check(n: int): Result[void] {
+    if (n > 10) { return err("too big"); }
+    return ok();
+}
+
+fn pipeline(n: int): Result[bool] {
+    check(n)?;
+    if (half(n)? > 2) { return ok(true); }
+    return ok(half(n)? == 1);
+}
+
+fn main() {
+    let r = quarter(8);
+    io.println(r.ok(), " ", r.value());
+    let r2 = quarter(6);
+    io.println(r2.ok(), " ", r2.error());
+    io.println(sum3("1", "2", "3").value(), " ", sum3("1", "x", "3").error());
+    io.println(shout(4).value(), " ", shout(-1).error());
+    io.println(pipeline(8).value(), " ", pipeline(2).value(), " ", pipeline(12).error(), " ", pipeline(5).error());
+    let dbl = fn (s: string): Result[int] { return ok(io.parse_int(s)? * 2); };
+    io.println(dbl("21").value(), " ", dbl("q").error());
+    let c = 3 > 2 ? 10 : 20;
+    let s = c == 10 ? "yes" : "no";
+    io.println(c, " ", s, " ", (half(4)? == 2) ? "two" : "not two");
+    let x = 7;
+    let p = &x;
+    let yes = true;
+    io.println(yes ? -1 : 2, " ", yes ? *p : 0, " ", yes ? !yes : yes, " ", half(8)? - 1, " ", half(8)? * 3);
+    let v = half(10)?;
+    io.println("main got ", v);
+}

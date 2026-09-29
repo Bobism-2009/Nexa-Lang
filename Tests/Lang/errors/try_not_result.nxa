@@ -1,0 +1,6 @@
+// ? works on a Result, and nothing else.
+#include <std/io>
+fn main() {
+    let n = 5;
+    let m = n?;
+}

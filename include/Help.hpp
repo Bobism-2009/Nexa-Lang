@@ -111,6 +111,7 @@ POINTERS AND MEMORY
 MORE
   strings slices maps       s.upper() xs.push(v) m.has(k)  -- SYNTAX/Core.txt
   Result[T]                 ok(v) err("...") r.ok() r.value() r.error()
+                            f()? -- the value, or the error returned at once
   #include                  modules, .nxa files, C/C++ headers, packages
   NexaC --help std/io       any standard module
   NexaC --help options      every command-line option)HELP" },
