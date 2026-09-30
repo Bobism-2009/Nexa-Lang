@@ -1,0 +1,42 @@
+// gfx.upload: a picture from the program's own pixels -- a []int of 0xRRGGBB or a
+// string of RGBA bytes -- drawn with every gfx.blit form, read back with gfx.get.
+// Built by Tests/gfx_upload_cases.sh against the fake X server (a window, no display).
+#include <std/io>
+#include <std/gfx>
+
+fn hex(v: int): string { return f"{v:06x}"; }
+
+fn main() {
+    gfx.open("up", 16, 8, 1);
+    gfx.clear(0, 0, 0);
+    // 3x2, one 0xRRGGBB a pixel, row by row
+    let px = [0xff0000, 0x00ff00, 0x0000ff,
+              0xffffff, 0x808080, 0x123456];
+    let img = gfx.upload(3, 2, px);
+    io.println("handle ", img, " size ", gfx.image_w(img), "x", gfx.image_h(img));
+    gfx.blit(1, 1, img);
+    io.println("1:1   ", hex(gfx.get(1, 1)), " ", hex(gfx.get(2, 1)), " ", hex(gfx.get(3, 1)), " / ",
+               hex(gfx.get(1, 2)), " ", hex(gfx.get(2, 2)), " ", hex(gfx.get(3, 2)), "  outside ", hex(gfx.get(4, 1)));
+    gfx.blit(6, 0, img, 6, 4);                        // scaled 2x
+    io.println("2x    ", hex(gfx.get(6, 0)), " ", hex(gfx.get(7, 1)), " ", hex(gfx.get(8, 0)), " ", hex(gfx.get(11, 3)));
+    gfx.blit(13, 0, img, -3, 0);                      // mirrored
+    io.println("mirror ", hex(gfx.get(13, 0)), " ", hex(gfx.get(15, 0)));
+    gfx.blit(-1, 5, img);                             // clipped on the left
+    io.println("clip  ", hex(gfx.get(0, 5)), " ", hex(gfx.get(1, 5)));
+
+    // RGBA bytes: one opaque red, one half-transparent white, one invisible
+    let rgba = "\xff\x00\x00\xff" + "\xff\xff\xff\x80" + "\x00\xff\x00\x00";
+    let a = gfx.upload(3, 1, rgba);
+    gfx.clear(0, 0, 0);
+    gfx.blit(0, 0, a);
+    io.println("rgba  ", hex(gfx.get(0, 0)), " ", hex(gfx.get(1, 0)), " ", hex(gfx.get(2, 0)));
+
+    // refill the first handle in place
+    let same = gfx.upload(1, 1, [0xabcdef], img);
+    gfx.blit(5, 5, img);
+    io.println("refill same handle ", same == img, " ", gfx.image_w(img), "x", gfx.image_h(img), " ", hex(gfx.get(5, 5)));
+
+    io.println("bad: short ", gfx.upload(2, 2, [1, 2, 3]), " zero ", gfx.upload(0, 1, [1]),
+               " rgba short ", gfx.upload(2, 1, "abc"));
+    gfx.close();
+}

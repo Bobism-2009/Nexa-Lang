@@ -2997,6 +2997,7 @@ private:
                     || e.value == "text_height" || e.value == "get"
                     || e.value == "image" || e.value == "decode" || e.value == "image_w"
                     || e.value == "image_h" || e.value == "blit" || e.value == "blit_rot"
+                    || e.value == "upload"
                     || e.value == "icon" || e.value == "cursor"
                     || e.value == "alpha" || e.value == "save"
                     || e.value == "sound" || e.value == "play" || e.value == "loop"
@@ -4498,6 +4499,7 @@ private:
             {"decode",          "gfx.decode(bytes)",                               "t"},
             {"image_w",         "gfx.image_w(id)",                                 "n"},
             {"image_h",         "gfx.image_h(id)",                                 "n"},
+            {"upload",          "gfx.upload(w, h, pixels[, into])",                "nn.n"},
             {"save",            "gfx.save(path)",                                  "t"},
             {"icon",            "gfx.icon(src)",                                   "x"},
             {"cursor",          "gfx.cursor([on])",                                "n"},
@@ -8568,6 +8570,18 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (fn == "decode") return "__nexa_gfx_decode(" + a(0) + ")";
                 if (fn == "image_w") return "__nexa_gfx_image_w(" + a(0) + ")";
                 if (fn == "image_h") return "__nexa_gfx_image_h(" + a(0) + ")";
+                if (fn == "upload") {
+                    // A picture the program made: a []int of 0xRRGGBB (gfx.get's shape) or
+                    // a string of RGBA bytes. The fourth argument is a handle to refill.
+                    const std::string pt = inferExprNexaType(e.children[2]);
+                    const bool list = nexaIsSliceType(pt) && nexaIsNumericIntType(nexaSliceElem(pt));
+                    if (!pt.empty() && !list && pt != "string") {
+                        throw std::runtime_error("gfx.upload(w, h, pixels[, into]) takes the pixels as a []int of "
+                            "0xRRGGBB, one a pixel, or a string of RGBA bytes, four a pixel -- not a " + pt);
+                    }
+                    return "__nexa_gfx_upload(" + a(0) + ", " + a(1) + ", " + a(2) + ", " +
+                           (e.children.size() > 3 ? a(3) : std::string("0")) + ")";
+                }
                 if (fn == "blit") {
                     std::string dw = "0", dh = "0", sx = "0", sy = "0", sw = "0", sh = "0";
                     if (e.children.size() == 5) {
@@ -9371,6 +9385,9 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         } else if (fn == "cursor") {
             cppUsage.gfxCursor = true;
         } else if (fn == "image_w" || fn == "image_h") {
+            cppUsage.gfxImageStore = true;
+        } else if (fn == "upload") {
+            cppUsage.gfxUpload = true;
             cppUsage.gfxImageStore = true;
         } else if (fn == "save") {
             cppUsage.gfxSave = true;

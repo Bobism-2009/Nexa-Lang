@@ -558,6 +558,7 @@ or an Emscripten canvas; no extra library to install on any of them.
             gfx.text_size([n])  gfx.text_width(s)  gfx.text_height(s)
   images    gfx.image(path)    gfx.decode(bytes)
             gfx.image_w(id)    gfx.image_h(id)
+            gfx.upload(w, h, pixels[, into])  an image from []int 0xRRGGBB or RGBA bytes
             gfx.blit(x, y, src[, w, h])
             gfx.blit(x, y, src, sx, sy, sw, sh[, dw, dh])
             gfx.blit_rot(x, y, src, angle[, w, h])

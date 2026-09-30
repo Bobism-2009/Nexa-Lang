@@ -4778,6 +4778,7 @@ private:
         else if (method == "play" || method == "loop") { argc = 1; argcMax = 2; }
         else if (method == "stop" || method == "volume") { argc = 0; argcMax = 1; }
         else if (method == "blit") { argc = 3; argcMax = 9; }
+        else if (method == "upload") { argc = 3; argcMax = 4; }
         else if (method == "blit_rot") { argc = 4; argcMax = 6; }
         else if (method == "icon") argc = 1;
         else if (method == "cursor") { argc = 0; argcMax = 1; }
@@ -4786,7 +4787,7 @@ private:
         else {
             throw std::runtime_error("Unknown gfx method 'gfx." + method +
                 "' at line " + std::to_string(methodTok.line) +
-                " (use open, close, resize, width, height, scale, title, icon, cursor, poll, closed, clear, plot, fill, rect, round_rect, fill_round_rect, line, circle, fill_circle, ellipse, fill_ellipse, arc, pie, tri, fill_tri, poly, fill_poly, text, text_size, text_width, text_height, get, present, image, decode, image_w, image_h, blit, blit_rot, alpha, save, key, pressed, released, wheel, wheel_x, typed, mouse_x, mouse_y, mouse, audio, sample, audio_queued, audio_flush, sound, play, loop, stop, volume, fullscreen, borderless, ontop, transparent, maxfps)");
+                " (use open, close, resize, width, height, scale, title, icon, cursor, poll, closed, clear, plot, fill, rect, round_rect, fill_round_rect, line, circle, fill_circle, ellipse, fill_ellipse, arc, pie, tri, fill_tri, poly, fill_poly, text, text_size, text_width, text_height, get, present, image, decode, image_w, image_h, upload, blit, blit_rot, alpha, save, key, pressed, released, wheel, wheel_x, typed, mouse_x, mouse_y, mouse, audio, sample, audio_queued, audio_flush, sound, play, loop, stop, volume, fullscreen, borderless, ontop, transparent, maxfps)");
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after gfx." + method + " at line " + std::to_string(peek().line));

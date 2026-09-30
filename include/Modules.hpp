@@ -149,6 +149,7 @@ public:
         bool gfxTyped = false;
         bool gfxWheel = false;
         bool gfxImageStore = false;
+        bool gfxUpload = false;     // gfx.upload: an image from the program's own pixels
         bool gfxBlit = false;
         bool gfxBlitRot = false;
         bool gfxIcon = false;
@@ -1967,7 +1968,8 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
             // somewhere to put what it loaded. (A blit already implies the load:
             // the usage scan counts every gfx.blit as one, because a path blit
             // decodes the file itself.)
-            if (need.blit || need.blitRot || need.icon || need.imageLoad) need.imageStore = true;
+            need.upload = usage.gfxUpload;
+            if (need.blit || need.blitRot || need.icon || need.imageLoad || need.upload) need.imageStore = true;
             // need.audio and need.sound are the combined flags worked out above
             // rather than this module's own: what they gate here is no longer
             // the stack itself but the declarations gfx.close() and gfx.poll()

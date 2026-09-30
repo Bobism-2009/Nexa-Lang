@@ -106,6 +106,7 @@ struct GfxNeed {
     bool wheel = false;          // wheel, wheel_x
     bool imageStore = false;     // the loaded-image table: image_w, image_h, blit
     bool imageLoad = false;      // image, decode -- the decoder and the file read
+    bool upload = false;         // gfx.upload -- an image from the program's own pixels
     bool blit = false;           // blit
     bool blitRot = false;        // blit_rot
     bool icon = false;           // gfx.icon
@@ -4555,6 +4556,71 @@ static int __nexa_gfx_image(const std::string& path) {
     return __nexa_gfx_store_img(w, h, px, path);
 }
 )NEXA_GFX";
+    if (need.upload) out += R"NEXA_GFX(
+// gfx.upload: a picture the program made, into the table gfx.image fills, so every
+// gfx.blit form draws it. `into`, a handle already in the table, is refilled in
+// place -- a picture redrawn every frame reuses one image and, at the same size,
+// one buffer. 0 when the size is out of range or the pixels do not fill it.
+static unsigned char* __nexa_gfx_upload_slot(int w, int h, int into, int* id) {
+    if (w < 1 || h < 1 || w > 4096 || h > 4096) return nullptr;
+    if (__nexa_imgs.empty()) {
+        __nexa_GfxImg z;
+        z.w = 0;
+        z.h = 0;
+        z.px = NULL;
+        __nexa_imgs.push_back(z);
+        __nexa_img_paths.push_back("");
+    }
+    const size_t n = (size_t)w * (size_t)h * 4;
+    if (into >= 1 && into < (int)__nexa_imgs.size()) {
+        __nexa_GfxImg& im = __nexa_imgs[(size_t)into];
+        if (!im.px || im.w != w || im.h != h) {
+            delete[] im.px;
+            im.px = new unsigned char[n];
+            im.w = w;
+            im.h = h;
+        }
+        // No longer what that file holds: gfx.image(path) must load it afresh.
+        __nexa_img_paths[(size_t)into].clear();
+        *id = into;
+        return im.px;
+    }
+    __nexa_GfxImg im;
+    im.w = w;
+    im.h = h;
+    im.px = new unsigned char[n];
+    __nexa_imgs.push_back(im);
+    __nexa_img_paths.push_back("");
+    *id = (int)__nexa_imgs.size() - 1;
+    return im.px;
+}
+
+template <class V>
+static int __nexa_gfx_upload(int w, int h, const std::vector<V>& pixels, int into) {
+    if (w < 1 || h < 1 || w > 4096 || h > 4096 || pixels.size() != (size_t)w * (size_t)h) return 0;
+    int id = 0;
+    unsigned char* px = __nexa_gfx_upload_slot(w, h, into, &id);
+    if (!px) return 0;
+    const size_t n = pixels.size();
+    for (size_t i = 0; i < n; i++) {
+        const unsigned long long v = (unsigned long long)pixels[i];
+        px[i * 4] = (unsigned char)(v >> 16);
+        px[i * 4 + 1] = (unsigned char)(v >> 8);
+        px[i * 4 + 2] = (unsigned char)v;
+        px[i * 4 + 3] = 255;
+    }
+    return id;
+}
+
+static int __nexa_gfx_upload(int w, int h, const std::string& rgba, int into) {
+    if (w < 1 || h < 1 || w > 4096 || h > 4096 || rgba.size() != (size_t)w * (size_t)h * 4) return 0;
+    int id = 0;
+    unsigned char* px = __nexa_gfx_upload_slot(w, h, into, &id);
+    if (!px) return 0;
+    std::memcpy(px, rgba.data(), rgba.size());
+    return id;
+}
+)NEXA_GFX";
     if (need.imageStore) out += R"NEXA_GFX(
 static int __nexa_gfx_image_w(int id) {
     if (id < 1 || id >= (int)__nexa_imgs.size() || !__nexa_imgs[(size_t)id].px) return 0;
@@ -4611,6 +4677,42 @@ static int __nexa_gfx_blit(int x, int y, int id, int dw, int dh, int sx, int sy,
     if (yy0 >= yy1 || xx0 >= xx1) return 0;
     int ga = __nexa_gfx_alpha_get();
     int drew = 0;
+    if (!flipx && !flipy && DW == sw && DH == sh) {
+        // Drawn 1:1, which is most blits: each row of the image is a run of the
+        // framebuffer's, so the source pixel is an offset, not two divisions.
+        const int run = (int)(xx1 - xx0);
+        for (long long yy = yy0; yy < yy1; yy++) {
+            const int py = (int)(Y + yy);
+            const unsigned char* s = im.px + ((size_t)(sy + yy) * (size_t)im.w + (size_t)(sx + xx0)) * 4;
+            int i = (py * __nexa_g.w + (int)(X + xx0)) * 4;
+            // A row with nothing see-through in it, at the default alpha, is a copy:
+            // straight across where the framebuffer keeps RGBA as the image does,
+            // with red and blue swapped where it keeps BGRA (Windows).
+            bool opaque = ga == 255;
+            for (int k = 0; opaque && k < run; k++) opaque = s[k * 4 + 3] == 255;
+            if (opaque) {
+                unsigned char* d = __nexa_g.fb + i;
+#ifdef _WIN32
+                for (int k = 0; k < run; k++) {
+                    d[k * 4] = s[k * 4 + 2];
+                    d[k * 4 + 1] = s[k * 4 + 1];
+                    d[k * 4 + 2] = s[k * 4];
+                    d[k * 4 + 3] = 255;
+                }
+#else
+                std::memcpy(d, s, (size_t)run * 4);
+#endif
+            } else {
+                for (int k = 0; k < run; k++, s += 4, i += 4) {
+                    int A = s[3];
+                    if (ga != 255) A = (A * ga + 127) / 255;
+                    __nexa_gfx_put_a(i, s[0], s[1], s[2], (unsigned char)A);
+                }
+            }
+            drew = 1;
+        }
+        return drew;
+    }
     for (long long yy = yy0; yy < yy1; yy++) {
         int py = (int)(Y + yy);
         long long ty = flipy ? DH - 1 - yy : yy;

@@ -264,6 +264,9 @@ run_groups() {
         '    let n: int = gfx.sound("b.wav");' "$@"
     group "window$suffix" '^static int __nexa_gfx_resize' \
         '    gfx.resize(4, 4);' "$@"
+    # gfx.upload's table writer and pixel conversions come only with gfx.upload.
+    group "upload$suffix" '^static unsigned char\* __nexa_gfx_upload_slot' \
+        '    let i: int = gfx.upload(1, 1, [255]);' "$@"
     # The frame limiter is core, not a group: every window is capped at 60
     # unless it asks otherwise. Tests/gfx_maxfps_cases.sh covers it.
     # Nothing but the call itself takes a window's frame off -- unlike

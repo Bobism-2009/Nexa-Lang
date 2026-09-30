@@ -1,0 +1,8 @@
+handle 1 size 3x2
+1:1   ff0000 00ff00 0000ff / ffffff 808080 123456  outside 000000
+2x    ff0000 ff0000 00ff00 123456
+mirror 0000ff ff0000
+clip  00ff00 0000ff
+rgba  ff0000 808080 000000
+refill same handle true 1x1 abcdef
+bad: short 0 zero 0 rgba short 0

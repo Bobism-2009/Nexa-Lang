@@ -881,6 +881,26 @@ ARGUMENT TYPES
                                    the result is cached: the same path gives the same handle
   gfx.decode(bytes)              - same decode from a string (os.load / http.get(...).value())
                                    not cached; each call decodes and returns a new handle
+  gfx.upload(w, h, pixels[, into])
+                                 - an image from the program's own pixels, w by h, row by
+                                   row from the top left; a handle, or 0. Draw it with any
+                                   gfx.blit form, as a loaded image is drawn. pixels is
+                                     a []int, one 0xRRGGBB a pixel -- what gfx.get gives --
+                                       fully opaque; or
+                                     a string of raw bytes, four a pixel: red, green,
+                                       blue, alpha -- for see-through parts
+                                   and must hold exactly w*h pixels (0 if not; w and h go
+                                   up to 4096). into, a handle, is refilled in place and
+                                   handed back: a picture redrawn every frame keeps one
+                                   image, and at the same size one buffer.
+                                     let px: []int = ...;
+                                     let img = gfx.upload(64, 64, px);
+                                     gfx.blit(10, 10, img);
+                                   A blit at 1:1 copies each opaque row whole: a 256x256
+                                   image in about 0.03 ms. For a picture that changes
+                                   every frame, upload + blit costs about what gfx.plot
+                                   for every pixel does; for one drawn again and again
+                                   (a sprite, a tile, a texture made once) it is a copy
   gfx.image_w(id) / image_h(id)  - pixel size of a loaded image (0 if invalid)
                                    handles start at 1, so 0 and negatives are never valid
   gfx.blit(x, y, src[, w, h])    - draw whole image at x,y; src is handle or path
