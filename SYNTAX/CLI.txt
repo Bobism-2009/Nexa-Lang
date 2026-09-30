@@ -112,7 +112,11 @@ OPTIONS
             program. Cannot be combined with --run (this machine cannot run
             it), --wasm, --win, --dll, --shared, --static-lib, --no-console
             or --link. --source works, and writes the C++ for that platform.
-            Needs clang (LLVM): set NEXA_TARGET_CLANG to use a particular one.
+            Needs clang (LLVM) built with the target CPU's backend: NexaC uses
+            the first clang it finds that has it and is new enough (from
+            NEXA_TARGET_CLANG, PATH, then the usual install places, MSYS2's
+            included). LLVM's Windows installer has no MIPS backend; MSYS2's
+            clang does.
             Targets live at github.com/Bobism-2009/Nexa-Targets.
   --no-console    Build Windows GUI .exe with no console window
   fn __init__() in a DLL/SO/dylib is auto-executed when the library is loaded

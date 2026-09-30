@@ -52,6 +52,7 @@
 #else
 #include <fcntl.h>
 #include <spawn.h>
+#include <sys/file.h>
 #include <sys/wait.h>
 #include <unistd.h>
 extern char** environ;
@@ -528,41 +529,211 @@ struct Toolchain {
     int major = 0;
 };
 
-// Clang, and the three tools that ship beside it. Found by asking clang itself
-// where its siblings are, which is right wherever LLVM was installed. Only
-// clang will do: g++ is built for one target, and cannot be asked for another.
-inline Toolchain findToolchain(const fs::path& scratch) {
+// The backend name `clang -print-targets` lists for a triple's CPU.
+inline std::string backendFor(const std::string& triple) {
+    std::string a = triple.substr(0, triple.find('-'));
+    if (a == "x86_64" || a == "amd64") return "x86-64";
+    if (a.size() == 4 && a[0] == 'i' && a.compare(2, 2, "86") == 0) return "x86";
+    if (a.compare(0, 5, "thumb") == 0) return a.compare(a.size() - 2, 2, "eb") == 0 ? "thumbeb" : "thumb";
+    if (a.compare(0, 3, "arm") == 0 && a != "arm64" && a != "arm64_32") {
+        return a.compare(a.size() - 2, 2, "eb") == 0 ? "armeb" : "arm";
+    }
+    return a;
+}
+
+// A clang is found on PATH the way a shell would find it, so that what the
+// toolchain cache below keys on is a file.
+inline fs::path whichProgram(const std::string& name) {
+    const bool hasDir = name.find('/') != std::string::npos || name.find('\\') != std::string::npos;
+    std::error_code ec;
+    auto exists = [&](const fs::path& p) -> fs::path {
+        if (fs::is_regular_file(p, ec)) return p;
+#ifdef _WIN32
+        fs::path e = p;
+        e += ".exe";
+        if (fs::is_regular_file(e, ec)) return e;
+#endif
+        return fs::path();
+    };
+    if (hasDir) return exists(name);
+    const char* path = std::getenv("PATH");
+    if (!path) return fs::path();
+#ifdef _WIN32
+    const char sep = ';';
+#else
+    const char sep = ':';
+#endif
+    std::string all = path;
+    for (size_t at = 0; at <= all.size();) {
+        size_t end = all.find(sep, at);
+        if (end == std::string::npos) end = all.size();
+        if (end > at) {
+            fs::path hit = exists(fs::path(all.substr(at, end - at)) / name);
+            if (!hit.empty()) return hit;
+        }
+        at = end + 1;
+    }
+    return fs::path();
+}
+
+// What a clang says about itself: its version, its backends, and where its
+// headers and sibling tools are. That is six processes, a tenth of a second
+// each on Windows, so the answer is kept in ~/.nexa/cache/targets/clang.txt,
+// keyed by the binary's path, size and time -- an LLVM update asks again --
+// and a build reads one line instead.
+struct ClangInfo {
+    std::string path;
+    long long stamp = 0;
+    uintmax_t size = 0;
+    Toolchain tc;
+    std::string backends;  // ",aarch64,mipsel,x86-64,"
+};
+
+inline fs::path clangCacheFile() { return cacheRoot() / "clang.txt"; }
+
+inline std::vector<ClangInfo> readClangCache() {
+    std::vector<ClangInfo> out;
+    std::ifstream in(clangCacheFile());
+    std::string line;
+    while (std::getline(in, line)) {
+        std::vector<std::string> f;
+        for (size_t at = 0;;) {
+            size_t tab = line.find('\t', at);
+            f.push_back(line.substr(at, tab == std::string::npos ? std::string::npos : tab - at));
+            if (tab == std::string::npos) break;
+            at = tab + 1;
+        }
+        if (f.size() != 10) continue;
+        ClangInfo c;
+        c.path = f[0];
+        c.stamp = std::atoll(f[1].c_str());
+        c.size = (uintmax_t)std::strtoull(f[2].c_str(), nullptr, 10);
+        c.tc.cxx = f[0];
+        c.tc.major = std::atoi(f[3].c_str());
+        c.tc.resource = f[4];
+        c.tc.lld = f[5];
+        c.tc.ar = f[6];
+        c.tc.cc = f[7];
+        c.backends = f[8];
+        out.push_back(c);
+    }
+    return out;
+}
+
+inline void writeClangCache(const std::vector<ClangInfo>& all, const std::string& unique) {
+    std::error_code ec;
+    fs::create_directories(cacheRoot(), ec);
+    fs::path tmp = clangCacheFile();
+    tmp += "." + unique;
+    {
+        std::ofstream o(tmp, std::ios::binary);
+        for (const ClangInfo& c : all) {
+            o << c.path << '\t' << c.stamp << '\t' << c.size << '\t' << c.tc.major << '\t' << c.tc.resource << '\t'
+              << c.tc.lld << '\t' << c.tc.ar << '\t' << c.tc.cc << '\t' << c.backends << "\t-\n";
+        }
+    }
+    fs::rename(tmp, clangCacheFile(), ec);  // whole or not at all, whoever writes last
+    if (ec) fs::remove(tmp, ec);
+}
+
+inline bool probeClang(const fs::path& bin, const fs::path& scratch, ClangInfo& c) {
+    const std::string cxx = bin.string();
+    std::string ver = capture({cxx, "--version"}, scratch);
+    size_t at = ver.find("clang version ");
+    if (at == std::string::npos) return false;
+    c.tc = Toolchain();
+    c.tc.cxx = cxx;
+    c.tc.major = std::atoi(ver.c_str() + at + 14);
+    // "    mipsel      - MIPS (32-bit little endian)", one a line after a heading
+    std::istringstream targets(capture({cxx, "-print-targets"}, scratch));
+    c.backends = ",";
+    for (std::string l; std::getline(targets, l);) {
+        size_t b = l.find_first_not_of(' ');
+        size_t dash = l.find(" - ");
+        if (b == std::string::npos || b < 2 || dash == std::string::npos) continue;
+        c.backends += l.substr(b, l.find(' ', b) - b) + ",";
+    }
+    c.tc.resource = capture({cxx, "-print-resource-dir"}, scratch);
+    if (!c.tc.resource.empty()) c.tc.resource = (fs::path(c.tc.resource) / "include").generic_string();
+    c.tc.lld = capture({cxx, "-print-prog-name=ld.lld"}, scratch);
+    c.tc.ar = capture({cxx, "-print-prog-name=llvm-ar"}, scratch);
+    c.tc.cc = capture({cxx, "-print-prog-name=clang"}, scratch);
+    if (c.tc.lld.empty()) c.tc.lld = "ld.lld";
+    if (c.tc.ar.empty()) c.tc.ar = "llvm-ar";
+    if (c.tc.cc.empty()) c.tc.cc = "clang";
+    return true;
+}
+
+// Clang, and the three tools that ship beside it: the first clang that can
+// build for `triple` and is at least `minMajor`. Not simply the first clang --
+// LLVM's own Windows installer, for one, is built for x86, ARM, RISC-V and a
+// few others and nothing else, while an MSYS2 clang on the same machine has
+// every backend. Only clang will do: g++ is built for one target, and cannot
+// be asked for another.
+inline Toolchain findToolchain(const fs::path& scratch, const std::string& triple, int minMajor,
+                               const std::string& targetName, const std::string& unique) {
     std::vector<std::string> tries;
     if (const char* e = std::getenv("NEXA_TARGET_CLANG")) tries.push_back(e);
     tries.push_back("clang++");
 #ifdef _WIN32
     tries.push_back("C:\\Program Files\\LLVM\\bin\\clang++.exe");
+    tries.push_back("C:\\msys64\\clang64\\bin\\clang++.exe");
+    tries.push_back("C:\\msys64\\ucrt64\\bin\\clang++.exe");
 #else
     tries.push_back("/usr/bin/clang++");
     tries.push_back("/opt/homebrew/opt/llvm/bin/clang++");
     tries.push_back("/usr/local/opt/llvm/bin/clang++");
 #endif
-    Toolchain t;
-    std::string ver;
-    for (const std::string& c : tries) {
-        ver = capture({c, "--version"}, scratch);
-        if (ver.find("clang version") != std::string::npos) { t.cxx = c; break; }
+    const std::string backend = backendFor(triple);
+    std::vector<ClangInfo> cache = readClangCache();
+    bool changed = false;
+    std::set<std::string> seen;
+    std::string rejected;
+    for (const std::string& t : tries) {
+        fs::path bin = whichProgram(t);
+        if (bin.empty()) continue;
+        std::error_code ec;
+        // As found, not resolved: /usr/bin/clang++ is a link to .../clang, and
+        // the name is what tells the driver it is compiling C++.
+        const std::string key = bin.string();
+        if (!seen.insert(key).second) continue;
+        const long long stamp = (long long)fs::last_write_time(bin, ec).time_since_epoch().count();
+        const uintmax_t size = fs::file_size(bin, ec);
+        ClangInfo* info = nullptr;
+        for (ClangInfo& c : cache) {
+            if (c.path == key) { info = &c; break; }
+        }
+        if (!info || info->stamp != stamp || info->size != size) {
+            ClangInfo fresh;
+            if (!probeClang(bin, scratch, fresh)) continue;
+            fresh.path = key;
+            fresh.stamp = stamp;
+            fresh.size = size;
+            if (info) *info = fresh; else cache.push_back(fresh);
+            info = nullptr;
+            for (ClangInfo& c : cache) if (c.path == key) info = &c;
+            changed = true;
+        }
+        const bool hasBackend = info->backends.size() <= 1 || info->backends.find("," + backend + ",") != std::string::npos;
+        const bool newEnough = minMajor <= 0 || info->tc.major >= minMajor;
+        if (hasBackend && newEnough) {
+            if (changed) writeClangCache(cache, unique);
+            return info->tc;
+        }
+        rejected += "\n  " + key + ": clang " + std::to_string(info->tc.major) +
+                    (hasBackend ? ", too old" : ", no " + backend + " backend");
     }
-    if (t.cxx.empty()) {
+    if (changed) writeClangCache(cache, unique);
+    if (rejected.empty()) {
         throw std::runtime_error("--target builds with clang (LLVM), and none was found. Install LLVM, "
                                  "or set NEXA_TARGET_CLANG to a clang++ binary");
     }
-    size_t at = ver.find("clang version ");
-    t.major = std::atoi(ver.c_str() + at + 14);
-    t.resource = capture({t.cxx, "-print-resource-dir"}, scratch);
-    if (!t.resource.empty()) t.resource = (fs::path(t.resource) / "include").generic_string();
-    t.lld = capture({t.cxx, "-print-prog-name=ld.lld"}, scratch);
-    t.ar = capture({t.cxx, "-print-prog-name=llvm-ar"}, scratch);
-    t.cc = capture({t.cxx, "-print-prog-name=clang"}, scratch);
-    if (t.lld.empty()) t.lld = "ld.lld";
-    if (t.ar.empty()) t.ar = "llvm-ar";
-    if (t.cc.empty()) t.cc = "clang";
-    return t;
+    throw std::runtime_error(targetName + " needs clang " + std::to_string(minMajor) + " or newer with the " + backend +
+                             " backend (`clang -print-targets` lists it), and no clang here has both:" + rejected +
+                             "\nLinux distributions' clang and Homebrew's llvm have every backend. On Windows, "
+                             "LLVM's installer and llvm-mingw do not; MSYS2's clang does (pacman -S "
+                             "mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-lld). Or point NEXA_TARGET_CLANG "
+                             "at one that has it");
 }
 
 // --- building ------------------------------------------------------------------------
@@ -675,6 +846,53 @@ inline std::vector<std::pair<std::string, std::string>> varsFor(const Spec& s, c
     return v;
 }
 
+// Held while a target's runtime is built. The operating system lets go of it
+// when the process ends, however it ends, so a build killed half-way never
+// leaves the next one waiting for it.
+class RuntimeLock {
+public:
+    RuntimeLock(const fs::path& path, const std::string& name) {
+        bool told = false;
+        auto tell = [&]() {
+            if (told) return;
+            told = true;
+            std::cout << "[Nexa] " << name << ": another NexaC is building this runtime; waiting for it\n"
+                      << std::flush;
+        };
+#ifdef _WIN32
+        for (;;) {
+            h_ = CreateFileW(path.wstring().c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
+                             FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (h_ != INVALID_HANDLE_VALUE || GetLastError() != ERROR_SHARING_VIOLATION) break;
+            tell();
+            Sleep(200);
+        }
+#else
+        fd_ = open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+        if (fd_ >= 0 && flock(fd_, LOCK_EX | LOCK_NB) != 0) {
+            tell();
+            flock(fd_, LOCK_EX);
+        }
+#endif
+    }
+    ~RuntimeLock() {
+#ifdef _WIN32
+        if (h_ != INVALID_HANDLE_VALUE) CloseHandle(h_);
+#else
+        if (fd_ >= 0) close(fd_);
+#endif
+    }
+    RuntimeLock(const RuntimeLock&) = delete;
+    RuntimeLock& operator=(const RuntimeLock&) = delete;
+
+private:
+#ifdef _WIN32
+    HANDLE h_ = INVALID_HANDLE_VALUE;
+#else
+    int fd_ = -1;
+#endif
+};
+
 // Whether a program that includes `modules` needs this library.
 inline bool wanted(const Library& l, const std::vector<std::string>& modules) {
     if (l.when.empty()) return true;
@@ -702,6 +920,20 @@ inline fs::path ensureRuntime(const Spec& s, const Toolchain& tc, const std::vec
     auto stampFor = [&](const Library& l) { return l.when.empty() ? core : dir / ("complete-" + l.name); };
 
     std::error_code ec;
+    auto pending = [&]() {
+        if (!fs::exists(core)) return true;
+        for (const Library& l : s.libraries) {
+            if (wanted(l, modules) && !fs::exists(stampFor(l))) return true;
+        }
+        return false;
+    };
+    if (!pending()) return dir;
+    // Two NexaCs that both find the runtime unbuilt must not both build it into
+    // one directory, the second deleting what the first is compiling. The
+    // second waits, then finds most or all of it already there.
+    fs::create_directories(dir.parent_path(), ec);
+    RuntimeLock lock(fs::path(dir.string() + ".lock"), s.name);
+
     const bool firstBuild = !fs::exists(core);
     if (firstBuild) fs::remove_all(dir, ec);  // what an interrupted first build left
     std::vector<const Library*> todo;
@@ -811,15 +1043,25 @@ struct BuildOptions {
 // against its runtime. Returns normally or throws with the tool's output.
 inline void buildProgram(const Spec& s, const std::string& cppPath, const std::string& outPath,
                          const BuildOptions& o) {
-    fs::path scratch = fs::temp_directory_path() / ("nexa_target_" + s.name);
+    // This build's own scratch directory: two NexaCs building for the same
+    // target at once would otherwise compile into, and link, each other's
+    // program.o.
+#ifdef _WIN32
+    const std::string unique = std::to_string(GetCurrentProcessId());
+#else
+    const std::string unique = std::to_string(getpid());
+#endif
+    fs::path scratch = fs::temp_directory_path() / ("nexa_target_" + s.name + "_" + unique);
     std::error_code ec;
     fs::create_directories(scratch, ec);
-    Toolchain tc = findToolchain(scratch);
-    if (s.clangMajor > 0 && tc.major < s.clangMajor) {
-        throw std::runtime_error(s.name + " needs clang " + std::to_string(s.clangMajor) +
-                                 " or newer -- its C++ library is written for it -- and this is clang " +
-                                 std::to_string(tc.major) + ". Update LLVM, or point NEXA_TARGET_CLANG at a newer one");
-    }
+    struct Cleanup {
+        fs::path p;
+        ~Cleanup() {
+            std::error_code e;
+            fs::remove_all(p, e);
+        }
+    } cleanup{scratch};
+    Toolchain tc = findToolchain(scratch, s.triple, s.clangMajor, s.name, unique);
     fs::path rt = ensureRuntime(s, tc, o.modules);
 
     auto vars = varsFor(s, tc, nullptr);
