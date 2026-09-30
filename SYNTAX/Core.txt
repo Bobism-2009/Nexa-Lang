@@ -204,6 +204,19 @@ VARIABLES
             As text -- printed, joined with +, in an f-string -- a bool is true
             or false, never 1 or 0; comparisons and fns returning bool too.
     float:  let pi = 3.14;  let x: float = 2.5;  let f: float;
+            64-bit (a C double). A literal like 2.5 is a float.
+    float32: let v: float32 = 0.5;  (float32)x
+            A real 32-bit float (a C float): half the memory, the type graphics,
+            audio and file formats use, and about 7 significant digits to float's
+            16. Mixing follows C: float32 with an int stays float32; float32 with a
+            float -- a literal like 2.0 included -- is a float. Declaring the result
+            float32 keeps it 32-bit: let y: float32 = v * 2.0;
+            (Writing f32, f64 or double is an error that names the Nexa type.)
+    bits(x)          - x's raw bits: an unsigned int for a float32, an unsigned
+                       long for a float. Nothing is converted or rounded:
+                       bits((float32)1.5) is 0x3FC00000.
+    from_bits32(u)   - the float32 those 32 bits are; from_bits64(u) the float for
+                       64. from_bits32(bits(v)) == v for every v but NaN.
     char:   let c = 'A';  let ch: char = 'x';  let letter: char;
     unsigned char: let b: unsigned char = 255;
     pointers: let p: *int = &x;  let q: **int;  (see POINTERS)

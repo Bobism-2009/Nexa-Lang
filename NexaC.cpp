@@ -2780,16 +2780,31 @@ int main(int argc, char* argv[]) {
         }
 
         std::string cmd = nexaBuildCompileCmd(cxx, targetFlags + pchFlag, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, linkGfx3d, noExceptions, noRtti, debugBuild, linkInputs);
-        int ret = std::system(cmd.c_str());
-        if (ret != 0 && !pchFlag.empty()) {
-            // Whatever clang had against the PCH (a compiler update, a header that moved),
-            // the program is built the plain way, and the next build makes a fresh PCH.
-            std::error_code ec;
-            std::filesystem::remove(pchFile, ec);
-            std::cout << "[Nexa] Retrying without the precompiled header (it is rebuilt next time)...\n";
-            std::cout.flush();
-            cmd = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, linkGfx3d, noExceptions, noRtti, debugBuild, linkInputs);
+        int ret;
+        if (pchFlag.empty()) {
             ret = std::system(cmd.c_str());
+        } else {
+            // With a PCH the compiler's output is held back for a moment: a complaint about
+            // the PCH itself (a compiler update, a header that moved) is NexaC's to deal
+            // with -- quietly, by building the plain way and making a fresh one next time --
+            // while anything else is the program's, and is shown once as it always was.
+            const std::string log = cppPath + ".log";
+            ret = std::system((cmd + " > \"" + log + "\" 2>&1").c_str());
+            std::string text;
+            {
+                std::ifstream lf(log, std::ios::binary);
+                text.assign(std::istreambuf_iterator<char>(lf), std::istreambuf_iterator<char>());
+            }
+            std::remove(log.c_str());
+            if (ret != 0 && (text.find("precompiled") != std::string::npos || text.find(".pch") != std::string::npos)) {
+                std::error_code ec;
+                std::filesystem::remove(pchFile, ec);
+                cmd = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, linkGfx3d, noExceptions, noRtti, debugBuild, linkInputs);
+                ret = std::system(cmd.c_str());
+            } else if (!text.empty()) {
+                std::cerr << text;
+                std::cerr.flush();
+            }
         }
 
         if (ret != 0 && sanitizeThisBuild && sanitizer != NexaSanitizer::None) {

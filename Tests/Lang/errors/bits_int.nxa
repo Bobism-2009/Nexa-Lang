@@ -1,0 +1,6 @@
+// bits() reads a float's bits; an int has nothing to read.
+#include <std/io>
+
+fn main() {
+    let u = bits(5);
+}

@@ -464,6 +464,7 @@ public:
                     if (!n.children.empty()) cppUsage.threadLambda = true;
                     break;
                 case AstNode::Type::ThreadJoin: cppUsage.thread = true; break;
+                case AstNode::Type::ExprBits: cppUsage.bits = true; break;
                 case AstNode::Type::ThreadMutex:
                 case AstNode::Type::ThreadLock: cppUsage.threadMutex = true; break;
                 case AstNode::Type::ThreadWorker:
@@ -598,7 +599,7 @@ public:
         std::function<void(const AstNode&)> checkNeedsString = [&](const AstNode& n) {
             if (n.type == AstNode::Type::ExprCast) {
                 if (n.value == "string") needsString = true;
-                if (n.value == "float" || nexaIsNumericIntType(n.value)) {
+                if (nexaIsFloatType(n.value) || nexaIsNumericIntType(n.value)) {
                     needsString = true;
                     needsCstdlib = true;
                 }
@@ -644,7 +645,7 @@ public:
                 }
                 if (node.type == AstNode::Type::Function && node.fnReturnType == "string") needsString = true;
             }
-            if (node.type == AstNode::Type::Variable && (node.declType == "string" || (node.initUninitialized && !nexaIsIntegerType(node.declType) && node.declType != "bool" && node.declType != "float" && !isPointerType(node.declType) && !isStructDeclType(node.declType) && !isEnumDeclType(node.declType)) || node.initFromFileRead || (!node.initIsInt && !node.initFromDllLoad && node.children.empty()))) needsString = true;
+            if (node.type == AstNode::Type::Variable && (node.declType == "string" || (node.initUninitialized && !nexaIsIntegerType(node.declType) && node.declType != "bool" && !nexaIsFloatType(node.declType) && !isPointerType(node.declType) && !isStructDeclType(node.declType) && !isEnumDeclType(node.declType)) || node.initFromFileRead || (!node.initIsInt && !node.initFromDllLoad && node.children.empty()))) needsString = true;
             if (node.type == AstNode::Type::Variable && !node.children.empty() && exprProducesString(node.children[0])) needsString = true;
             if (node.type == AstNode::Type::Variable && !node.children.empty() && node.children[0].type == AstNode::Type::ExprArrayLiteral) {
                 for (const auto& c : node.children[0].children) { if (exprProducesString(c)) { needsString = true; break; } }
@@ -1076,7 +1077,7 @@ public:
                 for (size_t i = 0; i < node.paramNames.size(); i++) {
                     bool isStr = (i < node.paramTypes.size() && node.paramTypes[i] == "string");
                     varIsString[node.paramNames[i]] = isStr;
-                    varIsFloat[node.paramNames[i]] = (i < node.paramTypes.size() && node.paramTypes[i] == "float");
+                    varIsFloat[node.paramNames[i]] = (i < node.paramTypes.size() && nexaIsFloatType(node.paramTypes[i]));
                     varIsChar[node.paramNames[i]] = (i < node.paramTypes.size() && node.paramTypes[i] == "char");
                     varIsBool[node.paramNames[i]] = (i < node.paramTypes.size() && node.paramTypes[i] == "bool");
                     varIsEnum[node.paramNames[i]] = (i < node.paramTypes.size() && isEnumDeclType(node.paramTypes[i]));
@@ -1229,7 +1230,7 @@ public:
             globalVarMap[node.value] = globalUseName(vname);
                 globalCppNames_.insert(globalUseName(vname));
             globalVarIsConst[node.value] = node.isConst;
-            globalVarIsFloat[node.value] = (!node.declType.empty() && node.declType == "float") || node.initIsFloat;
+            globalVarIsFloat[node.value] = nexaIsFloatType(node.declType) || node.initIsFloat;
             globalVarIsChar[node.value] = (!node.declType.empty() && node.declType == "char") || node.initIsChar;
             globalVarIsBool[node.value] = (!node.declType.empty() && node.declType == "bool") || node.initIsBool;
             globalVarIsEnum[node.value] = !node.declType.empty() && isEnumDeclType(node.declType);
@@ -1239,7 +1240,7 @@ public:
             if (node.declType.empty() && !isArray && !node.children.empty()) {
                 std::string it = inferExprNexaType(node.children[0]);
                 if (it == "string") isStr = true;
-                else if (nexaIsNumericIntType(it) || isPointerType(it) || it == "char" || it == "float" || it == "bool") isStr = false;
+                else if (nexaIsNumericIntType(it) || isPointerType(it) || it == "char" || nexaIsFloatType(it) || it == "bool") isStr = false;
             }
             globalVarIsString[node.value] = isStr;
             globalVarIsArray[node.value] = isArray || node.isFixedArray;
@@ -1260,6 +1261,8 @@ public:
                     out << c << "bool " << vname << " = false;\n";
                 } else if (!node.declType.empty() && node.declType == "float") {
                     out << c << "double " << vname << " = 0.0;\n";
+                } else if (!node.declType.empty() && node.declType == "float32") {
+                    out << c << "float " << vname << " = 0.0f;\n";
                 } else if (!node.declType.empty() && node.declType == "char") {
                     out << c << "char " << vname << " = '\\0';\n";
                 } else if (!node.declType.empty() && isStructDeclType(node.declType)) {
@@ -1298,7 +1301,8 @@ public:
                 } else {
                     bool useBool = !node.declType.empty() ? (node.declType == "bool") : node.initIsBool;
                     bool useInt = !node.declType.empty() ? nexaIsNumericIntType(node.declType) : node.initIsInt;
-                    bool useFloat = !node.declType.empty() ? (node.declType == "float") : node.initIsFloat;
+                    bool useFloat = !node.declType.empty() ? nexaIsFloatType(node.declType) : node.initIsFloat;
+                    bool use32 = node.declType == "float32";
                     bool useChar = !node.declType.empty() ? (node.declType == "char") : node.initIsChar;
                     std::string inferred;
                     if (node.declType.empty() && !node.children.empty()) {
@@ -1308,8 +1312,9 @@ public:
                             useFloat = false;
                             useChar = false;
                             useBool = false;
-                        } else if (inferred == "float") {
+                        } else if (nexaIsFloatType(inferred)) {
                             useFloat = true;
+                            use32 = inferred == "float32";
                             useInt = false;
                         } else if (inferred == "bool") {
                             useBool = true;
@@ -1326,7 +1331,7 @@ public:
                     } else if (!inferred.empty() && (nexaIsFnType(inferred) || nexaIsSliceType(inferred) || nexaIsMapType(inferred) || nexaIsResultType(inferred) || isStructDeclType(inferred) || inferred == "json")) {
                         out << c << nexaTypeToCpp(inferred) << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
                     } else {
-                        std::string cppType = c + (useBool ? "bool " : useFloat ? "double " : useChar ? "char " : (useInt ? "int " : "std::string "));
+                        std::string cppType = c + (useBool ? "bool " : useFloat ? (use32 ? "float " : "double ") : useChar ? "char " : (useInt ? "int " : "std::string "));
                         out << cppType << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
                     }
                 }
@@ -2066,7 +2071,7 @@ private:
 
     static bool typesMatchForOverload(const std::string& formal, const std::string& actual) {
         if (formal == actual) return true;
-        if (formal == "float" && actual == "int") return true;
+        if (nexaIsFloatType(formal) && (actual == "int" || nexaIsFloatType(actual))) return true;
         if (nexaIsNumericIntType(formal) && nexaIsNumericIntType(actual)) return true;
         // null is compatible with any pointer parameter
         if (isPointerType(formal) && actual == "null") return true;
@@ -2462,7 +2467,7 @@ private:
                 nexaDeclStack_.back()[name] = t;
                 spawnVarMap[name] = name;
                 spawnStr[name] = t == "string";
-                spawnFloat[name] = t == "float";
+                spawnFloat[name] = nexaIsFloatType(t);
                 spawnChar[name] = t == "char";
                 spawnBool[name] = t == "bool";
             }
@@ -2592,6 +2597,19 @@ private:
         if (arr.children.empty()) return "int";
         std::string elemT = inferExprNexaType(arr.children[0]);
         if (elemT.size() >= 9 && elemT.compare(0, 9, "arrayelt:") == 0) elemT = elemT.substr(9);
+        // Numbers written for a list of floats -- let xs: []float32 = [1.5, 2] -- take the
+        // list's element type, as each would if assigned one at a time.
+        if (nexaIsFloatType(elemT) || nexaIsNumericIntType(elemT)) {
+            const std::string want = emptySliceTypeOf(arr);
+            if (nexaIsSliceType(want) && nexaIsFloatType(nexaSliceElem(want))) {
+                bool numbers = true;
+                for (const AstNode& c : arr.children) {
+                    const std::string t = inferExprNexaType(c);
+                    if (!nexaIsFloatType(t) && !nexaIsNumericIntType(t)) { numbers = false; break; }
+                }
+                if (numbers) return nexaSliceElem(want);
+            }
+        }
         // Results: err("x") converts to any Result[T] and so types as Result[void]. The
         // literal is what it was written for, else what its first ok(...) holds.
         if (nexaIsResultType(elemT)) {
@@ -2838,12 +2856,12 @@ private:
                     std::string t0 = inferExprNexaType(e.children[0]);
                     std::string t1 = inferExprNexaType(e.children[1]);
                     if (t0 == "string" || t1 == "string") return "string";
-                    if (t0 == "float" || t1 == "float") return "float";
+                    { const std::string fm = nexaFloatMix(t0, t1); if (!fm.empty()) return fm; }
                     return nexaArithIntResultType(t0, t1);
                 }
                 if (e.children.size() >= 1) {
                     std::string t0 = inferExprNexaType(e.children[0]);
-                    return t0 == "float" ? "float" : nexaArithIntResultType(t0, t0);
+                    return nexaIsFloatType(t0) ? t0 : nexaArithIntResultType(t0, t0);
                 }
                 return "int";
             case AstNode::Type::ExprSub:
@@ -2858,10 +2876,10 @@ private:
                     std::string t0 = inferExprNexaType(e.children[0]);
                     if (e.children.size() >= 2) {
                         std::string t1 = inferExprNexaType(e.children[1]);
-                        if (t0 == "float" || t1 == "float") return "float";
+                        { const std::string fm = nexaFloatMix(t0, t1); if (!fm.empty()) return fm; }
                         return nexaArithIntResultType(t0, t1);
                     }
-                    return t0 == "float" ? "float" : nexaArithIntResultType(t0, t0);
+                    return nexaIsFloatType(t0) ? t0 : nexaArithIntResultType(t0, t0);
                 }
                 return "int";
             case AstNode::Type::ExprShl:
@@ -2870,10 +2888,14 @@ private:
                 // promoted left operand alone, so `1 << wide` is still an int.
                 if (e.children.size() >= 1) {
                     std::string t0 = inferExprNexaType(e.children[0]);
-                    return t0 == "float" ? "float" : nexaArithIntResultType(t0, t0);
+                    return nexaIsFloatType(t0) ? t0 : nexaArithIntResultType(t0, t0);
                 }
                 return "int";
             case AstNode::Type::ExprLen: return "int";
+            case AstNode::Type::ExprBits:
+                if (e.value == "from_bits32") return "float32";
+                if (e.value == "from_bits64") return "float";
+                return (!e.children.empty() && inferExprNexaType(e.children[0]) == "float32") ? "unsigned int" : "unsigned long";
             case AstNode::Type::ExprTrim: return "string";
             case AstNode::Type::ExprArrayLiteral: {
                 if (!e.children.empty()) {
@@ -3067,7 +3089,7 @@ private:
                     std::string t1 = inferExprNexaType(e.children[1]);
                     std::string t2 = inferExprNexaType(e.children[2]);
                     if (t1 == "string" || t2 == "string") return "string";
-                    if (t1 == "float" || t2 == "float") return "float";
+                    { const std::string fm = nexaFloatMix(t1, t2); if (!fm.empty()) return fm; }
                     if (t1 == "bool" && t2 == "bool") return "bool";
                     return t1;
                 }
@@ -3587,7 +3609,8 @@ private:
                 }
                 const std::string elem = nexaIsSliceType(want) ? nexaSliceElem(want) : std::string();
                 // [err("x"), ok(7)] written for a []Result[int]: err() alone says no T.
-                if (nexaIsResultType(elem)) emptySliceType_[&n] = want;
+                // [1.5, 2] written for a []float32: the numbers alone say float.
+                if (nexaIsResultType(elem) || elem == "float32") emptySliceType_[&n] = want;
                 for (const AstNode& c : n.children) stampNode(c, elem, fnRet);
                 return;
             }
@@ -3743,7 +3766,7 @@ private:
             {"i8", "char"}, {"i16", "short"}, {"i32", "int"}, {"i64", "long"}, {"int32", "int"}, {"int64", "long"},
             {"u8", "unsigned char"}, {"u16", "unsigned short"}, {"u32", "unsigned int"}, {"u64", "unsigned long"},
             {"uint", "unsigned int"}, {"uint32", "unsigned int"}, {"uint64", "unsigned long"}, {"byte", "unsigned char"},
-            {"usize", "size_t"}, {"isize", "long"}, {"f32", "float"}, {"f64", "float"}, {"double", "float"},
+            {"usize", "size_t"}, {"isize", "long"}, {"f32", "float32"}, {"f64", "float"}, {"double", "float"},
             {"str", "string"}, {"String", "string"}, {"boolean", "bool"}, {"Bool", "bool"}, {"Int", "int"},
         };
         auto check = [&](const std::string& t, const AstNode& at) {
@@ -3864,7 +3887,7 @@ private:
     bool semIsNexaType(const std::string& t) const {
         if (t.empty()) return false;
         if (isPointerType(t)) return semIsNexaType(pointerPointeeType(t));
-        return nexaIsNumericIntType(t) || t == "float" || t == "double" || t == "bool" || t == "char" ||
+        return nexaIsNumericIntType(t) || nexaIsFloatType(t) || t == "double" || t == "bool" || t == "char" ||
                t == "string" || t == "void" || t == "json" ||
                (isStructDeclType(t) && structCppNames_.count(structNameFromDecl(t))) ||
                t.rfind("enum:", 0) == 0 || t.rfind("fn(", 0) == 0 || nexaIsSliceType(t) ||
@@ -4102,7 +4125,7 @@ private:
         const bool structOrEnum = isStructDeclType(t) || isEnumDeclType(t);
         n.initIsInt = !structOrEnum && nexaIsNumericIntType(t);
         n.initIsBool = (t == "bool");
-        n.initIsFloat = (t == "float");
+        n.initIsFloat = nexaIsFloatType(t);
         n.initIsChar = (t == "char");
         n.initFromArray = nexaIsSliceType(t);
     }
@@ -4139,7 +4162,7 @@ private:
         const bool structOrEnum = isStructDeclType(t) || isEnumDeclType(t);
         n.initIsInt = !structOrEnum && nexaIsNumericIntType(t);
         n.initIsBool = (t == "bool");
-        n.initIsFloat = (t == "float");
+        n.initIsFloat = nexaIsFloatType(t);
         n.initIsChar = (t == "char");
         n.initFromArray = nexaIsSliceType(t);
     }
@@ -4166,7 +4189,7 @@ private:
         if (!e.children.empty()) {
             const AstNode& r = e.children[0];
             const std::string t = inferExprNexaType(r);
-            const bool sure = t == "float" || t == "bool" ||
+            const bool sure = nexaIsFloatType(t) || t == "bool" ||
                 (nexaIsNumericIntType(t) && (r.type == AstNode::Type::ExprIntLiteral ||
                                               (r.type == AstNode::Type::ExprVarRef && !lookupNexaDecl(r.value).empty())));
             if (sure) {
@@ -4753,7 +4776,7 @@ private:
     // bool are in because C++ promotes them; float is in because narrowing to
     // an int is a conversion the language allows, the same as C's.
     static bool semArgIsNumber(const std::string& t) {
-        return nexaIsNumericIntType(t) || t == "float" || t == "char" || t == "bool";
+        return nexaIsNumericIntType(t) || nexaIsFloatType(t) || t == "char" || t == "bool";
     }
 
     static bool semArgKindAccepts(char kind, const std::string& t) {
@@ -4883,12 +4906,12 @@ private:
     // build. They are still refused: the set the compiler accepts and the set
     // SYNTAX/ promises are the same set, and widening it later is additive.
     static bool sliceElemIsOrderable(const std::string& elem) {
-        return nexaIsNumericIntType(elem) || elem == "float" || elem == "string" ||
+        return nexaIsNumericIntType(elem) || nexaIsFloatType(elem) || elem == "string" ||
                elem == "char" || elem == "bool";
     }
 
     static bool sliceElemIsSummable(const std::string& elem) {
-        return nexaIsNumericIntType(elem) || elem == "float";
+        return nexaIsNumericIntType(elem) || nexaIsFloatType(elem);
     }
 
     // Can the receiver of an in-place method be written back to? A variable, a
@@ -5015,7 +5038,7 @@ private:
     // "" means "cannot tell from the syntax", which suppresses the diagnosis.
     static std::string semCategoryOfType(const std::string& t) {
         if (t == "string") return "string";
-        if (t == "float") return "float";
+        if (nexaIsFloatType(t)) return "float";
         if (t == "bool") return "bool";
         if (t == "char") return "char";
         if (nexaIsNumericIntType(t)) return "int";
@@ -5116,7 +5139,7 @@ private:
         if (baseT == "json") return "json";
         if (baseT == "string") return "char";
         if (isStructDeclType(baseT)) return baseT;
-        if (nexaIsIntegerType(baseT) || baseT == "bool" || baseT == "float") return baseT;
+        if (nexaIsIntegerType(baseT) || baseT == "bool" || nexaIsFloatType(baseT)) return baseT;
         return "int";
     }
     std::string nexaTypeToCpp(const std::string& t) const {
@@ -5127,6 +5150,7 @@ private:
         if (t == "string") return "std::string";
         if (t == "bool") return "bool";
         if (t == "float") return "double";
+        if (t == "float32") return "float";
         if (t == "char") return "char";
         if (t == "unsigned char") return "unsigned char";
         if (t == "unsigned int") return "unsigned int";
@@ -5411,7 +5435,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         }
         const bool foreign = foreignText(arg);
         bool exprIsStr = (ntype == "string") || foreign;
-        bool exprIsF = (ntype == "float");
+        bool exprIsF = nexaIsFloatType(ntype);
         bool exprIsC = (ntype == "char");
         bool exprIsBoolT = (ntype == "bool");
         bool exprIsPtr = isPointerType(ntype) || ntype == "null";
@@ -5692,7 +5716,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
     // How a value of Nexa type t is formatted: "text", "int", "uint", "float", or "" (not at all).
     static std::string fmtKind(const std::string& t) {
         if (t == "string" || t == "char" || t == "bool") return "text";
-        if (t == "float") return "float";
+        if (nexaIsFloatType(t)) return "float";
         if (t == "unsigned int" || t == "unsigned short" || t == "unsigned long" ||
             t == "unsigned char" || t == "size_t") return "uint";
         if (nexaIsNumericIntType(t)) return "int";
@@ -5891,11 +5915,12 @@ static std::string __nexa_show(const std::map<K, V>& m) {
     }
 
     bool exprIsFloat(const AstNode& e, const std::map<std::string, bool>& varIsFloat) const {
-        if (e.type == AstNode::Type::ExprCast) return e.value == "float";
+        if (e.type == AstNode::Type::ExprCast) return nexaIsFloatType(e.value);
         if (e.type == AstNode::Type::ExprMember && !e.children.empty()) {
             std::string ft = fieldTypeOfMemberExpr(e);
-            return ft == "float";
+            return nexaIsFloatType(ft);
         }
+        if (e.type == AstNode::Type::ExprBits) return e.value != "bits";
         if (e.type == AstNode::Type::ExprFloatLiteral) return true;
         if (e.type == AstNode::Type::TimeNowMs) return true;
         if (e.type == AstNode::Type::MathCall) return true;
@@ -5997,7 +6022,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             out << "    return 0;\n";
         } else if (nexaType == "bool") {
             out << "    return false;\n";
-        } else if (nexaType == "float") {
+        } else if (nexaIsFloatType(nexaType)) {
             out << "    return 0.0;\n";
         } else if (nexaType == "char") {
             out << "    return '\\0';\n";
@@ -6094,7 +6119,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         for (size_t i = 0; i < node.paramNames.size(); i++) {
             const std::string& pt = canonicalParamType(node, i);
             varIsString[node.paramNames[i]] = (pt == "string");
-            varIsFloat[node.paramNames[i]] = (pt == "float");
+            varIsFloat[node.paramNames[i]] = nexaIsFloatType(pt);
             varIsChar[node.paramNames[i]] = (pt == "char");
             varIsBool[node.paramNames[i]] = (pt == "bool");
             varIsEnum[node.paramNames[i]] = isEnumDeclType(pt);
@@ -6231,7 +6256,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 };
                 varMap[child.value] = shadowed != varMap.end() ? shadowed->second : vname;
                 varIsConst[child.value] = child.isConst;
-                bool isFloat = (!child.declType.empty() && child.declType == "float") || child.initIsFloat;
+                bool isFloat = nexaIsFloatType(child.declType) || child.initIsFloat;
                 bool isChar = (!child.declType.empty() && child.declType == "char") || child.initIsChar;
                 bool isBool = (!child.declType.empty() && child.declType == "bool") || child.initIsBool;
                 varIsFloat[child.value] = isFloat;
@@ -6269,7 +6294,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                         isStr = false;
                         isChar = false;
                         varIsChar[child.value] = false;
-                    } else if (it == "float") {
+                    } else if (nexaIsFloatType(it)) {
                         isFloat = true;
                         isStr = false;
                         varIsFloat[child.value] = true;
@@ -6347,6 +6372,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                         out << indent << c << "bool " << vname << " = false;\n";
                     } else if (!child.declType.empty() && child.declType == "float") {
                         out << indent << c << "double " << vname << " = 0.0;\n";
+                    } else if (!child.declType.empty() && child.declType == "float32") {
+                        out << indent << c << "float " << vname << " = 0.0f;\n";
                     } else if (!child.declType.empty() && child.declType == "char") {
                         out << indent << c << "char " << vname << " = '\\0';\n";
                     } else if (!child.declType.empty() && isStructDeclType(child.declType)) {
@@ -6392,7 +6419,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     } else {
                         bool useBool = !child.declType.empty() ? (child.declType == "bool") : child.initIsBool;
                         bool useInt = !child.declType.empty() ? nexaIsNumericIntType(child.declType) : child.initIsInt;
-                        bool useFloat = !child.declType.empty() ? (child.declType == "float") : child.initIsFloat;
+                        bool useFloat = !child.declType.empty() ? nexaIsFloatType(child.declType) : child.initIsFloat;
+                        bool use32 = child.declType == "float32";
                         bool useChar = !child.declType.empty() ? (child.declType == "char") : child.initIsChar;
                     std::string inferredPtr;
                     std::string inferredInt;
@@ -6415,8 +6443,9 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                                 useInt = false;
                                 useFloat = false;
                                 useBool = false;
-                            } else if (it == "float") {
+                            } else if (nexaIsFloatType(it)) {
                                 useFloat = true;
+                                use32 = it == "float32";
                                 useInt = false;
                                 useChar = false;
                                 useBool = false;
@@ -6435,7 +6464,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                             out << indent << c << nexaTypeToCpp(inferredOther) << " " << vname << " = " << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
                         } else {
                             const bool asString = !useBool && !useFloat && !useChar && !useInt;
-                            std::string cppType = c + (useBool ? "bool " : useFloat ? "double " : useChar ? "char " : (useInt ? "int " : "std::string "));
+                            std::string cppType = c + (useBool ? "bool " : useFloat ? (use32 ? "float " : "double ") : useChar ? "char " : (useInt ? "int " : "std::string "));
                             std::string init = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                             // A header's const char* can be NULL, which std::string cannot take.
                             if (asString && hasForeignCode_ && semMaybeForeign(child.children[0])) init = "__nexa_text(" + init + ")";
@@ -6504,7 +6533,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     AstNode vref{AstNode::Type::ExprVarRef, child.value, {}};
                     std::string ntype = inferExprNexaType(vref);
                     bool isStr = (ntype == "string");
-                    bool isF = (ntype == "float");
+                    bool isF = nexaIsFloatType(ntype);
                     bool isC = (ntype == "char");
                     bool isNexaEnum = !ntype.empty() && ntype.size() >= 5 && ntype.compare(0, 5, "enum:") == 0;
                     if (nexaIsSliceType(ntype) || nexaIsMapType(ntype)) {
@@ -6537,7 +6566,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     AstNode vref{AstNode::Type::ExprVarRef, child.value, {}};
                     std::string ntype = inferExprNexaType(vref);
                     bool isStr = (ntype == "string");
-                    bool isF = (ntype == "float");
+                    bool isF = nexaIsFloatType(ntype);
                     bool isC = (ntype == "char");
                     bool isNexaEnum = !ntype.empty() && ntype.size() >= 5 && ntype.compare(0, 5, "enum:") == 0;
                     if (isStr) {
@@ -7058,7 +7087,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 varMap[child.value] = loopVar;
                 varIsString[child.value] = (elemT == "string");
                 varIsConst[child.value] = false;
-                varIsFloat[child.value] = (elemT == "float");
+                varIsFloat[child.value] = nexaIsFloatType(elemT);
                 varIsChar[child.value] = (elemT == "char");
                 varIsBool[child.value] = (elemT == "bool");
                 varIsEnum[child.value] = isEnumDeclType(elemT);
@@ -7090,7 +7119,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     varMap[valueName] = loopVal;
                     varIsString[valueName] = (mapValT == "string");
                     varIsConst[valueName] = false;
-                    varIsFloat[valueName] = (mapValT == "float");
+                    varIsFloat[valueName] = nexaIsFloatType(mapValT);
                     varIsChar[valueName] = (mapValT == "char");
                     varIsBool[valueName] = (mapValT == "bool");
                     varIsEnum[valueName] = isEnumDeclType(mapValT);
@@ -7746,7 +7775,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             sig += nexaTypeToCpp(nexaT) + " " + pname;
             localMap[e.paramNames[i]] = pname;
             localStr[e.paramNames[i]] = (nexaT == "string");
-            localFloat[e.paramNames[i]] = (nexaT == "float");
+            localFloat[e.paramNames[i]] = nexaIsFloatType(nexaT);
             localChar[e.paramNames[i]] = (nexaT == "char");
             localBool[e.paramNames[i]] = (nexaT == "bool");
             localEnum[e.paramNames[i]] = isEnumDeclType(nexaT);
@@ -8227,7 +8256,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                             msg = "std::string(1, static_cast<char>(" + msg + "))";
                         } else if (mt == "bool") {
                             msg = "((" + msg + ") ? std::string(\"true\") : std::string(\"false\"))";
-                        } else if (mt == "float") {
+                        } else if (nexaIsFloatType(mt)) {
                             msg = "__nexa_f2s(" + msg + ")";
                         } else {
                             msg = "std::to_string(" + msg + ")";
@@ -8683,7 +8712,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 // A time is a count of seconds; text or a truth value is a slip.
                 auto timeArg = [&](size_t i) {
                     const std::string t = inferExprNexaType(e.children[i]);
-                    if (t == "string" || t == "bool" || t == "float") {
+                    if (t == "string" || t == "bool" || nexaIsFloatType(t)) {
                         throw std::runtime_error("time." + fn + " takes a time as seconds since 1970 -- an int or "
                                                  "long, as time.unix() gives -- not a " + t + where());
                     }
@@ -8720,6 +8749,26 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 return "__nexa_thread_worker_create()";
             case AstNode::Type::ThreadMutex:
                 return "__nexa_thread_mutex()";
+            case AstNode::Type::ExprBits: {
+                // The same bits, read as the other type: memcpy, which the compiler
+                // turns into one register move -- no conversion, no rounding.
+                const std::string at = e.line ? " at line " + std::to_string(e.line) : std::string();
+                const std::string t = inferExprNexaType(e.children[0]);
+                const std::string x = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                if (e.value == "bits") {
+                    if (t == "float32") return "__nexa_bits32(" + x + ")";
+                    if (t == "float" || t.empty()) return "__nexa_bits64(" + x + ")";
+                    throw std::runtime_error("bits(x) takes a float or a float32, not " +
+                        std::string(nexaIsNumericIntType(t) || t == "unsigned int" ? "an " : "a ") + t +
+                        "; (float32)x or (float)x makes one" + at);
+                }
+                if (!t.empty() && !nexaIsNumericIntType(t)) {
+                    throw std::runtime_error(e.value + "(u) takes the bits as an unsigned int" +
+                        std::string(e.value == "from_bits64" ? " or long" : "") + ", as bits() gives them, not a " + t + at);
+                }
+                if (e.value == "from_bits32") return "__nexa_from_bits32(static_cast<unsigned int>(" + x + "))";
+                return "__nexa_from_bits64(static_cast<unsigned long long>(" + x + "))";
+            }
             case AstNode::Type::ExprVarRef: {
                 if (e.value == "self" && !methodSelfType_.empty()) return "(*this)";
                 auto it = varMap.find(e.value);
@@ -8827,6 +8876,15 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 }
                 [[fallthrough]];
             case AstNode::Type::ExprSub:
+                // -x on a float is a negation: 0 - x would turn -0.0 into +0.0. (On an
+                // integer the two are the same, and it stays 0 - x.)
+                if (e.type == AstNode::Type::ExprSub && e.children.size() == 2 &&
+                    e.children[0].type == AstNode::Type::ExprIntLiteral &&
+                    e.children[0].initValue == "unary-minus" &&
+                    nexaIsFloatType(inferExprNexaType(e.children[1]))) {
+                    return "(-" + emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
+                }
+                [[fallthrough]];
             case AstNode::Type::ExprMul:
             case AstNode::Type::ExprDiv:
             case AstNode::Type::ExprMod:
@@ -8883,6 +8941,12 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     }
                     if (fromT == "bool") return "((" + inner + ") ? 1 : 0)";
                     return "static_cast<int>(" + inner + ")";
+                }
+                if (to == "float32") {
+                    if (fromT == "string") {
+                        return "([](const std::string& __s){ char* __e=nullptr; float __v=std::strtof(__s.c_str(),&__e); return (__e==__s.c_str())?0.0f:__v; })(std::string(" + inner + "))";
+                    }
+                    return "static_cast<float>(" + inner + ")";
                 }
                 if (to == "float") {
                     if (fromT == "string") {
@@ -8946,7 +9010,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     if (fromT == "string") return "std::string(" + inner + ")";
                     if (fromT == "char" || fromT == "unsigned char") return "std::string(1, static_cast<char>(" + inner + "))";
                     if (fromT == "bool") return "((" + inner + ") ? std::string(\"true\") : std::string(\"false\"))";
-                    if (fromT == "float") return "__nexa_f2s(" + inner + ")";
+                    if (nexaIsFloatType(fromT)) return "__nexa_f2s(" + inner + ")";
                     return "std::to_string(" + inner + ")";
                 }
                 return inner;

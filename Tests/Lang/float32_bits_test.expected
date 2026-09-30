@@ -1,0 +1,10 @@
+float32 16777217 -> 16777216   float -> 16777217
+0.1000000015  vs float 0.1000000000
+3 3 3 1.5 0.5 0
+0.625 -1
+sum 6.75 [1.5, 2.25, 3]
+2.75 7 3 text 1.5
+bits(1.5 as float32) = 3fc00000   back: 1.5
+bits(1.0 as float)   = 3ff0000000000000   back: 1
+inf inf  -0 bits 80000000  nan? true
+pi as float32 3.141592741  bits 40490fdb  round trip exact: true

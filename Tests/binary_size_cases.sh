@@ -13,7 +13,8 @@
 #
 #   size       Windows and Linux: an everyday program -- strings, a slice, a map,
 #              an f-string, a Result, io.to_int, io.parse_int / parse_float /
-#              to_float, io.eprintln, time.unix / format, a thread.mutex -- is under 64KB, and prints
+#              to_float, io.eprintln, time.unix / format, a thread.mutex, float32 and
+#              bits -- is under 64KB, and prints
 #              exactly what the same program built without the slimming
 #              (NEXA_NO_SLIM=1) prints.
 #
@@ -103,6 +104,8 @@ fn main() {
     let p = io.parse_int("12x");
     if (!p.ok()) { io.eprintln(p.error(), " ", sum); }
     io.println(io.parse_float(" 2.5 ").value() + io.to_float("0.5"));
+    let half: float32 = 0.5;
+    sum += (int)(from_bits32(bits(half)) * 4.0);
     let m = thread.mutex();
     thread.lock(m);
     sum += 1;

@@ -70,7 +70,8 @@ ENTRY POINT
 
 TYPES
   int  unsigned int  short  unsigned short  long  unsigned long  size_t
-  float  bool  char  unsigned char  string
+  float  float32  bool  char  unsigned char  string
+  bits(x)  from_bits32(u)  from_bits64(u)   a float's raw bits, and back
   *T pointers   []T slices   map[K]V maps   Result[T]   structs   enums
   fn(T): Ret    a function value (closure)
 

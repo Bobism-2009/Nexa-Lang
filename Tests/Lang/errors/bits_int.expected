@@ -1,0 +1,2 @@
+bits(x) takes a float or a float32, not an int
+at line 5

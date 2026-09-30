@@ -1,0 +1,6 @@
+// from_bits32 takes bits, as bits() gives them.
+#include <std/io>
+
+fn main() {
+    let f = from_bits32("x");
+}

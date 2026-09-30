@@ -79,7 +79,7 @@ struct AstNode {
                       ExprCall,
                       ExprStructLit,
                       ExprStringLiteral,
-                      ExprLen,
+                      ExprLen, ExprBits,
                       ExprTrim,
                       AssnIndex,
                       AssnDeref,
@@ -135,6 +135,21 @@ inline bool nexaIsIntegerType(const std::string& t) {
 
 inline bool nexaIsNumericIntType(const std::string& t) {
     return nexaIsIntegerType(t) && t != "char";
+}
+
+// float is 64-bit (a C double); float32 is a real 32-bit float (a C float).
+// Everything that asks "is this a floating-point value" asks this.
+inline bool nexaIsFloatType(const std::string& t) {
+    return t == "float" || t == "float32";
+}
+
+// The float type of an arithmetic mix, as C has it: a float (64-bit) anywhere
+// makes a float; otherwise a float32 makes a float32. "" when neither side is
+// a float, and the integer rules decide.
+inline std::string nexaFloatMix(const std::string& a, const std::string& b) {
+    if (a == "float" || b == "float") return "float";
+    if (a == "float32" || b == "float32") return "float32";
+    return "";
 }
 
 // Conversion rank of an integer type, ordered so that the higher-ranked operand of a binary
@@ -570,6 +585,7 @@ private:
         if (v == "string") return "string";
         if (v == "bool") return "bool";
         if (v == "float") return "float";
+        if (v == "float32") return "float32";
         if (v == "char") return "char";
         if (v == "void") return "void";
         if (v == "Json" || v == "json") {
@@ -631,7 +647,7 @@ private:
         if (p + 1 < tokens_.size() && tokens_[p + 1].type == TokenType::ColonColon) return true;
         const std::string& v = t.value;
         if (v == "int" || v == "short" || v == "long" || v == "size_t" ||
-            v == "float" || v == "char" || v == "bool" || v == "string" ||
+            v == "float" || v == "float32" || v == "char" || v == "bool" || v == "string" ||
             v == "void" || v == "unsigned" || v == "map" || v == "Json" || v == "json" ||
             v == "Result" || v == "result") {
             return true;
@@ -2682,7 +2698,7 @@ private:
             if (t1.type == TokenType::Identifier && t2.type == TokenType::RParen) {
                 const std::string& tn = t1.value;
                 if (tn == "int" || tn == "short" || tn == "long" || tn == "size_t" ||
-                    tn == "float" || tn == "char" || tn == "bool" || tn == "string") {
+                    tn == "float" || tn == "float32" || tn == "char" || tn == "bool" || tn == "string") {
                     advance();  // (
                     advance();  // type
                     advance();  // )
@@ -2709,6 +2725,9 @@ private:
         if (match(TokenType::Minus)) {
             AstNode inner = parseUnary();
             AstNode zero{AstNode::Type::ExprIntLiteral, "0", {}};
+            // Marked, so -x is emitted as a negation rather than 0 - x: the same for
+            // integers, but for a float 0 - 0.0 is +0.0 where -0.0 is -0.0.
+            zero.initValue = "unary-minus";
             return {AstNode::Type::ExprSub, "", {std::move(zero), std::move(inner)}};
         }
         if (match(TokenType::Not)) {
@@ -2994,6 +3013,27 @@ private:
         if (peek().type == TokenType::Identifier && peek().value == "trim" && pos_ + 1 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::LParen) {
             return applyIndexAndDotPostfix(parseTrimExpr());
+        }
+        // bits(x): a float's raw bits as an unsigned int (float32) or unsigned long
+        // (float); from_bits32(u) / from_bits64(u) turn them back.
+        if (peek().type == TokenType::Identifier &&
+            (peek().value == "bits" || peek().value == "from_bits32" || peek().value == "from_bits64") &&
+            pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::LParen) {
+            const std::string name = peek().value;
+            const size_t line = peek().line;
+            advance();
+            advance();
+            if (peek().type == TokenType::RParen) {
+                throw std::runtime_error(name + "(" + (name == "bits" ? "x" : "u") + ") takes one value at line " +
+                                         std::to_string(line));
+            }
+            AstNode arg = parseValueExpr();
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error(name + "(...) takes one value at line " + std::to_string(line));
+            }
+            AstNode n{AstNode::Type::ExprBits, name, {std::move(arg)}};
+            n.line = line;
+            return applyIndexAndDotPostfix(std::move(n));
         }
         if (looksLikeQualifiedFnCall() ||
             (peek().type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
@@ -5455,7 +5495,7 @@ private:
                     throw std::runtime_error("Expected ']' after array size at line " + std::to_string(peek().line));
                 }
                 isFixedArray = true;
-                if (declType == "string" || declType == "bool" || declType == "float" ||
+                if (declType == "string" || declType == "bool" || nexaIsFloatType(declType) ||
                     (declType.size() >= 5 && declType.compare(0, 5, "enum:") == 0) ||
                     (!declType.empty() && declType[0] == '*') ||
                     declType == "void") {
@@ -5475,7 +5515,7 @@ private:
             node.declType = declType;
             node.initIsInt = nexaIsNumericIntType(declType);
             node.initIsBool = (declType == "bool");
-            node.initIsFloat = (declType == "float");
+            node.initIsFloat = nexaIsFloatType(declType);
             node.initIsChar = (declType == "char");
             node.isFixedArray = isFixedArray;
             node.arraySize = arraySize;
@@ -5596,7 +5636,7 @@ private:
             node.declType = declType;
             node.initIsInt = nexaIsNumericIntType(declType);
             node.initIsBool = (declType == "bool");
-            node.initIsFloat = (declType == "float");
+            node.initIsFloat = nexaIsFloatType(declType);
             node.initIsChar = (declType == "char");
             if (declType.size() >= 7 && declType.compare(0, 7, "struct:") == 0) {
                 node.initIsInt = false;

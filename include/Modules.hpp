@@ -117,6 +117,7 @@ public:
         bool thread = false;
         bool threadLambda = false;
         bool threadMutex = false;   // thread.mutex / lock / unlock
+        bool bits = false;          // bits / from_bits32 / from_bits64
         bool threadWorker = false;
         bool dll = false;
         bool exceptions = false;
@@ -2138,6 +2139,14 @@ static std::string __nexa_time_format(const std::string& pat, long long t, bool 
             out += "  return (double)__ts.tv_sec * 1000.0 + (double)__ts.tv_nsec / 1000000.0;\n";
             out += "#endif\n";
             out += "}\n";
+        }
+        if (usage.bits) {
+            out += R"NEXA_BITS(#include <cstring>
+[[maybe_unused]] static unsigned int __nexa_bits32(float f) { unsigned int u; std::memcpy(&u, &f, 4); return u; }
+[[maybe_unused]] static unsigned long long __nexa_bits64(double d) { unsigned long long u; std::memcpy(&u, &d, 8); return u; }
+[[maybe_unused]] static float __nexa_from_bits32(unsigned int u) { float f; std::memcpy(&f, &u, 4); return f; }
+[[maybe_unused]] static double __nexa_from_bits64(unsigned long long u) { double d; std::memcpy(&d, &u, 8); return d; }
+)NEXA_BITS";
         }
         if (hasThread() && usage.threadMutex) {
             // thread.mutex(): the OS's own lock, recursive -- a thread that holds it

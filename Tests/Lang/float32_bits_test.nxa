@@ -1,0 +1,47 @@
+// float32: a real 32-bit float, beside float (64-bit). Its storage, the mixing
+// rules, casts, lists, fields, parameters, and bits / from_bits32 / from_bits64,
+// which read a float's raw bits and back -- negative zero included.
+#include <std/io>
+
+struct Vec2 {
+    x: float32;
+    y: float32;
+}
+
+let gscale: float32 = 0.5;
+let gcount: float32;
+
+fn scale(v: Vec2, s: float32): Vec2 {
+    return Vec2 { x: v.x * s, y: v.y * s };
+}
+
+fn half(f: float32): float32 {
+    return f / 2.0;
+}
+
+fn main() {
+    let big: float32 = 16777217.0;
+    let d = 16777217.0;
+    io.println("float32 16777217 -> ", (long)big, "   float -> ", (long)d);
+    let tenth: float32 = 0.1;
+    io.println(f"{tenth:.10}  vs float {0.1:.10}");
+    let a: float32 = 1.5;
+    let b = a * 2;            // float32 * int stays float32
+    let c = a * 2.0;          // with a float literal it is a float, as in C
+    let e: float32 = a * 2.0; // declared: back to 32 bits
+    io.println(b, " ", c, " ", e, " ", half(3.0), " ", gscale, " ", gcount);
+    let v = scale(Vec2 { x: 1.25, y: -2.0 }, gscale);
+    io.println(v.x, " ", v.y);
+    let xs: []float32 = [1.5, 2.25, 3.0];
+    let sum: float32 = 0.0;
+    for (x in xs) { sum = sum + x; }
+    io.println("sum ", sum, " ", xs);
+    io.println((float32)"2.75", " ", (float32)7, " ", (int)(float32)3.9, " ", "text " + a);
+
+    let u = bits(a);
+    io.println(f"bits(1.5 as float32) = {u:x}   back: {from_bits32(u)}");
+    io.println(f"bits(1.0 as float)   = {bits(1.0):x}   back: {from_bits64(bits(1.0))}");
+    io.println(f"inf {from_bits32(2139095040)}  -0 bits {bits((float32)-0.0):x}  nan? {from_bits32(2143289344) != from_bits32(2143289344)}");
+    let pi: float32 = 3.14159265;
+    io.println(f"pi as float32 {pi:.9}  bits {bits(pi):x}  round trip exact: {from_bits32(bits(pi)) == pi}");
+}
