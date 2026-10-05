@@ -1,0 +1,60 @@
+// gfx.pads / pad / pad_pressed / pad_axis on Linux, against a joystick the test
+// makes itself: a file of the kernel's joystick events (8 bytes each: 4 of time,
+// the value as a little-endian short, the kind -- 1 button, 2 axis, +0x80 for the
+// state reported as the device opens -- and the number). Tests/gfx_pad_cases.sh
+// builds this with the device path pointed at _nexa_pad/js%d, so what runs is
+// the reader a real pad gets. No window: a gamepad is not the window's.
+#include <std/io>
+#include <std/gfx>
+#include <std/file>
+
+fn show(tag: string) {
+    let names = ["a", "b", "x", "y", "lb", "rb", "back", "start", "ls", "rs", "up", "down", "left", "right", "lt", "rt"];
+    let down: string = "";
+    let edge: string = "";
+    for (n in names) {
+        if (gfx.pad(0, n) == 1) { down = down + n + " "; }
+        if (gfx.pad_pressed(0, n) == 1) { edge = edge + n + " "; }
+    }
+    io.println(tag, ": pads=", gfx.pads(), " down=[", down.trim(), "] pressed=[", edge.trim(), "]");
+}
+
+fn main() {
+    file.remove_all("_nexa_pad");
+    io.println("none: pads=", gfx.pads(), " a=", gfx.pad(0, "a"), " lx=", gfx.pad_axis(0, "lx"));
+    file.mkdir("_nexa_pad");
+    let t = "\x00\x00\x00\x00";
+    // as it opens: A, Y, start, the guide button (which has no name), the left
+    // stick's click; left stick hard right and half way up; right stick hard left
+    // and barely down; left trigger pulled, right a quarter; d-pad left
+    let opening = t + "\x01\x00\x81\x00" + t + "\x01\x00\x81\x03" + t + "\x01\x00\x81\x07"
+                + t + "\x01\x00\x81\x08" + t + "\x01\x00\x81\x09"
+                + t + "\xff\x7f\x82\x00" + t + "\x00\xc0\x82\x01"
+                + t + "\x01\x80\x82\x03" + t + "\xb8\x0b\x82\x04"
+                + t + "\xff\x7f\x82\x02" + t + "\x00\xc0\x82\x05"
+                + t + "\x01\x80\x82\x06" + t + "\x00\x00\x82\x07";
+    file.write("_nexa_pad/js1", opening);
+
+    // a pad that is not there is looked for again about once a second of frames
+    let waited = 0;
+    while (gfx.pads() == 0 && waited < 200) { gfx.poll(); waited++; }
+    io.println("found=", gfx.pads(), " within_a_second_of_frames=", waited > 0 && waited <= 61);
+    show("opened");
+    io.println("lx=", gfx.pad_axis(0, "lx"), " ly=", gfx.pad_axis(0, "ly"), " rx=", gfx.pad_axis(0, "rx"),
+               " ry=", gfx.pad_axis(0, "ry"), " lt=", gfx.pad_axis(0, "lt"), " rt=", gfx.pad_axis(0, "rt"));
+
+    gfx.poll();
+    show("still");
+    file.append("_nexa_pad/js1", t + "\x01\x00\x01\x01");                  // B down
+    gfx.poll();
+    show("b down");
+    gfx.poll();
+    show("b held");
+    file.append("_nexa_pad/js1", t + "\x00\x00\x01\x01" + t + "\x00\x00\x01\x00"   // B up, A up
+                               + t + "\xff\x7f\x02\x07" + t + "\x00\x00\x02\x06");  // d-pad down, not left
+    gfx.poll();
+    show("b and a up, dpad down");
+    io.println("other names: ", gfx.pad(0, "Triangle"), gfx.pad(0, "L2"), gfx.pad(0, "dpad_down"), gfx.pad(0, "options"),
+               " unknown: ", gfx.pad(0, "turbo"), gfx.pad_axis(0, "zz"), " no such pad: ", gfx.pad(1, "y"), gfx.pad(-1, "y"));
+    file.remove_all("_nexa_pad");
+}

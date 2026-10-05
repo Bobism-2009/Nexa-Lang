@@ -1,0 +1,2 @@
+gfx.pad(index, button) expects a number for index, but got text
+at line 6

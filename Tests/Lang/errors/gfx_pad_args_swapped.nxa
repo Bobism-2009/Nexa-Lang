@@ -1,0 +1,7 @@
+// gfx.pad takes which pad first, then the button.
+#include <std/io>
+#include <std/gfx>
+
+fn main() {
+    let down = gfx.pad("a", 0);
+}

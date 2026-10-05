@@ -104,6 +104,7 @@ struct GfxNeed {
     bool keyEdge = false;        // pressed, released -- the two snapshots and their table
     bool typed = false;          // typed
     bool wheel = false;          // wheel, wheel_x
+    bool pad = false;            // pads, pad, pad_pressed, pad_axis -- gamepads
     bool imageStore = false;     // the loaded-image table: image_w, image_h, blit
     bool imageLoad = false;      // image, decode -- the decoder and the file read
     bool upload = false;         // gfx.upload -- an image from the program's own pixels
@@ -1048,6 +1049,7 @@ static void __nexa_gfx_mouse_apply(int x, int y, int inside, int left, int middl
 }
 )NEXA_GFX";
     if (need.keyEdge) out += "\nstatic void __nexa_gfx_key_snapshot();\n";
+    if (need.pad) out += "\nstatic void __nexa_gfx_pad_frame();\n";
     // Focus is the one thing every input family asks about, and nothing else
     // does: what arrived while the window was not the user's is dropped rather
     // than queued up to land in the program's lap when it comes back.
@@ -2753,7 +2755,11 @@ static void __nexa_gfx_poll() {
     // the window, so a program that plays a sound without opening one still
     // gets its mixer topped up by the poll loop.
     __nexa_gfx_mix_pump();
-    if (!__nexa_g.ready) return;
+)NEXA_GFX";
+    // Ahead of the window check for the same reason: a gamepad is not the
+    // window's either.
+    if (need.pad) out += "    __nexa_gfx_pad_frame();\n";
+    out += R"NEXA_GFX(    if (!__nexa_g.ready) return;
 #ifdef _WIN32
     MSG msg;
     while (PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -4485,6 +4491,277 @@ static int __nexa_gfx_wheel() {
 static int __nexa_gfx_wheel_x() {
     if (!__nexa_g.ready) return 0;
     return __nexa_g.wheel_x;
+}
+)NEXA_GFX";
+    // Gamepads. Up to four, read without a window and without linking anything:
+    // Windows asks XInput, loaded when first wanted; Linux reads the kernel's
+    // joystick devices; the browser its Gamepad API. Each is turned into the
+    // same sixteen buttons and six axes, in the Xbox layout all three speak.
+    // macOS has no reader here yet and reports no pads.
+    //
+    // gfx.poll() samples them, and that is the frame gfx.pad_pressed measures
+    // against, as gfx.pressed does for keys. A program that never polls still
+    // gets live answers: each read samples for itself.
+    if (need.pad) out += R"NEXA_GFX(
+struct __nexa_GfxPad {
+    int on;              // connected
+    unsigned now, prev;  // one bit a button, this sample and the one before
+    double ax[6];        // lx ly rx ry lt rt
+    int wait;            // samples to skip before looking for it again
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__) && !defined(__APPLE__)
+    int fd;
+    unsigned raw_btn;
+    int raw_ax[8];
+#endif
+};
+static __nexa_GfxPad __nexa_pads[4];
+static int __nexa_pad_polled = 0;
+static int __nexa_pad_init = 0;
+
+// A stick at rest is never exactly 0. Below the dead zone it is; above it the
+// range is stretched back out, so there is no jump at the edge.
+static double __nexa_gfx_pad_stick(double v) {
+    const double dz = 0.15;
+    if (v > 1.0) v = 1.0;
+    if (v < -1.0) v = -1.0;
+    if (v > -dz && v < dz) return 0.0;
+    return v > 0 ? (v - dz) / (1.0 - dz) : (v + dz) / (1.0 - dz);
+}
+
+// Bits: 0 a, 1 b, 2 x, 3 y, 4 lb, 5 rb, 6 back, 7 start, 8 ls, 9 rs,
+//       10 up, 11 down, 12 left, 13 right, 14 lt, 15 rt (a trigger past half way)
+static void __nexa_gfx_pad_set(__nexa_GfxPad& p, unsigned btn, double lx, double ly, double rx, double ry,
+                               double lt, double rt) {
+    p.on = 1;
+    p.ax[0] = __nexa_gfx_pad_stick(lx);
+    p.ax[1] = __nexa_gfx_pad_stick(ly);
+    p.ax[2] = __nexa_gfx_pad_stick(rx);
+    p.ax[3] = __nexa_gfx_pad_stick(ry);
+    p.ax[4] = lt < 0 ? 0 : (lt > 1 ? 1 : lt);
+    p.ax[5] = rt < 0 ? 0 : (rt > 1 ? 1 : rt);
+    if (p.ax[4] > 0.5) btn |= 1u << 14;
+    if (p.ax[5] > 0.5) btn |= 1u << 15;
+    p.now = btn;
+}
+
+static void __nexa_gfx_pad_off(__nexa_GfxPad& p) {
+    p.on = 0;
+    p.now = 0;
+    for (int k = 0; k < 6; k++) p.ax[k] = 0.0;
+    p.wait = 60;  // about a second of frames: asking for a pad that is not there is slow
+}
+
+#ifdef _WIN32
+struct __nexa_XInputState {
+    DWORD packet;
+    WORD buttons;
+    BYTE lt, rt;
+    SHORT lx, ly, rx, ry;
+};
+typedef DWORD (WINAPI *__nexa_XInputGetState)(DWORD, __nexa_XInputState*);
+static __nexa_XInputGetState __nexa_xinput_get = nullptr;
+
+static void __nexa_gfx_pad_sample() {
+    if (!__nexa_pad_init) {
+        __nexa_pad_init = 1;
+        // 1_4 is Windows 8 and later; 9_1_0 is in every Windows; 1_3 came with DirectX.
+        const char* const dlls[] = { "xinput1_4.dll", "xinput9_1_0.dll", "xinput1_3.dll" };
+        for (int i = 0; i < 3 && !__nexa_xinput_get; i++) {
+            HMODULE h = LoadLibraryA(dlls[i]);
+            if (h) __nexa_xinput_get = (__nexa_XInputGetState)(void*)GetProcAddress(h, "XInputGetState");
+        }
+    }
+    if (!__nexa_xinput_get) return;
+    for (int i = 0; i < 4; i++) {
+        __nexa_GfxPad& p = __nexa_pads[i];
+        if (!p.on && p.wait > 0) { p.wait--; continue; }
+        __nexa_XInputState s;
+        std::memset(&s, 0, sizeof(s));
+        if (__nexa_xinput_get((DWORD)i, &s) != 0) { __nexa_gfx_pad_off(p); continue; }
+        const unsigned w = s.buttons;
+        unsigned b = 0;
+        if (w & 0x1000) b |= 1u << 0;
+        if (w & 0x2000) b |= 1u << 1;
+        if (w & 0x4000) b |= 1u << 2;
+        if (w & 0x8000) b |= 1u << 3;
+        if (w & 0x0100) b |= 1u << 4;
+        if (w & 0x0200) b |= 1u << 5;
+        if (w & 0x0020) b |= 1u << 6;
+        if (w & 0x0010) b |= 1u << 7;
+        if (w & 0x0040) b |= 1u << 8;
+        if (w & 0x0080) b |= 1u << 9;
+        if (w & 0x0001) b |= 1u << 10;
+        if (w & 0x0002) b |= 1u << 11;
+        if (w & 0x0004) b |= 1u << 12;
+        if (w & 0x0008) b |= 1u << 13;
+        // XInput's y points up; the screen's, and every other reader's, points down.
+        __nexa_gfx_pad_set(p, b, s.lx / 32767.0, -(s.ly / 32767.0), s.rx / 32767.0, -(s.ry / 32767.0),
+                           s.lt / 255.0, s.rt / 255.0);
+    }
+}
+#elif defined(__EMSCRIPTEN__)
+static void __nexa_gfx_pad_sample() {
+    // A page sees a gamepad only after a button on it has been pressed there.
+    if (emscripten_sample_gamepad_data() != EMSCRIPTEN_RESULT_SUCCESS) return;
+    const int n = emscripten_get_num_gamepads();
+    for (int i = 0; i < 4; i++) {
+        __nexa_GfxPad& p = __nexa_pads[i];
+        EmscriptenGamepadEvent s;
+        if (i >= n || emscripten_get_gamepad_status(i, &s) != EMSCRIPTEN_RESULT_SUCCESS || !s.connected) {
+            p.on = 0;
+            p.now = 0;
+            for (int k = 0; k < 6; k++) p.ax[k] = 0.0;
+            continue;
+        }
+        // The "standard" mapping: 0-3 a b x y, 4 5 bumpers, 6 7 triggers, 8 back,
+        // 9 start, 10 11 sticks, 12-15 up down left right.
+        static const int at[14] = { 0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15 };
+        unsigned b = 0;
+        for (int k = 0; k < 14; k++) {
+            if (at[k] < s.numButtons && s.digitalButton[at[k]]) b |= 1u << k;
+        }
+        __nexa_gfx_pad_set(p, b, s.numAxes > 0 ? s.axis[0] : 0, s.numAxes > 1 ? s.axis[1] : 0,
+                           s.numAxes > 2 ? s.axis[2] : 0, s.numAxes > 3 ? s.axis[3] : 0,
+                           s.numButtons > 6 ? s.analogButton[6] : 0, s.numButtons > 7 ? s.analogButton[7] : 0);
+    }
+}
+#elif defined(__APPLE__)
+static void __nexa_gfx_pad_sample() {}
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
+#ifndef NEXA_GFX_PAD_PATH
+#define NEXA_GFX_PAD_PATH "/dev/input/js%d"
+#endif
+// The kernel's joystick interface, the one device node a program may read
+// without being in the input group. It hands over changes -- which button, which
+// axis, the new value -- starting with one for everything as the device opens.
+// Buttons and axes come numbered in the order the xpad driver gives them.
+static void __nexa_gfx_pad_sample() {
+    if (!__nexa_pad_init) {
+        __nexa_pad_init = 1;
+        for (int i = 0; i < 4; i++) __nexa_pads[i].fd = -1;
+    }
+    for (int i = 0; i < 4; i++) {
+        __nexa_GfxPad& p = __nexa_pads[i];
+        if (p.fd < 0) {
+            if (p.wait > 0) { p.wait--; continue; }
+            char path[64];
+            std::snprintf(path, sizeof(path), NEXA_GFX_PAD_PATH, i);
+            p.fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+            if (p.fd < 0) { __nexa_gfx_pad_off(p); continue; }
+            p.raw_btn = 0;
+            for (int k = 0; k < 8; k++) p.raw_ax[k] = 0;
+            // A trigger rests at the bottom of its range, not the middle.
+            p.raw_ax[2] = -32767;
+            p.raw_ax[5] = -32767;
+        }
+        struct { unsigned int time; short value; unsigned char type, number; } ev;
+        bool gone = false;
+        for (;;) {
+            const ssize_t got = read(p.fd, &ev, sizeof(ev));
+            if (got == (ssize_t)sizeof(ev)) {
+                const int kind = ev.type & 0x7f;  // 0x80 marks the opening state
+                if (kind == 1 && ev.number < 32) {
+                    if (ev.value) p.raw_btn |= 1u << ev.number; else p.raw_btn &= ~(1u << ev.number);
+                } else if (kind == 2 && ev.number < 8) {
+                    p.raw_ax[ev.number] = ev.value;
+                }
+                continue;
+            }
+            if (got < 0 && (errno == EAGAIN || errno == EINTR)) break;
+            if (got == 0) break;   // a plain file at its end: nothing more for now
+            gone = true;           // unplugged
+            break;
+        }
+        if (gone) {
+            close(p.fd);
+            p.fd = -1;
+            __nexa_gfx_pad_off(p);
+            continue;
+        }
+        // xpad: buttons a b x y lb rb back start (guide) ls rs; axes lx ly lt rx ry rt hat-x hat-y
+        static const int at[10] = { 0, 1, 2, 3, 4, 5, 6, 7, 9, 10 };
+        unsigned b = 0;
+        for (int k = 0; k < 10; k++) {
+            if (p.raw_btn & (1u << at[k])) b |= 1u << k;
+        }
+        if (p.raw_ax[7] < -16000) b |= 1u << 10;
+        if (p.raw_ax[7] > 16000) b |= 1u << 11;
+        if (p.raw_ax[6] < -16000) b |= 1u << 12;
+        if (p.raw_ax[6] > 16000) b |= 1u << 13;
+        __nexa_gfx_pad_set(p, b, p.raw_ax[0] / 32767.0, p.raw_ax[1] / 32767.0, p.raw_ax[3] / 32767.0,
+                           p.raw_ax[4] / 32767.0, (p.raw_ax[2] + 32767) / 65534.0, (p.raw_ax[5] + 32767) / 65534.0);
+    }
+}
+#endif
+
+static void __nexa_gfx_pad_frame() {
+    __nexa_pad_polled = 1;
+    for (int i = 0; i < 4; i++) __nexa_pads[i].prev = __nexa_pads[i].now;
+    __nexa_gfx_pad_sample();
+}
+
+// The i-th connected pad, counting from 0: a pad in the second slot with the
+// first one empty is still pad 0.
+static __nexa_GfxPad* __nexa_gfx_pad_at(int i) {
+    if (!__nexa_pad_polled) __nexa_gfx_pad_sample();
+    if (i < 0) return nullptr;
+    for (int k = 0; k < 4; k++) {
+        if (__nexa_pads[k].on && i-- == 0) return &__nexa_pads[k];
+    }
+    return nullptr;
+}
+
+static int __nexa_gfx_pads() {
+    if (!__nexa_pad_polled) __nexa_gfx_pad_sample();
+    int n = 0;
+    for (int k = 0; k < 4; k++) n += __nexa_pads[k].on ? 1 : 0;
+    return n;
+}
+
+static int __nexa_gfx_pad_name(const std::string& name, const char* const* names, int count) {
+    std::string s = name;
+    for (char& c : s) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    for (int i = 0; i < count; i++) {
+        if (s == names[i]) return i;
+    }
+    return -1;
+}
+
+static int __nexa_gfx_pad_bit(const std::string& name) {
+    static const char* const names[] = {
+        "a", "b", "x", "y", "lb", "rb", "back", "start", "ls", "rs", "up", "down", "left", "right", "lt", "rt",
+        // the same sixteen, as other pads print them
+        "cross", "circle", "square", "triangle", "l1", "r1", "select", "options", "l3", "r3",
+        "dpad_up", "dpad_down", "dpad_left", "dpad_right", "l2", "r2"
+    };
+    const int at = __nexa_gfx_pad_name(name, names, 32);
+    return at < 0 ? -1 : at % 16;
+}
+
+static int __nexa_gfx_pad(int i, const std::string& name) {
+    const __nexa_GfxPad* p = __nexa_gfx_pad_at(i);
+    const int bit = __nexa_gfx_pad_bit(name);
+    if (!p || bit < 0) return 0;
+    return (p->now >> bit) & 1u;
+}
+
+static int __nexa_gfx_pad_pressed(int i, const std::string& name) {
+    const __nexa_GfxPad* p = __nexa_gfx_pad_at(i);
+    const int bit = __nexa_gfx_pad_bit(name);
+    // An edge is between two polls; before the first there is nothing to compare.
+    if (!p || bit < 0 || !__nexa_pad_polled) return 0;
+    return ((p->now & ~p->prev) >> bit) & 1u;
+}
+
+static double __nexa_gfx_pad_axis(int i, const std::string& name) {
+    static const char* const names[] = { "lx", "ly", "rx", "ry", "lt", "rt", "", "", "", "", "l2", "r2" };
+    const __nexa_GfxPad* p = __nexa_gfx_pad_at(i);
+    const int at = __nexa_gfx_pad_name(name, names, 12);
+    if (!p || at < 0 || (at > 5 && at < 10)) return 0.0;
+    return p->ax[at > 5 ? at - 6 : at];
 }
 )NEXA_GFX";
     if (need.typed) out += R"NEXA_GFX(

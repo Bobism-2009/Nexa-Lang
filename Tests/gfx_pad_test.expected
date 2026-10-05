@@ -1,0 +1,9 @@
+none: pads=0 a=0 lx=0
+found=1 within_a_second_of_frames=true
+opened: pads=1 down=[a y start ls left lt] pressed=[a y start ls left lt]
+lx=1 ly=-0.411783 rx=-1 ry=0 lt=1 rt=0.249992
+still: pads=1 down=[a y start ls left lt] pressed=[]
+b down: pads=1 down=[a b y start ls left lt] pressed=[b]
+b held: pads=1 down=[a b y start ls left lt] pressed=[]
+b and a up, dpad down: pads=1 down=[y start ls down lt] pressed=[down]
+other names: 1111 unknown: 00 no such pad: 00

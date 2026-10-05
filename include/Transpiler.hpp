@@ -3006,7 +3006,9 @@ private:
                 if (e.value == "title") return e.children.empty() ? "string" : "int";
                 if (e.value == "drop" || e.value == "opendialog" || e.value == "openfile"
                     || e.value == "typed") return "string";
+                if (e.value == "pad_axis") return "float";
                 if (e.value == "closed" || e.value == "key" || e.value == "pressed"
+                    || e.value == "pads" || e.value == "pad" || e.value == "pad_pressed"
                     || e.value == "released" || e.value == "wheel" || e.value == "wheel_x"
                     || e.value == "open" || e.value == "resize"
                     || e.value == "mouse_x" || e.value == "mouse_y" || e.value == "mouse"
@@ -4502,6 +4504,9 @@ private:
             {"pressed",         "gfx.pressed(name)",                               "t"},
             {"released",        "gfx.released(name)",                              "t"},
             {"mouse",           "gfx.mouse(name)",                                 "t"},
+            {"pad",             "gfx.pad(index, button)",                          "nt"},
+            {"pad_pressed",     "gfx.pad_pressed(index, button)",                  "nt"},
+            {"pad_axis",        "gfx.pad_axis(index, axis)",                       "nt"},
             {"clear",           "gfx.clear(r, g, b)",                              "nnn"},
             {"plot",            "gfx.plot(x, y, r, g, b)",                         "nnnnn"},
             {"get",             "gfx.get(x, y)",                                   "nn"},
@@ -6001,6 +6006,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         if (e.type == AstNode::Type::TimeNowMs) return true;
         if (e.type == AstNode::Type::MathCall) return true;
         if (e.type == AstNode::Type::RandomCall) return e.value == "float";
+        if (e.type == AstNode::Type::GfxCall) return e.value == "pad_axis";
         if (e.type == AstNode::Type::ExprVarRef) {
             auto it = varIsFloat.find(e.value);
             return it != varIsFloat.end() && it->second;
@@ -8577,6 +8583,10 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (fn == "key") return "__nexa_gfx_key(" + a(0) + ")";
                 if (fn == "pressed") return "__nexa_gfx_pressed(" + a(0) + ")";
                 if (fn == "released") return "__nexa_gfx_released(" + a(0) + ")";
+                if (fn == "pads") return "__nexa_gfx_pads()";
+                if (fn == "pad") return "__nexa_gfx_pad(" + a(0) + ", " + a(1) + ")";
+                if (fn == "pad_pressed") return "__nexa_gfx_pad_pressed(" + a(0) + ", " + a(1) + ")";
+                if (fn == "pad_axis") return "__nexa_gfx_pad_axis(" + a(0) + ", " + a(1) + ")";
                 if (fn == "wheel") return "__nexa_gfx_wheel()";
                 if (fn == "wheel_x") return "__nexa_gfx_wheel_x()";
                 if (fn == "typed") return "__nexa_gfx_typed()";
@@ -9482,6 +9492,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             cppUsage.gfxTyped = true;
         } else if (fn == "wheel" || fn == "wheel_x") {
             cppUsage.gfxWheel = true;
+        } else if (fn == "pads" || fn == "pad" || fn == "pad_pressed" || fn == "pad_axis") {
+            cppUsage.gfxPad = true;
         } else if (fn == "image" || fn == "decode") {
             cppUsage.gfxImage = true;
         } else if (fn == "blit") {

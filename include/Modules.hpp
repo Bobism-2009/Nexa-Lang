@@ -158,6 +158,7 @@ public:
         bool gfxKeyEdge = false;
         bool gfxTyped = false;
         bool gfxWheel = false;
+        bool gfxPad = false;         // gfx.pads, pad, pad_pressed, pad_axis
         bool gfxImageStore = false;
         bool gfxUpload = false;     // gfx.upload: an image from the program's own pixels
         bool gfxBlit = false;
@@ -1990,6 +1991,7 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
             need.keyEdge = usage.gfxKeyEdge;
             need.typed = usage.gfxTyped;
             need.wheel = usage.gfxWheel;
+            need.pad = usage.gfxPad;
             need.imageStore = usage.gfxImageStore;
             need.imageLoad = usage.gfxImage;
             need.blit = usage.gfxBlit;

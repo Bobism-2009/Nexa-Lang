@@ -1038,6 +1038,38 @@ ARGUMENT TYPES
                                    wasm: document.hasFocus()). Input that arrives while the
                                    window is not focused is dropped, not saved up to arrive
                                    the moment it is.
+  gfx.pads()                     - how many gamepads are connected, 0 to 4
+  gfx.pad(i, button)             - 1 if that button of gamepad i is down. i counts the
+                                   connected pads from 0. Buttons, in the Xbox layout:
+                                   "a" "b" "x" "y", "lb" "rb" (bumpers), "lt" "rt" (a
+                                   trigger pulled past half way), "back" "start", "ls"
+                                   "rs" (a stick pressed in), "up" "down" "left" "right"
+                                   (the d-pad). The same sixteen under their other names:
+                                   "cross" "circle" "square" "triangle", "l1" "r1",
+                                   "l2" "r2", "select" "options", "l3" "r3", "dpad_up" ...
+                                   Case-insensitive; an unknown name, or a pad that is
+                                   not there, is 0.
+  gfx.pad_pressed(i, button)     - 1 if it went down since the last gfx.poll() -- once
+                                   per press, as gfx.pressed is for a key. 0 before the
+                                   first gfx.poll().
+  gfx.pad_axis(i, axis)          - a float: "lx" "ly" "rx" "ry" are the sticks, -1 to 1,
+                                   with y pointing down like the screen's (up is
+                                   negative); "lt" "rt" are the triggers, 0 to 1. A stick
+                                   at rest reads exactly 0: the middle 15% is a dead
+                                   zone, and the rest is stretched to keep the full range.
+                                   Gamepads need no window, and are read whether or not
+                                   the window is focused. gfx.poll() takes the reading
+                                   the calls answer from; a program that never polls
+                                   gets a fresh one on each call.
+                                   Windows: XInput, loaded when first needed, so nothing
+                                   is linked and a machine without it has no pads.
+                                   Linux: the kernel's joystick devices (/dev/input/js0..3),
+                                   in the layout its xpad driver gives an Xbox pad; another
+                                   make's buttons can land under other names.
+                                   wasm: the browser's Gamepad API, "standard" mapping; a
+                                   page is shown a pad only after a button on it is pressed.
+                                   macOS: not read yet -- gfx.pads() is 0.
+                                   A program that calls none of these carries none of it.
   gfx.drop()                     - path of a file dropped on the window (consumes; empty if none)
   gfx.opendialog([filter])       - native file picker; filter like "*.ch8;*.hex" (empty if cancelled)
                                    alias: gfx.openfile([filter])

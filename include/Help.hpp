@@ -582,6 +582,8 @@ or an Emscripten canvas; no extra library to install on any of them.
   input     gfx.key(name)  gfx.pressed(name)  gfx.released(name)
             gfx.typed()    gfx.wheel()        gfx.wheel_x()
             gfx.mouse(button)  gfx.mouse_x()  gfx.mouse_y()
+            gfx.pads()  gfx.pad(i, button)  gfx.pad_pressed(i, button)
+            gfx.pad_axis(i, axis)                 gamepads; no window needed
             gfx.drop()     gfx.opendialog([filter]) / gfx.openfile(...)
 
   fn main() {
