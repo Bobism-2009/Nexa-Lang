@@ -251,7 +251,8 @@ struct Library {
     std::vector<std::string> files;   // relative to root, from the list file
     std::vector<std::string> flags;   // placeholders still in them
     // Built and linked only for a program that includes one of these modules
-    // ("when": ["std/inline"]); empty means always. Lets a target keep the
+    // ("when": ["std/inline"]) -- or, for "exceptions" and "no-exceptions",
+    // one that does or does not throw; empty means always. Lets a target keep the
     // bulk of a library -- all of libc++, say -- off every other program's
     // first build.
     std::vector<std::string> when;
@@ -982,7 +983,7 @@ inline fs::path ensureRuntime(const Spec& s, const Toolchain& tc, const std::vec
             for (const std::string& w : lib->when) {
                 if (std::find(modules.begin(), modules.end(), w) != modules.end() &&
                     why.find(w) == std::string::npos) {
-                    why += (why.empty() ? "" : ", ") + w;
+                    why += (why.empty() ? "" : ", ") + (w == "no-exceptions" ? std::string("no exceptions") : w);
                 }
             }
         }
@@ -1062,7 +1063,13 @@ inline void buildProgram(const Spec& s, const std::string& cppPath, const std::s
         }
     } cleanup{scratch};
     Toolchain tc = findToolchain(scratch, s.triple, s.clangMajor, s.name, unique);
-    fs::path rt = ensureRuntime(s, tc, o.modules);
+    // What a library's "when" is matched against: the std modules the program
+    // includes, and whether it throws -- so a target can carry a C++ library
+    // built without exceptions for the programs that have none, which then
+    // link no unwinder at all.
+    std::vector<std::string> conds = o.modules;
+    conds.push_back(o.exceptions ? "exceptions" : "no-exceptions");
+    fs::path rt = ensureRuntime(s, tc, conds);
 
     auto vars = varsFor(s, tc, nullptr);
     fs::path obj = scratch / "program.o";
@@ -1087,7 +1094,7 @@ inline void buildProgram(const Spec& s, const std::string& cppPath, const std::s
     ld.push_back(obj.generic_string());
     ld.push_back("--start-group");
     for (const Library& l : s.libraries) {
-        if (wanted(l, o.modules)) ld.push_back((rt / ("lib" + l.name + ".a")).generic_string());
+        if (wanted(l, conds)) ld.push_back((rt / ("lib" + l.name + ".a")).generic_string());
     }
     ld.push_back("--end-group");
     for (const std::string& f : s.endFiles) ld.push_back((rt / objectName(f)).generic_string());
