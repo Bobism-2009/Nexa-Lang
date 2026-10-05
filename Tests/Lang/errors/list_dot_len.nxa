@@ -1,0 +1,7 @@
+// .len() is the string method; a list or a map is measured with len(xs).
+#include <std/io>
+
+fn main() {
+    let xs = [1, 2, 3];
+    io.println(xs.len());
+}

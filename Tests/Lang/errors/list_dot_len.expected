@@ -1,0 +1,2 @@
+.len() is a string method; the length of a list is len(xs), not xs.len()
+at line 6

@@ -4227,6 +4227,17 @@ private:
         if (e.type == AstNode::Type::StrMethod) {
             semResolveStrMethod(e);
             if (e.type == AstNode::Type::StrMethod) semCheckStrMethodArity(e);
+            // xs.len() on a list or a map: .len() is the string's, and what the C++
+            // compiler said about a std::vector handed to it was nobody's idea of help.
+            if (e.type == AstNode::Type::StrMethod && e.value == "len" && !e.children.empty()) {
+                const std::string recv = inferExprNexaType(e.children[0]);
+                if (nexaIsSliceType(recv) || nexaIsMapType(recv)) {
+                    const std::string name = e.children[0].type == AstNode::Type::ExprVarRef ? e.children[0].value : "xs";
+                    semError(e, ".len() is a string method; the length of a " +
+                                    std::string(nexaIsMapType(recv) ? "map" : "list") + " is len(" + name +
+                                    "), not " + name + ".len()");
+                }
+            }
             if (e.type == AstNode::Type::StrMethod && e.value == "__fmt") semCheckFmt(e);
         }
         // &flags[i] on a []bool: the bools in a slice are packed into bits, and a
