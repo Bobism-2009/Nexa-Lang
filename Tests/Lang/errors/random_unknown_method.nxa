@@ -1,0 +1,7 @@
+// A random.* name that does not exist lists the ones that do.
+#include <std/io>
+#include <std/random>
+
+fn main() {
+    random.pick(3);
+}

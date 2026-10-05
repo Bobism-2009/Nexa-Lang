@@ -1,0 +1,7 @@
+// random.choice reads its list twice, so it takes the list itself, not an expression.
+#include <std/io>
+#include <std/random>
+
+fn main() {
+    let x = random.choice([1, 2, 3]);
+}

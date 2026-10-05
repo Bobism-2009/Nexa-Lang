@@ -30,7 +30,7 @@ struct AstNode {
                       OsExit, OsHostname, OsUsername, OsHome, OsSetenv,
                       DllLoad, DllCall,
                       FileRead, FileWrite, FileAppend, FileExists, FileMkdir, FileCall,
-                      RandomInt, RandomSeed,
+                      RandomInt, RandomSeed, RandomCall,
                       MathCall, CryptoCall, HttpCall, TcpCall, UdpCall, GfxCall, Gfx3dCall, UiCall, JsonCall,
                       ResultMake,
                       StrMethod,
@@ -2931,6 +2931,11 @@ private:
             tokens_[pos_ + 2].value == "int") {
             return applyIndexAndDotPostfix(parseRandomInt());
         }
+        if (peek().type == TokenType::Identifier && peek().value == "random" && pos_ + 2 < tokens_.size() &&
+            tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier &&
+            isRandomValueMethod(tokens_[pos_ + 2].value)) {
+            return applyIndexAndDotPostfix(parseRandomExpr());
+        }
         if (peek().type == TokenType::Identifier && peek().value == "math" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
             return applyIndexAndDotPostfix(parseMathCall());
@@ -4159,6 +4164,68 @@ private:
         return {AstNode::Type::RandomInt, "", {minArg, maxArg}};
     }
 
+    static bool isRandomValueMethod(const std::string& m) {
+        return m == "float" || m == "bool" || m == "chance" || m == "choice";
+    }
+
+    // random.choice and random.shuffle take the list itself, not a copy of it:
+    // a variable, a field or an element. choice reads it twice (its length,
+    // then the element), so an expression that built a list would build two.
+    static bool isRandomListOperand(const AstNode& e) {
+        return e.type == AstNode::Type::ExprVarRef || e.type == AstNode::Type::ExprMember ||
+               e.type == AstNode::Type::ExprArrayIndex;
+    }
+
+    // random.float() / random.float(min, max) / random.bool() / random.chance(p)
+    // / random.choice(list), as values.
+    AstNode parseRandomExpr() {
+        size_t line = peek().line;
+        if (!modules_.hasRandom()) {
+            throw std::runtime_error("random.* requires #include <std/random> at line " + std::to_string(line));
+        }
+        advance();  // random
+        advance();  // .
+        const std::string method = peek().value;
+        advance();
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after random." + method + " at line " + std::to_string(peek().line));
+        }
+        AstNode node{AstNode::Type::RandomCall, method, {}};
+        if (method == "float") {
+            if (peek().type != TokenType::RParen) {
+                node.children.push_back(parseValueExpr());
+                if (!match(TokenType::Comma)) {
+                    throw std::runtime_error("random.float() gives 0 up to 1, random.float(min, max) a range: "
+                                             "expected ',' at line " + std::to_string(peek().line));
+                }
+                node.children.push_back(parseValueExpr());
+            }
+        } else if (method == "chance") {
+            node.children.push_back(parseValueExpr());
+        } else if (method == "choice") {
+            node.children.push_back(parseValueExpr());
+            if (!isRandomListOperand(node.children[0])) {
+                throw std::runtime_error("random.choice(list) takes a list variable or field at line " +
+                                         std::to_string(line) + "; put the list in a let first");
+            }
+        }
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' after random." + method + " arguments at line " +
+                                     std::to_string(peek().line));
+        }
+        if (method == "choice") {
+            // list[a random index]: an index expression, so the element's type
+            // is the list's, the way it is for list[0].
+            AstNode indexed{AstNode::Type::ExprArrayIndex, "", {}};
+            AstNode list = node.children[0];
+            node.value = "index";
+            indexed.children.push_back(std::move(list));
+            indexed.children.push_back(std::move(node));
+            return indexed;
+        }
+        return node;
+    }
+
     AstNode parseMathCall() {
         size_t line = peek().line;
         if (!modules_.hasMath()) {
@@ -4178,20 +4245,26 @@ private:
         advance();
         AstNode node{AstNode::Type::MathCall, method, {}};
         // Constants: math.pi, math.e (no call parentheses)
-        if (method == "pi" || method == "e") {
+        if (method == "pi" || method == "e" || method == "tau" || method == "inf") {
             return node;
         }
         // One-argument functions
         static const std::set<std::string> oneArg = {
             "abs", "sqrt", "floor", "ceil", "round",
-            "sin", "cos", "tan", "log", "log10", "exp"
+            "sin", "cos", "tan", "log", "log10", "exp",
+            "asin", "acos", "atan", "sinh", "cosh", "tanh", "log2", "cbrt", "trunc", "sign", "deg", "rad"
         };
         // Two-argument functions
-        static const std::set<std::string> twoArg = {"pow", "min", "max"};
-        if (oneArg.find(method) == oneArg.end() && twoArg.find(method) == twoArg.end()) {
+        static const std::set<std::string> twoArg = {"pow", "min", "max", "atan2", "hypot", "mod"};
+        // Three-argument functions
+        static const std::set<std::string> threeArg = {"clamp", "lerp"};
+        const bool isThree = threeArg.find(method) != threeArg.end();
+        if (oneArg.find(method) == oneArg.end() && twoArg.find(method) == twoArg.end() && !isThree) {
             throw std::runtime_error("Unknown math function 'math." + method +
                 "' at line " + std::to_string(methodTok.line) +
-                " (use abs, min, max, pow, sqrt, floor, ceil, round, sin, cos, tan, log, log10, exp, pi, e)");
+                " (use abs, sign, min, max, clamp, lerp, pow, sqrt, cbrt, hypot, exp, log, log2, log10, floor, "
+                "ceil, round, trunc, mod, sin, cos, tan, asin, acos, atan, atan2, sinh, cosh, tanh, deg, rad, "
+                "pi, tau, e, inf)");
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after math." + method + " at line " + std::to_string(peek().line));
@@ -4202,6 +4275,16 @@ private:
                 throw std::runtime_error("Expected ',' in math." + method + "(a, b) at line " + std::to_string(peek().line));
             }
             node.children.push_back(parseValueExpr());
+        }
+        if (isThree) {
+            for (int k = 0; k < 2; k++) {
+                if (!match(TokenType::Comma)) {
+                    throw std::runtime_error("Expected ',' in math." + method +
+                                             (method == "clamp" ? "(x, low, high)" : "(a, b, t)") + " at line " +
+                                             std::to_string(peek().line));
+                }
+                node.children.push_back(parseValueExpr());
+            }
         }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' after math." + method + " arguments at line " + std::to_string(peek().line));
@@ -5124,15 +5207,27 @@ private:
             throw std::runtime_error("Expected random method (int, seed) at line " + std::to_string(methodTok.line));
         }
         std::string method = methodTok.value;
-        if (method != "int" && method != "seed") {
-            throw std::runtime_error("Expected random.int or random.seed at line " + std::to_string(methodTok.line));
+        if (isRandomValueMethod(method)) {
+            throw std::runtime_error("random." + method + " gives a value: use it in an expression, as in let x = random." +
+                                     method + "(...); at line " + std::to_string(methodTok.line));
+        }
+        if (method != "int" && method != "seed" && method != "shuffle") {
+            throw std::runtime_error("Unknown random method 'random." + method + "' at line " +
+                                     std::to_string(methodTok.line) +
+                                     " (use int, float, bool, chance, choice, shuffle, seed)");
         }
         advance();
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
         }
         AstNode arg1 = parseValueExpr();
-        AstNode node{method == "int" ? AstNode::Type::RandomInt : AstNode::Type::RandomSeed, "", {}};
+        if (method == "shuffle" && !isRandomListOperand(arg1)) {
+            throw std::runtime_error("random.shuffle(list) takes a list variable or field, and reorders it in place, "
+                                     "at line " + std::to_string(line));
+        }
+        AstNode node{method == "int" ? AstNode::Type::RandomInt
+                     : method == "seed" ? AstNode::Type::RandomSeed : AstNode::Type::RandomCall,
+                     method == "shuffle" ? "shuffle" : "", {}};
         node.children.push_back(arg1);
         if (method == "int") {
             if (!match(TokenType::Comma)) {
@@ -5605,6 +5700,10 @@ private:
                 node.initIsFloat = true;
             } else if (b.type == AstNode::Type::MathCall) {
                 node.initIsFloat = true;
+            } else if (b.type == AstNode::Type::RandomCall && b.value == "float") {
+                node.initIsFloat = true;
+            } else if (b.type == AstNode::Type::RandomCall && (b.value == "bool" || b.value == "chance")) {
+                node.initIsBool = true;
             } else if (b.type == AstNode::Type::StrMethod && b.value == "split") {
                 node.initFromArray = true;
                 node.initIsInt = false;

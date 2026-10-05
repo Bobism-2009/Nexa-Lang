@@ -389,6 +389,14 @@ public:
                     break;
                 case AstNode::Type::RandomInt:
                 case AstNode::Type::RandomSeed: cppUsage.random = true; break;
+                case AstNode::Type::RandomCall:
+                    cppUsage.random = true;
+                    if (n.value == "float" || n.value == "chance") cppUsage.randomFloat = true;
+                    if (n.value == "chance") cppUsage.randomChance = true;
+                    if (n.value == "bool") cppUsage.randomBool = true;
+                    if (n.value == "index") cppUsage.randomIndex = true;
+                    if (n.value == "shuffle") cppUsage.randomShuffle = true;
+                    break;
                 case AstNode::Type::MathCall: cppUsage.math = true; break;
                 case AstNode::Type::CryptoCall: {
                     const std::string& fn = n.value;
@@ -2942,6 +2950,10 @@ private:
                 return "int";
             case AstNode::Type::IoEof: return "bool";
             case AstNode::Type::RandomInt: return "int";
+            case AstNode::Type::RandomCall:
+                if (e.value == "float") return "float";
+                if (e.value == "bool" || e.value == "chance") return "bool";
+                return "int";
             case AstNode::Type::MathCall:
                 // math.* operates in the floating-point domain and always yields float (double).
                 // For an integer result, assign to an int (e.g. let n: int = math.floor(x);).
@@ -4544,6 +4556,34 @@ private:
             {"min",   "math.min(a, b)",       "nn"},
             {"max",   "math.max(a, b)",       "nn"},
             {"pow",   "math.pow(base, exp)",  "nn"},
+            {"asin",  "math.asin(x)",         "n"},
+            {"acos",  "math.acos(x)",         "n"},
+            {"atan",  "math.atan(x)",         "n"},
+            {"sinh",  "math.sinh(x)",         "n"},
+            {"cosh",  "math.cosh(x)",         "n"},
+            {"tanh",  "math.tanh(x)",         "n"},
+            {"log2",  "math.log2(x)",         "n"},
+            {"cbrt",  "math.cbrt(x)",         "n"},
+            {"trunc", "math.trunc(x)",        "n"},
+            {"sign",  "math.sign(x)",         "n"},
+            {"deg",   "math.deg(radians)",    "n"},
+            {"rad",   "math.rad(degrees)",    "n"},
+            {"atan2", "math.atan2(y, x)",     "nn"},
+            {"hypot", "math.hypot(a, b)",     "nn"},
+            {"mod",   "math.mod(a, b)",       "nn"},
+            {"clamp", "math.clamp(x, low, high)", "nnn"},
+            {"lerp",  "math.lerp(a, b, t)",   "nnn"},
+            {"", nullptr, nullptr},
+        };
+        return rows;
+    }
+
+    // std/random's value calls. random.int and random.seed have rows of their
+    // own, by node type, in builtinArgRowFor.
+    static const BuiltinArgRow* randomArgRows() {
+        static const BuiltinArgRow rows[] = {
+            {"float",  "random.float(min, max)", "nn"},
+            {"chance", "random.chance(p)",       "n"},
             {"", nullptr, nullptr},
         };
         return rows;
@@ -4876,6 +4916,11 @@ private:
                 break;
             case AstNode::Type::MathCall:
                 semCheckBuiltinArgRow(e, findBuiltinArgRow(mathArgRows(), e.value, e.children.size()));
+                break;
+            case AstNode::Type::RandomCall:
+                if (e.value == "float" || e.value == "chance") {
+                    semCheckBuiltinArgRow(e, findBuiltinArgRow(randomArgRows(), e.value, e.children.size()));
+                }
                 break;
             case AstNode::Type::HttpCall:
                 semCheckBuiltinArgRow(e, findBuiltinArgRow(httpArgRows(), e.value, e.children.size()));
@@ -5926,6 +5971,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         if (e.type == AstNode::Type::ExprFloatLiteral) return true;
         if (e.type == AstNode::Type::TimeNowMs) return true;
         if (e.type == AstNode::Type::MathCall) return true;
+        if (e.type == AstNode::Type::RandomCall) return e.value == "float";
         if (e.type == AstNode::Type::ExprVarRef) {
             auto it = varIsFloat.find(e.value);
             return it != varIsFloat.end() && it->second;
@@ -6622,6 +6668,10 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             } else if (child.type == AstNode::Type::RandomSeed) {
                 std::string seedExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 out << indent << "__nexa_random_seed(" << seedExpr << ");\n";
+            } else if (child.type == AstNode::Type::RandomCall) {
+                // Only random.shuffle is a statement; the rest are values.
+                out << indent << "__nexa_random_shuffle("
+                    << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ");\n";
             } else if (child.type == AstNode::Type::RandomInt) {
                 std::string minExpr = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 std::string maxExpr = emitExpr(child.children[1], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
@@ -8096,10 +8146,27 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 std::string maxExpr = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 return "__nexa_random_int(" + minExpr + ", " + maxExpr + ")";
             }
+            case AstNode::Type::RandomCall: {
+                const std::string& fn = e.value;
+                auto arg = [&](size_t i) {
+                    return emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                };
+                if (fn == "float") {
+                    if (e.children.size() < 2) return std::string("__nexa_random_float()");
+                    return "__nexa_random_float(static_cast<double>(" + arg(0) + "), static_cast<double>(" + arg(1) + "))";
+                }
+                if (fn == "bool") return std::string("__nexa_random_bool()");
+                if (fn == "chance") return "__nexa_random_chance(static_cast<double>(" + arg(0) + "))";
+                if (fn == "shuffle") return "__nexa_random_shuffle(" + arg(0) + ")";
+                // "index": where random.choice(list) looks
+                return "__nexa_random_index(std::size(" + arg(0) + "))";
+            }
             case AstNode::Type::MathCall: {
                 const std::string& fn = e.value;
                 if (fn == "pi") return "3.14159265358979323846";
                 if (fn == "e") return "2.71828182845904523536";
+                if (fn == "tau") return "6.28318530717958647692";
+                if (fn == "inf") return "__builtin_inf()";
                 std::string a0 = e.children.empty() ? "" : emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 std::string da0 = "static_cast<double>(" + a0 + ")";
                 if (fn == "abs") return "std::abs(" + da0 + ")";
@@ -8112,7 +8179,24 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     std::string a1 = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                     return "std::pow(" + da0 + ", static_cast<double>(" + a1 + "))";
                 }
-                // sqrt, floor, ceil, round, sin, cos, tan, log, log10, exp
+                if (fn == "atan2" || fn == "hypot" || fn == "mod") {
+                    std::string a1 = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    return "std::" + std::string(fn == "mod" ? "fmod" : fn) + "(" + da0 + ", static_cast<double>(" + a1 + "))";
+                }
+                if (fn == "clamp" || fn == "lerp") {
+                    std::string a1 = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    std::string a2 = emitExpr(e.children[2], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    // A lambda, so each argument is evaluated once.
+                    const char* body = fn == "clamp" ? "return __x < __a ? __a : (__x > __b ? __b : __x);"
+                                                     : "return __x + (__a - __x) * __b;";
+                    return std::string("([](double __x, double __a, double __b) { ") + body + " })(" + da0 +
+                           ", static_cast<double>(" + a1 + "), static_cast<double>(" + a2 + "))";
+                }
+                if (fn == "sign") return "([](double __x) { return static_cast<double>((__x > 0) - (__x < 0)); })(" + da0 + ")";
+                if (fn == "deg") return "(" + da0 + " * 57.29577951308232087680)";
+                if (fn == "rad") return "(" + da0 + " * 0.01745329251994329577)";
+                // sqrt, floor, ceil, round, trunc, sin, cos, tan, asin, acos, atan, sinh, cosh, tanh,
+                // log, log2, log10, exp, cbrt
                 return "std::" + fn + "(" + da0 + ")";
             }
             case AstNode::Type::CryptoCall: {

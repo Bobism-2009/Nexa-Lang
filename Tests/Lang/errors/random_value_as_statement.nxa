@@ -1,0 +1,7 @@
+// random.float is a value; on a line of its own it would be thrown away.
+#include <std/io>
+#include <std/random>
+
+fn main() {
+    random.float();
+}

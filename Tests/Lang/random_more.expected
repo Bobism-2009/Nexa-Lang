@@ -1,0 +1,15 @@
+float=0.37454 0.950714
+range=17.3199 inside=true
+swapped=-0.986585
+flips=TTHTTHHTHTHTHTTT
+chance=252 never=false always=true
+choice=cy ada bob dee ada ada 
+one=ada len=3
+sum=50
+only=99
+shuffle=[5, 4, 6, 8, 7, 1, 3, 2]
+names=["dee", "cy", "bob", "ada"]
+flags=[false, true, false, true, false]
+deck=[1, 4, 3, 2, 5] top=2
+empty=0
+again=0.37454

@@ -1,0 +1,7 @@
+// math.clamp takes the value and both bounds.
+#include <std/io>
+#include <std/math>
+
+fn main() {
+    let x = math.clamp(5, 10);
+}

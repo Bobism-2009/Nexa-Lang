@@ -1,0 +1,12 @@
+asin=1.5708 acos=0 atan=0.785398
+atan2=2.35619 -1.5708
+sinh=1.1752 cosh=1.54308 tanh=0.761594
+log2=10 cbrt=3 hypot=5
+trunc=2 -2 round=-3
+mod=1.5 -1.5
+sign=-1 0 1
+clamp=10 0 2.5
+lerp=12.5 10 20
+deg=180 rad=3.14159 tau=6.28318
+inf=inf -inf bigger=true
+whole=10 once=2

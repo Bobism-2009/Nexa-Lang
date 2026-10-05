@@ -328,18 +328,21 @@ Only read/write/append are emitted unless you call a path or listing API, so a
 write-only program stays hello-world sized.)HELP" },
 
 { "std/math", "math arithmetic trig", Group::Module,
-  "abs, min, max, pow, sqrt, rounding, trig, logs, pi and e",
+  "abs, min, max, clamp, lerp, pow, roots, rounding, trig, logs, pi, tau, e, inf",
   R"HELP(std/math - floating-point maths
   #include <std/math>
   Full reference: SYNTAX/Modules.txt (std/math)
 
-  compare   math.abs(x)  math.min(a, b)  math.max(a, b)
-  powers    math.pow(base, exp)  math.sqrt(x)  math.exp(x)
-  logs      math.log(x)          natural
-            math.log10(x)        base 10
-  rounding  math.floor(x)  math.ceil(x)  math.round(x)
+  compare   math.abs(x)  math.sign(x)  math.min(a, b)  math.max(a, b)
+  range     math.clamp(x, low, high)  math.lerp(a, b, t)
+  powers    math.pow(base, exp)  math.sqrt(x)  math.cbrt(x)  math.hypot(a, b)  math.exp(x)
+  logs      math.log(x)  math.log2(x)  math.log10(x)
+  rounding  math.floor(x)  math.ceil(x)  math.round(x)  math.trunc(x)  math.mod(a, b)
   trig      math.sin(x)  math.cos(x)  math.tan(x)        radians
-  constants math.pi  math.e                              no parentheses
+            math.asin(x)  math.acos(x)  math.atan(x)  math.atan2(y, x)
+            math.sinh(x)  math.cosh(x)  math.tanh(x)
+            math.deg(radians)  math.rad(degrees)
+  constants math.pi  math.tau  math.e  math.inf          no parentheses
 
 Every math.* call returns float. Assign to an int to get one:
 
@@ -350,17 +353,24 @@ Every math.* call returns float. Assign to an int to get one:
   })HELP" },
 
 { "std/random", "random rand rng seed", Group::Module,
-  "random.int and random.seed",
+  "random int, float, bool, chance, choice, shuffle and seed",
   R"HELP(std/random - random numbers
   #include <std/random>
   Full reference: SYNTAX/Modules.txt (std/random)
 
-  random.int(min, max)   a random int in [min, max], both ends included
-  random.seed(n)         seed the generator, for a reproducible sequence
+  random.int(min, max)    a random int in [min, max], both ends included
+  random.float()          a random float in [0, 1); (min, max) for a range
+  random.bool()           true or false
+  random.chance(p)        true with probability p
+  random.choice(list)     one element of a list
+  random.shuffle(list)    reorder a list in place
+  random.seed(n)          seed the generator: the same sequence on every platform
 
   fn main() {
       random.seed(42);
-      io.println(random.int(1, 6));
+      let deck = [1, 2, 3, 4];
+      random.shuffle(deck);
+      io.println(random.int(1, 6), " ", random.choice(deck));
   })HELP" },
 
 { "std/time", "time sleep clock timer", Group::Module,

@@ -188,10 +188,25 @@ ARGUMENT TYPES
 
 #include <std/random>
   random.int(min, max)  - Random int in [min, max] inclusive (max..min is min..max)
+  random.float()        - Random float in [0, 1): 0 is possible, 1 is not
+  random.float(min, max) - Random float in [min, max)
+  random.bool()         - true or false, evenly
+  random.chance(p)      - true with probability p: chance(0.25) is one time in four;
+                          chance(0) is never, chance(1) always
+  random.choice(list)   - One element of the list, each equally likely. Its type is
+                          the list's element type. Takes a list variable or field
+                          (it reads the list twice), not an expression that builds
+                          one. An empty list is an out-of-range index, as list[0]
+                          is: check len(list) first.
+  random.shuffle(list)  - Reorder the list in place, every order equally likely.
+                          A statement; takes a list variable or field.
   random.seed(n)        - Seed RNG for reproducibility: the same seed gives the
-                          same numbers on every platform (Windows, Linux, macOS,
-                          ARM, the browser)
+                          same numbers, floats, choices and shuffles on every
+                          platform (Windows, Linux, macOS, ARM, MIPS, the browser)
+  A program that uses only some of these carries only those.
   Use: let roll = random.int(1, 6);  random.seed(42);
+       let card = random.choice(deck);  random.shuffle(deck);
+       if (random.chance(0.1)) { io.println("rare"); }
 
 #include <std/math>
   math.abs(x)           - Absolute value
@@ -202,12 +217,26 @@ ARGUMENT TYPES
   math.floor(x)         - Round down to nearest whole number
   math.ceil(x)          - Round up to nearest whole number
   math.round(x)         - Round to nearest whole number
+  math.trunc(x)         - Drop the fraction (toward zero): trunc(-2.9) is -2
+  math.mod(a, b)        - Float remainder of a / b, with a's sign: mod(7.5, 2) is 1.5
+  math.sign(x)          - -1, 0 or 1
+  math.clamp(x, low, high) - x kept inside [low, high]
+  math.lerp(a, b, t)    - From a to b by t: lerp(10, 20, 0.25) is 12.5
+  math.cbrt(x)          - Cube root
+  math.hypot(a, b)      - sqrt(a*a + b*b), without overflowing on the way
   math.sin(x) / math.cos(x) / math.tan(x) - Trigonometry (radians)
+  math.asin(x) / math.acos(x) / math.atan(x) - Their inverses (radians)
+  math.atan2(y, x)      - Angle of the point (x, y), in (-pi, pi]: note y first
+  math.sinh(x) / math.cosh(x) / math.tanh(x) - Hyperbolic functions
+  math.deg(radians) / math.rad(degrees) - Convert between the two
   math.log(x)           - Natural logarithm (base e)
+  math.log2(x)          - Base-2 logarithm
   math.log10(x)         - Base-10 logarithm
   math.exp(x)           - e raised to x
   math.pi               - 3.14159... (constant, no parentheses)
+  math.tau              - 6.28318..., a full turn (constant)
   math.e                - 2.71828... (constant, no parentheses)
+  math.inf              - Infinity (constant); -math.inf is its negative
   All math.* return float. For an int result, assign to int: let n: int = math.floor(x);
   Use: let h = math.sqrt(math.pow(3.0, 2.0) + math.pow(4.0, 2.0));
 
@@ -475,6 +504,8 @@ ARGUMENT TYPES
   time.milliseconds(n)      - n milliseconds
   time.now_ms()             - Monotonic time in milliseconds (float); QPC on Windows, CLOCK_MONOTONIC on Linux/macOS
   Use: time.sleep(time.seconds(1));  let t0 = time.now_ms();  ...  let dt = time.now_ms() - t0;
+  Keep now_ms in a float (let t0 = time.now_ms();), not an int: it counts from when the
+  machine started, and an int overflows once that is 24.8 days ago. A difference fits either.
 
   The wall clock -- when, where now_ms is how long. It can jump (the user sets the
   clock, the network corrects it), so time a stretch with now_ms, not with this.

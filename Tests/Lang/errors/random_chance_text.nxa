@@ -1,0 +1,7 @@
+// random.chance takes a probability, not text.
+#include <std/io>
+#include <std/random>
+
+fn main() {
+    let hit = random.chance("often");
+}

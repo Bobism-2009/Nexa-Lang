@@ -20,7 +20,7 @@ fn main() {
     let ok: int = gfx.audio(44100);
     io.println("audio=" + ok);
 
-    let t0: int = time.now_ms();
+    let t0 = time.now_ms();   // a float: an int cannot hold the uptime of a machine up 25 days
 
     let fed: int = 0;
     let i: int = 0;

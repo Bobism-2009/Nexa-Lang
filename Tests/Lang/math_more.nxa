@@ -1,0 +1,27 @@
+// The rest of std/math: inverse and hyperbolic trig, the other logs and roots,
+// the float remainder, sign / clamp / lerp, degrees and radians, tau and inf.
+// Reference: SYNTAX/Modules.txt (std/math)
+#include <std/io>
+#include <std/math>
+
+fn r(x: float): float { return math.round(x * 1000000.0) / 1000000.0; }
+
+fn main() {
+    io.println("asin=", r(math.asin(1.0)), " acos=", r(math.acos(1.0)), " atan=", r(math.atan(1.0)));
+    io.println("atan2=", r(math.atan2(1.0, -1.0)), " ", r(math.atan2(-1, 0)));
+    io.println("sinh=", r(math.sinh(1.0)), " cosh=", r(math.cosh(1.0)), " tanh=", r(math.tanh(1.0)));
+    io.println("log2=", math.log2(1024), " cbrt=", math.cbrt(27.0), " hypot=", math.hypot(3, 4));
+    io.println("trunc=", math.trunc(2.9), " ", math.trunc(-2.9), " round=", math.round(-2.5));
+    io.println("mod=", math.mod(7.5, 2.0), " ", math.mod(-7.5, 2.0));
+    io.println("sign=", math.sign(-3.2), " ", math.sign(0), " ", math.sign(12));
+    io.println("clamp=", math.clamp(15, 0, 10), " ", math.clamp(-5, 0, 10), " ", math.clamp(2.5, 0, 10));
+    io.println("lerp=", math.lerp(10, 20, 0.25), " ", math.lerp(10, 20, 0), " ", math.lerp(10, 20, 1));
+    io.println("deg=", r(math.deg(math.pi)), " rad=", r(math.rad(180.0)), " tau=", r(math.tau));
+    io.println("inf=", math.inf, " ", -math.inf, " bigger=", math.inf > 1000000000.0);
+
+    // every math.* is a float; an int takes one the way it takes math.floor
+    let whole: int = math.clamp(42, 0, 10);
+    let n = 0;
+    let once = math.clamp(n + 1, 0, 10) + math.lerp(n, 4, 0.5) + math.sign(n - 1);
+    io.println("whole=", whole, " once=", once);
+}

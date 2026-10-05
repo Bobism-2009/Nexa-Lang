@@ -74,6 +74,11 @@ public:
         bool fileRead = false;
         bool fileFs = false;
         bool random = false;
+        bool randomFloat = false;    // random.float, and random.chance on top of it
+        bool randomChance = false;
+        bool randomBool = false;
+        bool randomIndex = false;    // random.choice
+        bool randomShuffle = false;
         bool math = false;
         bool crypto = false;
         bool cryptoHex = false;
@@ -1843,6 +1848,36 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
                    "  do { x = (unsigned long long)(g() & 0xFFFFFFFFULL); } while (x >= limit);\n"
                    "  return (int)((long long)a + (long long)(x % span));\n"
                    "}\n";
+            // The rest are built on the same generator the same way: arithmetic that is
+            // exact, so a seed gives one sequence everywhere. A float is 53 random bits
+            // over 2^53 -- every double in [0, 1) that is a multiple of 2^-53, never 1.
+            if (usage.randomFloat) {
+                out += "static double __nexa_random_float() {\n"
+                       "  std::mt19937& g = __nexa_rng();\n"
+                       "  const unsigned long long hi = (unsigned long long)(g() & 0xFFFFFFFFULL) >> 5;\n"
+                       "  const unsigned long long lo = (unsigned long long)(g() & 0xFFFFFFFFULL) >> 6;\n"
+                       "  return (double)(hi * 67108864ULL + lo) / 9007199254740992.0;\n"
+                       "}\n"
+                       "[[maybe_unused]] static double __nexa_random_float(double a, double b) { return a + (b - a) * __nexa_random_float(); }\n";
+            }
+            if (usage.randomChance) {
+                out += "static bool __nexa_random_chance(double p) { return __nexa_random_float() < p; }\n";
+            }
+            if (usage.randomBool) {
+                out += "static bool __nexa_random_bool() { return ((__nexa_rng()() >> 31) & 1u) != 0; }\n";
+            }
+            if (usage.randomIndex) {
+                out += "static int __nexa_random_index(size_t n) { return n > 1 ? __nexa_random_int(0, (int)(n - 1)) : 0; }\n";
+            }
+            if (usage.randomShuffle) {
+                // Fisher-Yates, from the back: each order equally likely.
+                out += "template <class V> static void __nexa_random_shuffle(V& v) {\n"
+                       "  for (size_t i = std::size(v); i > 1; i--) {\n"
+                       "    const size_t j = (size_t)__nexa_random_int(0, (int)(i - 1));\n"
+                       "    if (j != i - 1) { using std::swap; swap(v[i - 1], v[j]); }\n"
+                       "  }\n"
+                       "}\n";
+            }
         }
         if (hasMath() && usage.math) {
             out += "#include <cmath>\n";
