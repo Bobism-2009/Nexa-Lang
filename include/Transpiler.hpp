@@ -386,6 +386,11 @@ public:
                 case AstNode::Type::FileMkdir:
                 case AstNode::Type::FileCall:
                     cppUsage.fileFs = true;
+                    if (n.value == "size") cppUsage.fileSize64 = true;
+                    if (n.value == "modified") cppUsage.fileModified = true;
+                    if (n.value == "stem") cppUsage.fileStem = true;
+                    if (n.value == "walk") cppUsage.fileWalk = true;
+                    if (n.value == "lines") { cppUsage.fileLines = true; cppUsage.fileRead = true; }
                     break;
                 case AstNode::Type::RandomInt:
                 case AstNode::Type::RandomSeed: cppUsage.random = true; break;
@@ -2699,7 +2704,8 @@ private:
             if (!v.children.empty() && v.children[0].type == AstNode::Type::StrMethod && v.children[0].value == "split") {
                 return "[]string";
             }
-            if (!v.children.empty() && v.children[0].type == AstNode::Type::FileCall && v.children[0].value == "list") {
+            if (!v.children.empty() && v.children[0].type == AstNode::Type::FileCall &&
+                fileCallGivesStrings(v.children[0].value)) {
                 return "[]string";
             }
             if (!v.children.empty() && v.children[0].type == AstNode::Type::OsInfo && v.children[0].value == "environ") {
@@ -3077,11 +3083,14 @@ private:
             case AstNode::Type::IoGetline:
                 return "string";
             case AstNode::Type::FileCall:
-                if (e.value == "list") return "[]string";
+                if (fileCallGivesStrings(e.value)) return "[]string";
                 if (e.value == "cwd" || e.value == "abspath" || e.value == "join" ||
-                    e.value == "dirname" || e.value == "basename" || e.value == "extension") {
+                    e.value == "dirname" || e.value == "basename" || e.value == "extension" ||
+                    e.value == "stem") {
                     return "string";
                 }
+                // A size past 2GB and a time past 2038 are both more than an int holds.
+                if (e.value == "size" || e.value == "modified") return "long";
                 return "int";
             // Comparisons and the logical operators yield bool, not int — overload
             // resolution needs this to match `fn f(x: bool)` against `f(a == b)`.
@@ -4687,6 +4696,10 @@ private:
             {"dirname",    "file.dirname(path)",     "t"},
             {"basename",   "file.basename(path)",    "t"},
             {"extension",  "file.extension(path)",   "t"},
+            {"stem",       "file.stem(path)",        "t"},
+            {"modified",   "file.modified(path)",    "t"},
+            {"lines",      "file.lines(path)",       "t"},
+            {"walk",       "file.walk(path)",        "t"},
             {"rename",     "file.rename(from, to)",  "tt"},
             {"copy",       "file.copy(from, to)",    "tt"},
             {"join",       "file.join(a, b)",        "tt"},
@@ -5880,7 +5893,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         if (e.type == AstNode::Type::ExprCast && e.value == "string") return true;
         if (e.type == AstNode::Type::FileCall) {
             const std::string& m = e.value;
-            return m == "cwd" || m == "abspath" || m == "join" || m == "dirname" || m == "basename" || m == "extension";
+            return m == "cwd" || m == "abspath" || m == "join" || m == "dirname" || m == "basename" || m == "extension" || m == "stem";
         }
         if (e.type == AstNode::Type::StrMethod) return strMethodReturnsString(e.value);
         if (e.type == AstNode::Type::ExprAdd && e.children.size() >= 2) {
@@ -5892,10 +5905,15 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         return false;
     }
 
+    // The file.* calls that hand back a []string.
+    static bool fileCallGivesStrings(const std::string& m) {
+        return m == "list" || m == "lines" || m == "walk";
+    }
+
     // Whether an array-valued initializer expression yields std::vector<std::string>.
     bool arrayInitProducesString(const AstNode& initExpr, const std::map<std::string, bool>& varIsString) const {
         if (initExpr.type == AstNode::Type::StrMethod && initExpr.value == "split") return true;
-        if (initExpr.type == AstNode::Type::FileCall && initExpr.value == "list") return true;
+        if (initExpr.type == AstNode::Type::FileCall && fileCallGivesStrings(initExpr.value)) return true;
         if (initExpr.type == AstNode::Type::OsInfo && initExpr.value == "environ") return true;
         return arrayLiteralProducesString(initExpr, varIsString);
     }
@@ -5909,7 +5927,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             if (d == "[]string") return true;
         }
         if (coll.type == AstNode::Type::StrMethod && coll.value == "split") return true;
-        if (coll.type == AstNode::Type::FileCall && coll.value == "list") return true;
+        if (coll.type == AstNode::Type::FileCall && fileCallGivesStrings(coll.value)) return true;
         if (coll.type == AstNode::Type::OsInfo && coll.value == "environ") return true;
         if (coll.type == AstNode::Type::ExprArrayLiteral) {
             std::map<std::string, bool> empty;
@@ -5957,7 +5975,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         if (e.type == AstNode::Type::JsonCall && e.value == "stringify") return true;
         if (e.type == AstNode::Type::FileCall) {
             const std::string& m = e.value;
-            return m == "cwd" || m == "abspath" || m == "join" || m == "dirname" || m == "basename" || m == "extension";
+            return m == "cwd" || m == "abspath" || m == "join" || m == "dirname" || m == "basename" || m == "extension" || m == "stem";
         }
         if (e.type == AstNode::Type::StrMethod) return strMethodReturnsString(e.value);
         if (e.type == AstNode::Type::FnCall) {
@@ -8123,7 +8141,11 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (fn == "list") return "__nexa_file_list(" + a0 + ")";
                 if (fn == "isdir") return "__nexa_file_isdir(" + a0 + ")";
                 if (fn == "isfile") return "__nexa_file_isfile(" + a0 + ")";
-                if (fn == "size") return "__nexa_file_size(" + a0 + ")";
+                if (fn == "size") return "__nexa_file_size64(" + a0 + ")";
+                if (fn == "modified") return "__nexa_file_modified(" + a0 + ")";
+                if (fn == "stem") return "__nexa_file_stem(" + a0 + ")";
+                if (fn == "lines") return "__nexa_file_lines(" + a0 + ")";
+                if (fn == "walk") return "__nexa_file_walk(" + a0 + ")";
                 if (fn == "chdir") return "__nexa_file_chdir(" + a0 + ")";
                 if (fn == "abspath") return "__nexa_file_abspath(" + a0 + ")";
                 if (fn == "dirname") return "__nexa_file_dirname(" + a0 + ")";

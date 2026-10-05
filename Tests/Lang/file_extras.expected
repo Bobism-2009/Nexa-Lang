@@ -1,0 +1,12 @@
+lines=4 ["one", "two", "", "four"]
+one_line=["no newline at the end"]
+empty_file=0 missing=0
+longest=4
+walk=["Upper.txt", "notes.txt", "src/deep/a.txt", "src/deep/b.txt", "src/main.nxa", "zeta.md"]
+deep=["a.txt", "b.txt"] none=0 missing=0 a_file=0
+bytes=40
+stem=photo.tar report Makefile .bashrc dir|
+s=notes.txt len=5
+size=21 doubled=42 small=2 dir=-1 missing=-1
+modified_recent=true dir=true missing=-1
+cleaned=0

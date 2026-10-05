@@ -392,7 +392,7 @@ private:
         if (e.type == AstNode::Type::UdpCall) return e.value == "recv" || e.value == "sender";
         if (e.type == AstNode::Type::FileCall) {
             const std::string& m = e.value;
-            return m == "cwd" || m == "abspath" || m == "join" || m == "dirname" || m == "basename" || m == "extension";
+            return m == "cwd" || m == "abspath" || m == "join" || m == "dirname" || m == "basename" || m == "extension" || m == "stem";
         }
         if (e.type == AstNode::Type::StrMethod) {
             const std::string& m = e.value;
@@ -4016,7 +4016,8 @@ private:
         static const std::set<std::string> m = {
             "remove", "remove_all", "rename", "copy", "list",
             "isdir", "isfile", "size", "cwd", "chdir",
-            "abspath", "join", "dirname", "basename", "extension"
+            "abspath", "join", "dirname", "basename", "extension",
+            "stem", "modified", "lines", "walk"
         };
         return m.count(method) > 0;
     }
@@ -5682,9 +5683,11 @@ private:
                 node.initIsInt = false;
             } else if (b.type == AstNode::Type::FileCall &&
                        (b.value == "cwd" || b.value == "abspath" || b.value == "join" ||
-                        b.value == "dirname" || b.value == "basename" || b.value == "extension")) {
+                        b.value == "dirname" || b.value == "basename" || b.value == "extension" ||
+                        b.value == "stem")) {
                 node.initIsInt = false;
-            } else if (b.type == AstNode::Type::FileCall && b.value == "list") {
+            } else if (b.type == AstNode::Type::FileCall &&
+                       (b.value == "list" || b.value == "lines" || b.value == "walk")) {
                 node.initFromArray = true;
                 node.initIsInt = false;
                 node.declType = "[]string";

@@ -73,6 +73,11 @@ public:
         bool fileWrite = false;
         bool fileRead = false;
         bool fileFs = false;
+        bool fileSize64 = false;     // file.size, as a long
+        bool fileModified = false;
+        bool fileStem = false;
+        bool fileLines = false;
+        bool fileWalk = false;
         bool random = false;
         bool randomFloat = false;    // random.float, and random.chance on top of it
         bool randomChance = false;
@@ -1827,6 +1832,8 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
         }
         if (hasFile() && usage.fileFs) {
             out += fileRuntimeCpp();
+            out += fileExtraRuntimeCpp(usage.fileSize64, usage.fileModified, usage.fileStem, usage.fileLines,
+                                       usage.fileWalk);
         }
         if (hasRandom() && usage.random) {
             out += "#include <random>\n";

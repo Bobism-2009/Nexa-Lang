@@ -1,0 +1,62 @@
+// file.lines, file.walk, file.stem, file.modified, and file.size as a long.
+// Everything is made under one scratch directory and removed again.
+// Reference: SYNTAX/Modules.txt (std/file)
+#include <std/io>
+#include <std/file>
+#include <std/time>
+
+fn main() {
+    let root = "_nexa_file_extras";
+    file.remove_all(root);
+    file.mkdir(file.join(root, "src/deep"));
+    file.mkdir(file.join(root, "empty"));
+    file.write(file.join(root, "notes.txt"), "one\ntwo\r\n\nfour\n");
+    file.write(file.join(root, "zeta.md"), "no newline at the end");
+    file.write(file.join(root, "src/main.nxa"), "x");
+    file.write(file.join(root, "src/deep/b.txt"), "");
+    file.write(file.join(root, "src/deep/a.txt"), "ab");
+    file.write(file.join(root, "Upper.txt"), "U");
+
+    // lines: \n and \r\n both end one, a blank line is a line, the last newline adds none
+    let lines = file.lines(file.join(root, "notes.txt"));
+    io.println("lines=", len(lines), " ", lines);
+    io.println("one_line=", file.lines(file.join(root, "zeta.md")));
+    io.println("empty_file=", len(file.lines(file.join(root, "src/deep/b.txt"))),
+               " missing=", len(file.lines(file.join(root, "nope.txt"))));
+    let longest = 0;
+    for (l in file.lines(file.join(root, "notes.txt"))) {
+        if (l.len() > longest) { longest = l.len(); }
+    }
+    io.println("longest=", longest);
+
+    // walk: every file below, '/' between the parts, each directory in byte order
+    let all = file.walk(root);
+    io.println("walk=", all);
+    io.println("deep=", file.walk(file.join(root, "src/deep")), " none=", len(file.walk(file.join(root, "empty"))),
+               " missing=", len(file.walk(file.join(root, "nope"))), " a_file=", len(file.walk(file.join(root, "zeta.md"))));
+    let bytes: long = 0;
+    for (p in all) { bytes = bytes + file.size(file.join(root, p)); }
+    io.println("bytes=", bytes);
+
+    // stem: the name without its last extension
+    io.println("stem=", file.stem("a/b/photo.tar.gz"), " ", file.stem("report.txt"), " ", file.stem("Makefile"),
+               " ", file.stem(".bashrc"), " ", file.stem("dir.d/"), "|", file.stem(""));
+    let s = file.stem(file.join(root, "notes.txt"));
+    io.println("s=", s + file.extension("notes.txt"), " len=", s.len());
+
+    // size: a long; -1 for what is not a file
+    let size = file.size(file.join(root, "zeta.md"));
+    let doubled = size * 2;
+    let small: int = file.size(file.join(root, "src/deep/a.txt"));
+    io.println("size=", size, " doubled=", doubled, " small=", small, " dir=", file.size(root),
+               " missing=", file.size(file.join(root, "nope")));
+
+    // modified: seconds since 1970, what time.unix() counts in
+    let m = file.modified(file.join(root, "notes.txt"));
+    let age = time.unix() - m;
+    io.println("modified_recent=", age >= -2 && age < 120, " dir=", file.modified(root) > 1700000000,
+               " missing=", file.modified(file.join(root, "nope")));
+
+    file.remove_all(root);
+    io.println("cleaned=", file.exists(root));
+}

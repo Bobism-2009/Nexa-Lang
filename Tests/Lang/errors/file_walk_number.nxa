@@ -1,0 +1,7 @@
+// file.walk takes a path, which is text.
+#include <std/io>
+#include <std/file>
+
+fn main() {
+    let all = file.walk(3);
+}

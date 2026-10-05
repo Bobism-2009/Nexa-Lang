@@ -295,17 +295,20 @@ os.setenv("PORT", 8080) -- with os.getprocessid(name) the one exception.
   Full reference: SYNTAX/Modules.txt (std/file)
 
   bytes   file.read(path)            the whole file, as a string
+          file.lines(path)           the file as a []string of lines
           file.write(path, content)  overwrite; statement, or 1/0
           file.append(path, content) append; statement, or 1/0
   ask     file.exists(path)  file.isdir(path)  file.isfile(path)
-          file.size(path)            bytes, or -1
+          file.size(path)            bytes (long), or -1
+          file.modified(path)        last written, unix seconds (long), or -1
   manage  file.mkdir(path)           creates parents too
           file.remove(path) / file.delete(path)      a file or empty directory
           file.remove_all(path)      recursive
           file.rename(from, to) / file.move(from, to)
           file.copy(from, to)        file or directory tree
           file.list(path) / file.listdir(path)       names, as []string
-  paths   file.join(a, b)  file.abspath(p)  file.extension(p)
+          file.walk(path)            every file below, as []string of "a/b.txt"
+  paths   file.join(a, b)  file.abspath(p)  file.extension(p)  file.stem(p)
           file.dirname(p) / file.parent(p)
           file.basename(p) / file.name(p)
           file.cwd()  file.chdir(path)

@@ -1623,6 +1623,11 @@ ARGUMENT TYPES
 
 #include <std/file>
   file.read(path)       - Read entire file as binary, returns string
+  file.lines(path)      - The file as a []string of lines: split at 
+, a  before it
+                          dropped (so Windows text reads the same), a blank line kept,
+                          and no empty last line for the newline a text file ends
+                          with. A missing file is an empty list.
   file.write(path, c)   - Write bytes to file (overwrites, binary); statement or returns 1/0
   file.append(path, c)  - Append bytes to file (binary); statement or returns 1/0
   file.exists(path)     - Returns 1 if exists, 0 otherwise
@@ -1632,8 +1637,19 @@ ARGUMENT TYPES
   file.rename(from, to) / file.move(from, to) - Rename/move; returns 1/0
   file.copy(from, to)   - Copy file or directory tree; returns 1/0
   file.list(path) / file.listdir(path) - Entry names in directory as []string
+  file.walk(path)       - Every file under a directory, at any depth, as []string:
+                          paths from it with '/' between the parts ("src/main.nxa"),
+                          each directory's entries in byte order, the same on every
+                          platform. Files only -- an empty directory adds nothing --
+                          and a link to a directory is not followed. file.join(path, p)
+                          makes one usable. Not a directory: an empty list.
   file.isdir(path) / file.isfile(path) - Returns 1/0
-  file.size(path)       - File size in bytes (int), or -1 if unavailable
+  file.size(path)       - File size in bytes (long, so past 2GB), or -1 if unavailable
+  file.modified(path)   - When the file or directory was last written: seconds since
+                          1970 UTC (long), what time.unix() counts in, so
+                          time.unix() - file.modified(p) is its age and
+                          time.format("%F %T", file.modified(p)) prints it. -1 if
+                          there is no such path.
   file.cwd()            - Current working directory (string)
   file.chdir(path)      - Change working directory; returns 1/0
   file.abspath(path)    - Absolute path (string)
@@ -1641,10 +1657,13 @@ ARGUMENT TYPES
   file.dirname(path) / file.parent(path) - Parent directory (string)
   file.basename(path) / file.name(path) - Final path component (string)
   file.extension(path)  - Extension including leading '.' (string)
+  file.stem(path)       - Final path component without that extension:
+                          "a/photo.tar.gz" is "photo.tar", ".bashrc" is ".bashrc"
   pathVar.Write(c)      - Write to path in variable (e.g. SaveData.Write("Test"))
   pathVar.Append(c)     - Append to path in variable
   path, content: string or variable
-  Only I/O helpers (read/write/append) are emitted unless you call a path/list API.
+  Only I/O helpers (read/write/append) are emitted unless you call a path/list API;
+  lines, walk, stem and modified are each emitted only for a program that calls them.
   write/read/append use C stdio in binary mode (no CR/LF translation).
   write/append return 1 on success and 0 on failure (cannot open, short write, or a
   buffered write that only fails at close time, e.g. a full disk). The return may be

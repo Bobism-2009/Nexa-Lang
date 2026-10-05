@@ -36,6 +36,116 @@ static std::string __nexa_file_read(const char* __path) {
 )NEXA_FILE_RD";
 }
 
+// The helpers a program asks for one at a time, after fileRuntimeCpp's block
+// (they use its isdir, join and list): each is emitted only when it is called,
+// so a program that calls none of them is the C++ it always was.
+inline std::string fileExtraRuntimeCpp(bool size64, bool modified, bool stem, bool lines, bool walk) {
+    std::string out;
+    // file.size as a long: the int it used to be stopped at 2GB.
+    if (size64) out += R"NEXA_FILE_X(
+static long long __nexa_file_size64(const char* __path) {
+  if (!__path || !__path[0]) return -1;
+#ifdef _WIN32
+  WIN32_FILE_ATTRIBUTE_DATA __d;
+  if (!GetFileAttributesExA(__path, GetFileExInfoStandard, &__d)) return -1;
+  if (__d.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) return -1;
+  return (long long)(((unsigned long long)__d.nFileSizeHigh << 32) | (unsigned long long)__d.nFileSizeLow);
+#else
+  struct stat __st;
+  if (stat(__path, &__st) != 0 || !S_ISREG(__st.st_mode)) return -1;
+  return (long long)__st.st_size;
+#endif
+}
+)NEXA_FILE_X";
+    // When the file (or directory) was last written, in seconds since 1970 UTC --
+    // what time.unix() counts in, so the two subtract. -1 when there is no such path.
+    if (modified) out += R"NEXA_FILE_X(
+static long long __nexa_file_modified(const char* __path) {
+  if (!__path || !__path[0]) return -1;
+#ifdef _WIN32
+  WIN32_FILE_ATTRIBUTE_DATA __d;
+  if (!GetFileAttributesExA(__path, GetFileExInfoStandard, &__d)) return -1;
+  const unsigned long long __t = ((unsigned long long)__d.ftLastWriteTime.dwHighDateTime << 32) |
+                                 (unsigned long long)__d.ftLastWriteTime.dwLowDateTime;
+  // FILETIME counts 100ns from 1601; 11644473600 seconds separate that from 1970.
+  return (long long)(__t / 10000000ULL) - 11644473600LL;
+#else
+  struct stat __st;
+  if (stat(__path, &__st) != 0) return -1;
+  return (long long)__st.st_mtime;
+#endif
+}
+)NEXA_FILE_X";
+    // The name without its last extension: "a/b/photo.tar.gz" is "photo.tar",
+    // ".bashrc" is ".bashrc" -- the same split file.extension makes.
+    if (stem) out += R"NEXA_FILE_X(
+static std::string __nexa_file_stem(const char* __path) {
+  std::string __b = __nexa_file_basename(__path);
+  return __b.substr(0, __b.size() - __nexa_file_extension(__path).size());
+}
+)NEXA_FILE_X";
+    // The file as lines: split at \n, a \r before it dropped, and no empty last
+    // line for the newline a text file ends with. A missing file is no lines.
+    if (lines) out += R"NEXA_FILE_X(
+static std::vector<std::string> __nexa_file_lines(const char* __path) {
+  std::vector<std::string> __out;
+  const std::string __s = __nexa_file_read(__path);
+  size_t __a = 0;
+  while (__a < __s.size()) {
+    size_t __b = __s.find('\n', __a);
+    if (__b == std::string::npos) __b = __s.size();
+    size_t __e = __b;
+    if (__e > __a && __s[__e - 1] == '\r') __e--;
+    __out.emplace_back(__s, __a, __e - __a);
+    __a = __b + 1;
+  }
+  return __out;
+}
+)NEXA_FILE_X";
+    // Every file under a directory, as paths from it with '/' between the parts
+    // ("src/main.nxa"), each directory's entries in byte order so the answer is the
+    // same on every platform. Directories are walked, not listed; a link to one is
+    // not followed, so a link back up cannot loop.
+    if (walk) out += R"NEXA_FILE_X(
+static void __nexa_file_walk_into(const std::string& __dir, const std::string& __rel, std::vector<std::string>& __out, int __depth) {
+  if (__depth > 64) return;
+  std::vector<std::string> __names = __nexa_file_list(__dir.c_str());
+  for (size_t __i = 1; __i < __names.size(); __i++) {
+    for (size_t __j = __i; __j > 0 && __names[__j] < __names[__j - 1]; __j--) __names[__j].swap(__names[__j - 1]);
+  }
+  for (const std::string& __n : __names) {
+    const std::string __full = __nexa_file_join(__dir.c_str(), __n.c_str());
+    std::string __r = __rel;
+    if (!__r.empty()) __r += '/';
+    __r += __n;
+    int __link = 0;
+#ifdef _WIN32
+    // A symbolic link or a junction -- not every reparse point: a OneDrive
+    // folder is one too, and is a real directory to walk.
+    WIN32_FIND_DATAA __fd;
+    HANDLE __h = FindFirstFileA(__full.c_str(), &__fd);
+    if (__h != INVALID_HANDLE_VALUE) {
+      __link = (__fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
+               (__fd.dwReserved0 == IO_REPARSE_TAG_SYMLINK || __fd.dwReserved0 == IO_REPARSE_TAG_MOUNT_POINT);
+      FindClose(__h);
+    }
+#else
+    struct stat __st;
+    __link = lstat(__full.c_str(), &__st) == 0 && S_ISLNK(__st.st_mode);
+#endif
+    if (!__link && __nexa_file_isdir(__full.c_str())) __nexa_file_walk_into(__full, __r, __out, __depth + 1);
+    else if (__nexa_file_isfile(__full.c_str())) __out.push_back(__r);
+  }
+}
+static std::vector<std::string> __nexa_file_walk(const char* __path) {
+  std::vector<std::string> __out;
+  if (__path && __path[0]) __nexa_file_walk_into(__path, std::string(), __out, 0);
+  return __out;
+}
+)NEXA_FILE_X";
+    return out;
+}
+
 // Path/list/mkdir helpers — Win32 / POSIX, no <filesystem>.
 inline std::string fileRuntimeCpp() {
     return R"NEXA_FILE_FS(
