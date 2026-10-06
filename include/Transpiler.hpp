@@ -728,6 +728,7 @@ public:
         bool needsMap = false;
         bool needsFunctional = false;
         bool needsFmt = false;
+        bool needsDefer = false;
         std::function<void(const std::string&)> noteContainerType = [&](const std::string& t) {
             if (nexaIsSliceType(t)) {
                 needsVector = true;
@@ -807,6 +808,7 @@ public:
                     n.value == "keys" || n.value == "values")) {
                 needsMap = true;
             }
+            if (n.type == AstNode::Type::Defer) needsDefer = true;
             for (const AstNode& c : n.children) checkNeedsContainers(c);
         };
         for (const AstNode& node : ast_) checkNeedsContainers(node);
@@ -822,6 +824,19 @@ public:
         if (needsString) out << "[[maybe_unused]] static std::string __nexa_f2s(double __v) { char __b[32]; std::snprintf(__b, sizeof(__b), \"%g\", __v); return std::string(__b); }\n\n";
         if (needsFmt) out << kFmtRuntime;
         if (needsCstr) out << "[[maybe_unused]] static std::string __nexa_cstr(const char* __p) { return __p ? std::string(__p) : std::string(); }\n\n";
+        if (needsDefer) {
+            // A defer runs its body when the guard is destroyed -- at block exit,
+            // by any path, in reverse order of the defers in the block.
+            out << "template <class __NxF> struct __nexa_Defer {\n"
+                   "    __NxF __f; bool __on;\n"
+                   "    __nexa_Defer(__NxF __fn) : __f(__fn), __on(true) {}\n"
+                   "    __nexa_Defer(__nexa_Defer&& __o) : __f(__o.__f), __on(__o.__on) { __o.__on = false; }\n"
+                   "    __nexa_Defer(const __nexa_Defer&) = delete;\n"
+                   "    __nexa_Defer& operator=(const __nexa_Defer&) = delete;\n"
+                   "    ~__nexa_Defer() { if (__on) __f(); }\n"
+                   "};\n"
+                   "template <class __NxF> __nexa_Defer<__NxF> __nexa_make_defer(__NxF __fn) { return __nexa_Defer<__NxF>(__fn); }\n\n";
+        }
 
         bool wroteUserCppHeaders = false;
         for (const AstNode& node : ast_) {
@@ -1624,6 +1639,7 @@ private:
     mutable std::vector<std::map<std::string, std::string>> varStructScopes_;
     std::map<std::string, std::map<std::string, const AstNode*>> structMethods_;
     mutable std::string methodSelfType_;
+    int deferSeq_ = 0;   // unique names for defer guards
 
     struct FnOverloadSlot {
         size_t astIndex = 0;
@@ -6759,6 +6775,12 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 out << indent << "fflush(stdout);\n";
             } else if (child.type == AstNode::Type::FileRead) {
                 out << indent << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
+            } else if (child.type == AstNode::Type::Defer) {
+                out << indent << "auto __nexa_defer_" << (deferSeq_++) << " = __nexa_make_defer([&]() {\n";
+                const AstNode& deferBody = child.children[0];
+                emitBlock(out, deferBody.children, varMap, varIdx, varIsString, varIsConst, varIsFloat,
+                          varIsChar, varIsBool, varIsEnum, indent + "    ");
+                out << indent << "});\n";
             } else if (child.type == AstNode::Type::FileWrite) {
                 emitFileWriteOrAppend(out, indent, child, varMap, varIsString, varIsFloat, varIsChar, varIsBool, 0);
             } else if (child.type == AstNode::Type::FileAppend) {

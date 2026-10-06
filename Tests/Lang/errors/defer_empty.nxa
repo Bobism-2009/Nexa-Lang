@@ -1,0 +1,6 @@
+// defer must be given something to run.
+#include <std/io>
+
+fn main() {
+    defer;
+}

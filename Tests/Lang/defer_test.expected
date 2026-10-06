@@ -1,0 +1,26 @@
+basic: start
+basic: body
+basic: B (deferred second, runs first)
+basic: A (deferred first, runs last)
+---
+early: returning n
+early: cleanup n=5
+early(5) = 5
+early: returning -1
+early: cleanup n=-1
+early(-1) = -1
+---
+loop: body 0
+loop: end of iter 0
+loop: continue at 1
+loop: end of iter 1
+loop: break at 2
+loop: end of iter 2
+loop: done
+---
+braced: body
+braced: closing x=10
+---
+throw: about to throw
+throw: deferred cleanup ran
+throw: caught boom

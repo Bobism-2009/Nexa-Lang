@@ -13,7 +13,7 @@
 #
 #   size       Windows and Linux: an everyday program -- strings, a slice, a map,
 #              an f-string, a Result, io.to_int, io.parse_int / parse_float /
-#              to_float, io.eprintln, time.unix / format, a thread.mutex, float32 and
+#              to_float, io.eprintln, time.unix / format, a thread.mutex, a defer, float32 and
 #              bits, std/math, all of std/random and the std/file extras -- is under 64KB, and prints
 #              exactly what the same program built without the slimming
 #              (NEXA_NO_SLIM=1) prints.
@@ -111,8 +111,8 @@ fn main() {
     sum += (int)(from_bits32(bits(half)) * 4.0);
     let m = thread.mutex();
     thread.lock(m);
+    defer thread.unlock(m);
     sum += 1;
-    thread.unlock(m);
     random.seed(5);
     let bag = [3, 1, 2];
     random.shuffle(bag);

@@ -1,0 +1,69 @@
+// defer runs its statement when the block exits, last-written-first, on every
+// path out: normal end, early return, break/continue, and a thrown error
+// (which the enclosing try still catches).
+#include <std/io>
+
+fn basic() {
+    io.println("basic: start");
+    defer io.println("basic: A (deferred first, runs last)");
+    defer io.println("basic: B (deferred second, runs first)");
+    io.println("basic: body");
+}
+
+fn early(n: int): int {
+    defer io.println("early: cleanup n=", n);
+    if (n < 0) {
+        io.println("early: returning -1");
+        return -1;
+    }
+    io.println("early: returning n");
+    return n;
+}
+
+fn loopy() {
+    for (i, 3) {
+        defer io.println("loop: end of iter ", i);
+        if (i == 1) {
+            io.println("loop: continue at ", i);
+            continue;
+        }
+        if (i == 2) {
+            io.println("loop: break at ", i);
+            break;
+        }
+        io.println("loop: body ", i);
+    }
+    io.println("loop: done");
+}
+
+fn braced() {
+    let x = 10;
+    defer {
+        let msg = "braced: closing";
+        io.println(msg, " x=", x);
+    }
+    io.println("braced: body");
+}
+
+fn withthrow() {
+    try {
+        defer io.println("throw: deferred cleanup ran");
+        io.println("throw: about to throw");
+        throw "boom";
+    } catch (e) {
+        io.println("throw: caught ", e);
+    }
+}
+
+fn main() {
+    basic();
+    io.println("---");
+    io.println("early(5) = ", early(5));
+    io.println("early(-1) = ", early(-1));
+    io.println("---");
+    loopy();
+    io.println("---");
+    braced();
+    io.println("---");
+    withthrow();
+}

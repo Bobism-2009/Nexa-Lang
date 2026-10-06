@@ -93,6 +93,14 @@ LOOPS
   while (false) { ... }  - never runs
   break;                 - exit loop immediately
   continue;               - skip to next iteration
+  defer <stmt>;            - run <stmt> when the enclosing block exits, on every path out:
+  defer { ... }              the end of the block, a return, a break/continue, or a thrown
+                             error. Several in one block run last-written-first, so a file
+                             opened then deferred-closed closes before one opened earlier.
+                             It sees the variables in scope where it is written. Use it to
+                             pair a cleanup with the thing it undoes, next to each other:
+                                 term.raw(true);
+                                 defer term.raw(false);   // restored however this block ends
   true, false - boolean literals (like C++)
 
   Example:

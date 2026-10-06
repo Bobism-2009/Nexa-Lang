@@ -46,6 +46,7 @@ struct AstNode {
                       Return,
                       Break,
                       Continue,
+                      Defer,
                       Goto,
                       Label,
                       TryCatch,
@@ -1467,6 +1468,8 @@ private:
                 stmts.push_back(parseBreak());
             } else if (t.type == TokenType::Continue) {
                 stmts.push_back(parseContinue());
+            } else if (t.type == TokenType::Defer) {
+                stmts.push_back(parseDefer());
             } else if (t.type == TokenType::Eof) {
                 throw std::runtime_error("Unexpected end of file inside block (missing '}') at line " +
                                          std::to_string(t.line));
@@ -1740,6 +1743,26 @@ private:
             throw std::runtime_error("Expected ';' after continue at line " + std::to_string(peek().line));
         }
         return {AstNode::Type::Continue, "", {}};
+    }
+
+    // defer <statement>  or  defer { ... }
+    // The statement runs when the enclosing block exits -- however it exits:
+    // the end of the block, an early return, a break or continue, or a thrown
+    // error. Several in one block run last-written-first. It is emitted as a
+    // guard object whose destructor runs the body, so C++ handles every exit.
+    AstNode parseDefer() {
+        size_t line = peek().line;
+        if (!match(TokenType::Defer)) {
+            throw std::runtime_error("Expected 'defer' at line " + std::to_string(line));
+        }
+        if (peek().type == TokenType::Semicolon) {
+            throw std::runtime_error("defer needs something to run: defer file.close(f); at line " +
+                                     std::to_string(line));
+        }
+        AstNode node{AstNode::Type::Defer, "", {}};
+        node.line = line;
+        node.children.push_back(parseBody());  // a Block: braced, or one statement
+        return node;
     }
 
     AstNode parseGoto() {
@@ -2367,6 +2390,8 @@ private:
                 stmts.push_back(parseBreak());
             } else if (t.type == TokenType::Continue) {
                 stmts.push_back(parseContinue());
+            } else if (t.type == TokenType::Defer) {
+                stmts.push_back(parseDefer());
             } else if (t.type != TokenType::Eof) {
                 throw std::runtime_error(unexpectedToken(t));
             } else {
