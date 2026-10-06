@@ -419,6 +419,7 @@ public:
                         cppUsage.termScreen = true;
                     else if (m == "raw" || m == "getkey" || m == "key_available") cppUsage.termRaw = true;
                     else if (m == "progress") cppUsage.termProgress = true;
+                    else if (m == "spinner") cppUsage.termSpinner = true;
                     else if (m == "width" || m == "height") cppUsage.termSize = true;
                     break;
                 }
@@ -4696,6 +4697,7 @@ private:
             {"alt_screen","term.alt_screen(on)",    "n"},
             {"raw",       "term.raw(on)",           "n"},
             {"progress",  "term.progress(done, total)", "nnn"},
+            {"spinner",   "term.spinner(tick)",        "nt"},
             {"", nullptr, nullptr},
         };
         return rows;
@@ -8507,6 +8509,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (fn == "clear_eol") return std::string("(__nexa_term_eol(), 0)");
                 if (fn == "progress") return "(__nexa_term_progress(" + n(0) + ", " + n(1) + ", " +
                        (e.children.size() > 2 ? n(2) : std::string("-1")) + "), 0)";
+                if (fn == "spinner") return "(__nexa_term_spinner(" + n(0) + ", " +
+                       (e.children.size() > 1 ? s(1) : std::string("std::string()")) + "), 0)";
                 if (fn == "home") return std::string("(__nexa_term_home(), 0)");
                 if (fn == "hide_cursor") return std::string("(__nexa_term_cursor(0), 0)");
                 if (fn == "show_cursor") return std::string("(__nexa_term_cursor(1), 0)");

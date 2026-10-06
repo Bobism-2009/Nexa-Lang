@@ -812,6 +812,7 @@ loses the undefined-name check.)HELP" },
             names: black red green yellow blue magenta cyan white, gray,
                    bright_<name>; unknown leaves the text plain
   bars    term.progress(done, total[, width])   a loading bar, redrawn in place
+          term.spinner(tick[, label])           a |/-\ spinner for unknown-length work
   cursor  term.clear()  term.clear_line()  term.clear_eol()  term.move(col, row)
           term.home()
           term.hide_cursor()  term.show_cursor()  term.cursor(show)

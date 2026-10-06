@@ -15,7 +15,7 @@ namespace nexa {
 // `screen` : term.clear / clear_line / move / home / hide_cursor / show_cursor / alt_screen
 // `raw`    : term.raw / getkey / key_available
 // `size`   : term.width / term.height
-inline std::string termRuntimeCpp(bool style, bool screen, bool raw, bool size, bool progress) {
+inline std::string termRuntimeCpp(bool style, bool screen, bool raw, bool size, bool progress, bool spinner) {
     std::string out;
     out += "#include <string>\n";
     out += "#include <cstdio>\n";
@@ -30,7 +30,7 @@ inline std::string termRuntimeCpp(bool style, bool screen, bool raw, bool size, 
     // On Windows the console honours ANSI escapes only once virtual-terminal
     // processing is turned on; everywhere else it always does. Done once, the
     // first time any colour or cursor call runs.
-    if (style || screen || progress) {
+    if (style || screen || progress || spinner) {
         out += R"NEXA_TERM(
 static void __nexa_term_vt() {
 #ifdef _WIN32
@@ -154,6 +154,23 @@ static void __nexa_term_progress(int __done, int __total, int __width) {
     if (__pct < 10) __b += " ";
     __b += std::to_string(__pct);
     __b += "%\x1b[K";
+    __nexa_term_emit(__b);
+}
+)NEXA_TERM";
+    }
+
+    if (spinner) {
+        // A one-character spinner on the current line, for work with no known
+        // length: call it with a tick that climbs each frame, optionally with a
+        // label after it ("- working..."). Plain ASCII |/-\ so it shows anywhere.
+        out += R"NEXA_TERM(
+static void __nexa_term_spinner(int __tick, const std::string& __label) {
+    __nexa_term_vt();
+    static const char __frames[] = {'|', '/', '-', '\\'};
+    std::string __b = "\r";
+    __b += __frames[((__tick % 4) + 4) % 4];
+    if (!__label.empty()) { __b += " "; __b += __label; }
+    __b += "\x1b[K";
     __nexa_term_emit(__b);
 }
 )NEXA_TERM";

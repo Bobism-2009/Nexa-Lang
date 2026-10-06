@@ -167,6 +167,7 @@ public:
         bool termRaw = false;        // term.raw/getkey/key_available
         bool termSize = false;       // term.width/height
         bool termProgress = false;   // term.progress
+        bool termSpinner = false;    // term.spinner
         bool gfxPad = false;         // gfx.pads, pad, pad_pressed, pad_axis
         bool gfxImageStore = false;
         bool gfxUpload = false;     // gfx.upload: an image from the program's own pixels
@@ -1938,8 +1939,8 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
             out += fileExtraRuntimeCpp(usage.fileSize64, usage.fileModified, usage.fileStem, usage.fileLines,
                                        usage.fileWalk);
         }
-        if (hasTerm() && (usage.termStyle || usage.termScreen || usage.termRaw || usage.termSize || usage.termProgress)) {
-            out += termRuntimeCpp(usage.termStyle, usage.termScreen, usage.termRaw, usage.termSize, usage.termProgress);
+        if (hasTerm() && (usage.termStyle || usage.termScreen || usage.termRaw || usage.termSize || usage.termProgress || usage.termSpinner)) {
+            out += termRuntimeCpp(usage.termStyle, usage.termScreen, usage.termRaw, usage.termSize, usage.termProgress, usage.termSpinner);
         }
         if (hasRandom() && usage.random) {
             out += "#include <random>\n";

@@ -1,0 +1,12 @@
+// term.spinner: a one-character spinner for work with no known length. Each call
+// is followed by a newline so the frames land on their own lines for the check.
+// Reference: SYNTAX/Modules.txt (std/term)
+#include <std/io>
+#include <std/term>
+
+fn main() {
+    for (i, 6) { term.spinner(i); io.println(""); }          // | / - \ | /
+    for (i, 4) { term.spinner(i, "working"); io.println(""); }
+    term.spinner(-1); io.println("");                          // wraps to the last frame
+    io.println("done");
+}
