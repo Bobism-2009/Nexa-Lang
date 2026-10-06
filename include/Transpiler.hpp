@@ -1167,7 +1167,7 @@ public:
                     if (!node.fnReturnType.empty()) {
                         if (node.fnReturnType != "void") {
                             throw std::runtime_error(
-                                "main may only use `: void` as an explicit return type (or omit it for int main)");
+                                "main returns int or void: write `: int`, `: void`, or no return type");
                         }
                         if (mainValRet) {
                             throw std::runtime_error("cannot return a value from void main()");
@@ -6103,6 +6103,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             else hasValueReturn = true;
             return;
         }
+        // A closure's returns are its own, not the enclosing function's.
+        if (n.type == AstNode::Type::ExprLambda) return;
         for (const AstNode& c : n.children) astClassifyReturns(c, hasValueReturn, hasVoidReturn);
     }
     static void stmtsClassifyReturns(const std::vector<AstNode>& stmts, bool& hasValueReturn, bool& hasVoidReturn) {

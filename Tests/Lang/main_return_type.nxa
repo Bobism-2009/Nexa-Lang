@@ -1,0 +1,22 @@
+// fn main(): int is main with its return type written out, and a closure's
+// `return value;` belongs to the closure, not to the function around it.
+// Reference: SYNTAX/Core.txt (ENTRY POINT)
+#include <std/io>
+
+fn quiet(): void {
+    let twice = fn (a: int): int { return a * 2; };
+    io.println("void_fn_closure=", twice(4));
+}
+
+fn untyped() {
+    let half = fn (a: int): int { return a / 2; };
+    io.println("untyped_fn_closure=", half(10));
+}
+
+fn main(): int {
+    let add = fn (a: int): int { return a + 1; };
+    io.println("main_int_closure=", add(1));
+    quiet();
+    untyped();
+    return 0;
+}

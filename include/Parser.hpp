@@ -1181,6 +1181,8 @@ private:
         std::string mainReturnType;
         if (match(TokenType::Colon)) {
             mainReturnType = parseTypeName();
+            // `: int` says what main already is with no type written.
+            if (mainReturnType == "int") mainReturnType.clear();
         }
         if (!match(TokenType::LBrace)) {
             throw std::runtime_error("Expected '{' at line " + std::to_string(peek().line));

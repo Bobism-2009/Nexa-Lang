@@ -1,0 +1,5 @@
+#include <std/io>
+
+fn main(): string {
+    io.println("hi");
+}

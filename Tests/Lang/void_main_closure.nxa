@@ -1,0 +1,8 @@
+// A void main may hold a closure that returns a value.
+// Reference: SYNTAX/Core.txt (ENTRY POINT)
+#include <std/io>
+
+fn main(): void {
+    let add = fn (a: int): int { return a + 1; };
+    io.println("void_main_closure=", add(41));
+}

@@ -1,0 +1,6 @@
+#include <std/io>
+
+fn main(): void {
+    io.println("hi");
+    return 3;
+}
