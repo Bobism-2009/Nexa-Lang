@@ -12,12 +12,13 @@ fn bar(n: int, w: int): string {
     return s;
 }
 
-// One menu line: clear just this line, then write it. Called from the top of
-// the screen downward, this overwrites the old frame in place -- no full-screen
-// clear, so nothing flashes.
+// One line of the frame: write the text over whatever was there, then clear to
+// the end of the line (not before writing). The old glyphs are overwritten in
+// place -- never blanked first -- so nothing flashes.
 fn line(text: string) {
-    term.clear_line();
-    io.println(text);
+    io.print(text);
+    term.clear_eol();
+    io.println("");
 }
 
 fn main() {
@@ -28,14 +29,14 @@ fn main() {
     io.println(term.bold(term.color("std/term demo", "cyan")));
     io.println(term.dim("loading..."));
     for (i, 21) {
-        term.clear_line();
-        io.print("  ", term.color(bar(i, 20), "green"), " ", i * 5, "%");
+        io.print("\r  ", term.color(bar(i, 20), "green"), " ", i * 5, "%");
+        term.clear_eol();
         io.flush();
         time.sleep(time.milliseconds(40));
     }
 
-    // 2. An arrow-key menu, redrawn from the top each frame (cursor home, then
-    //    overwrite line by line) so it updates without flicker.
+    // 2. An arrow-key menu, redrawn from the top each frame by overwriting lines
+    //    in place (cursor home, write-then-clear-to-end) -- no screen clear, no flicker.
     let items = ["New game", "Load game", "Settings", "Quit"];
     let pick = 0;
     let message: string = "";
