@@ -1,0 +1,68 @@
+// A tour of std/term: colour, a cursor-driven progress bar, and an arrow-key
+// menu read with raw getkey. Run it in a real terminal: NexaC term_demo.nxa --run
+#include <std/io>
+#include <std/term>
+#include <std/time>
+
+fn bar(n: int, w: int): string {
+    let s: string = "";
+    for (i, w) {
+        if (i < n) { s = s + "#"; } else { s = s + "-"; }
+    }
+    return s;
+}
+
+fn main() {
+    term.hide_cursor();
+    defer term.show_cursor();   // cursor is restored however we leave
+
+    io.println(term.bold(term.color("std/term demo", "cyan")));
+    io.println(term.dim("a progress bar, then an arrow-key menu"));
+    io.println("");
+
+    // 1. A bar that fills in place, redrawing one line with the cursor.
+    for (i, 21) {
+        term.clear_line();
+        io.print("  ", term.color(bar(i, 20), "green"), " ", i * 5, "%");
+        io.flush();
+        time.sleep(time.milliseconds(40));
+    }
+    io.println("");
+    io.println("");
+
+    // 2. A menu: up/down to move, Enter to pick, q to quit.
+    let items = ["New game", "Load game", "Settings", "Quit"];
+    let pick = 0;
+    term.raw(true);
+    defer term.raw(false);      // cooked mode restored on every exit path
+
+    while (true) {
+        // redraw the four lines in place
+        for (i, len(items)) {
+            term.clear_line();
+            if (i == pick) {
+                io.println("  ", term.reverse(" " + items[i] + " "));
+            } else {
+                io.println("    ", term.dim(items[i]));
+            }
+        }
+        io.print(term.dim("  up/down, enter, q"));
+        io.flush();
+
+        let k = term.getkey();
+        if (k == "up") { if (pick > 0) { pick = pick - 1; } }
+        if (k == "down") { if (pick < len(items) - 1) { pick = pick + 1; } }
+        if (k == "q") { break; }
+        if (k == "enter") {
+            if (pick == len(items) - 1) { break; }
+            io.println("");
+            io.println(term.color("-> " + items[pick], "yellow"));
+            time.sleep(time.milliseconds(700));
+        }
+        // move the cursor back up over the menu to redraw it next loop
+        term.move(0, 3);
+    }
+
+    io.println("");
+    io.println(term.color("bye", "bright_green"));
+}
