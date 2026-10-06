@@ -5,7 +5,7 @@
 #include <std/term>
 
 fn main() {
-    for (i, 6) { term.spinner(i); io.println(""); }          // a spinning wheel | / - \
+    for (i, 6) { term.spinner(i); io.println(""); }          // a spinning wheel (|) (/) (-) (\)
     for (i, 4) { term.spinner(i, "working"); io.println(""); }
     term.spinner(-1); io.println("");                          // wraps to the last frame
     io.println("done");

@@ -1748,7 +1748,7 @@ ARGUMENT TYPES
                            work advances, then print a newline when done. width is
                            the bar between the brackets (default 30); out-of-range
                            done is clamped, total <= 0 is treated as 1.
-  term.spinner(tick[, label]) - a spinning wheel (| / - \) on the current line, for
+  term.spinner(tick[, label]) - a spinning wheel in a casing, (|) (/) (-) (\), for
                            work with no known length. Pass a tick that climbs each
                            frame; an optional label follows it. Redrawn in place;
                            print a newline when done. Pure ASCII, so it looks the
