@@ -16,37 +16,40 @@ fn main() {
     term.hide_cursor();
     defer term.show_cursor();   // cursor is restored however we leave
 
-    io.println(term.bold(term.color("std/term demo", "cyan")));
-    io.println(term.dim("a progress bar, then an arrow-key menu"));
-    io.println("");
-
     // 1. A bar that fills in place, redrawing one line with the cursor.
+    io.println(term.bold(term.color("std/term demo", "cyan")));
+    io.println(term.dim("loading..."));
     for (i, 21) {
         term.clear_line();
         io.print("  ", term.color(bar(i, 20), "green"), " ", i * 5, "%");
         io.flush();
         time.sleep(time.milliseconds(40));
     }
-    io.println("");
-    io.println("");
 
-    // 2. A menu: up/down to move, Enter to pick, q to quit.
+    // 2. A menu: up/down to move, Enter to pick, q to quit. Each frame clears
+    //    the screen and draws from the top, so the cursor never drifts.
     let items = ["New game", "Load game", "Settings", "Quit"];
     let pick = 0;
+    let message: string = "";
     term.raw(true);
     defer term.raw(false);      // cooked mode restored on every exit path
 
     while (true) {
-        // redraw the four lines in place
+        term.clear();
+        io.println(term.bold(term.color("std/term demo", "cyan")));
+        io.println(term.dim("up / down to move, enter to pick, q to quit"));
+        io.println("");
         for (i, len(items)) {
-            term.clear_line();
             if (i == pick) {
-                io.println("  ", term.reverse(" " + items[i] + " "));
+                io.println("  ", term.color("> ", "yellow"), term.reverse(" " + items[i] + " "));
             } else {
                 io.println("    ", term.dim(items[i]));
             }
         }
-        io.print(term.dim("  up/down, enter, q"));
+        if (message.len() > 0) {
+            io.println("");
+            io.println("  ", message);
+        }
         io.flush();
 
         let k = term.getkey();
@@ -55,14 +58,10 @@ fn main() {
         if (k == "q") { break; }
         if (k == "enter") {
             if (pick == len(items) - 1) { break; }
-            io.println("");
-            io.println(term.color("-> " + items[pick], "yellow"));
-            time.sleep(time.milliseconds(700));
+            message = term.color("you chose: " + items[pick], "green");
         }
-        // move the cursor back up over the menu to redraw it next loop
-        term.move(0, 3);
     }
 
-    io.println("");
+    term.clear();
     io.println(term.color("bye", "bright_green"));
 }
