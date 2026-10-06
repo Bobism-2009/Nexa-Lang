@@ -173,12 +173,21 @@ static int doBuild(const std::string& dir) {
 static int doInit(const std::string& dir) {
     namespace fs = std::filesystem;
     fs::path base = dir.empty() ? fs::current_path() : fs::path(dir);
+    std::error_code ec;
     if (!dir.empty()) {
-        if (fs::exists(base) && !fs::is_empty(base)) {
+        if (fs::exists(base, ec) && !fs::is_empty(base, ec)) {
             std::cerr << "[Nexa] Error: Directory '" << dir << "' exists and is not empty.\n";
             return 1;
         }
-        fs::create_directories(base);
+        fs::create_directories(base, ec);
+        if (ec) {
+            std::cerr << "[Nexa] Error: cannot create '" << dir << "': " << ec.message() << "\n";
+            return 1;
+        }
+    } else if (fs::exists(base / "nexapkg.json", ec)) {
+        // The current directory is somebody's work: never write over it.
+        std::cerr << "[Nexa] Error: this directory is already a Nexa project (nexapkg.json exists).\n";
+        return 1;
     }
     std::string mainNxa = R"(#include <std/io>
 
@@ -201,21 +210,39 @@ fn main() {
 )";
     std::string projName = fs::absolute(base).filename().string();
     if (projName.empty()) projName = "myapp";
-    std::string nexapkgJson = "{\n  \"name\": \"" + projName + "\",\n  \"dependencies\": {}\n}\n";
-    try {
-        std::ofstream(base / "main.nxa") << mainNxa;
-        std::ofstream(base / ".gitignore") << gitignore;
-        std::ofstream(base / "nexapkg.json") << nexapkgJson;
-        std::cout << "[Nexa] Initialized project in " << base.string() << "\n";
-        std::cout << "  main.nxa     - Entry point\n";
-        std::cout << "  nexapkg.json - Package manifest (nexapkg add, install)\n";
-        std::cout << "  .gitignore   - Ignore build artifacts\n";
-        std::cout << "Run: NexaC build  |  nexapkg add <pkg> && nexapkg install\n";
-        return 0;
-    } catch (const std::exception& e) {
-        std::cerr << "[Nexa] Error: " << e.what() << "\n";
-        return 1;
+    std::string jsonName;
+    for (char c : projName) {
+        if (c == '"' || c == '\\') jsonName += '\\';
+        jsonName += c;
     }
+    std::string nexapkgJson = "{\n  \"name\": \"" + jsonName + "\",\n  \"dependencies\": {}\n}\n";
+    // A file that is already there is the user's, and is kept as it is.
+    struct Scaffold { const char* name; const std::string* text; const char* what; };
+    const Scaffold files[] = {
+        {"main.nxa", &mainNxa, "Entry point"},
+        {"nexapkg.json", &nexapkgJson, "Package manifest (nexapkg add, install)"},
+        {".gitignore", &gitignore, "Ignore build artifacts"},
+    };
+    bool kept[3] = {false, false, false};
+    for (int i = 0; i < 3; i++) {
+        const fs::path p = base / files[i].name;
+        if (fs::exists(p, ec)) { kept[i] = true; continue; }
+        std::ofstream out(p);
+        out << *files[i].text;
+        out.close();
+        if (!out) {
+            std::cerr << "[Nexa] Error: cannot write " << p.string() << "\n";
+            return 1;
+        }
+    }
+    std::cout << "[Nexa] Initialized project in " << base.string() << "\n";
+    for (int i = 0; i < 3; i++) {
+        std::string label = files[i].name;
+        label.resize(12, ' ');
+        std::cout << "  " << label << " - " << (kept[i] ? "kept (already here)" : files[i].what) << "\n";
+    }
+    std::cout << "Run: NexaC build  |  nexapkg add <pkg> && nexapkg install\n";
+    return 0;
 }
 
 #ifdef _WIN32

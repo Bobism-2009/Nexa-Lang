@@ -118,21 +118,7 @@ static void __nexa_file_walk_into(const std::string& __dir, const std::string& _
     std::string __r = __rel;
     if (!__r.empty()) __r += '/';
     __r += __n;
-    int __link = 0;
-#ifdef _WIN32
-    // A symbolic link or a junction -- not every reparse point: a OneDrive
-    // folder is one too, and is a real directory to walk.
-    WIN32_FIND_DATAA __fd;
-    HANDLE __h = FindFirstFileA(__full.c_str(), &__fd);
-    if (__h != INVALID_HANDLE_VALUE) {
-      __link = (__fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
-               (__fd.dwReserved0 == IO_REPARSE_TAG_SYMLINK || __fd.dwReserved0 == IO_REPARSE_TAG_MOUNT_POINT);
-      FindClose(__h);
-    }
-#else
-    struct stat __st;
-    __link = lstat(__full.c_str(), &__st) == 0 && S_ISLNK(__st.st_mode);
-#endif
+    const int __link = __nexa_file_islink(__full.c_str());
     if (!__link && __nexa_file_isdir(__full.c_str())) __nexa_file_walk_into(__full, __r, __out, __depth + 1);
     else if (__nexa_file_isfile(__full.c_str())) __out.push_back(__r);
   }
@@ -187,6 +173,25 @@ static int __nexa_file_isdir(const char* __path) {
   struct stat __st;
   if (stat(__path, &__st) != 0) return 0;
   return S_ISDIR(__st.st_mode) ? 1 : 0;
+#endif
+}
+// A symbolic link or a junction -- not every reparse point: a OneDrive folder
+// is one too, and is a real directory. The path names the link itself, so it
+// must not end in a separator.
+static int __nexa_file_islink(const char* __path) {
+  if (!__path || !__path[0]) return 0;
+#ifdef _WIN32
+  // FindFirstFile would match a pattern; a name with one is no file at all.
+  for (const char* __c = __path; *__c; ++__c) if (*__c == '*' || *__c == '?') return 0;
+  WIN32_FIND_DATAA __fd;
+  HANDLE __h = FindFirstFileA(__path, &__fd);
+  if (__h == INVALID_HANDLE_VALUE) return 0;
+  FindClose(__h);
+  return ((__fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
+          (__fd.dwReserved0 == IO_REPARSE_TAG_SYMLINK || __fd.dwReserved0 == IO_REPARSE_TAG_MOUNT_POINT)) ? 1 : 0;
+#else
+  struct stat __st;
+  return (lstat(__path, &__st) == 0 && S_ISLNK(__st.st_mode)) ? 1 : 0;
 #endif
 }
 static int __nexa_file_isfile(const char* __path) {
@@ -412,21 +417,37 @@ static int __nexa_file_remove(const char* __path) {
   if (__nexa_file_isdir(__path)) return RemoveDirectoryA(__path) ? 1 : 0;
   return DeleteFileA(__path) ? 1 : 0;
 #else
-  if (__nexa_file_isdir(__path)) return rmdir(__path) == 0 ? 1 : 0;
+  // lstat: a link to a directory is unlinked, not rmdir'd, and a link whose
+  // target is gone is still there to remove.
+  struct stat __st;
+  if (lstat(__path, &__st) != 0) return 0;
+  if (S_ISDIR(__st.st_mode)) return rmdir(__path) == 0 ? 1 : 0;
   return unlink(__path) == 0 ? 1 : 0;
 #endif
 }
-static int __nexa_file_remove_all(const char* __path) {
-  if (!__path || !__path[0]) return 0;
+// A link is removed, never walked: what it points at is not under this path,
+// and deleting through it would empty a directory somewhere else.
+static int __nexa_file_remove_all_at(const char* __path) {
+  if (__nexa_file_islink(__path)) return __nexa_file_remove(__path);
   if (!__nexa_file_exists(__path)) return 1;
   if (__nexa_file_isdir(__path)) {
     std::vector<std::string> __names = __nexa_file_list(__path);
     for (size_t __i = 0; __i < __names.size(); ++__i) {
       std::string __c = __nexa_file_join(__path, __names[__i].c_str());
-      if (!__nexa_file_remove_all(__c.c_str())) return 0;
+      if (!__nexa_file_remove_all_at(__c.c_str())) return 0;
     }
   }
   return __nexa_file_remove(__path);
+}
+static int __nexa_file_remove_all(const char* __path) {
+  if (!__path || !__path[0]) return 0;
+  // "link/" names what the link points at; without the separator it is the link.
+  size_t __n = 0;
+  while (__path[__n]) __n++;
+  size_t __e = __n;
+  while (__e > 1 && __nexa_file_is_sep(__path[__e - 1]) && __path[__e - 2] != ':') __e--;
+  if (__e == __n) return __nexa_file_remove_all_at(__path);
+  return __nexa_file_remove_all_at(std::string(__path, __e).c_str());
 }
 static int __nexa_file_copy_file(const char* __from, const char* __to) {
 #ifdef _WIN32

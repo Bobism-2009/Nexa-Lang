@@ -121,7 +121,7 @@ fn main() {
                " ", random.bool(), " ", sum);
     let nowhere = "_nexa_no_such_dir/notes.txt";
     io.println(file.stem(nowhere), " ", len(file.lines(nowhere)), " ", len(file.walk(nowhere)), " ",
-               file.size(nowhere), " ", file.modified(nowhere));
+               file.size(nowhere), " ", file.modified(nowhere), " ", file.remove_all(nowhere));
     let when: long = 1000000000;
     io.println(time.format_utc("%F %T", when), " ", time.unix() > when, " ", time.month(when));
 }
