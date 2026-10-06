@@ -1,0 +1,10 @@
+// A float main: a whole number may be returned as a float, and falling off
+// the end needs no return.
+// Reference: SYNTAX/Core.txt (ENTRY POINT)
+#include <std/io>
+
+fn main(args: []string): float {
+    if (len(args) > 99) { return 2; }
+    if (len(args) > 98) { return 1.5; }
+    io.println("float_main=ran");
+}

@@ -1,0 +1,7 @@
+#include <std/io>
+
+struct P { x: int; }
+
+fn main(): bool {
+    return 1;
+}

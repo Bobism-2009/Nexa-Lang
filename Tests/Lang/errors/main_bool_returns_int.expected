@@ -1,0 +1,1 @@
+main returns bool, but this returns an int

@@ -14,8 +14,16 @@ ENTRY POINT
     ...
   }
   - Every executable must have exactly one fn main()
-  - main returns int (the exit code) or void: write `: int`, `: void`, or no return type,
-    which is the same as `: int`. No other return type is allowed.
+  - main may write any return type, or none:
+      fn main()            the same as `: int`
+      fn main(): int       the value returned is the exit code; falling off the end is 0
+      fn main(): void      exits 0; `return value;` is an error
+      fn main(): long      (any integer type) the value is the exit code
+      fn main(): Result[T] an error is printed as "error: <message>" and exits 1; ok exits 0
+      fn main(): string    (float, bool, a struct, a slice, ...) the value is dropped; exits 0
+  - When main writes a type, every `return` in it must be of that type, or it does not
+    compile: `fn main(): string { return 5; }` is "main returns string, but this returns
+    an int". A whole number may be returned as any integer type or as a float.
   - Optional command line: one parameter named as you like, type must be exactly []string.
     Index 0 is the program name/path as in C argv[0]; 1.. are arguments. Use len(args) for the count.
   - DLL builds (--dll) do not require main

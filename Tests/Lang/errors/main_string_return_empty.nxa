@@ -1,5 +1,7 @@
 #include <std/io>
 
+struct P { x: int; }
+
 fn main(): string {
-    io.println("hi");
+    return;
 }

@@ -1,0 +1,19 @@
+// main may write any return type. A value that is not an integer is dropped,
+// and a closure inside main keeps its own return type.
+// Reference: SYNTAX/Core.txt (ENTRY POINT)
+#include <std/io>
+
+fn load(s: string): Result[int] {
+    if (s == "") { return err("empty"); }
+    return ok(7);
+}
+
+fn main(args: []string): string {
+    let twice = fn (a: int): int { return a * 2; };
+    io.println("closure_in_string_main=", twice(4));
+    let v = load("x")?;
+    io.println("try_in_string_main=", v);
+    if (len(args) > 99) { return "many"; }
+    io.println("before_return=1");
+    return "n=" + v;
+}

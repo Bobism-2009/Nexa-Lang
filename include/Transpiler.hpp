@@ -1135,6 +1135,25 @@ public:
                         throw std::runtime_error(
                             "main(...) only supports an optional single parameter (args: []string)");
                     }
+                    bool mainValRet = false, mainVoidRet = false;
+                    stmtsClassifyReturns(node.children, mainValRet, mainVoidRet);
+                    if (mainValRet && mainVoidRet) {
+                        throw std::runtime_error("main mixes 'return;' and 'return expr;'");
+                    }
+                    // main may return any type. int is the exit code and void exits 0,
+                    // both written straight into C++'s main. Any other type is main's
+                    // body as a closure that C++'s main calls: an integer it returns is
+                    // the exit code, a Result's error is printed and exits 1, and any
+                    // other value is dropped.
+                    const std::string& mainRet = node.fnReturnType;
+                    const bool typedMain = !mainRet.empty() && mainRet != "void" && mainRet != "int";
+                    if (mainRet == "void") {
+                        if (mainValRet) throw std::runtime_error("cannot return a value from void main()");
+                    } else if (!mainRet.empty() && mainVoidRet) {
+                        throw std::runtime_error("return with no value in main, which returns " + mainRet);
+                    }
+                    const bool mainExits = typedMain && !nexaIsResultType(mainRet) && stmtsHaveTry(node.children);
+                    if (mainExits) out << "#include <cstdlib>\n";
                     if (sliceMain) {
                         out << "int main(int argc, char** argv) {\n";
                     } else {
@@ -1159,31 +1178,41 @@ public:
                         out << "        " << aname << ".emplace_back(argv[__nexa_ai] ? argv[__nexa_ai] : \"\");\n";
                         out << "    }\n";
                     }
-                    bool mainValRet = false, mainVoidRet = false;
-                    stmtsClassifyReturns(node.children, mainValRet, mainVoidRet);
-                    if (mainValRet && mainVoidRet) {
-                        throw std::runtime_error("main mixes 'return;' and 'return expr;'");
-                    }
-                    if (!node.fnReturnType.empty()) {
-                        if (node.fnReturnType != "void") {
-                            throw std::runtime_error(
-                                "main returns int or void: write `: int`, `: void`, or no return type");
-                        }
-                        if (mainValRet) {
-                            throw std::runtime_error("cannot return a value from void main()");
-                        }
-                    }
                     varStructPush();
                     nexaDeclStack_.push_back(globalNexaDecl_);
                     if (sliceMain) {
                         nexaDeclStack_.back()[node.paramNames[0]] = "[]string";
                     }
                     emitFnRet_ = EmitFnRet::Main;
+                    mainRetType_ = (mainRet == "void") ? std::string() : mainRet;
+                    if (typedMain) {
+                        out << "    auto __nexa_main = [&]() -> " << nexaTypeToCpp(mainRet) << " {\n";
+                        emitFnRet_ = EmitFnRet::IntFn;
+                        tryFnRet_ = mainRet; tryFnName_ = "main";
+                        tryInMain_ = !nexaIsResultType(mainRet);
+                        tryMainExit_ = tryInMain_;
+                    }
                     emitBlockStatements(out, node.children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum);
                     emitFnRet_ = EmitFnRet::Main;
+                    tryInMain_ = true; tryMainExit_ = false; tryFnRet_.clear(); tryFnName_.clear();
+                    mainRetType_.clear();
                     nexaDeclStack_.pop_back();
                     varStructPop();
-                    if (!stmtsEndWithReturn(node.children)) {
+                    if (typedMain) {
+                        if (!stmtsEndWithReturn(node.children)) emitDefaultReturnForNexaFn(out, mainRet);
+                        out << "    };\n";
+                        if (nexaIsResultType(mainRet)) {
+                            out << "    auto __nexa_main_r = __nexa_main();\n";
+                            out << "    if (!__nexa_main_r.ok()) { std::fflush(stdout); std::fputs(\"error: \", stderr); "
+                                   "std::fputs(__nexa_main_r.error().c_str(), stderr); std::fputc('\\n', stderr); return 1; }\n";
+                            out << "    return 0;\n";
+                        } else if (nexaIsNumericIntType(mainRet)) {
+                            out << "    return static_cast<int>(__nexa_main());\n";
+                        } else {
+                            out << "    (void)__nexa_main();\n";
+                            out << "    return 0;\n";
+                        }
+                    } else if (!stmtsEndWithReturn(node.children)) {
                         out << "    return 0;\n";
                     }
                     out << "}\n";
@@ -1575,6 +1604,12 @@ private:
     std::string tryFnRet_;
     std::string tryFnName_;
     bool tryInMain_ = true;
+    // main with a return type other than int or void is a closure, where
+    // `return 1;` is not how a failed `?` ends the program.
+    bool tryMainExit_ = false;
+    // The return type main wrote (not void), while main's own statements are
+    // emitted: every `return` there is checked against it. Empty otherwise.
+    std::string mainRetType_;
     mutable int tryCounter_ = 0;
     // Set while emitting a function that wrote no return type and returns a
     // value, so is an int function by inference: its name, for the error a
@@ -6107,6 +6142,41 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         if (n.type == AstNode::Type::ExprLambda) return;
         for (const AstNode& c : n.children) astClassifyReturns(c, hasValueReturn, hasVoidReturn);
     }
+    // Whether a `?` is among these statements, a closure's own aside.
+    static bool stmtsHaveTry(const std::vector<AstNode>& stmts) {
+        for (const AstNode& s : stmts) {
+            if (s.type == AstNode::Type::ExprLambda) continue;
+            if (s.type == AstNode::Type::ExprTry || stmtsHaveTry(s.children)) return true;
+        }
+        return false;
+    }
+    // main says what it returns, so a `return` of another type is an error here
+    // and not a conversion C++ makes quietly (a float cut down to an int) or
+    // refuses in its own words. A whole number may be returned as any integer
+    // type or as a float, the way it may be assigned to one.
+    void checkMainReturn(const AstNode& ret) const {
+        if (mainRetType_.empty() || ret.children.empty()) return;
+        const std::string& want = mainRetType_;
+        const std::string got = inferExprNexaType(ret.children[0]);
+        if (got.empty() || got == want) return;
+        if (nexaIsNumericIntType(want) && nexaIsNumericIntType(got)) return;
+        if (nexaIsFloatType(want) && (nexaIsFloatType(got) || nexaIsNumericIntType(got))) return;
+        if (nexaIsResultType(want) && nexaIsResultType(got)) return;
+        if (isPointerType(want) && isPointerType(got)) return;
+        // "struct:P" and "enum:Color" are how those types are kept; the user wrote P.
+        auto shown = [](std::string t) {
+            for (const char* tag : {"struct:", "enum:"}) {
+                size_t at;
+                while ((at = t.find(tag)) != std::string::npos) t.erase(at, std::string(tag).size());
+            }
+            return t;
+        };
+        const std::string gotShown = shown(got);
+        const bool vowel = std::string("aeiou").find(gotShown[0]) != std::string::npos;
+        std::string msg = "main returns " + shown(want) + ", but this returns " + (vowel ? "an " : "a ") + gotShown;
+        if (ret.line) msg += " at line " + std::to_string(ret.line);
+        throw std::runtime_error(msg);
+    }
     static void stmtsClassifyReturns(const std::vector<AstNode>& stmts, bool& hasValueReturn, bool& hasVoidReturn) {
         for (const AstNode& s : stmts) astClassifyReturns(s, hasValueReturn, hasVoidReturn);
     }
@@ -7410,6 +7480,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                         throw std::runtime_error("cannot return a value from void function");
                     }
                     checkInferredIntReturn(child);
+                    checkMainReturn(child);
                     out << indent << "return " << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
                 }
             } else if (child.type == AstNode::Type::Break) {
@@ -7907,6 +7978,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         const std::string savedTryRet = tryFnRet_, savedTryName = tryFnName_;
         const bool savedTryMain = tryInMain_;
         tryFnRet_ = ret; tryFnName_ = "a function literal"; tryInMain_ = false;
+        const std::string savedMainRet = mainRetType_;
+        mainRetType_.clear();
         std::ostringstream body;
         emitBlockStatements(body, e.children, localMap, varIdx, localStr, localConst, localFloat,
                             localChar, localBool, localEnum);
@@ -7914,6 +7987,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         emitFnRet_ = savedRet;
         inferredIntFn_ = savedInferred;
         tryFnRet_ = savedTryRet; tryFnName_ = savedTryName; tryInMain_ = savedTryMain;
+        mainRetType_ = savedMainRet;
         varStructPop();
         nexaDeclStack_.pop_back();
         return nexaTypeToCpp(ty) + "([&](" + sig + ") -> " + nexaTypeToCpp(ret) + " {\n" + body.str() + "})";
@@ -9219,7 +9293,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 std::string fail;
                 if (tryInMain_) {
                     fail = "{ std::fflush(stdout); std::fputs(\"error: \", stderr); std::fputs(" + q +
-                           ".error().c_str(), stderr); std::fputc('\\n', stderr); return 1; }";
+                           ".error().c_str(), stderr); std::fputc('\\n', stderr); " +
+                           (tryMainExit_ ? "std::exit(1); }" : "return 1; }");
                 } else {
                     fail = "return __nexa_result_err(" + q + ".error());";
                 }
