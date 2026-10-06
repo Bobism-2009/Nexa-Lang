@@ -1,0 +1,23 @@
+// std/term colour, styles and cursor codes. Escape sequences are identical on
+// every platform, so this is a plain run test; getkey/raw and width/height are
+// not here (they need a terminal) -- Tests/term_cases.sh covers getkey.
+// Reference: SYNTAX/Modules.txt (std/term)
+#include <std/io>
+#include <std/term>
+
+fn main() {
+    io.println(term.color("red", "red"));
+    io.println(term.color("gray", "gray"), " ", term.color("grey", "grey"));
+    io.println(term.bg(term.color("fg+bg", "white"), "blue"));
+    io.println(term.bold("B"), term.dim("D"), term.italic("I"), term.underline("U"), term.reverse("R"));
+    io.println(term.bold(term.color("nested", "green")));
+    io.println(term.color("unknown", "chartreuse"));        // plain, no codes
+    io.println(term.color("bright", "bright_cyan"));
+    // cursor codes as statements
+    term.move(3, 2);
+    term.clear_line();
+    term.home();
+    term.hide_cursor();
+    term.show_cursor();
+    io.println("done");
+}

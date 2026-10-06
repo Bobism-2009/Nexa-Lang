@@ -32,7 +32,7 @@ struct AstNode {
                       DllLoad, DllCall,
                       FileRead, FileWrite, FileAppend, FileExists, FileMkdir, FileCall,
                       RandomInt, RandomSeed, RandomCall,
-                      MathCall, CryptoCall, HttpCall, TcpCall, UdpCall, GfxCall, Gfx3dCall, UiCall, JsonCall,
+                      MathCall, CryptoCall, HttpCall, TcpCall, UdpCall, GfxCall, Gfx3dCall, UiCall, JsonCall, TermCall,
                       ResultMake,
                       StrMethod,
                       TimeSleep, TimeSeconds, TimeMilliseconds, TimeNowMs, TimeCall,
@@ -1000,7 +1000,7 @@ private:
         static const std::vector<std::string> mods = {
             "std/io", "std/os", "std/file", "std/dll", "std/random", "std/math",
             "std/crypto", "std/network", "std/json", "std/time", "std/thread",
-            "std/gfx", "std/gfx3d", "std/ui", "std/inline",
+            "std/gfx", "std/gfx3d", "std/ui", "std/inline", "std/term",
         };
         return mods;
     }
@@ -1404,6 +1404,8 @@ private:
                 stmts.push_back(parseTimeCall());
             } else if (t.type == TokenType::Identifier && t.value == "random") {
                 stmts.push_back(parseRandomCall());
+            } else if (t.type == TokenType::Identifier && t.value == "term") {
+                stmts.push_back(parseTermStmt());
             } else if (t.type == TokenType::Identifier && t.value == "gfx") {
                 stmts.push_back(parseGfxCall(true));
             } else if (t.type == TokenType::Identifier && t.value == "gfx3d") {
@@ -2326,6 +2328,8 @@ private:
                 stmts.push_back(parseTimeCall());
             } else if (t.type == TokenType::Identifier && t.value == "random") {
                 stmts.push_back(parseRandomCall());
+            } else if (t.type == TokenType::Identifier && t.value == "term") {
+                stmts.push_back(parseTermStmt());
             } else if (t.type == TokenType::Identifier && t.value == "gfx") {
                 stmts.push_back(parseGfxCall(true));
             } else if (t.type == TokenType::Identifier && t.value == "gfx3d") {
@@ -2966,6 +2970,10 @@ private:
         if (peek().type == TokenType::Identifier && peek().value == "math" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
             return applyIndexAndDotPostfix(parseMathCall());
+        }
+        if (peek().type == TokenType::Identifier && peek().value == "term" && pos_ + 2 < tokens_.size() &&
+            tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
+            return applyIndexAndDotPostfix(parseTermCall());
         }
         if (peek().type == TokenType::Identifier && peek().value == "crypto" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
@@ -4395,6 +4403,65 @@ private:
         }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' after crypto." + method + "(...) at line " + std::to_string(peek().line));
+        }
+        return node;
+    }
+
+    static int termArity(const std::string& m) {
+        if (m == "color" || m == "bg" || m == "move") return 2;
+        if (m == "bold" || m == "dim" || m == "italic" || m == "underline" || m == "reverse" ||
+            m == "raw" || m == "cursor" || m == "alt_screen") return 1;
+        if (m == "clear" || m == "clear_line" || m == "home" || m == "hide_cursor" || m == "show_cursor" ||
+            m == "getkey" || m == "key_available" || m == "width" || m == "height") return 0;
+        return -1;
+    }
+
+    AstNode parseTermCall() {
+        size_t line = peek().line;
+        if (!modules_.hasTerm()) {
+            throw std::runtime_error("term.* requires #include <std/term> at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "term") {
+            throw std::runtime_error("Expected 'term' at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        const Token& methodTok = peek();
+        if (methodTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected term method at line " + std::to_string(methodTok.line));
+        }
+        const std::string m = methodTok.value;
+        advance();  // method name
+        const int arity = termArity(m);
+        if (arity < 0) {
+            throw std::runtime_error("Unknown term method 'term." + m + "' at line " + std::to_string(methodTok.line) +
+                " (use color, bg, bold, dim, italic, underline, reverse, clear, clear_line, move, home, "
+                "hide_cursor, show_cursor, cursor, alt_screen, raw, getkey, key_available, width, height)");
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after term." + m + " at line " + std::to_string(peek().line));
+        }
+        AstNode node{AstNode::Type::TermCall, m, {}};
+        node.line = line;
+        for (int i = 0; i < arity; i++) {
+            if (i > 0 && !match(TokenType::Comma)) {
+                throw std::runtime_error("Expected ',' in term." + m + "(...) at line " + std::to_string(peek().line));
+            }
+            node.children.push_back(parseValueExpr());
+        }
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' after term." + m + "(...) at line " + std::to_string(peek().line));
+        }
+        return node;
+    }
+
+    // Statement form: consumes the trailing ';'. The value methods are usable
+    // as statements too (their result is simply dropped).
+    AstNode parseTermStmt() {
+        AstNode node = parseTermCall();
+        if (!match(TokenType::Semicolon)) {
+            throw std::runtime_error("Expected ';' after term." + node.value + "(...) at line " + std::to_string(peek().line));
         }
         return node;
     }

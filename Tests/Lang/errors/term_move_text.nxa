@@ -1,0 +1,7 @@
+// term.move takes two numbers (column, row), not text.
+#include <std/io>
+#include <std/term>
+
+fn main() {
+    term.move("x", 3);
+}

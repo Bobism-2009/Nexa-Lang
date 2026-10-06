@@ -1,0 +1,2 @@
+term.move(col, row) expects a number for col, but got text
+at line 6

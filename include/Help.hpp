@@ -801,6 +801,39 @@ string can end the block early. Clang has to accept whatever comes out.
 Reach for this last; a program that uses it keeps RTTI and exceptions, and
 loses the undefined-name check.)HELP" },
 
+{ "std/term", "term terminal color colour cursor key tui ansi", Group::Module,
+  "terminal colour, cursor control, and a key at a time",
+  R"HELP(std/term - terminal colour, cursor and keys
+  #include <std/term>
+  Full reference: SYNTAX/Modules.txt (std/term)
+
+  colour  term.color(text, name)  term.bg(text, name)      return a string
+          term.bold / dim / italic / underline / reverse (text)   they nest
+            names: black red green yellow blue magenta cyan white, gray,
+                   bright_<name>; unknown leaves the text plain
+  cursor  term.clear()  term.clear_line()  term.move(col, row)  term.home()
+          term.hide_cursor()  term.show_cursor()  term.cursor(show)
+          term.alt_screen(on)      clean full-screen buffer, scrollback kept
+  keys    term.raw(on)             one key at a time, unechoed; undo with defer
+          term.getkey()            a key by name ("a","enter","up","ctrl-c",...)
+          term.key_available()     1 if a key is waiting (non-blocking loops)
+  size    term.width()  term.height()        columns and rows (80x24 if unknown)
+
+Plain terminal control -- ANSI escapes and the console API, nothing linked, and
+each group emitted only when used. On Windows colour turns on virtual-terminal
+processing the first time it runs.
+
+  fn main() {
+      term.raw(true);
+      defer term.raw(false);
+      io.println(term.bold(term.color("ready", "green")), " - arrows, q to quit");
+      while (true) {
+          let k = term.getkey();
+          if (k == "q") { break; }
+          io.println("you pressed ", k);
+      }
+  })HELP" },
+
 };
 
 inline const size_t kTopicCount = sizeof(kTopics) / sizeof(kTopics[0]);

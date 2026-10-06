@@ -5,6 +5,7 @@
 #include <sstream>
 #include "CryptoRuntime.hpp"
 #include "FileRuntime.hpp"
+#include "TermRuntime.hpp"
 #include "HttpRuntime.hpp"
 #include "GfxRuntime.hpp"
 #include "UiRuntime.hpp"
@@ -161,6 +162,10 @@ public:
         bool gfxKeyEdge = false;
         bool gfxTyped = false;
         bool gfxWheel = false;
+        bool termStyle = false;      // term.color/bg/bold/dim/italic/underline/reverse
+        bool termScreen = false;     // term.clear/move/home/cursor/alt_screen
+        bool termRaw = false;        // term.raw/getkey/key_available
+        bool termSize = false;       // term.width/height
         bool gfxPad = false;         // gfx.pads, pad, pad_pressed, pad_axis
         bool gfxImageStore = false;
         bool gfxUpload = false;     // gfx.upload: an image from the program's own pixels
@@ -272,6 +277,9 @@ public:
 
     bool hasThread() const {
         return enabled_.count("std/thread") > 0;
+    }
+    bool hasTerm() const {
+        return enabled_.count("std/term") > 0;
     }
 
     bool hasGfx() const {
@@ -1928,6 +1936,9 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
             out += fileRuntimeCpp();
             out += fileExtraRuntimeCpp(usage.fileSize64, usage.fileModified, usage.fileStem, usage.fileLines,
                                        usage.fileWalk);
+        }
+        if (hasTerm() && (usage.termStyle || usage.termScreen || usage.termRaw || usage.termSize)) {
+            out += termRuntimeCpp(usage.termStyle, usage.termScreen, usage.termRaw, usage.termSize);
         }
         if (hasRandom() && usage.random) {
             out += "#include <random>\n";

@@ -1718,6 +1718,48 @@ ARGUMENT TYPES
   A write-only program stays hello-world sized.
   exists/mkdir/list/cwd and the other path helpers use Win32 / POSIX (no <filesystem>).
 
+#include <std/term>
+  Colour, cursor control and keys for building command-line tools, menus and
+  terminal games. All of it is plain terminal control (ANSI escapes + the OS
+  console API); nothing is linked, and each group is emitted only if used.
+
+  colour (return a string, so print or concatenate it):
+  term.color(text, name) - text in a foreground colour, then back to default
+  term.bg(text, name)    - text on a background colour
+                           names: black red green yellow blue magenta cyan white,
+                           gray/grey, and bright_<name>. An unknown name leaves
+                           the text unchanged.
+  term.bold(text) / term.dim(text) / term.italic(text) / term.underline(text)
+  term.reverse(text)     - each turns one attribute on then off, so they nest:
+                           term.bold(term.color("x", "red")) keeps both.
+  cursor and screen (statements):
+  term.clear()           - clear the screen and move home
+  term.clear_line()      - erase the current line, cursor to its start
+  term.move(col, row)    - move the cursor (0-based; 0,0 is top-left)
+  term.home()            - cursor to 0,0
+  term.hide_cursor() / term.show_cursor()
+  term.cursor(show)      - show when show is 1, hide when 0
+  term.alt_screen(on)    - switch to a clean full-screen buffer (on=1) and back
+                           (on=0), leaving the user's scrollback as it was
+  keys:
+  term.raw(on)           - raw mode (on=1): keys arrive one at a time, unechoed,
+                           and Ctrl-C/Ctrl-Z are keys, not signals. Pair it with
+                           defer term.raw(false) so it is always undone.
+  term.getkey()          - one keypress, by name: a printable key is itself
+                           ("a","7"), the rest are "enter" "esc" "tab" "space"
+                           "backspace" "up" "down" "left" "right" "home" "end"
+                           "pageup" "pagedown" "delete" "insert", and a control
+                           combo is "ctrl-a".."ctrl-z". "" at end of input. Reads
+                           per key in raw mode; without it, a line is read first.
+  term.key_available()   - 1 if a key is waiting (so a loop can do other work),
+                           else 0. Pairs with getkey for a non-blocking loop.
+  size:
+  term.width() / term.height() - the terminal size in columns and rows (80x24
+                           if it cannot be determined, e.g. output is a pipe)
+  Windows note: colour needs virtual-terminal processing, which term turns on
+  the first time any colour/cursor call runs. The key reader is the console API
+  (_getch); on Linux/macOS it is termios + the kernel. No reader on a non-tty.
+
 #include <std/dll>
   dll.load(path)    - Load .so/.dll/.dylib, returns handle (int)
   dll.call(h, "sym") - Call exported fn from loaded library

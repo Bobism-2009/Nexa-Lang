@@ -410,6 +410,17 @@ public:
                     if (n.value == "shuffle") cppUsage.randomShuffle = true;
                     break;
                 case AstNode::Type::MathCall: cppUsage.math = true; break;
+                case AstNode::Type::TermCall: {
+                    const std::string& m = n.value;
+                    if (m == "color" || m == "bg" || m == "bold" || m == "dim" || m == "italic" ||
+                        m == "underline" || m == "reverse") cppUsage.termStyle = true;
+                    else if (m == "clear" || m == "clear_line" || m == "move" || m == "home" ||
+                             m == "hide_cursor" || m == "show_cursor" || m == "cursor" || m == "alt_screen")
+                        cppUsage.termScreen = true;
+                    else if (m == "raw" || m == "getkey" || m == "key_available") cppUsage.termRaw = true;
+                    else if (m == "width" || m == "height") cppUsage.termSize = true;
+                    break;
+                }
                 case AstNode::Type::CryptoCall: {
                     const std::string& fn = n.value;
                     const bool hexLit = (fn == "hex_encode" || fn == "hex_decode") &&
@@ -3024,6 +3035,11 @@ private:
                 return "float";
             case AstNode::Type::CryptoCall:
                 return "string";
+            case AstNode::Type::TermCall:
+                if (e.value == "color" || e.value == "bg" || e.value == "bold" || e.value == "dim" ||
+                    e.value == "italic" || e.value == "underline" || e.value == "reverse" || e.value == "getkey")
+                    return "string";
+                return "int";
             case AstNode::Type::HttpCall:
                 if (e.value == "request") return nexaMakeResultType("struct:HttpResponse");
                 if (e.value == "localhost") return nexaMakeResultType("struct:HttpServer");
@@ -4664,6 +4680,25 @@ private:
         return rows;
     }
 
+    // std/term.
+    static const BuiltinArgRow* termArgRows() {
+        static const BuiltinArgRow rows[] = {
+            {"color",     "term.color(text, name)", "tt"},
+            {"bg",        "term.bg(text, name)",    "tt"},
+            {"bold",      "term.bold(text)",        "t"},
+            {"dim",       "term.dim(text)",         "t"},
+            {"italic",    "term.italic(text)",      "t"},
+            {"underline", "term.underline(text)",   "t"},
+            {"reverse",   "term.reverse(text)",     "t"},
+            {"move",      "term.move(col, row)",    "nn"},
+            {"cursor",    "term.cursor(show)",      "n"},
+            {"alt_screen","term.alt_screen(on)",    "n"},
+            {"raw",       "term.raw(on)",           "n"},
+            {"", nullptr, nullptr},
+        };
+        return rows;
+    }
+
     // std/random's value calls. random.int and random.seed have rows of their
     // own, by node type, in builtinArgRowFor.
     static const BuiltinArgRow* randomArgRows() {
@@ -5030,6 +5065,9 @@ private:
                 break;
             case AstNode::Type::CryptoCall:
                 semCheckBuiltinArgRow(e, findBuiltinArgRow(cryptoArgRows(), e.value, e.children.size()));
+                break;
+            case AstNode::Type::TermCall:
+                semCheckBuiltinArgRow(e, findBuiltinArgRow(termArgRows(), e.value, e.children.size()));
                 break;
             default:
                 semCheckBuiltinArgRow(e, nodeArgRow(e.type, e.value));
@@ -5939,6 +5977,11 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         return m == "contains" || m == "starts_with" || m == "ends_with";
     }
 
+    static bool termCallIsString(const std::string& m) {
+        return m == "color" || m == "bg" || m == "bold" || m == "dim" || m == "italic" ||
+               m == "underline" || m == "reverse" || m == "getkey";
+    }
+
     static bool exprProducesString(const AstNode& e) {
         if (e.type == AstNode::Type::OsInfo) {
             const std::string& m = e.value;
@@ -5954,6 +5997,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         // udp.recv the same, and udp.sender is the address the bytes came from.
         if (e.type == AstNode::Type::UdpCall) return e.value == "recv" || e.value == "sender";
         if (e.type == AstNode::Type::JsonCall && e.value == "stringify") return true;
+        if (e.type == AstNode::Type::TermCall) return termCallIsString(e.value);
         // gfx3d.backend() is the one call in the module that answers with
         // text, so it is the one that concatenates instead of being counted.
         if (e.type == AstNode::Type::Gfx3dCall) return e.value == "backend" || e.value == "typed";
@@ -6043,6 +6087,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         // udp.recv the same, and udp.sender is the address the bytes came from.
         if (e.type == AstNode::Type::UdpCall) return e.value == "recv" || e.value == "sender";
         if (e.type == AstNode::Type::JsonCall && e.value == "stringify") return true;
+        if (e.type == AstNode::Type::TermCall) return termCallIsString(e.value);
         if (e.type == AstNode::Type::FileCall) {
             const std::string& m = e.value;
             return m == "cwd" || m == "abspath" || m == "join" || m == "dirname" || m == "basename" || m == "extension" || m == "stem";
@@ -6775,6 +6820,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 out << indent << "fflush(stdout);\n";
             } else if (child.type == AstNode::Type::FileRead) {
                 out << indent << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
+            } else if (child.type == AstNode::Type::TermCall) {
+                out << indent << "(void)(" << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ");\n";
             } else if (child.type == AstNode::Type::Defer) {
                 out << indent << "auto __nexa_defer_" << (deferSeq_++) << " = __nexa_make_defer([&]() {\n";
                 const AstNode& deferBody = child.children[0];
@@ -8428,6 +8475,41 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     return "__nexa_crypto_hmac_sha256(" + key + ", " + data + ")";
                 }
                 throw std::runtime_error("Internal: unknown crypto method '" + fn + "'");
+            }
+            case AstNode::Type::TermCall: {
+                const std::string& fn = e.value;
+                auto s = [&](size_t i) {
+                    std::map<std::string, bool> em;
+                    const auto& vs = varIsString ? *varIsString : em;
+                    const auto& vf = varIsFloat ? *varIsFloat : em;
+                    const auto& vc = varIsChar ? *varIsChar : em;
+                    const auto& vb = varIsBool ? *varIsBool : em;
+                    return emitConcatOperand(e.children[i], varMap, vs, vf, vc, vb);
+                };
+                auto n = [&](size_t i) {
+                    return emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                };
+                if (fn == "color") return "__nexa_term_color(" + s(0) + ", " + s(1) + ", 0)";
+                if (fn == "bg") return "__nexa_term_color(" + s(0) + ", " + s(1) + ", 1)";
+                if (fn == "bold") return "__nexa_term_attr(" + s(0) + ", \"1\", \"22\")";
+                if (fn == "dim") return "__nexa_term_attr(" + s(0) + ", \"2\", \"22\")";
+                if (fn == "italic") return "__nexa_term_attr(" + s(0) + ", \"3\", \"23\")";
+                if (fn == "underline") return "__nexa_term_attr(" + s(0) + ", \"4\", \"24\")";
+                if (fn == "reverse") return "__nexa_term_attr(" + s(0) + ", \"7\", \"27\")";
+                if (fn == "getkey") return std::string("__nexa_term_getkey()");
+                if (fn == "key_available") return std::string("__nexa_term_key_available()");
+                if (fn == "width") return std::string("__nexa_term_width()");
+                if (fn == "height") return std::string("__nexa_term_height()");
+                if (fn == "clear") return std::string("(__nexa_term_clear(), 0)");
+                if (fn == "clear_line") return std::string("(__nexa_term_clear_line(), 0)");
+                if (fn == "home") return std::string("(__nexa_term_home(), 0)");
+                if (fn == "hide_cursor") return std::string("(__nexa_term_cursor(0), 0)");
+                if (fn == "show_cursor") return std::string("(__nexa_term_cursor(1), 0)");
+                if (fn == "cursor") return "(__nexa_term_cursor(" + n(0) + "), 0)";
+                if (fn == "move") return "(__nexa_term_move(" + n(0) + ", " + n(1) + "), 0)";
+                if (fn == "alt_screen") return "(__nexa_term_alt(" + n(0) + "), 0)";
+                if (fn == "raw") return "(__nexa_term_raw(" + n(0) + "), 0)";
+                throw std::runtime_error("Internal: unknown term method '" + fn + "'");
             }
             case AstNode::Type::HttpCall: {
                 const std::string& fn = e.value;

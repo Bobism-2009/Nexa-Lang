@@ -14,7 +14,7 @@
 #   size       Windows and Linux: an everyday program -- strings, a slice, a map,
 #              an f-string, a Result, io.to_int, io.parse_int / parse_float /
 #              to_float, io.eprintln, time.unix / format, a thread.mutex, a defer, float32 and
-#              bits, std/math, all of std/random and the std/file extras -- is under 64KB, and prints
+#              bits, std/math, all of std/random, the std/file extras and std/term colour -- is under 64KB, and prints
 #              exactly what the same program built without the slimming
 #              (NEXA_NO_SLIM=1) prints.
 #
@@ -72,6 +72,7 @@ cat > "$WORK/every.nxa" <<'EOF'
 #include <std/math>
 #include <std/random>
 #include <std/file>
+#include <std/term>
 
 struct Item {
     name: string;
@@ -113,6 +114,7 @@ fn main() {
     thread.lock(m);
     defer thread.unlock(m);
     sum += 1;
+    io.println(term.bold(term.color("ok", "green")), " ", term.underline("x"));
     random.seed(5);
     let bag = [3, 1, 2];
     random.shuffle(bag);

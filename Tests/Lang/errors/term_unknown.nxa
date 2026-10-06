@@ -1,0 +1,7 @@
+// term.spin is not a method.
+#include <std/io>
+#include <std/term>
+
+fn main() {
+    term.spin();
+}
