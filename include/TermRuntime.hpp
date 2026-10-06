@@ -41,9 +41,6 @@ static void __nexa_term_vt() {
     DWORD __m = 0;
     if (__h != INVALID_HANDLE_VALUE && GetConsoleMode(__h, &__m))
         SetConsoleMode(__h, __m | 0x0004 /* ENABLE_VIRTUAL_TERMINAL_PROCESSING */);
-    // Output UTF-8, so the box-drawing and circle glyphs render on the classic
-    // console (with a TrueType font) and not just in Windows Terminal.
-    SetConsoleOutputCP(65001 /* CP_UTF8 */);
 #endif
 }
 static void __nexa_term_emit(const std::string& __s) { std::fwrite(__s.data(), 1, __s.size(), stdout); std::fflush(stdout); }
@@ -169,14 +166,16 @@ static void __nexa_term_progress(int __done, int __total, int __width) {
         out += R"NEXA_TERM(
 static void __nexa_term_spinner(int __tick, const std::string& __label) {
     __nexa_term_vt();
-    // A rotating circle: the filled half moves left -> top -> right -> bottom.
-    // UTF-8 for U+25D0 U+25D3 U+25D1 U+25D2; output is UTF-8 (see __nexa_term_vt),
-    // so it renders on the classic console with a TrueType font, not just in
-    // Windows Terminal. A terminal whose font lacks the glyph shows its
-    // placeholder box -- the glyphs are common (Consolas, DejaVu Sans Mono).
-    static const char* const __frames[] = {"\xE2\x97\x90", "\xE2\x97\x93", "\xE2\x97\x91", "\xE2\x97\x92"};
-    std::string __b = "\r";
-    __b += __frames[((__tick % 4) + 4) % 4];
+    // A marker that bounces back and forth in a bracket: [=   ] [ =  ] [  = ]
+    // [   =] [  = ] ... Pure ASCII, so it looks the same in CMD, PowerShell,
+    // Windows Terminal and every Linux/macOS terminal -- no font to depend on.
+    const int __w = 4;
+    const int __period = 2 * (__w - 1);
+    int __p = ((__tick % __period) + __period) % __period;
+    if (__p >= __w) __p = __period - __p;
+    std::string __b = "\r[";
+    for (int __i = 0; __i < __w; __i++) __b += (__i == __p ? '=' : ' ');
+    __b += "]";
     if (!__label.empty()) { __b += " "; __b += __label; }
     __b += "\x1b[K";
     __nexa_term_emit(__b);
