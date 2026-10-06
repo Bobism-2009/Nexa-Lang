@@ -811,7 +811,8 @@ loses the undefined-name check.)HELP" },
           term.bold / dim / italic / underline / reverse (text)   they nest
             names: black red green yellow blue magenta cyan white, gray,
                    bright_<name>; unknown leaves the text plain
-  cursor  term.clear()  term.clear_line()  term.move(col, row)  term.home()
+  cursor  term.clear()  term.clear_line()  term.clear_eol()  term.move(col, row)
+          term.home()
           term.hide_cursor()  term.show_cursor()  term.cursor(show)
           term.alt_screen(on)      clean full-screen buffer, scrollback kept
   keys    term.raw(on)             one key at a time, unechoed; undo with defer

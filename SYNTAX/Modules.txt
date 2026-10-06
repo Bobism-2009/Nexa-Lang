@@ -1734,7 +1734,11 @@ ARGUMENT TYPES
                            term.bold(term.color("x", "red")) keeps both.
   cursor and screen (statements):
   term.clear()           - clear the screen and move home
-  term.clear_line()      - erase the current line, cursor to its start
+  term.clear_line()      - erase the whole current line, cursor to its start
+  term.clear_eol()       - erase from the cursor to the end of the line. Writing a
+                           line then clear_eol (rather than clearing first) overwrites
+                           in place with no blank flash -- the flicker-free way to
+                           redraw: term.home(), then each line as print + clear_eol.
   term.move(col, row)    - move the cursor (0-based; 0,0 is top-left)
   term.home()            - cursor to 0,0
   term.hide_cursor() / term.show_cursor()

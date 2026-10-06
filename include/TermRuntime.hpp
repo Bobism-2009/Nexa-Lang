@@ -89,6 +89,7 @@ static std::string __nexa_term_attr(const std::string& __text, const char* __on,
         out += R"NEXA_TERM(
 static void __nexa_term_clear() { __nexa_term_vt(); __nexa_term_emit("\x1b[2J\x1b[H"); }
 static void __nexa_term_clear_line() { __nexa_term_vt(); __nexa_term_emit("\x1b[2K\r"); }
+static void __nexa_term_eol() { __nexa_term_vt(); __nexa_term_emit("\x1b[K"); }
 static void __nexa_term_home() { __nexa_term_vt(); __nexa_term_emit("\x1b[H"); }
 static void __nexa_term_move(int __col, int __row) {
     __nexa_term_vt();

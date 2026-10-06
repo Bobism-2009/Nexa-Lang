@@ -414,7 +414,7 @@ public:
                     const std::string& m = n.value;
                     if (m == "color" || m == "bg" || m == "bold" || m == "dim" || m == "italic" ||
                         m == "underline" || m == "reverse") cppUsage.termStyle = true;
-                    else if (m == "clear" || m == "clear_line" || m == "move" || m == "home" ||
+                    else if (m == "clear" || m == "clear_line" || m == "clear_eol" || m == "move" || m == "home" ||
                              m == "hide_cursor" || m == "show_cursor" || m == "cursor" || m == "alt_screen")
                         cppUsage.termScreen = true;
                     else if (m == "raw" || m == "getkey" || m == "key_available") cppUsage.termRaw = true;
@@ -8502,6 +8502,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (fn == "height") return std::string("__nexa_term_height()");
                 if (fn == "clear") return std::string("(__nexa_term_clear(), 0)");
                 if (fn == "clear_line") return std::string("(__nexa_term_clear_line(), 0)");
+                if (fn == "clear_eol") return std::string("(__nexa_term_eol(), 0)");
                 if (fn == "home") return std::string("(__nexa_term_home(), 0)");
                 if (fn == "hide_cursor") return std::string("(__nexa_term_cursor(0), 0)");
                 if (fn == "show_cursor") return std::string("(__nexa_term_cursor(1), 0)");
