@@ -15,7 +15,7 @@ namespace nexa {
 // `screen` : term.clear / clear_line / move / home / hide_cursor / show_cursor / alt_screen
 // `raw`    : term.raw / getkey / key_available
 // `size`   : term.width / term.height
-inline std::string termRuntimeCpp(bool style, bool screen, bool raw, bool size) {
+inline std::string termRuntimeCpp(bool style, bool screen, bool raw, bool size, bool progress) {
     std::string out;
     out += "#include <string>\n";
     out += "#include <cstdio>\n";
@@ -30,7 +30,7 @@ inline std::string termRuntimeCpp(bool style, bool screen, bool raw, bool size) 
     // On Windows the console honours ANSI escapes only once virtual-terminal
     // processing is turned on; everywhere else it always does. Done once, the
     // first time any colour or cursor call runs.
-    if (style || screen) {
+    if (style || screen || progress) {
         out += R"NEXA_TERM(
 static void __nexa_term_vt() {
 #ifdef _WIN32
@@ -130,6 +130,31 @@ static int __nexa_term_height() {
     if (ioctl(1, TIOCGWINSZ, &__w) == 0 && __w.ws_row) return __w.ws_row;
     return 24;
 #endif
+}
+)NEXA_TERM";
+    }
+
+    if (progress) {
+        // A loading bar on the current line, redrawn in place: "[####------]  40%".
+        // The caller loops and calls it, then prints a newline when done. width is
+        // the bar between the brackets; -1 means a sensible default.
+        out += R"NEXA_TERM(
+static void __nexa_term_progress(int __done, int __total, int __width) {
+    __nexa_term_vt();
+    if (__width < 1) __width = 30;
+    if (__total < 1) __total = 1;
+    if (__done < 0) __done = 0;
+    if (__done > __total) __done = __total;
+    const int __filled = (int)((long long)__done * __width / __total);
+    const int __pct = (int)((long long)__done * 100 / __total);
+    std::string __b = "\r[";
+    for (int __i = 0; __i < __width; __i++) __b += (__i < __filled ? '#' : '-');
+    __b += "] ";
+    if (__pct < 100) __b += " ";
+    if (__pct < 10) __b += " ";
+    __b += std::to_string(__pct);
+    __b += "%\x1b[K";
+    __nexa_term_emit(__b);
 }
 )NEXA_TERM";
     }

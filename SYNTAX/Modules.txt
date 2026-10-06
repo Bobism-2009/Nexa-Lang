@@ -1743,6 +1743,11 @@ ARGUMENT TYPES
   term.home()            - cursor to 0,0
   term.hide_cursor() / term.show_cursor()
   term.cursor(show)      - show when show is 1, hide when 0
+  term.progress(done, total[, width]) - a loading bar on the current line, redrawn
+                           in place: "[####------]  40%". Call it in a loop as the
+                           work advances, then print a newline when done. width is
+                           the bar between the brackets (default 30); out-of-range
+                           done is clamped, total <= 0 is treated as 1.
   term.alt_screen(on)    - switch to a clean full-screen buffer (on=1) and back
                            (on=0), leaving the user's scrollback as it was
   keys:

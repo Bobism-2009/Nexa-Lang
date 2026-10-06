@@ -1,20 +1,11 @@
-// A tour of std/term: colour, a cursor-driven progress bar, and an arrow-key
-// menu read with raw getkey. Run it in a real terminal: NexaC term_demo.nxa --run
+// A tour of std/term: colour, a loading bar, and an arrow-key menu read with
+// raw getkey. Run it in a real terminal: NexaC term_demo.nxa --run
 #include <std/io>
 #include <std/term>
 #include <std/time>
 
-fn bar(n: int, w: int): string {
-    let s: string = "";
-    for (i, w) {
-        if (i < n) { s = s + "#"; } else { s = s + "-"; }
-    }
-    return s;
-}
-
 // One line of the frame: write the text over whatever was there, then clear to
-// the end of the line (not before writing). The old glyphs are overwritten in
-// place -- never blanked first -- so nothing flashes.
+// the end of the line (not before writing), so nothing blanks and nothing flashes.
 fn line(text: string) {
     io.print(text);
     term.clear_eol();
@@ -25,15 +16,15 @@ fn main() {
     term.hide_cursor();
     defer term.show_cursor();
 
-    // 1. A bar that fills in place.
+    // 1. A loading bar that fills in place -- term.progress draws and redraws it.
     io.println(term.bold(term.color("std/term demo", "cyan")));
     io.println(term.dim("loading..."));
-    for (i, 21) {
-        io.print("\r  ", term.color(bar(i, 20), "green"), " ", i * 5, "%");
-        term.clear_eol();
+    for (i, 41) {
+        term.progress(i, 40);
         io.flush();
-        time.sleep(time.milliseconds(40));
+        time.sleep(time.milliseconds(20));
     }
+    io.println("");
 
     // 2. An arrow-key menu, redrawn from the top each frame by overwriting lines
     //    in place (cursor home, write-then-clear-to-end) -- no screen clear, no flicker.
@@ -56,7 +47,7 @@ fn main() {
             }
         }
         line("");
-        line(message);          // always drawn (empty when none), so no stale text
+        line(message);
         io.flush();
 
         let k = term.getkey();

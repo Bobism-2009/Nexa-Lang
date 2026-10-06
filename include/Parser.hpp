@@ -4408,12 +4408,18 @@ private:
     }
 
     static int termArity(const std::string& m) {
+        if (m == "progress") return 2;  // done, total; an optional width makes three
         if (m == "color" || m == "bg" || m == "move") return 2;
         if (m == "bold" || m == "dim" || m == "italic" || m == "underline" || m == "reverse" ||
             m == "raw" || m == "cursor" || m == "alt_screen") return 1;
         if (m == "clear" || m == "clear_line" || m == "clear_eol" || m == "home" || m == "hide_cursor" || m == "show_cursor" ||
             m == "getkey" || m == "key_available" || m == "width" || m == "height") return 0;
         return -1;
+    }
+
+    static int termArityMax(const std::string& m) {
+        if (m == "progress") return 3;
+        return termArity(m);
     }
 
     AstNode parseTermCall() {
@@ -4437,14 +4443,16 @@ private:
         if (arity < 0) {
             throw std::runtime_error("Unknown term method 'term." + m + "' at line " + std::to_string(methodTok.line) +
                 " (use color, bg, bold, dim, italic, underline, reverse, clear, clear_line, move, home, "
-                "hide_cursor, show_cursor, cursor, alt_screen, clear_eol, raw, getkey, key_available, width, height)");
+                "hide_cursor, show_cursor, cursor, alt_screen, clear_eol, progress, raw, getkey, key_available, width, height)");
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after term." + m + " at line " + std::to_string(peek().line));
         }
         AstNode node{AstNode::Type::TermCall, m, {}};
         node.line = line;
-        for (int i = 0; i < arity; i++) {
+        const int arityMax = termArityMax(m);
+        for (int i = 0; i < arityMax; i++) {
+            if (i >= arity && peek().type == TokenType::RParen) break;  // the optional ones are done
             if (i > 0 && !match(TokenType::Comma)) {
                 throw std::runtime_error("Expected ',' in term." + m + "(...) at line " + std::to_string(peek().line));
             }

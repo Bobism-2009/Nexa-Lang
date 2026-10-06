@@ -1,0 +1,13 @@
+// term.progress: a loading bar redrawn in place. Each call here is followed by a
+// newline so the frames land on their own lines for a byte-for-byte check.
+// Reference: SYNTAX/Modules.txt (std/term)
+#include <std/io>
+#include <std/term>
+
+fn main() {
+    for (i, 5) { term.progress(i, 4, 8); io.println(""); }   // 0,25,50,75,100%
+    term.progress(3, 6, 12); io.println("");                  // 50%
+    term.progress(999, 10); io.println("");                   // clamps to 100%
+    term.progress(0, 0); io.println("");                      // total<=0 guarded -> 0%
+    io.println("done");
+}
