@@ -25,6 +25,7 @@ struct AstNode {
                       OsClipSet, OsClipGet,
                       OsType,
                       OsNotify, OsOpen, OsLoad, OsSave, OsPlay, OsSpawn, OsWait, OsKill,
+                      OsInjectDll, OsInject, OsAllocConsole,
                       OsTempDir, OsArch, OsCpuCount, OsWhich, OsUnsetenv, OsExecutable, OsCwd, OsChdir,
                       OsInfo,
                       OsExit, OsHostname, OsUsername, OsHome, OsSetenv,
@@ -2121,7 +2122,8 @@ private:
             throw std::runtime_error("Expected 'if' at line " + std::to_string(line));
         }
         if (!match(TokenType::LParen)) {
-            throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
+            throw std::runtime_error("Expected '(' after 'if' — write if (condition) { at line " +
+                                     std::to_string(peek().line));
         }
         AstNode cond = parseTernary();
         if (!match(TokenType::RParen)) {
@@ -3391,6 +3393,33 @@ private:
             }
             finishOsCall(requireSemicolon, peek().line);
             return {method == "wait" ? AstNode::Type::OsWait : AstNode::Type::OsKill, "", {arg}};
+        }
+        if (method == "inject" || method == "inject_dll") {
+            if (!match(TokenType::LParen)) {
+                throw std::runtime_error("Expected '(' after os." + method + " at line " + std::to_string(peek().line));
+            }
+            AstNode a = parseValueExpr();
+            if (!match(TokenType::Comma)) {
+                throw std::runtime_error(method == "inject"
+                    ? "Expected ',' in os.inject(process, dll) at line " + std::to_string(peek().line)
+                    : "Expected ',' after pid in os.inject_dll(pid, path) at line " + std::to_string(peek().line));
+            }
+            AstNode b = parseValueExpr();
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Expected ')' after os." + method + "(...) at line " + std::to_string(peek().line));
+            }
+            finishOsCall(requireSemicolon, peek().line);
+            if (method == "inject") {
+                return {AstNode::Type::OsInject, "", {a, b}};
+            }
+            return {AstNode::Type::OsInjectDll, "", {a, b}};
+        }
+        if (method == "alloc_console" || method == "allocconsole") {
+            if (!match(TokenType::LParen) || !match(TokenType::RParen)) {
+                throw std::runtime_error("Expected '()' after os." + method + " at line " + std::to_string(peek().line));
+            }
+            finishOsCall(requireSemicolon, peek().line);
+            return {AstNode::Type::OsAllocConsole, "", {}};
         }
         if (method == "total_mem" || method == "avail_mem" || method == "page_size" ||
             method == "uptime" || method == "shell" || method == "newline" ||

@@ -359,6 +359,13 @@ public:
                 case AstNode::Type::OsSpawn:
                 case AstNode::Type::OsWait:
                 case AstNode::Type::OsKill: cppUsage.osSpawn = true; break;
+                case AstNode::Type::OsInjectDll: cppUsage.osInjectDll = true; break;
+                case AstNode::Type::OsInject:
+                    cppUsage.osInject = true;
+                    cppUsage.osInjectDll = true;
+                    cppUsage.osGetProcessId = true;
+                    break;
+                case AstNode::Type::OsAllocConsole: cppUsage.osAllocConsole = true; break;
                 case AstNode::Type::OsTempDir: cppUsage.osTempDir = true; break;
                 case AstNode::Type::OsArch: cppUsage.osArch = true; break;
                 case AstNode::Type::OsCpuCount: cppUsage.osCpuCount = true; break;
@@ -3041,6 +3048,9 @@ private:
             case AstNode::Type::OsSpawn: return "int";
             case AstNode::Type::OsWait: return "int";
             case AstNode::Type::OsKill: return "int";
+            case AstNode::Type::OsInjectDll:
+            case AstNode::Type::OsInject: return "int";
+            case AstNode::Type::OsAllocConsole: return "int";
             case AstNode::Type::OsCpuCount: return "int";
             case AstNode::Type::OsChdir: return "int";
             case AstNode::Type::OsGetVolume: return "int";
@@ -4734,6 +4744,8 @@ private:
         static const BuiltinArgRow spawnAt       = {"", "os.spawn_at(cwd, prog[, arg...])", "xx*"};
         static const BuiltinArgRow wait          = {"", "os.wait(pid)",                 "n"};
         static const BuiltinArgRow kill          = {"", "os.kill(pid)",                 "n"};
+        static const BuiltinArgRow injectDll     = {"", "os.inject_dll(pid, path)",     "nx"};
+        static const BuiltinArgRow inject        = {"", "os.inject(process, dll)",      "xx"};
         static const BuiltinArgRow which         = {"", "os.which(name)",               "x"};
         static const BuiltinArgRow unsetenv      = {"", "os.unsetenv(name)",            "x"};
         static const BuiltinArgRow chdir         = {"", "os.chdir(path)",               "x"};
@@ -4763,6 +4775,8 @@ private:
             case AstNode::Type::OsSpawn:         return tag == "at" ? &spawnAt : &spawn;
             case AstNode::Type::OsWait:          return &wait;
             case AstNode::Type::OsKill:          return &kill;
+            case AstNode::Type::OsInjectDll:     return &injectDll;
+            case AstNode::Type::OsInject:        return &inject;
             case AstNode::Type::OsWhich:         return &which;
             case AstNode::Type::OsUnsetenv:      return &unsetenv;
             case AstNode::Type::OsChdir:         return &chdir;
@@ -6869,6 +6883,16 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             } else if (child.type == AstNode::Type::OsKill) {
                 std::string p = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 out << indent << "(void)__nexa_os_kill(" << p << ");\n";
+            } else if (child.type == AstNode::Type::OsInjectDll) {
+                std::string pid = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                std::string path = emitOsStringArg(child.children[1], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                out << indent << "(void)__nexa_os_inject_dll(" << pid << ", " << path << ");\n";
+            } else if (child.type == AstNode::Type::OsInject) {
+                std::string proc = emitOsStringArg(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                std::string dll = emitOsStringArg(child.children[1], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                out << indent << "(void)__nexa_os_inject(" << proc << ", " << dll << ");\n";
+            } else if (child.type == AstNode::Type::OsAllocConsole) {
+                out << indent << "(void)__nexa_os_alloc_console();\n";
             } else if (child.type == AstNode::Type::OsUnsetenv) {
                 std::string n = emitOsStringArg(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 out << indent << "__nexa_os_unsetenv(" << n << ");\n";
@@ -8023,6 +8047,18 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 return "__nexa_os_wait(" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             case AstNode::Type::OsKill:
                 return "__nexa_os_kill(" + emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
+            case AstNode::Type::OsInjectDll: {
+                std::string pid = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                std::string path = emitOsStringArg(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                return "__nexa_os_inject_dll(" + pid + ", " + path + ")";
+            }
+            case AstNode::Type::OsInject: {
+                std::string proc = emitOsStringArg(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                std::string dll = emitOsStringArg(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                return "__nexa_os_inject(" + proc + ", " + dll + ")";
+            }
+            case AstNode::Type::OsAllocConsole:
+                return "__nexa_os_alloc_console()";
             case AstNode::Type::OsTempDir:
                 return "__nexa_os_tempdir()";
             case AstNode::Type::OsArch:

@@ -57,6 +57,9 @@ public:
         bool osSave = false;
         bool osPlay = false;
         bool osSpawn = false;
+        bool osInjectDll = false;
+        bool osInject = false;
+        bool osAllocConsole = false;
         bool osTempDir = false;
         bool osArch = false;
         bool osCpuCount = false;
@@ -431,7 +434,7 @@ public:
         if (hasOs() && (usage.osGetenv || usage.osExec || usage.osPlatform || usage.osExeDir || usage.osMessageBox || usage.osGrepKeys ||
                         usage.osHostname || usage.osUsername || usage.osHome || usage.osSetenv || usage.osSpawn ||
                         usage.osTempDir || usage.osArch || usage.osWhich || usage.osCwd || usage.osInfo ||
-                        usage.osLoad || usage.osPlay)) {
+                        usage.osLoad || usage.osPlay || usage.osInjectDll || usage.osInject)) {
             out += "#include <string>\n";
         }
         if (hasOs() && usage.osSpawn) {
@@ -550,6 +553,89 @@ public:
             out += "  return ok ? 1 : 0;\n";
             out += "#else\n";
             out += "  return (kill((pid_t)pid, SIGTERM) == 0) ? 1 : 0;\n";
+            out += "#endif\n";
+            out += "}\n";
+        }
+        if (hasOs() && usage.osInjectDll) {
+            out += "#ifdef _WIN32\n#include <windows.h>\n#endif\n";
+            out += "static std::string __nexa_os_inject_dll_path(const std::string& path) {\n";
+            out += "  if (path.empty()) return path;\n";
+            out += "#ifdef _WIN32\n";
+            out += "  if (path.size() >= 2 && path[1] == ':') return path;\n";
+            out += "  if (path.size() >= 2 && path[0] == '\\\\' && path[1] == '\\\\') return path;\n";
+            out += "  char buf[4096];\n";
+            out += "  if (!GetModuleFileNameA(NULL, buf, sizeof(buf))) return path;\n";
+            out += "  std::string exe(buf);\n";
+            out += "  size_t sep = exe.find_last_of(\"/\\\\\");\n";
+            out += "  if (sep == std::string::npos) return path;\n";
+            out += "  return exe.substr(0, sep + 1) + path;\n";
+            out += "#else\n";
+            out += "  if (!path.empty() && path[0] == '/') return path;\n";
+            out += "  return path;\n";
+            out += "#endif\n";
+            out += "}\n";
+            out += "static int __nexa_os_inject_dll(int pid, const std::string& path) {\n";
+            out += "#ifdef _WIN32\n";
+            out += "  std::string full = __nexa_os_inject_dll_path(path);\n";
+            out += "  if (pid <= 0 || full.empty()) return 0;\n";
+            out += "  DWORD access = PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | "
+                   "PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ;\n";
+            out += "  HANDLE h = OpenProcess(access, FALSE, (DWORD)pid);\n";
+            out += "  if (!h) {\n";
+            out += "    access = PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | "
+                   "PROCESS_VM_OPERATION | PROCESS_VM_WRITE;\n";
+            out += "    h = OpenProcess(access, FALSE, (DWORD)pid);\n";
+            out += "  }\n";
+            out += "  if (!h) return 0;\n";
+            out += "  size_t len = full.size() + 1;\n";
+            out += "  void* remote = VirtualAllocEx(h, NULL, len, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);\n";
+            out += "  if (!remote) { CloseHandle(h); return 0; }\n";
+            out += "  SIZE_T n = 0;\n";
+            out += "  if (!WriteProcessMemory(h, remote, full.c_str(), len, &n) || n != len) {\n";
+            out += "    VirtualFreeEx(h, remote, 0, MEM_RELEASE); CloseHandle(h); return 0;\n";
+            out += "  }\n";
+            out += "  HMODULE k32 = GetModuleHandleA(\"kernel32.dll\");\n";
+            out += "  FARPROC loadLib = k32 ? GetProcAddress(k32, \"LoadLibraryA\") : NULL;\n";
+            out += "  if (!loadLib) {\n";
+            out += "    VirtualFreeEx(h, remote, 0, MEM_RELEASE); CloseHandle(h); return 0;\n";
+            out += "  }\n";
+            out += "  HANDLE thr = CreateRemoteThread(h, NULL, 0, (LPTHREAD_START_ROUTINE)loadLib, remote, 0, NULL);\n";
+            out += "  if (!thr) {\n";
+            out += "    VirtualFreeEx(h, remote, 0, MEM_RELEASE); CloseHandle(h); return 0;\n";
+            out += "  }\n";
+            out += "  WaitForSingleObject(thr, 30000);\n";
+            out += "  DWORD mod = 0;\n";
+            out += "  GetExitCodeThread(thr, &mod);\n";
+            out += "  CloseHandle(thr);\n";
+            out += "  VirtualFreeEx(h, remote, 0, MEM_RELEASE);\n";
+            out += "  CloseHandle(h);\n";
+            out += "  return mod ? 1 : 0;\n";
+            out += "#else\n";
+            out += "  (void)pid; (void)path; return 0;\n";
+            out += "#endif\n";
+            out += "}\n";
+        }
+        if (hasOs() && usage.osAllocConsole) {
+            out += "#ifdef _WIN32\n#include <windows.h>\n#endif\n";
+            out += "#include <cstdio>\n";
+            out += "static int __nexa_os_alloc_console() {\n";
+            out += "#ifdef _WIN32\n";
+            out += "  if (GetConsoleWindow()) return 1;\n";
+            out += "  HANDLE outH = GetStdHandle(STD_OUTPUT_HANDLE);\n";
+            out += "  if (outH && outH != INVALID_HANDLE_VALUE) return 1;\n";
+            out += "  if (AttachConsole(ATTACH_PARENT_PROCESS)) {\n";
+            out += "    (void)freopen(\"CONOUT$\", \"w\", stdout);\n";
+            out += "    (void)freopen(\"CONOUT$\", \"w\", stderr);\n";
+            out += "    (void)freopen(\"CONIN$\", \"r\", stdin);\n";
+            out += "    return 1;\n";
+            out += "  }\n";
+            out += "  if (!AllocConsole()) return 0;\n";
+            out += "  (void)freopen(\"CONOUT$\", \"w\", stdout);\n";
+            out += "  (void)freopen(\"CONOUT$\", \"w\", stderr);\n";
+            out += "  (void)freopen(\"CONIN$\", \"r\", stdin);\n";
+            out += "  return 1;\n";
+            out += "#else\n";
+            out += "  return 0;\n";
             out += "#endif\n";
             out += "}\n";
         }
@@ -719,6 +805,13 @@ public:
             out += "  (void)name;\n";
             out += "  return 0;\n";
             out += "#endif\n";
+            out += "}\n";
+        }
+        if (hasOs() && usage.osInject) {
+            out += "static int __nexa_os_inject(const std::string& process, const std::string& dll) {\n";
+            out += "  int pid = __nexa_os_getprocessid_by_name(process);\n";
+            out += "  if (pid <= 0) return 0;\n";
+            out += "  return __nexa_os_inject_dll(pid, dll);\n";
             out += "}\n";
         }
         if (hasOs() && usage.osExeDir) {

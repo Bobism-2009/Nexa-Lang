@@ -86,6 +86,18 @@ ARGUMENT TYPES
   os.spawn_at(cwd, prog [, arg...]) - Spawn with working directory `cwd`. Returns pid.
   os.wait(pid)      - Wait for a child started by spawn/spawn_at; returns exit code (-1 on failure)
   os.kill(pid)      - Terminate a process by id; returns 1 on success, 0 on failure
+  os.inject(process, dll) - Find a process by executable name (e.g. "notepad.exe") and
+                    load a .dll into it (Windows only). The dll name is relative to
+                    the folder containing this program unless it is already an absolute
+                    path. Returns 1 if the module loaded, 0 on failure.
+  os.inject_dll(pid, path) - Load a .dll into a process id (Windows only).
+                    Relative path is resolved beside this executable. Returns 1/0.
+                    Non-Windows builds always return 0 for both inject calls.
+  os.alloc_console() - Create a console window in this process (Windows only).
+                    Redirects stdout/stderr/stdin for io.println and io.readln.
+                    Returns 1 if a console is available (already had one or created),
+                    0 on failure. Use from fn __init__() in an injected DLL for debug
+                    output in GUI processes. Non-Windows builds return 0.
   os.tempdir()      - System temp directory (string)
   os.arch()         - CPU architecture: "x86_64", "x86", "arm64", "arm", or "unknown"
   os.cpu_count()    - Number of logical CPUs (int, at least 1)

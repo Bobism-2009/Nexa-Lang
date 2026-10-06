@@ -254,6 +254,9 @@ need no include at all. NexaC --help core.)HELP" },
             os.spawn_wait(...)         the same, waiting; returns the exit code
             os.spawn_at(cwd, ...)      the same, in a working directory
             os.wait(pid)  os.kill(pid)  os.exit(code)
+            os.inject(process, dll)        find process + load DLL beside this exe (Windows); 1/0
+            os.inject_dll(pid, path)     load a DLL by pid; relative dll name ok; 1/0
+            os.alloc_console()           attach a debug console (Windows); 1/0
   env       os.getenv(name)  os.setenv(name, v)  os.unsetenv(name)
             os.environ() / os.env()    []string of KEY=value
   identity  os.hostname()  os.username() / os.user()  os.home()  os.lang()
