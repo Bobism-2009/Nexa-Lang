@@ -166,16 +166,12 @@ static void __nexa_term_progress(int __done, int __total, int __width) {
         out += R"NEXA_TERM(
 static void __nexa_term_spinner(int __tick, const std::string& __label) {
     __nexa_term_vt();
-    // A marker that bounces back and forth in a bracket: [=   ] [ =  ] [  = ]
-    // [   =] [  = ] ... Pure ASCII, so it looks the same in CMD, PowerShell,
-    // Windows Terminal and every Linux/macOS terminal -- no font to depend on.
-    const int __w = 4;
-    const int __period = 2 * (__w - 1);
-    int __p = ((__tick % __period) + __period) % __period;
-    if (__p >= __w) __p = __period - __p;
-    std::string __b = "\r[";
-    for (int __i = 0; __i < __w; __i++) __b += (__i == __p ? '=' : ' ');
-    __b += "]";
+    // A spinning wheel: a spoke turning a step each frame, | / - \. Pure ASCII,
+    // so it looks the same in CMD, PowerShell, Windows Terminal and every
+    // Linux/macOS terminal -- no font or codepage to depend on.
+    static const char __frames[] = {'|', '/', '-', '\\'};
+    std::string __b = "\r";
+    __b += __frames[((__tick % 4) + 4) % 4];
     if (!__label.empty()) { __b += " "; __b += __label; }
     __b += "\x1b[K";
     __nexa_term_emit(__b);
