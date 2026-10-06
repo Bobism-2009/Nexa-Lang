@@ -1748,10 +1748,12 @@ ARGUMENT TYPES
                            work advances, then print a newline when done. width is
                            the bar between the brackets (default 30); out-of-range
                            done is clamped, total <= 0 is treated as 1.
-  term.spinner(tick[, label]) - a one-character spinner (| / - \) on the current
-                           line, for work with no known length. Pass a tick that
-                           climbs each frame; an optional label follows it ("- busy").
-                           Redrawn in place; print a newline when the work is done.
+  term.spinner(tick[, label]) - a rotating-circle spinner on the current line, for
+                           work with no known length. Pass a tick that climbs each
+                           frame; an optional label follows it. Redrawn in place;
+                           print a newline when done. The circle is Unicode; term
+                           sets the console to UTF-8, so it shows on the classic
+                           Windows console too (a font without the glyph shows a box).
   term.alt_screen(on)    - switch to a clean full-screen buffer (on=1) and back
                            (on=0), leaving the user's scrollback as it was
   keys:
