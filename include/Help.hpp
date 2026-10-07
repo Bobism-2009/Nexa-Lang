@@ -83,9 +83,9 @@ DECLARATIONS
   Globals are the same syntax at file scope.
 
 STRUCTS AND ENUMS
-  struct Point { x: int; y: int;
+  struct Point { x: int = 0; y: int;   fields may carry a default (= expr)
       fn len2(): int { return self.x * self.x + self.y * self.y; } }
-  let p = Point { x: 1, y: 2 };        omitted fields are zeroed
+  let p = Point { x: 1, y: 2 };        omitted fields take their default, else zeroed
   enum Colour { Red; Green; }          let c: enum Colour = Colour.Red;
 
 CONTROL FLOW

@@ -1,0 +1,30 @@
+// A struct field may declare a default value. It fills in when a plain `let p: T;`
+// is declared with no literal, and when a struct literal omits the field -- even
+// when other fields are given out of order. Reference: SYNTAX/Core.txt (STRUCTS).
+#include <std/io>
+
+struct Config {
+    name: string = "untitled";
+    width: int = 80;
+    height: int = 24;
+    ratio: float = 1.5;
+    active: bool = true;
+}
+
+fn main() {
+    let a: Config;                 // every field takes its default
+    io.println(a.name);
+    io.println(a.width);
+    io.println(a.active);
+
+    let b = Config { width: 120 }; // one override, the rest default
+    io.println(b.name);
+    io.println(b.width);
+    io.println(b.height);
+
+    let c = Config { name: "game", height: 48 };  // out of order, two given
+    io.println(c.name);
+    io.println(c.width);
+    io.println(c.height);
+    io.println(c.ratio);
+}

@@ -783,6 +783,16 @@ private:
                 throw std::runtime_error("Expected ':' after field name at line " + std::to_string(peek().line));
             }
             node.paramTypes.push_back(parseTypeName());
+            // A field may carry a default: `count: int = 0;`. It fills in when a
+            // struct literal omits the field and when a value is declared with no
+            // literal at all (`let p: Point;`).
+            if (match(TokenType::Assign)) {
+                node.paramHasDefault.push_back(true);
+                node.paramDefaults.push_back(parseValueExpr());
+            } else {
+                node.paramHasDefault.push_back(false);
+                node.paramDefaults.push_back(AstNode{AstNode::Type::ExprIntLiteral, "0", {}});
+            }
             if (!match(TokenType::Semicolon)) {
                 throw std::runtime_error("Expected ';' after struct field at line " + std::to_string(peek().line));
             }

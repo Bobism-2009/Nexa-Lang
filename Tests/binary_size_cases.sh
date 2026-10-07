@@ -76,7 +76,7 @@ cat > "$WORK/every.nxa" <<'EOF'
 
 struct Item {
     name: string;
-    qty: int;
+    qty: int = 1;
 }
 
 fn parse(s: string): Result[int] {
@@ -90,7 +90,7 @@ fn twice(s: string): Result[int] {
 }
 
 fn main() {
-    let items = [Item { name: "pen", qty: 3 }, Item { name: "cup", qty: 12 }];
+    let items = [Item { name: "pen", qty: 3 }, Item { name: "cup", qty: 12 }, Item { name: "map" }];
     let totals: map[string]int;
     for (it in items) { totals[it.name] += it.qty; }
     let words = "7,x,-4".split(",");

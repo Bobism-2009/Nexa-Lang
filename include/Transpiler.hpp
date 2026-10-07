@@ -555,6 +555,7 @@ public:
         for (const std::string& inc : inlineCppHoisted) out << inc << "\n";
         structFields_.clear();
         structFieldOrder_.clear();
+        structFieldDefaults_.clear();
         structCppNames_.clear();
         enumCppNames_.clear();
         enumVariants_.clear();
@@ -597,6 +598,9 @@ public:
                 }
                 for (size_t i = 0; i < node.paramNames.size(); i++) {
                     structFields_[node.value][node.paramNames[i]] = node.paramTypes[i];
+                    if (i < node.paramHasDefault.size() && node.paramHasDefault[i]) {
+                        structFieldDefaults_[node.value][node.paramNames[i]] = &node.paramDefaults[i];
+                    }
                 }
                 structFieldOrder_[node.value] = node.paramNames;
                 for (const AstNode& meth : node.children) {
@@ -915,7 +919,14 @@ public:
                 std::string cppName = structCppNames_.at(nexaName);
                 out << "struct " << cppName << " {\n";
                 for (size_t i = 0; i < node.paramNames.size(); i++) {
-                    out << "    " << nexaTypeToCpp(node.paramTypes[i]) << " " << node.paramNames[i] << ";\n";
+                    out << "    " << nexaTypeToCpp(node.paramTypes[i]) << " " << node.paramNames[i];
+                    // A field default becomes a C++ default member initializer, so a plain
+                    // `let p: Point;` and an aggregate `{}` both pick it up. The struct stays
+                    // an aggregate in C++17, so `Point{a, b}` still works.
+                    if (i < node.paramHasDefault.size() && node.paramHasDefault[i]) {
+                        out << " = " << emitStructFieldDefault(node.paramDefaults[i], node.paramTypes[i]);
+                    }
+                    out << ";\n";
                 }
                 // A closure has no ==, so a struct holding one (anywhere inside it)
                 // has none either.
@@ -1645,6 +1656,9 @@ private:
     std::string inferredIntFn_;
     std::map<std::string, std::map<std::string, std::string>> structFields_;
     std::map<std::string, std::vector<std::string>> structFieldOrder_;
+    // Per struct, the fields that declared a default value: field name -> default expr.
+    // Used by the struct-def member initializer and by struct literals that omit the field.
+    std::map<std::string, std::map<std::string, const AstNode*>> structFieldDefaults_;
     std::map<std::string, std::string> structCppNames_;
     std::map<std::string, std::string> enumCppNames_;
     std::map<std::string, std::set<std::string>> enumVariants_;
@@ -7967,6 +7981,14 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         }
     }
 
+    // A struct field's default value, emitted in struct scope (no locals). Used both as a
+    // C++ default member initializer and in place of an omitted field in a struct literal.
+    std::string emitStructFieldDefault(const AstNode& def, const std::string& /*fieldType*/) {
+        std::map<std::string, std::string> noVars;
+        std::map<std::string, bool> noFlags;
+        return emitExpr(def, noVars, &noFlags, &noFlags, &noFlags, &noFlags);
+    }
+
     std::string emitStructLiteral(const AstNode& e,
                                  const std::map<std::string, std::string>& varMap,
                                  const std::map<std::string, bool>* varIsString,
@@ -7993,7 +8015,17 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             if (i) s += ", ";
             auto pit = provided.find(order[i]);
             if (pit == provided.end()) {
-                s += "{}";
+                // Omitted: use the field's declared default if it has one, else zero-init.
+                // (An explicit `{}` here would override the struct's default member
+                // initializer, so a defaulted field must emit its default expression.)
+                auto dit = structFieldDefaults_.find(e.value);
+                const AstNode* def = nullptr;
+                if (dit != structFieldDefaults_.end()) {
+                    auto fit = dit->second.find(order[i]);
+                    if (fit != dit->second.end()) def = fit->second;
+                }
+                if (def) s += emitStructFieldDefault(*def, fields.count(order[i]) ? fields.at(order[i]) : std::string());
+                else s += "{}";
             } else {
                 s += emitExpr(*pit->second, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             }
