@@ -1123,13 +1123,15 @@ ARGUMENT TYPES
   triangles to the GPU and lets a depth buffer decide what is in front. There
   is no gfx3d.get and no gfx3d.save for that reason: there is no array of
   pixels here to read back.
-  Four backends: Windows (Win32 + WGL), macOS (Cocoa + NSOpenGL), Linux
-  (X11 + GLX) and the browser (--wasm, WebGL). No library to install for any
-  of them: the entry points are declared in the runtime and taken by name at
-  run time, so no GL development package is needed to build and no loader
-  library is linked.
-  The first three are the same renderer -- OpenGL 1.1, the fixed-function
-  pipeline -- and only the window differs. The browser is not. WebGL has no
+  Four backends: Windows (Win32 + WGL, or Vulkan 1.4), macOS (Cocoa + NSOpenGL),
+  Linux (X11 + GLX) and the browser (--wasm, WebGL). No library to install for
+  any of them: the entry points are declared in the runtime and taken by name at
+  run time, so no GL or Vulkan development package is needed to build and no
+  loader library is linked. Windows loads vulkan-1.dll only when a program asks
+  for Vulkan.
+  OpenGL 1.1, the fixed-function pipeline, is the renderer on macOS and Linux,
+  and the default on Windows. Windows can open Vulkan 1.4 instead; see
+  gfx3d.renderer below. The browser is a different renderer. WebGL has no
   glBegin, no matrix stack and no fixed-function anything, so --wasm carries
   a second renderer: a vertex shader that applies the camera, a fragment
   shader that paints the colour, and one buffer the triangles are uploaded
@@ -1320,17 +1322,20 @@ ARGUMENT TYPES
   Input that arrives while it is not focused is dropped rather than saved up to
   arrive the moment it is. Before the first gfx3d.open, and after gfx3d.close,
   every reader answers 0 and typed() answers "".
-  gfx3d.renderer(name)           - ask for a renderer before gfx3d.open. "opengl" and
-                                   "vulkan" are accepted and answer 1; any other name
-                                   answers 0 and changes nothing
+  gfx3d.renderer(name)           - ask for a renderer before gfx3d.open. "opengl",
+                                   "opengl 1.1", "opengl 3.3", "vulkan" and
+                                   "vulkan 1.4" are accepted and answer 1; any
+                                   other name answers 0 and changes nothing
   gfx3d.backend()                - the renderer the window actually opened with, as
                                    text. "" before the first successful gfx3d.open
-  Two renderers are named and one is built. gfx3d.renderer("vulkan") is
-  accepted and quietly gives you OpenGL -- nothing is printed and nothing
-  fails -- and gfx3d.backend() then answers "opengl", which is what the window
-  really is rather than what was asked for. A program that cares reads
-  backend(); one that does not is not interrupted. The switch is where
-  programs will expect it when a Vulkan backend exists.
+  "opengl" and "opengl 1.1" open the fixed-function path. "opengl 3.3" opens a
+  core context and draws the same batch through a shader; if that context or
+  its shader cannot be built, the window opens on 1.1 instead.
+  "vulkan" and "vulkan 1.4" open Vulkan 1.4 on Windows when vulkan-1.dll and a
+  1.4 device are present. gfx3d.backend() then answers "vulkan 1.4". If that
+  device cannot be created, the window opens on OpenGL and backend() answers
+  "opengl" or "opengl 3.3". Nothing is printed. A program that cares reads
+  backend().
   gfx3d.model(path)              - load a Wavefront .obj; handle, or 0
                                    Reads v, vt, vn and f: positions, texture
                                    coordinates, normals, and which corners make

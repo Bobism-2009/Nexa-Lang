@@ -23,18 +23,17 @@
 //   and __nexa_g3_look_at instead. The cube is six faces of two triangles,
 //   spelled out.
 //
-//   No extension loading and no shader compiler. Everything here is OpenGL
-//   1.1 -- glBegin, glEnd, glLoadMatrixf -- which every driver exports
-//   directly from the system library. A core-profile pipeline would need
-//   wglGetProcAddress on Windows, glXGetProcAddress on Linux, a GLSL
-//   compiler at run time and a pair of shaders to feed it, none of which a
-//   first version needs in order to put a cube on screen.
+//   The default is OpenGL 1.1 -- glBegin, glEnd, glLoadMatrixf -- which every
+//   driver exports directly from the system library. gfx3d.renderer("OpenGL 3.3")
+//   asks for a core-profile context instead, and the same vertex batch is
+//   submitted through a shader loaded by wglGetProcAddress / glXGetProcAddress.
+//   The 1.1 path is unchanged, and it is what opens when the 3.3 context or
+//   its shader cannot be built.
 //
-// The renderer is a choice the API makes room for and only one answer fills
-// today. gfx3d.renderer("vulkan") is accepted and quietly gives you OpenGL;
-// gfx3d.backend() reports "opengl", which is the truth rather than the
-// request. When a Vulkan backend exists, the switch is already where
-// programs expect it.
+// gfx3d.renderer("vulkan") and gfx3d.renderer("vulkan 1.4") open Vulkan 1.4
+// on Windows when the loader and a 1.4 device are there. gfx3d.backend()
+// answers "vulkan 1.4" only in that case. If 1.4 cannot be created, the
+// window opens on OpenGL instead and backend() says which OpenGL that was.
 //
 // Platforms: Windows (Win32 + WGL), macOS (Cocoa + NSOpenGL), Linux (X11 +
 // GLX) and the browser (WebGL). The first three are one renderer and three
@@ -330,9 +329,14 @@ struct __nexa_G3State {
     float xf[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
     int xf_id = 1;
 
-    // What the program asked for, and what it got. They differ only while
-    // there is a renderer that is not built yet.
+    // What the program asked for, and what it got. They differ when Vulkan 1.4
+    // or OpenGL 3.3 was asked for and this machine could not open it.
     std::string requested = "opengl";
+    int vulkan = 0;          // 1 once a Vulkan 1.4 device is drawing the window
+    int core33 = 0;          // 1 once a 3.3 core context and its shader are current
+    unsigned ctx_gen = 0;   // bumped each time that context is created, so a
+                             // cached mesh uploads again instead of reusing a
+                             // name from the context that was just deleted
 
     // Frame cap from gfx3d.maxfps: 0 is none.
     double frame_ms = 0.0;
@@ -503,9 +507,9 @@ static void __nexa_g3_xf_dir(float* x, float* y, float* z) {
 // Every shape in this module is triangles with a colour per vertex. They are
 // written here once and handed to the platform to submit, because the two
 // backends want them in completely different shapes: desktop OpenGL replays
-// them one at a time through the fixed-function pipeline, and WebGL -- which
-// has no fixed-function pipeline at all, no glBegin and no matrix stack --
-// uploads them to a buffer for a shader to read. Keeping the geometry on this
+// them one at a time through the fixed-function pipeline. OpenGL 3.3 and
+// WebGL have no glBegin and no matrix stack, so they upload the same
+// vertices to a buffer for a shader to read. Keeping the geometry on this
 // side of that split means gfx3d.cube is six faces of two triangles exactly
 // once, whichever backend is underneath.
 //
@@ -611,8 +615,10 @@ static double __nexa_g3_now_ms(void) {
 // to four operations -- make a window with a GL context on it, pump its
 // events, swap its buffers, tear it down -- so that adding a third platform
 // is filling in those four and nothing else.
+#include "nexa_vk14_embed.inc"
+
 inline std::string gfx3dPlatformCpp() {
-    return R"NEXA_GFX3D(
+    std::string s = R"NEXA_GFX3D(
 // --- symbol loading ---------------------------------------------------------
 
 #if defined(_WIN32)
@@ -718,6 +724,10 @@ static int __nexa_g3_load_gl(void) {
     return 1;
 }
 
+#if !defined(NEXA_WASM)
+static int __nexa_g3_try_core33(void);
+#endif
+
 // --- Windows: Win32 + WGL ---------------------------------------------------
 
 #if defined(_WIN32)
@@ -775,7 +785,74 @@ static LRESULT CALLBACK __nexa_g3_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM
     return DefWindowProcA(hwnd, msg, wp, lp);
 }
 
+// The 1.1 context is already current. A 3.3 core context is created beside
+// it and, if its shader links, replaces it. Any failure leaves the 1.1
+// context current and returns 0, which is the path the window keeps.
+static int __nexa_g3_win_core(void) {
+    typedef PROC (WINAPI *GPA)(LPCSTR);
+    typedef HGLRC (WINAPI *CreateAttribs)(HDC, HGLRC, const int*);
+    typedef BOOL (WINAPI *MakeCur)(HDC, HGLRC);
+    typedef BOOL (WINAPI *Del)(HGLRC);
+    typedef HGLRC (WINAPI *Create)(HDC);
+    GPA gpa = (GPA)__nexa_g3_sym("wglGetProcAddress");
+    MakeCur make = (MakeCur)__nexa_g3_sym("wglMakeCurrent");
+    Del del = (Del)__nexa_g3_sym("wglDeleteContext");
+    Create create11 = (Create)__nexa_g3_sym("wglCreateContext");
+    if (!gpa || !make || !del || !create11) return 0;
+    CreateAttribs create = (CreateAttribs)gpa("wglCreateContextAttribsARB");
+    if (!create) return 0;
+    HGLRC old = __nexa_g3.glrc;
+    const int withFlags[] = {
+        0x2091, 3, 0x2092, 3, 0x9126, 0x00000001, 0x2094, 0x00000002, 0
+    };
+    const int plain[] = { 0x2091, 3, 0x2092, 3, 0x9126, 0x00000001, 0 };
+    const int* lists[2] = { withFlags, plain };
+    for (int t = 0; t < 2; t++) {
+        HGLRC core = create(__nexa_g3.hdc, nullptr, lists[t]);
+        if (!core) continue;
+        if (!make(__nexa_g3.hdc, core)) { del(core); continue; }
+        __nexa_g3.glrc = core;
+        del(old);
+        if (__nexa_g3_try_core33()) return 1;
+        make(nullptr, nullptr);
+        del(core);
+        __nexa_g3.glrc = create11(__nexa_g3.hdc);
+        if (!__nexa_g3.glrc || !make(__nexa_g3.hdc, __nexa_g3.glrc)) return 0;
+        return 0;
+    }
+    return 0;
+}
+
+/*@@VK14@@*/
+
 static int __nexa_g3_platform_open(const std::string& title, int w, int h) {
+    __nexa_g3.core33 = 0;
+    __nexa_g3.vulkan = 0;
+    if (__nexa_g3.requested == "vulkan 1.4") {
+        WNDCLASSA wc;
+        std::memset(&wc, 0, sizeof(wc));
+        wc.lpfnWndProc = __nexa_g3_wndproc;
+        wc.hInstance = GetModuleHandleA(nullptr);
+        wc.lpszClassName = "NexaGfx3d";
+        wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        wc.style = CS_OWNDC;
+        RegisterClassA(&wc);
+        RECT wr;
+        wr.left = 0; wr.top = 0; wr.right = w; wr.bottom = h;
+        AdjustWindowRect(&wr, WS_OVERLAPPEDWINDOW, FALSE);
+        HWND hw = CreateWindowExA(WS_EX_APPWINDOW, "NexaGfx3d", title.c_str(),
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT,
+            wr.right - wr.left, wr.bottom - wr.top,
+            nullptr, nullptr, wc.hInstance, nullptr);
+        if (hw && nexa_vk14::open(hw, __nexa_g3.vsync)) {
+            __nexa_g3.hwnd = hw;
+            __nexa_g3.vulkan = 1;
+            return 1;
+        }
+        nexa_vk14::shutdown();
+        if (hw) DestroyWindow(hw);
+        __nexa_g3.hwnd = nullptr;
+    }
     if (!__nexa_g3_load_gl()) return 0;
 
     __nexa_pfn_wglCreateContext wglCreate =
@@ -822,6 +899,10 @@ static int __nexa_g3_platform_open(const std::string& title, int w, int h) {
     __nexa_g3.glrc = wglCreate(__nexa_g3.hdc);
     if (!__nexa_g3.glrc) return 0;
     if (!wglCurrent(__nexa_g3.hdc, __nexa_g3.glrc)) return 0;
+    if (__nexa_g3.requested == "opengl 3.3" && __nexa_g3_win_core()) {
+        __nexa_g3.core33 = 1;
+        __nexa_g3.ctx_gen++;
+    }
     return 1;
 }
 
@@ -834,12 +915,14 @@ static void __nexa_g3_platform_poll(void) {
 }
 
 static void __nexa_g3_platform_swap(void) {
+    if (__nexa_g3.vulkan) { nexa_vk14::present(nullptr, 0, 0); return; }
     if (__nexa_g3.hdc) SwapBuffers(__nexa_g3.hdc);
 }
 
 // Whether SwapBuffers waits for the monitor's refresh. An extension, found
 // through the context that has to be current by now.
 static void __nexa_g3_platform_vsync(int on) {
+    if (__nexa_g3.vulkan) { nexa_vk14::set_vsync(on); return; }
     typedef PROC (WINAPI *__nexa_pfn_wglGetProcAddress)(LPCSTR);
     typedef BOOL (WINAPI *__nexa_pfn_wglSwapIntervalEXT)(int);
     __nexa_pfn_wglGetProcAddress gpa = (__nexa_pfn_wglGetProcAddress)__nexa_g3_sym("wglGetProcAddress");
@@ -849,6 +932,13 @@ static void __nexa_g3_platform_vsync(int on) {
 }
 
 static void __nexa_g3_platform_close(void) {
+    if (__nexa_g3.vulkan) {
+        nexa_vk14::shutdown();
+        if (__nexa_g3.hwnd) DestroyWindow(__nexa_g3.hwnd);
+        __nexa_g3.hwnd = nullptr;
+        __nexa_g3.vulkan = 0;
+        return;
+    }
     __nexa_pfn_wglMakeCurrent wglCurrent =
         (__nexa_pfn_wglMakeCurrent)__nexa_g3_sym("wglMakeCurrent");
     __nexa_pfn_wglDeleteContext wglDelete =
@@ -866,10 +956,10 @@ static void __nexa_g3_platform_close(void) {
 //
 // The window is the one std/gfx already opens on this platform, with an
 // NSOpenGLContext attached to its view instead of a bitmap blitted into it.
-// The pixel format asks for NSOpenGLProfileVersionLegacy on purpose: that is
-// the profile that still has the fixed-function pipeline this runtime draws
-// with. A core profile would compile and then draw nothing, because glBegin
-// does not exist in one.
+// The pixel format asks for NSOpenGLProfileVersionLegacy unless the program
+// asked for OpenGL 3.3. Legacy is the profile glBegin still exists in; the
+// 3.3 ask uses the 4.1 core profile, which is the core context macOS ships,
+// and draws through the shader instead.
 //
 // OpenGL is deprecated on macOS and has been since 10.14. Deprecated is not
 // removed -- it still runs -- but a Metal backend is what this will eventually
@@ -901,6 +991,7 @@ static NSOpenGLContext* __nexa_g3_nsctx = nil;
 
 static int __nexa_g3_platform_open(const std::string& title, int w, int h) {
     if (!__nexa_g3_load_gl()) return 0;
+    __nexa_g3.core33 = 0;
     @autoreleasepool {
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
@@ -923,8 +1014,13 @@ static int __nexa_g3_platform_open(const std::string& title, int w, int h) {
         __nexa_g3_nsdel = [[__NexaG3Delegate alloc] init];
         [__nexa_g3_nswin setDelegate:__nexa_g3_nsdel];
 
+        // macOS never shipped an OpenGL 3.3 context. 4.1 core is the one that
+        // runs a #version 330 shader; the legacy profile stays the default
+        // because that is the profile glBegin still exists in.
+        int wantCore = __nexa_g3.requested == "opengl 3.3";
         NSOpenGLPixelFormatAttribute attrs[] = {
-            NSOpenGLPFAOpenGLProfile, NSOpenGLProfileVersionLegacy,
+            NSOpenGLPFAOpenGLProfile, wantCore ? NSOpenGLProfileVersion4_1Core
+                                               : NSOpenGLProfileVersionLegacy,
             NSOpenGLPFADoubleBuffer,
             NSOpenGLPFAColorSize, 24,
             NSOpenGLPFAAlphaSize, 8,
@@ -932,11 +1028,20 @@ static int __nexa_g3_platform_open(const std::string& title, int w, int h) {
             0
         };
         NSOpenGLPixelFormat* pf = [[NSOpenGLPixelFormat alloc] initWithAttributes:attrs];
+        if (!pf && wantCore) {
+            wantCore = 0;
+            attrs[1] = NSOpenGLProfileVersionLegacy;
+            pf = [[NSOpenGLPixelFormat alloc] initWithAttributes:attrs];
+        }
         if (!pf) return 0;
         __nexa_g3_nsctx = [[NSOpenGLContext alloc] initWithFormat:pf shareContext:nil];
         if (!__nexa_g3_nsctx) return 0;
         [__nexa_g3_nsctx setView:__nexa_g3_nsview];
         [__nexa_g3_nsctx makeCurrentContext];
+        if (wantCore && __nexa_g3_try_core33()) {
+            __nexa_g3.core33 = 1;
+            __nexa_g3.ctx_gen++;
+        }
 
         [__nexa_g3_nswin center];
         [__nexa_g3_nswin makeKeyAndOrderFront:nil];
@@ -1249,8 +1354,62 @@ typedef int          (*__nexa_pfn_glXMakeCurrent)(Display*, Window, void*);
 typedef void         (*__nexa_pfn_glXSwapBuffers)(Display*, Window);
 typedef void         (*__nexa_pfn_glXDestroyContext)(Display*, void*);
 
+// Same bargain as Windows: the legacy context is already current, and a 3.3
+// core context replaces it only when the shader links. vi is the visual the
+// window was created with; the FBConfig has to be one that matches it.
+static int __nexa_g3_linux_core(XVisualInfo* vi) {
+    typedef void* (*CreateAttribs)(Display*, void*, void*, int, const int*);
+    typedef void** (*ChooseFB)(Display*, int, const int*, int*);
+    typedef XVisualInfo* (*GetVis)(Display*, void*);
+    typedef int (*MakeCur)(Display*, Window, void*);
+    typedef void (*Destroy)(Display*, void*);
+    typedef void* (*Create11)(Display*, XVisualInfo*, void*, int);
+    typedef void* (*GPA)(const unsigned char*);
+    GPA gpa = (GPA)__nexa_g3_sym("glXGetProcAddressARB");
+    if (!gpa) gpa = (GPA)__nexa_g3_sym("glXGetProcAddress");
+    if (!gpa) return 0;
+    CreateAttribs create = (CreateAttribs)gpa((const unsigned char*)"glXCreateContextAttribsARB");
+    ChooseFB choose = (ChooseFB)gpa((const unsigned char*)"glXChooseFBConfig");
+    GetVis getvis = (GetVis)__nexa_g3_sym("glXGetVisualFromFBConfig");
+    MakeCur make = (MakeCur)__nexa_g3_sym("glXMakeCurrent");
+    Destroy destroy = (Destroy)__nexa_g3_sym("glXDestroyContext");
+    Create11 create11 = (Create11)__nexa_g3_sym("glXCreateContext");
+    if (!create || !choose || !getvis || !make || !destroy || !create11) return 0;
+    int fbAttribs[] = { 0x8012, 1, 0x8010, 1, 0x8011, 1, 5, 1, 12, 24, 0 };
+    int n = 0;
+    void** cfgs = choose(__nexa_g3.dpy, vi->screen, fbAttribs, &n);
+    if (!cfgs || n < 1) return 0;
+    void* match = nullptr;
+    for (int i = 0; i < n; i++) {
+        XVisualInfo* v = getvis(__nexa_g3.dpy, cfgs[i]);
+        if (v && v->visualid == vi->visualid) match = cfgs[i];
+        if (v) XFree(v);
+        if (match) break;
+    }
+    if (!match) { XFree(cfgs); return 0; }
+    const int attribs[] = { 0x2091, 3, 0x2092, 3, 0x9126, 0x00000001, 0 };
+    void* core = create(__nexa_g3.dpy, match, nullptr, 1, attribs);
+    XFree(cfgs);
+    if (!core) return 0;
+    void* old = __nexa_g3.ctx;
+    if (!make(__nexa_g3.dpy, __nexa_g3.win, core)) {
+        destroy(__nexa_g3.dpy, core);
+        make(__nexa_g3.dpy, __nexa_g3.win, old);
+        return 0;
+    }
+    __nexa_g3.ctx = core;
+    destroy(__nexa_g3.dpy, old);
+    if (__nexa_g3_try_core33()) return 1;
+    make(__nexa_g3.dpy, 0, nullptr);
+    destroy(__nexa_g3.dpy, core);
+    __nexa_g3.ctx = create11(__nexa_g3.dpy, vi, nullptr, 1);
+    if (!__nexa_g3.ctx || !make(__nexa_g3.dpy, __nexa_g3.win, __nexa_g3.ctx)) return 0;
+    return 0;
+}
+
 static int __nexa_g3_platform_open(const std::string& title, int w, int h) {
     if (!__nexa_g3_load_gl()) return 0;
+    __nexa_g3.core33 = 0;
 
     __nexa_pfn_glXChooseVisual   glXChooseVisual   = (__nexa_pfn_glXChooseVisual)__nexa_g3_sym("glXChooseVisual");
     __nexa_pfn_glXCreateContext  glXCreateContext  = (__nexa_pfn_glXCreateContext)__nexa_g3_sym("glXCreateContext");
@@ -1289,6 +1448,10 @@ static int __nexa_g3_platform_open(const std::string& title, int w, int h) {
     __nexa_g3.ctx = glXCreateContext(__nexa_g3.dpy, vi, nullptr, 1);
     if (!__nexa_g3.ctx) return 0;
     if (!glXMakeCurrent(__nexa_g3.dpy, __nexa_g3.win, __nexa_g3.ctx)) return 0;
+    if (__nexa_g3.requested == "opengl 3.3" && __nexa_g3_linux_core(vi)) {
+        __nexa_g3.core33 = 1;
+        __nexa_g3.ctx_gen++;
+    }
     return 1;
 }
 
@@ -1737,14 +1900,16 @@ struct __nexa_G3Mesh {
         float key[28];
         std::vector<float> col;  // r, g, b a corner, 0..1
         unsigned used = 0;
-        unsigned gl_col = 0;     // WebGL: col, uploaded; stale when col is redone
+        unsigned gl_col = 0;     // WebGL / 3.3: col, uploaded; stale when col is redone
         int gl_stale = 1;
+        unsigned gl_gen = 0;     // ctx_gen this buffer was uploaded for
     };
     Lit lit[4];              // a few colours of one shape, e.g. red and blue balls
     int n_lit = 0;
     unsigned clock = 0;
-    unsigned gl_pos = 0;     // WebGL: pos, uploaded once
-    unsigned gl_uv = 0;      // WebGL: uv, the same
+    unsigned gl_pos = 0;     // WebGL / 3.3: pos, uploaded once
+    unsigned gl_uv = 0;      // WebGL / 3.3: uv, the same
+    unsigned gl_gen = 0;
 };
 
 // While a mesh is being built, the shape code below writes its corners here
@@ -2246,11 +2411,322 @@ static __nexa_G3Mesh& __nexa_g3_box_mesh(void) {
     return m;
 }
 
+// --- OpenGL 3.3 -------------------------------------------------------------
+//
+// The desktop fixed-function submit, written out as a core-profile shader.
+// The vertices are the batch and the cached meshes above; the colour is the
+// lit colour already stored on them; a texture, when there is one, is
+// multiplied through and a cutout drops fragments at half opacity. That is
+// GL_MODULATE and GL_ALPHA_TEST from the 1.1 path, and nothing else.
+
+#if !defined(NEXA_WASM)
+
+static unsigned __nexa_g3_tex_gl(void);
+
+struct __nexa_GL33 {
+    __nexa_GLuint (NEXA_GLAPI *CreateShader)(__nexa_GLenum);
+    void (NEXA_GLAPI *ShaderSource)(__nexa_GLuint, __nexa_GLsizei, const __nexa_GLchar* const*, const __nexa_GLint*);
+    void (NEXA_GLAPI *CompileShader)(__nexa_GLuint);
+    void (NEXA_GLAPI *GetShaderiv)(__nexa_GLuint, __nexa_GLenum, __nexa_GLint*);
+    void (NEXA_GLAPI *DeleteShader)(__nexa_GLuint);
+    __nexa_GLuint (NEXA_GLAPI *CreateProgram)(void);
+    void (NEXA_GLAPI *AttachShader)(__nexa_GLuint, __nexa_GLuint);
+    void (NEXA_GLAPI *LinkProgram)(__nexa_GLuint);
+    void (NEXA_GLAPI *GetProgramiv)(__nexa_GLuint, __nexa_GLenum, __nexa_GLint*);
+    void (NEXA_GLAPI *UseProgram)(__nexa_GLuint);
+    __nexa_GLint (NEXA_GLAPI *GetUniformLocation)(__nexa_GLuint, const __nexa_GLchar*);
+    __nexa_GLint (NEXA_GLAPI *GetAttribLocation)(__nexa_GLuint, const __nexa_GLchar*);
+    void (NEXA_GLAPI *UniformMatrix4fv)(__nexa_GLint, __nexa_GLsizei, __nexa_GLubyte, const __nexa_GLfloat*);
+    void (NEXA_GLAPI *Uniform1i)(__nexa_GLint, __nexa_GLint);
+    void (NEXA_GLAPI *Uniform1f)(__nexa_GLint, __nexa_GLfloat);
+    void (NEXA_GLAPI *GenBuffers)(__nexa_GLsizei, __nexa_GLuint*);
+    void (NEXA_GLAPI *BindBuffer)(__nexa_GLenum, __nexa_GLuint);
+    void (NEXA_GLAPI *BufferData)(__nexa_GLenum, __nexa_GLsizeiptr, const void*, __nexa_GLenum);
+    void (NEXA_GLAPI *EnableVertexAttribArray)(__nexa_GLuint);
+    void (NEXA_GLAPI *DisableVertexAttribArray)(__nexa_GLuint);
+    void (NEXA_GLAPI *VertexAttribPointer)(__nexa_GLuint, __nexa_GLint, __nexa_GLenum, __nexa_GLubyte, __nexa_GLsizei, const void*);
+    void (NEXA_GLAPI *GenVertexArrays)(__nexa_GLsizei, __nexa_GLuint*);
+    void (NEXA_GLAPI *BindVertexArray)(__nexa_GLuint);
+};
+static __nexa_GL33 __nexa_g33;
+
+static __nexa_GLuint __nexa_g33_prog = 0;
+static __nexa_GLuint __nexa_g33_vao = 0;
+static __nexa_GLuint __nexa_g33_vbo = 0;
+static __nexa_GLint __nexa_g33_u_mvp = -1;
+static __nexa_GLint __nexa_g33_u_texon = -1;
+static __nexa_GLint __nexa_g33_u_cut = -1;
+static __nexa_GLint __nexa_g33_a_pos = -1;
+static __nexa_GLint __nexa_g33_a_col = -1;
+static __nexa_GLint __nexa_g33_a_uv = -1;
+static __nexa_GLuint __nexa_g33_ov_prog = 0;
+static __nexa_GLuint __nexa_g33_ov_vbo = 0;
+static __nexa_GLint __nexa_g33_ov_a_pos = -1;
+static __nexa_GLint __nexa_g33_ov_a_uv = -1;
+static __nexa_GLint __nexa_g33_ov_u_swap = -1;
+
+static void* __nexa_g3_glproc(const char* name) {
+#if defined(_WIN32)
+    typedef PROC (WINAPI *GPA)(LPCSTR);
+    GPA gpa = (GPA)__nexa_g3_sym("wglGetProcAddress");
+    if (gpa) {
+        PROC p = gpa(name);
+        INT_PTR v = (INT_PTR)p;
+        if (p && v != 1 && v != 2 && v != 3 && v != -1) return (void*)p;
+    }
+    return __nexa_g3_sym(name);
+#elif defined(__APPLE__)
+    return __nexa_g3_sym(name);
+#elif defined(__linux__)
+    typedef void* (*GPA)(const unsigned char*);
+    GPA gpa = (GPA)__nexa_g3_sym("glXGetProcAddressARB");
+    if (!gpa) gpa = (GPA)__nexa_g3_sym("glXGetProcAddress");
+    if (gpa) return gpa((const unsigned char*)name);
+    return __nexa_g3_sym(name);
+#else
+    (void)name;
+    return nullptr;
+#endif
+}
+
+static const char* __nexa_g33_vs =
+    "#version 330 core\n"
+    "in vec3 aPos;\n"
+    "in vec3 aCol;\n"
+    "in vec2 aUV;\n"
+    "uniform mat4 uMVP;\n"
+    "out vec3 vCol;\n"
+    "out vec2 vUV;\n"
+    "void main() {\n"
+    "  vCol = aCol;\n"
+    "  vUV = aUV;\n"
+    "  gl_Position = uMVP * vec4(aPos, 1.0);\n"
+    "}\n";
+
+static const char* __nexa_g33_fs =
+    "#version 330 core\n"
+    "uniform sampler2D uTex;\n"
+    "uniform float uTexOn;\n"
+    "uniform float uCut;\n"
+    "in vec3 vCol;\n"
+    "in vec2 vUV;\n"
+    "out vec4 fragColor;\n"
+    "void main() {\n"
+    "  vec3 c = vCol;\n"
+    "  if (uTexOn > 0.5) {\n"
+    "    vec4 t = texture(uTex, vUV);\n"
+    "    if (uCut > 0.5 && t.a <= 0.5) discard;\n"
+    "    c *= t.rgb;\n"
+    "  }\n"
+    "  fragColor = vec4(c, 1.0);\n"
+    "}\n";
+
+static const char* __nexa_g33_ov_vs =
+    "#version 330 core\n"
+    "in vec2 aPos;\n"
+    "in vec2 aUV;\n"
+    "out vec2 vUV;\n"
+    "void main() {\n"
+    "  vUV = aUV;\n"
+    "  gl_Position = vec4(aPos, 0.0, 1.0);\n"
+    "}\n";
+
+static const char* __nexa_g33_ov_fs =
+    "#version 330 core\n"
+    "uniform sampler2D uTex;\n"
+    "uniform float uSwap;\n"
+    "in vec2 vUV;\n"
+    "out vec4 fragColor;\n"
+    "void main() {\n"
+    "  vec4 t = texture(uTex, vUV);\n"
+    "  fragColor = (uSwap > 0.5) ? vec4(t.b, t.g, t.r, t.a) : t;\n"
+    "}\n";
+
+static __nexa_GLuint __nexa_g33_compile(__nexa_GLenum kind, const char* src) {
+    __nexa_GLuint s = __nexa_g33.CreateShader(kind);
+    if (!s) return 0;
+    __nexa_g33.ShaderSource(s, 1, &src, nullptr);
+    __nexa_g33.CompileShader(s);
+    __nexa_GLint ok = 0;
+    __nexa_g33.GetShaderiv(s, NEXA_GL_COMPILE_STATUS, &ok);
+    if (!ok) { __nexa_g33.DeleteShader(s); return 0; }
+    return s;
+}
+
+static int __nexa_g33_link(__nexa_GLuint* prog, __nexa_GLuint vs, __nexa_GLuint fs) {
+    if (!vs || !fs) return 0;
+    __nexa_GLuint p = __nexa_g33.CreateProgram();
+    if (!p) return 0;
+    __nexa_g33.AttachShader(p, vs);
+    __nexa_g33.AttachShader(p, fs);
+    __nexa_g33.LinkProgram(p);
+    __nexa_GLint ok = 0;
+    __nexa_g33.GetProgramiv(p, NEXA_GL_LINK_STATUS, &ok);
+    __nexa_g33.DeleteShader(vs);
+    __nexa_g33.DeleteShader(fs);
+    if (!ok) return 0;
+    *prog = p;
+    return 1;
+}
+
+static int __nexa_g3_try_core33(void) {
+#define NEXA_G33(field, name) \
+    __nexa_g33.field = (decltype(__nexa_g33.field))__nexa_g3_glproc(name); \
+    if (!__nexa_g33.field) return 0;
+    NEXA_G33(CreateShader, "glCreateShader")
+    NEXA_G33(ShaderSource, "glShaderSource")
+    NEXA_G33(CompileShader, "glCompileShader")
+    NEXA_G33(GetShaderiv, "glGetShaderiv")
+    NEXA_G33(DeleteShader, "glDeleteShader")
+    NEXA_G33(CreateProgram, "glCreateProgram")
+    NEXA_G33(AttachShader, "glAttachShader")
+    NEXA_G33(LinkProgram, "glLinkProgram")
+    NEXA_G33(GetProgramiv, "glGetProgramiv")
+    NEXA_G33(UseProgram, "glUseProgram")
+    NEXA_G33(GetUniformLocation, "glGetUniformLocation")
+    NEXA_G33(GetAttribLocation, "glGetAttribLocation")
+    NEXA_G33(UniformMatrix4fv, "glUniformMatrix4fv")
+    NEXA_G33(Uniform1i, "glUniform1i")
+    NEXA_G33(Uniform1f, "glUniform1f")
+    NEXA_G33(GenBuffers, "glGenBuffers")
+    NEXA_G33(BindBuffer, "glBindBuffer")
+    NEXA_G33(BufferData, "glBufferData")
+    NEXA_G33(EnableVertexAttribArray, "glEnableVertexAttribArray")
+    NEXA_G33(DisableVertexAttribArray, "glDisableVertexAttribArray")
+    NEXA_G33(VertexAttribPointer, "glVertexAttribPointer")
+    NEXA_G33(GenVertexArrays, "glGenVertexArrays")
+    NEXA_G33(BindVertexArray, "glBindVertexArray")
+#undef NEXA_G33
+    if (!__nexa_g33_link(&__nexa_g33_prog,
+            __nexa_g33_compile(NEXA_GL_VERTEX_SHADER, __nexa_g33_vs),
+            __nexa_g33_compile(NEXA_GL_FRAGMENT_SHADER, __nexa_g33_fs))) return 0;
+    __nexa_g33_u_mvp = __nexa_g33.GetUniformLocation(__nexa_g33_prog, "uMVP");
+    __nexa_g33_u_texon = __nexa_g33.GetUniformLocation(__nexa_g33_prog, "uTexOn");
+    __nexa_g33_u_cut = __nexa_g33.GetUniformLocation(__nexa_g33_prog, "uCut");
+    __nexa_g33_a_pos = __nexa_g33.GetAttribLocation(__nexa_g33_prog, "aPos");
+    __nexa_g33_a_col = __nexa_g33.GetAttribLocation(__nexa_g33_prog, "aCol");
+    __nexa_g33_a_uv = __nexa_g33.GetAttribLocation(__nexa_g33_prog, "aUV");
+    if (__nexa_g33_a_pos < 0 || __nexa_g33_a_col < 0) return 0;
+    __nexa_g33.UseProgram(__nexa_g33_prog);
+    __nexa_GLint utex = __nexa_g33.GetUniformLocation(__nexa_g33_prog, "uTex");
+    if (utex >= 0) __nexa_g33.Uniform1i(utex, 0);
+    if (!__nexa_g33_link(&__nexa_g33_ov_prog,
+            __nexa_g33_compile(NEXA_GL_VERTEX_SHADER, __nexa_g33_ov_vs),
+            __nexa_g33_compile(NEXA_GL_FRAGMENT_SHADER, __nexa_g33_ov_fs))) return 0;
+    __nexa_g33_ov_a_pos = __nexa_g33.GetAttribLocation(__nexa_g33_ov_prog, "aPos");
+    __nexa_g33_ov_a_uv = __nexa_g33.GetAttribLocation(__nexa_g33_ov_prog, "aUV");
+    __nexa_g33_ov_u_swap = __nexa_g33.GetUniformLocation(__nexa_g33_ov_prog, "uSwap");
+    __nexa_g33.GenVertexArrays(1, &__nexa_g33_vao);
+    __nexa_g33.GenBuffers(1, &__nexa_g33_vbo);
+    __nexa_g33.GenBuffers(1, &__nexa_g33_ov_vbo);
+    if (!__nexa_g33_vao || !__nexa_g33_vbo) return 0;
+    __nexa_g33.BindVertexArray(__nexa_g33_vao);
+    return 1;
+}
+
+static void __nexa_g3_core_mvp(const float* M, float* mvp) {
+    float vp[16];
+    __nexa_g3_mul4(vp, __nexa_g3.proj, __nexa_g3.view);
+    if (M) __nexa_g3_mul4(mvp, vp, M);
+    else {
+        for (int i = 0; i < 16; i++) mvp[i] = vp[i];
+    }
+}
+
+static void __nexa_g3_core_batch(void) {
+    if (!__nexa_g33_prog || !__nexa_gl.DrawArrays) return;
+    if (__nexa_g3_two_sided) __nexa_gl.Disable(NEXA_GL_CULL_FACE);
+    float mvp[16];
+    __nexa_g3_core_mvp(nullptr, mvp);
+    __nexa_g33.BindVertexArray(__nexa_g33_vao);
+    __nexa_g33.UseProgram(__nexa_g33_prog);
+    __nexa_g33.UniformMatrix4fv(__nexa_g33_u_mvp, 1, 0, mvp);
+    __nexa_g33.Uniform1f(__nexa_g33_u_texon, 0.0f);
+    __nexa_g33.Uniform1f(__nexa_g33_u_cut, 0.0f);
+    __nexa_g33.BindBuffer(NEXA_GL_ARRAY_BUFFER, __nexa_g33_vbo);
+    __nexa_g33.BufferData(NEXA_GL_ARRAY_BUFFER,
+        (__nexa_GLsizeiptr)(__nexa_g3_vn * 6 * (int)sizeof(float)),
+        __nexa_g3_vb, NEXA_GL_DYNAMIC_DRAW);
+    const __nexa_GLsizei stride = (__nexa_GLsizei)(6 * sizeof(float));
+    __nexa_g33.EnableVertexAttribArray((__nexa_GLuint)__nexa_g33_a_pos);
+    __nexa_g33.VertexAttribPointer((__nexa_GLuint)__nexa_g33_a_pos, 3, NEXA_GL_FLOAT, 0, stride, (const void*)0);
+    __nexa_g33.EnableVertexAttribArray((__nexa_GLuint)__nexa_g33_a_col);
+    __nexa_g33.VertexAttribPointer((__nexa_GLuint)__nexa_g33_a_col, 3, NEXA_GL_FLOAT, 0, stride,
+                                   (const void*)(3 * sizeof(float)));
+    if (__nexa_g33_a_uv >= 0) __nexa_g33.DisableVertexAttribArray((__nexa_GLuint)__nexa_g33_a_uv);
+    __nexa_gl.DrawArrays(__nexa_g3_prim ? NEXA_GL_LINES : NEXA_GL_TRIANGLES, 0, __nexa_g3_vn);
+    if (__nexa_g3_two_sided) __nexa_gl.Enable(NEXA_GL_CULL_FACE);
+}
+
+static int __nexa_g3_core_mesh(__nexa_G3Mesh& m, __nexa_G3Mesh::Lit& L, const float* M) {
+    if (!__nexa_g33_prog || !__nexa_gl.DrawArrays) return 0;
+    if (m.gl_gen != __nexa_g3.ctx_gen) {
+        m.gl_pos = 0;
+        m.gl_uv = 0;
+        m.gl_gen = __nexa_g3.ctx_gen;
+        for (int i = 0; i < 4; i++) { m.lit[i].gl_col = 0; m.lit[i].gl_stale = 1; m.lit[i].gl_gen = 0; }
+    }
+    if (!m.gl_pos) {
+        __nexa_g33.GenBuffers(1, &m.gl_pos);
+        if (!m.gl_pos) return 0;
+        __nexa_g33.BindBuffer(NEXA_GL_ARRAY_BUFFER, m.gl_pos);
+        __nexa_g33.BufferData(NEXA_GL_ARRAY_BUFFER, (__nexa_GLsizeiptr)(m.pos.size() * sizeof(float)),
+                              m.pos.data(), NEXA_GL_STATIC_DRAW);
+    }
+    if (L.gl_gen != __nexa_g3.ctx_gen) { L.gl_col = 0; L.gl_stale = 1; L.gl_gen = __nexa_g3.ctx_gen; }
+    if (!L.gl_col) {
+        __nexa_g33.GenBuffers(1, &L.gl_col);
+        if (!L.gl_col) return 0;
+        L.gl_stale = 1;
+    }
+    __nexa_g33.BindVertexArray(__nexa_g33_vao);
+    __nexa_g33.BindBuffer(NEXA_GL_ARRAY_BUFFER, L.gl_col);
+    if (L.gl_stale) {
+        __nexa_g33.BufferData(NEXA_GL_ARRAY_BUFFER, (__nexa_GLsizeiptr)(L.col.size() * sizeof(float)),
+                              L.col.data(), NEXA_GL_DYNAMIC_DRAW);
+        L.gl_stale = 0;
+    }
+    __nexa_g33.EnableVertexAttribArray((__nexa_GLuint)__nexa_g33_a_col);
+    __nexa_g33.VertexAttribPointer((__nexa_GLuint)__nexa_g33_a_col, 3, NEXA_GL_FLOAT, 0, 0, (const void*)0);
+    __nexa_g33.BindBuffer(NEXA_GL_ARRAY_BUFFER, m.gl_pos);
+    __nexa_g33.EnableVertexAttribArray((__nexa_GLuint)__nexa_g33_a_pos);
+    __nexa_g33.VertexAttribPointer((__nexa_GLuint)__nexa_g33_a_pos, 3, NEXA_GL_FLOAT, 0, 0, (const void*)0);
+    const unsigned tex = m.uv.empty() ? 0 : __nexa_g3_tex_gl();
+    const int cut = tex && __nexa_g3_texs[(size_t)__nexa_g3_tex_cur].cutout;
+    if (tex && __nexa_g33_a_uv >= 0) {
+        if (m.gl_gen == __nexa_g3.ctx_gen && !m.gl_uv) {
+            __nexa_g33.GenBuffers(1, &m.gl_uv);
+            __nexa_g33.BindBuffer(NEXA_GL_ARRAY_BUFFER, m.gl_uv);
+            __nexa_g33.BufferData(NEXA_GL_ARRAY_BUFFER, (__nexa_GLsizeiptr)(m.uv.size() * sizeof(float)),
+                                  m.uv.data(), NEXA_GL_STATIC_DRAW);
+        }
+        __nexa_g33.BindBuffer(NEXA_GL_ARRAY_BUFFER, m.gl_uv);
+        __nexa_g33.EnableVertexAttribArray((__nexa_GLuint)__nexa_g33_a_uv);
+        __nexa_g33.VertexAttribPointer((__nexa_GLuint)__nexa_g33_a_uv, 2, NEXA_GL_FLOAT, 0, 0, (const void*)0);
+        __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, tex);
+    } else if (__nexa_g33_a_uv >= 0) {
+        __nexa_g33.DisableVertexAttribArray((__nexa_GLuint)__nexa_g33_a_uv);
+    }
+    float mvp[16];
+    __nexa_g3_core_mvp(M, mvp);
+    __nexa_g33.UseProgram(__nexa_g33_prog);
+    __nexa_g33.UniformMatrix4fv(__nexa_g33_u_mvp, 1, 0, mvp);
+    __nexa_g33.Uniform1f(__nexa_g33_u_texon, tex ? 1.0f : 0.0f);
+    __nexa_g33.Uniform1f(__nexa_g33_u_cut, cut ? 1.0f : 0.0f);
+    const int both = m.two_sided || cut;
+    if (both) __nexa_gl.Disable(NEXA_GL_CULL_FACE);
+    __nexa_gl.DrawArrays(NEXA_GL_TRIANGLES, 0, (__nexa_GLsizei)(m.pos.size() / 3));
+    if (both) __nexa_gl.Enable(NEXA_GL_CULL_FACE);
+    return 1;
+}
+
+#endif
+
 // --- submitting the batch ---------------------------------------------------
 //
 // The two halves of the split this module is built around. Above this line,
-// one description of the geometry; below it, the two ways a machine will take
-// it.
+// one description of the geometry; below it, the ways a machine will take it.
+// OpenGL 3.3 is the fixed-function submit again, through the shader above.
 
 #if defined(NEXA_WASM)
 
@@ -2376,7 +2852,12 @@ static int __nexa_g3_mesh_submit(__nexa_G3Mesh& m, __nexa_G3Mesh::Lit& L, const 
 // The fixed-function pipeline takes the camera as two matrices and keeps it,
 // and takes the geometry a vertex at a time.
 static void __nexa_g3_platform_camera(void) {
+    if (__nexa_g3.vulkan) return;
     if (!__nexa_gl.loaded) return;
+    if (__nexa_g3.core33) {
+        __nexa_gl.Viewport(0, 0, __nexa_g3.w, __nexa_g3.h);
+        return;
+    }
     __nexa_gl.Viewport(0, 0, __nexa_g3.w, __nexa_g3.h);
     __nexa_gl.MatrixMode(NEXA_GL_PROJECTION);
     __nexa_gl.LoadMatrixf(__nexa_g3.proj);
@@ -2407,6 +2888,26 @@ static unsigned __nexa_g3_tex_gl(void) {
 // A cached mesh: its own arrays, placed by M on top of the camera. The camera
 // is what gfx3d.clear left on the modelview stack, and is put back after.
 static int __nexa_g3_mesh_submit(__nexa_G3Mesh& m, __nexa_G3Mesh::Lit& L, const float* M) {
+#if defined(_WIN32)
+    if (__nexa_g3.vulkan) {
+        const size_t n = m.pos.size() / 3;
+        if (n == 0 || L.col.size() < n * 3) return 0;
+        std::vector<float> tmp(n * 6);
+        for (size_t i = 0; i < n; ++i) {
+            tmp[i * 6]     = m.pos[i * 3];
+            tmp[i * 6 + 1] = m.pos[i * 3 + 1];
+            tmp[i * 6 + 2] = m.pos[i * 3 + 2];
+            tmp[i * 6 + 3] = L.col[i * 3];
+            tmp[i * 6 + 4] = L.col[i * 3 + 1];
+            tmp[i * 6 + 5] = L.col[i * 3 + 2];
+        }
+        float mvp[16];
+        __nexa_g3_core_mvp(M, mvp);
+        nexa_vk14::draw(tmp.data(), (int)n, 0, m.two_sided, mvp);
+        return 1;
+    }
+#endif
+    if (__nexa_g3.core33) return __nexa_g3_core_mesh(m, L, M);
     const float* col = L.col.data();
     if (!__nexa_gl.loaded || !__nexa_gl.DrawArrays || !__nexa_gl.VertexPointer ||
         !__nexa_gl.ColorPointer || !__nexa_gl.EnableClientState || !__nexa_gl.DisableClientState ||
@@ -2449,7 +2950,17 @@ static int __nexa_g3_mesh_submit(__nexa_G3Mesh& m, __nexa_G3Mesh::Lit& L, const 
 }
 
 static void __nexa_g3_batch_submit(void) {
+#if defined(_WIN32)
+    if (__nexa_g3.vulkan) {
+        if (__nexa_g3_vn <= 0) return;
+        float mvp[16];
+        __nexa_g3_core_mvp(nullptr, mvp);
+        nexa_vk14::draw(__nexa_g3_vb, __nexa_g3_vn, __nexa_g3_prim, __nexa_g3_two_sided, mvp);
+        return;
+    }
+#endif
     if (!__nexa_gl.loaded) return;
+    if (__nexa_g3.core33) { __nexa_g3_core_batch(); return; }
     if (__nexa_g3_two_sided) __nexa_gl.Disable(NEXA_GL_CULL_FACE);
     // The whole batch in one call, straight out of the buffer it was written
     // to. Vertex by vertex it was two calls a corner -- a few hundred thousand a
@@ -2480,6 +2991,19 @@ static void __nexa_g3_batch_submit(void) {
 
 #endif
 )NEXA_GFX3D";
+    const std::string mark = "/*@@VK14@@*/";
+    const size_t at = s.find(mark);
+    if (at != std::string::npos) {
+        std::string vk = nexa_vk14_embed();
+        const std::string once = "#pragma once";
+        const size_t p = vk.find(once);
+        if (p != std::string::npos && p < 8) {
+            const size_t nl = vk.find('\n', p);
+            if (nl != std::string::npos) vk.erase(0, nl + 1);
+        }
+        s.replace(at, mark.size(), vk);
+    }
+    return s;
 }
 
 // The fifteen calls std/gfx3d offers, in the shape std/gfx offers its own.
@@ -2516,10 +3040,13 @@ static int __nexa_gfx3d_open(const std::string& title, int w, int h) {
     // gfx with three coordinates, so it is on from the start rather than being
     // something a program has to remember to ask for. Back faces are dropped
     // for the same reason: a solid cube has no use for the inside of itself.
+    // Vulkan turns those on in its own pipeline; there is no GL context to enable.
+    if (!__nexa_g3.vulkan) {
     __nexa_gl.Enable(NEXA_GL_DEPTH_TEST);
     __nexa_gl.Enable(NEXA_GL_CULL_FACE);
     __nexa_gl.CullFace(NEXA_GL_BACK);
     __nexa_gl.FrontFace(NEXA_GL_CCW);
+    }
     __nexa_gfx3d_reset();
     __nexa_g3.ready = 1;
     __nexa_g3_platform_vsync(__nexa_g3.vsync);
@@ -2544,6 +3071,8 @@ static void __nexa_gfx3d_close(void) {
 #endif
     __nexa_g3.ready = 0;
     __nexa_g3.closed = 1;
+    __nexa_g3.core33 = 0;
+    __nexa_g3.vulkan = 0;
 }
 
 static void __nexa_gfx3d_poll(void) {
@@ -2584,6 +3113,12 @@ static void __nexa_gfx3d_clear(int r, int g, int b) {
     if (r < 0) r = 0; if (r > 255) r = 255;
     if (g < 0) g = 0; if (g > 255) g = 255;
     if (b < 0) b = 0; if (b > 255) b = 255;
+    if (__nexa_g3.vulkan) {
+        __nexa_g3_apply_camera();
+        nexa_vk14::begin((float)r / 255.0f, (float)g / 255.0f, (float)b / 255.0f, __nexa_g3.w, __nexa_g3.h);
+        __nexa_g3_overlay_frame(__nexa_g3.w, __nexa_g3.h);
+        return;
+    }
     __nexa_gl.ClearColor((float)r / 255.0f, (float)g / 255.0f, (float)b / 255.0f, 1.0f);
     __nexa_gl.Clear(NEXA_GL_COLOR_BUFFER_BIT | NEXA_GL_DEPTH_BUFFER_BIT);
     // The camera is pushed here rather than in every draw call: clear is the
@@ -3053,15 +3588,19 @@ static std::string __nexa_gfx3d_typed(void) {
     return out;
 }
 
-// What the program asked for. A renderer that is not built yet is accepted
-// and answered with OpenGL; gfx3d.backend() is where the difference shows.
+// What the program asked for. Vulkan 1.4 is built on Windows. A machine that
+// cannot open it still accepts the name and opens OpenGL; gfx3d.backend()
+// is where the difference shows.
 static int __nexa_gfx3d_renderer(const std::string& name) {
     std::string n;
     for (size_t i = 0; i < name.size(); i++) {
         char c = name[i];
         n.push_back((c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c);
     }
-    if (n != "opengl" && n != "vulkan") return 0;
+    if (n == "opengl" || n == "opengl 1.1") n = "opengl";
+    else if (n == "opengl 3.3") n = "opengl 3.3";
+    else if (n == "vulkan" || n == "vulkan 1.4") n = "vulkan 1.4";
+    else return 0;
     __nexa_g3.requested = n;
     return 1;
 }
@@ -3070,6 +3609,8 @@ static int __nexa_gfx3d_renderer(const std::string& name) {
 // for. Empty before the first successful gfx3d.open.
 static std::string __nexa_gfx3d_backend(void) {
     if (!__nexa_g3.ready) return std::string("");
+    if (__nexa_g3.vulkan) return std::string("vulkan 1.4");
+    if (__nexa_g3.core33) return std::string("opengl 3.3");
     return std::string("opengl");
 }
 )NEXA_GFX3D";
@@ -3521,6 +4062,68 @@ static __nexa_GLuint __nexa_g3_ov_tex = 0;
 static int __nexa_g3_ov_tw = 0;
 static int __nexa_g3_ov_th = 0;
 
+#if !defined(NEXA_WASM)
+// The same six vertices the fixed-function path sends with glBegin. Windows
+// keeps the pixels BGRA; a core context will not take that as a format, so
+// they are uploaded as RGBA and swapped back in the shader.
+static void __nexa_g3_core_overlay(int w, int h, int tw, int th, float u, float v) {
+    if (!__nexa_g33_ov_prog || !__nexa_gl.GenTextures || !__nexa_gl.TexImage2D ||
+        !__nexa_gl.TexSubImage2D || !__nexa_gl.DrawArrays) return;
+#if defined(_WIN32)
+    const float swap = 1.0f;
+#else
+    const float swap = 0.0f;
+#endif
+    if (!__nexa_g3_ov_tex) __nexa_gl.GenTextures(1, &__nexa_g3_ov_tex);
+    __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_ov_tex);
+    if (tw != __nexa_g3_ov_tw || th != __nexa_g3_ov_th) {
+        __nexa_gl.TexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_MIN_FILTER, (__nexa_GLint)NEXA_GL_NEAREST);
+        __nexa_gl.TexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_MAG_FILTER, (__nexa_GLint)NEXA_GL_NEAREST);
+        __nexa_gl.TexImage2D(NEXA_GL_TEXTURE_2D, 0, (__nexa_GLint)NEXA_GL_RGBA, tw, th, 0,
+                             NEXA_GL_RGBA, NEXA_GL_UNSIGNED_BYTE, nullptr);
+        __nexa_g3_ov_tw = tw;
+        __nexa_g3_ov_th = th;
+    }
+    __nexa_gl.TexSubImage2D(NEXA_GL_TEXTURE_2D, 0, 0, 0, w, h,
+                            NEXA_GL_RGBA, NEXA_GL_UNSIGNED_BYTE, __nexa_g.fb);
+    const float quad[24] = {
+        -1.0f,  1.0f, 0.0f, 0.0f,
+        -1.0f, -1.0f, 0.0f, v,
+         1.0f, -1.0f, u,    v,
+        -1.0f,  1.0f, 0.0f, 0.0f,
+         1.0f, -1.0f, u,    v,
+         1.0f,  1.0f, u,    0.0f,
+    };
+    __nexa_g33.BindVertexArray(__nexa_g33_vao);
+    __nexa_g33.UseProgram(__nexa_g33_ov_prog);
+    if (__nexa_g33_ov_u_swap >= 0) __nexa_g33.Uniform1f(__nexa_g33_ov_u_swap, swap);
+    __nexa_g33.BindBuffer(NEXA_GL_ARRAY_BUFFER, __nexa_g33_ov_vbo);
+    __nexa_g33.BufferData(NEXA_GL_ARRAY_BUFFER, (__nexa_GLsizeiptr)sizeof(quad), quad, NEXA_GL_DYNAMIC_DRAW);
+    const __nexa_GLsizei stride = (__nexa_GLsizei)(4 * sizeof(float));
+    if (__nexa_g33_ov_a_pos >= 0) {
+        __nexa_g33.EnableVertexAttribArray((__nexa_GLuint)__nexa_g33_ov_a_pos);
+        __nexa_g33.VertexAttribPointer((__nexa_GLuint)__nexa_g33_ov_a_pos, 2, NEXA_GL_FLOAT, 0, stride, (const void*)0);
+    }
+    if (__nexa_g33_ov_a_uv >= 0) {
+        __nexa_g33.EnableVertexAttribArray((__nexa_GLuint)__nexa_g33_ov_a_uv);
+        __nexa_g33.VertexAttribPointer((__nexa_GLuint)__nexa_g33_ov_a_uv, 2, NEXA_GL_FLOAT, 0, stride,
+                                       (const void*)(2 * sizeof(float)));
+    }
+    __nexa_gl.Disable(NEXA_GL_DEPTH_TEST);
+    __nexa_gl.Disable(NEXA_GL_CULL_FACE);
+    __nexa_gl.Enable(NEXA_GL_BLEND);
+    __nexa_gl.BlendFunc(NEXA_GL_SRC_ALPHA, NEXA_GL_ONE_MINUS_SRC_ALPHA);
+    __nexa_gl.DrawArrays(NEXA_GL_TRIANGLES, 0, 6);
+    __nexa_gl.Disable(NEXA_GL_BLEND);
+    __nexa_gl.Enable(NEXA_GL_CULL_FACE);
+    __nexa_gl.Enable(NEXA_GL_DEPTH_TEST);
+    if (__nexa_g33_ov_a_pos >= 0) __nexa_g33.DisableVertexAttribArray((__nexa_GLuint)__nexa_g33_ov_a_pos);
+    if (__nexa_g33_ov_a_uv >= 0) __nexa_g33.DisableVertexAttribArray((__nexa_GLuint)__nexa_g33_ov_a_uv);
+    if (__nexa_g33_a_pos >= 0) __nexa_g33.DisableVertexAttribArray((__nexa_GLuint)__nexa_g33_a_pos);
+    if (__nexa_g33_a_col >= 0) __nexa_g33.DisableVertexAttribArray((__nexa_GLuint)__nexa_g33_a_col);
+}
+#endif
+
 static int __nexa_g3_ov_pow2(int n) {
     int p = 1;
     while (p < n && p < (1 << 14)) p <<= 1;
@@ -3633,6 +4236,13 @@ static int __nexa_g3_ov_build(void) {
 #endif
 
 static void __nexa_g3_overlay_present(void) {
+#if defined(_WIN32)
+    if (__nexa_g3.vulkan) {
+        if (__nexa_g.overlay && __nexa_g.fb && __nexa_g.w > 0 && __nexa_g.h > 0)
+            nexa_vk14::set_overlay(__nexa_g.fb, __nexa_g.w, __nexa_g.h);
+        return;
+    }
+#endif
     if (!__nexa_g.overlay || !__nexa_g.fb) return;
     const int w = __nexa_g.w;
     const int h = __nexa_g.h;
@@ -3698,6 +4308,7 @@ static void __nexa_g3_overlay_present(void) {
     if (__nexa_g3_ov_a_pos >= 0) glDisableVertexAttribArray((__nexa_GLuint)__nexa_g3_ov_a_pos);
     if (__nexa_g3_ov_a_uv >= 0) glDisableVertexAttribArray((__nexa_GLuint)__nexa_g3_ov_a_uv);
 #else
+    if (__nexa_g3.core33) { __nexa_g3_core_overlay(w, h, tw, th, u, v); return; }
     if (!__nexa_gl.GenTextures || !__nexa_gl.BindTexture || !__nexa_gl.TexImage2D ||
         !__nexa_gl.TexSubImage2D || !__nexa_gl.TexParameteri || !__nexa_gl.BlendFunc ||
         !__nexa_gl.TexCoord2f) return;

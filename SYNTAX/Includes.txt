@@ -25,7 +25,7 @@ MODULE INCLUDES (angle brackets)
   #include <std/gfx3d>    - 3D window: gfx3d.open/poll/clear/present/closed
                             camera: gfx3d.camera/perspective
                             shapes: gfx3d.tri, gfx3d.cube
-                            renderer: gfx3d.renderer/backend (OpenGL today)
+                            renderer: gfx3d.renderer/backend (OpenGL, or Vulkan 1.4 on Windows)
   #include <std/ui>       - Widgets, themes and styles on the gfx window (includes std/gfx):
                             ui.open/background/theme/style/accent, ui.text/heading/caption,
                             ui.panel, ui.button/checkbox/toggle/radio/slider/progress,

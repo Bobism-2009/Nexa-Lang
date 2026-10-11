@@ -640,7 +640,8 @@ no array of pixels to read back.
             gfx3d.typed()    gfx3d.wheel()        gfx3d.wheel_x()
             gfx3d.mouse(button)  gfx3d.mouse_x()  gfx3d.mouse_y()
                                       the names std/gfx uses, read while focused
-  renderer  gfx3d.renderer(name)      ask, before open; "opengl" or "vulkan"
+  renderer  gfx3d.renderer(name)      ask, before open; "opengl", "opengl 1.1",
+                                      "opengl 3.3", "vulkan" or "vulkan 1.4"
             gfx3d.backend()           what the window actually opened with
   model     gfx3d.model(path)         load a .obj; handle, or 0
             gfx3d.draw(id, x, y, z, scale, r, g, b)
@@ -671,8 +672,9 @@ no array of pixels to read back.
       gfx3d.close();
   }
 
-Two renderers are named and one is built: asking for vulkan quietly gives you
-opengl, and backend() reports the truth. Depth test and back-face culling are
+On Windows, "vulkan" and "vulkan 1.4" open Vulkan 1.4 when that device exists.
+backend() answers "vulkan 1.4" only then. If it cannot, the window opens on
+OpenGL and backend() says which. Depth test and back-face culling are
 on from the start, though a lone gfx3d.tri is drawn from both sides. A cube's
 flat sides take the direction of the face and stay sharp-edged; curved ones
 take the direction the surface really points and come out smooth. One
