@@ -24,7 +24,7 @@ struct Gpu {
     uint64_t slMesh = 0, slMat = 0, slSky = 0, slPart = 0, slBlit = 0, slTex = 0;
     uint64_t setMesh = 0, setSky = 0, setBlit = 0;
     uint64_t pool = 0;
-    uint64_t sampLin = 0, sampSh = 0, sampRep = 0;
+    uint64_t sampLin = 0, sampNear = 0, sampSh = 0, sampRep = 0;
     uint64_t sceneBuf = 0, sceneMem = 0, drawBuf = 0, drawMem = 0, partBuf = 0, partMem = 0;
     void* sceneMap = nullptr;
     void* drawMap = nullptr;
@@ -44,8 +44,15 @@ struct Gpu {
     Stage stage;
     std::vector<Stage> extra;
     std::vector<Img> textures;
-    std::vector<uint64_t> matSets, partSets, texSets;
-    int matN = 0, partN = 0, texN = 0;
+    std::vector<uint64_t> meshSets, matSets, partSets, texSets;
+    int meshN = 0, matN = 0, partN = 0, texN = 0;
+    uint64_t matViews[128][5] = {};
+    int matSlot[128] = {};
+    int matReady[128] = {};
+    uint64_t partView[64] = {};
+    int partReady[64] = {};
+    uint64_t skySeen[6] = {};
+    int skyReady = 0;
 };
 
 inline Gpu& gpu() {
@@ -233,11 +240,15 @@ struct BI { uint64_t buffer; uint64_t offset; uint64_t range; };
 struct II { uint64_t sampler; uint64_t view; uint32_t layout; };
 struct Wr { uint32_t sType; const void* pNext; uint64_t set; uint32_t binding, element, count, type; const II* image; const BI* buf; const void* texel; };
 
-inline void write_buf(Dev& d, uint64_t set, uint32_t binding, uint32_t type, uint64_t buf, uint64_t range) {
-    BI bi{ buf, 0, range };
+inline void write_buf_at(Dev& d, uint64_t set, uint32_t binding, uint32_t type, uint64_t buf, uint64_t offset, uint64_t range) {
+    BI bi{ buf, offset, range };
     Wr wr{};
     wr.sType = 35; wr.set = set; wr.binding = binding; wr.count = 1; wr.type = type; wr.buf = &bi;
     d.UpdateDescriptorSets(d.device, 1, &wr, 0, nullptr);
+}
+
+inline void write_buf(Dev& d, uint64_t set, uint32_t binding, uint32_t type, uint64_t buf, uint64_t range) {
+    write_buf_at(d, set, binding, type, buf, 0, range);
 }
 
 inline void write_img(Dev& d, uint64_t set, uint32_t binding, uint64_t samp, uint64_t view) {
@@ -351,9 +362,9 @@ inline int make_scene_pipes(Dev& d) {
     const At partAt[] = { {0, 0, 106, 0}, {1, 0, 103, 12}, {2, 0, 109, 20} };
     struct Kind { int cull, blend, depthT, depthW, bias, stencil; uint32_t mask; float bc, bs; uint32_t topo; };
     const Kind kinds[10] = {
-        { 2, 0, 1, 1, 0, 0, 0xF, 0, 0, 3 },
         { 0, 0, 1, 1, 0, 0, 0xF, 0, 0, 3 },
-        { 2, 1, 1, 1, 0, 0, 0xF, 0, 0, 3 },
+        { 0, 0, 1, 1, 0, 0, 0xF, 0, 0, 3 },
+        { 0, 1, 1, 1, 0, 0, 0xF, 0, 0, 3 },
         { 0, 1, 1, 1, 0, 0, 0xF, 0, 0, 3 },
         { 0, 1, 1, 0, 1, 0, 0xF, -1, -1, 3 },
         { 0, 0, 0, 0, 0, 0, 0xF, 0, 0, 3 },
@@ -364,7 +375,7 @@ inline int make_scene_pipes(Dev& d) {
     };
     for (int i = 0; i < 10; ++i) {
         const Kind& k = kinds[i];
-        if (!pipe_ex(d, g.sh[0], g.sh[1], k.topo, (uint32_t)k.cull, 1, k.depthT, k.depthW, k.blend, g.samples,
+        if (!pipe_ex(d, g.sh[0], g.sh[1], k.topo, (uint32_t)k.cull, 0, k.depthT, k.depthW, k.blend, g.samples,
                      k.bias, k.bc, k.bs, k.stencil, k.mask, 36, meshAt, 3, 1, g.layoutMesh, g.passC, &g.pipeMesh[i])) { fail("mesh pipe"); return 0; }
     }
     if (!pipe_ex(d, g.sh[3], g.sh[4], 3, 0, 1, 1, 1, 0, g.samples, 0, 0, 0, 0, 0xF, 48, matAt, 4, 1, g.layoutMat, g.passC, &g.pipeMat[0])) { fail("mat pipe"); return 0; }
@@ -491,11 +502,14 @@ inline void scene_down(Dev& d) {
         for (uint64_t lay : lays) if (lay && d.DestroyPipelineLayout) d.DestroyPipelineLayout(d.device, lay, nullptr);
         for (uint64_t sh : g.sh) if (sh && d.DestroyShaderModule) d.DestroyShaderModule(d.device, sh, nullptr);
         if (g.sampLin && d.DestroySampler) d.DestroySampler(d.device, g.sampLin, nullptr);
+        if (g.sampNear && d.DestroySampler) d.DestroySampler(d.device, g.sampNear, nullptr);
         if (g.sampSh && d.DestroySampler) d.DestroySampler(d.device, g.sampSh, nullptr);
         if (g.sampRep && d.DestroySampler) d.DestroySampler(d.device, g.sampRep, nullptr);
     }
     g = Gpu{};
 }
+
+inline void prime_mesh_sets(Dev& d);
 
 inline int scene_boot(Dev& d) {
     Gpu& g = gpu();
@@ -508,9 +522,9 @@ inline int scene_boot(Dev& d) {
         s.sType = 31; s.mag = s.minf = filter; s.mip = filter ? 1u : 0u; s.u = s.v = s.w = addr; s.border = border;
         return d.CreateSampler(d.device, &s, nullptr, out) == 0;
     };
-    if (!samp(&g.sampLin, 1, 2, 0) || !samp(&g.sampSh, 0, 3, 2) || !samp(&g.sampRep, 1, 0, 0)) { fail("scene sampler"); scene_down(d); return 0; }
-    const uint32_t meshB[] = { 0, 6, 0x11, 1, 7, 0x11, 2, 1, 0x10 };
-    const uint32_t matB[] = { 0, 6, 0x11, 1, 7, 0x11, 2, 1, 0x10, 3, 1, 0x10, 4, 1, 0x10, 5, 1, 0x10, 6, 1, 0x10, 7, 1, 0x10 };
+    if (!samp(&g.sampLin, 1, 2, 0) || !samp(&g.sampNear, 0, 2, 0) || !samp(&g.sampSh, 0, 3, 2) || !samp(&g.sampRep, 1, 0, 0)) { fail("scene sampler"); scene_down(d); return 0; }
+    const uint32_t meshB[] = { 0, 6, 0x11, 1, 6, 0x11, 2, 1, 0x10 };
+    const uint32_t matB[] = { 0, 6, 0x11, 1, 6, 0x11, 2, 1, 0x10, 3, 1, 0x10, 4, 1, 0x10, 5, 1, 0x10, 6, 1, 0x10, 7, 1, 0x10 };
     const uint32_t skyB[] = { 0, 1, 0x10, 1, 1, 0x10, 2, 1, 0x10, 3, 1, 0x10, 4, 1, 0x10, 5, 1, 0x10 };
     const uint32_t partB[] = { 0, 6, 0x11, 1, 1, 0x10 };
     const uint32_t oneB[] = { 0, 1, 0x10 };
@@ -524,15 +538,12 @@ inline int scene_boot(Dev& d) {
     struct PL2 { uint32_t sType; const void* pNext; uint32_t flags; uint32_t setCount; const void* sets; uint32_t pcCount; const Range* pc; } pl2{};
     pl2.sType = 30; pl2.pcCount = 1; pl2.pc = &pc;
     if (d.CreatePipelineLayout(d.device, &pl2, nullptr, &g.layoutDepth) != 0) { fail("depth layout"); scene_down(d); return 0; }
-    struct PS { uint32_t type, count; } ps[3] = { { 6, 256 }, { 7, 160 }, { 1, 1024 } };
+    struct PS { uint32_t type, count; } ps[3] = { { 6, 3000 }, { 7, 8 }, { 1, 2200 } };
     struct DP { uint32_t sType; const void* pNext; uint32_t flags; uint32_t maxSets; uint32_t n; const PS* p; } dp{};
-    dp.sType = 33; dp.maxSets = 400; dp.n = 3; dp.p = ps;
+    dp.sType = 33; dp.maxSets = 1600; dp.n = 3; dp.p = ps;
     if (d.CreateDescriptorPool(d.device, &dp, nullptr, &g.pool) != 0) { fail("scene pool"); scene_down(d); return 0; }
-    {
-        std::vector<uint64_t> one;
-        if (!alloc_sets(d, g.slMesh, 1, one)) { fail("mesh set"); scene_down(d); return 0; }
-        g.setMesh = one[0];
-    }
+    if (!alloc_sets(d, g.slMesh, 1024, g.meshSets)) { fail("mesh sets"); scene_down(d); return 0; }
+    g.setMesh = g.meshSets.empty() ? 0 : g.meshSets[0];
     if (!alloc_sets(d, g.slMat, 128, g.matSets)) { fail("mat sets"); scene_down(d); return 0; }
     if (!alloc_sets(d, g.slSky, 1, g.partSets)) { fail("sky set"); scene_down(d); return 0; }
     g.setSky = g.partSets.empty() ? 0 : g.partSets[0];
@@ -556,6 +567,7 @@ inline int scene_boot(Dev& d) {
     }
     if (!make_image(d, g.white, 37, 1, 1, 1, 0x2 | 0x4, 1)) { fail("white"); scene_down(d); return 0; }
     if (!ensure_shadow(d) || !ensure_target(d, 16, 16, 1)) { scene_down(d); return 0; }
+    prime_mesh_sets(d);
     g.booted = 1;
     return 1;
 }
@@ -602,7 +614,7 @@ inline int open_frame(Dev& d, int w, int h) {
 inline void write_mesh_set(Dev& d) {
     Gpu& g = gpu();
     write_buf(d, g.setMesh, 0, 6, g.sceneBuf, 1072);
-    write_buf(d, g.setMesh, 1, 7, g.drawBuf, 320);
+    write_buf(d, g.setMesh, 1, 6, g.drawBuf, 512);
     write_img(d, g.setMesh, 2, g.sampSh, g.shadow.view ? g.shadow.view : g.white.view);
 }
 
@@ -613,7 +625,7 @@ inline int scene_begin(int ww, int wh, int rw, int rh, int samples, float red, f
     if (!ensure_target(d, rw, rh, samples) && !g.color.image) return 0;
     if (!open_frame(d, ww, wh)) return 0;
     g.on = 1; g.simpleOpen = 0; g.inColor = 0; g.inShadow = 0; g.needLoad = 0; g.drewColor = 0;
-    g.shadowReady = 0; g.drawN = 0; g.matN = 0; g.partN = 0; g.texN = 0; g.stage.used = 0;
+    g.shadowReady = 0; g.drawN = 0; g.meshN = 0; g.matN = 0; g.partN = 0; g.texN = 0; g.stage.used = 0;
     g.cr = red; g.cg = green; g.cb = blue; g.d0 = 0; g.d1 = 1;
     for (Stage& s : g.extra) free_stage(d, s);
     g.extra.clear();
@@ -630,7 +642,6 @@ inline int scene_begin(int ww, int wh, int rw, int rh, int samples, float red, f
             g.whiteLayout = 5;
         }
     }
-    write_mesh_set(d);
     return 1;
 }
 
@@ -681,6 +692,33 @@ inline int draw_slot(const void* draw) {
     return g.drawN++;
 }
 
+inline int tex_hit(const void* key, int w, int h) {
+    if (!key || w < 1 || h < 1) return 1;
+    Gpu& g = gpu();
+    for (const Img& im : g.textures)
+        if (im.key == key && im.keyW == w && im.keyH == h && im.view) return 1;
+    return 0;
+}
+
+inline void prime_mesh_sets(Dev& d) {
+    Gpu& g = gpu();
+    uint64_t sh = g.shadow.view ? g.shadow.view : g.white.view;
+    for (size_t i = 0; i < g.meshSets.size(); ++i) {
+        write_buf(d, g.meshSets[i], 0, 6, g.sceneBuf, 1072);
+        write_buf_at(d, g.meshSets[i], 1, 6, g.drawBuf, (uint64_t)i * 512ull, 512);
+        write_img(d, g.meshSets[i], 2, g.sampSh, sh);
+    }
+}
+
+inline uint64_t vert_keep(const void* data, uint64_t bytes) {
+    Dev& d = dev();
+    if (!data || !bytes || !d.smap || d.sused + bytes > d.scap) return ~0ull;
+    std::memcpy((char*)d.smap + d.sused, data, (size_t)bytes);
+    uint64_t off = d.sused;
+    d.sused = (d.sused + bytes + 15ull) & ~15ull;
+    return off;
+}
+
 inline int shadow_begin() {
     Dev& d = dev();
     Gpu& g = gpu();
@@ -697,15 +735,23 @@ inline int shadow_begin() {
     return 1;
 }
 
-inline void shadow_draw(const float* xyz, int nvert, const float* mvp) {
+inline void shadow_draw_buf(uint64_t buf, uint64_t off, int nvert, const float* mvp) {
     Dev& d = dev();
     Gpu& g = gpu();
-    if (!g.inShadow || !xyz || nvert <= 0 || !mvp) return;
-    uint64_t off = vert_upload(d, xyz, (uint64_t)nvert * 36ull);
-    if (off == ~0ull) return;
+    if (!g.inShadow || nvert <= 0 || !mvp || off == ~0ull || !buf) return;
     d.CmdPushConstants(d.cmd, g.layoutDepth, 1, 0, 64, mvp);
-    d.CmdBindVertexBuffers(d.cmd, 0, 1, &d.vbuf, &off);
+    d.CmdBindVertexBuffers(d.cmd, 0, 1, &buf, &off);
     d.CmdDraw(d.cmd, (uint32_t)nvert, 1, 0, 0);
+}
+
+inline void shadow_draw(const float* xyz, int nvert, const float* mvp) {
+    Dev& d = dev();
+    if (!xyz || nvert <= 0) return;
+    shadow_draw_buf(d.vbuf, vert_upload(d, xyz, (uint64_t)nvert * 36ull), nvert, mvp);
+}
+
+inline void shadow_draw_kept(uint64_t off, int nvert, const float* mvp) {
+    shadow_draw_buf(dev().sbuf, off, nvert, mvp);
 }
 
 inline void shadow_end() {
@@ -719,29 +765,42 @@ inline void shadow_end() {
     d.CmdPipelineBarrier(d.cmd, 0x200, 0x80, 0, 1, &mb, 0, nullptr, 0, nullptr);
 }
 
-inline void mesh_draw(const float* xyz, int nvert, const void* draw, int kind) {
+inline void mesh_draw_buf(uint64_t buf, uint64_t off, int nvert, const void* draw, int kind) {
     Dev& d = dev();
     Gpu& g = gpu();
-    if (!g.on || !xyz || nvert <= 0 || !draw || kind < 0 || kind > 9 || !g.pipeMesh[kind]) return;
+    if (!g.on || nvert <= 0 || !draw || kind < 0 || kind > 9 || !g.pipeMesh[kind] || off == ~0ull || !buf) return;
     ensure_color(d);
     int slot = draw_slot(draw);
-    if (slot < 0) return;
-    uint64_t off = vert_upload(d, xyz, (uint64_t)nvert * 36ull);
-    if (off == ~0ull) return;
-    uint32_t dyn = (uint32_t)slot * 512u;
+    if (slot < 0 || slot >= (int)g.meshSets.size()) return;
+    uint64_t set = g.meshSets[(size_t)slot];
     d.CmdBindPipeline(d.cmd, 0, g.pipeMesh[kind]);
-    d.CmdBindDescriptorSets(d.cmd, 0, g.layoutMesh, 0, 1, &g.setMesh, 1, &dyn);
-    d.CmdBindVertexBuffers(d.cmd, 0, 1, &d.vbuf, &off);
+    d.CmdBindDescriptorSets(d.cmd, 0, g.layoutMesh, 0, 1, &set, 0, nullptr);
+    d.CmdBindVertexBuffers(d.cmd, 0, 1, &buf, &off);
     d.CmdDraw(d.cmd, (uint32_t)nvert, 1, 0, 0);
+}
+
+inline void mesh_draw(const float* xyz, int nvert, const void* draw, int kind) {
+    Dev& d = dev();
+    if (!xyz || nvert <= 0) return;
+    mesh_draw_buf(d.vbuf, vert_upload(d, xyz, (uint64_t)nvert * 36ull), nvert, draw, kind);
+}
+
+inline void mesh_draw_kept(uint64_t off, int nvert, const void* draw, int kind) {
+    mesh_draw_buf(dev().sbuf, off, nvert, draw, kind);
 }
 
 struct Pix { const unsigned char* p; int w, h; };
 
-inline void mat_draw(const float* xyz, int nvert, const void* draw, int blend, const Pix maps[5]) {
+inline void mat_draw_buf(uint64_t buf, uint64_t off, int nvert, const void* draw, int blend, const Pix maps[5]) {
     Dev& d = dev();
     Gpu& g = gpu();
-    if (!g.on || !xyz || nvert <= 0 || !draw || g.matN >= (int)g.matSets.size()) return;
-    close_pass(d);
+    if (!g.on || nvert <= 0 || !draw || off == ~0ull || !buf || g.matN >= (int)g.matSets.size() || g.matN >= 128) return;
+    int fresh = 0;
+    if (maps) {
+        for (int i = 0; i < 5; ++i)
+            if (maps[i].p && maps[i].w > 0 && maps[i].h > 0 && !tex_hit(maps[i].p, maps[i].w, maps[i].h)) fresh = 1;
+    }
+    if (fresh) close_pass(d);
     uint64_t views[5];
     for (int i = 0; i < 5; ++i) {
         views[i] = (maps && maps[i].p && maps[i].w > 0) ? upload_rgba(d, maps[i].p, maps[i].p, maps[i].w, maps[i].h, 3) : g.white.view;
@@ -749,50 +808,96 @@ inline void mat_draw(const float* xyz, int nvert, const void* draw, int blend, c
     }
     int slot = draw_slot(draw);
     if (slot < 0) return;
-    uint64_t set = g.matSets[(size_t)g.matN++];
-    write_buf(d, set, 0, 6, g.sceneBuf, 1072);
-    write_buf(d, set, 1, 7, g.drawBuf, 320);
-    write_img(d, set, 2, g.sampSh, g.shadow.view ? g.shadow.view : g.white.view);
-    for (int i = 0; i < 5; ++i) write_img(d, set, (uint32_t)(3 + i), g.sampLin, views[i]);
+    int mi = g.matN++;
+    uint64_t set = g.matSets[(size_t)mi];
+    int same = g.matReady[mi] && g.matSlot[mi] == slot;
+    if (same) {
+        for (int i = 0; i < 5; ++i) if (g.matViews[mi][i] != views[i]) same = 0;
+    }
+    if (!same) {
+        write_buf(d, set, 0, 6, g.sceneBuf, 1072);
+        write_buf_at(d, set, 1, 6, g.drawBuf, (uint64_t)slot * 512ull, 512);
+        write_img(d, set, 2, g.sampSh, g.shadow.view ? g.shadow.view : g.white.view);
+        for (int i = 0; i < 5; ++i) {
+            write_img(d, set, (uint32_t)(3 + i), g.sampLin, views[i]);
+            g.matViews[mi][i] = views[i];
+        }
+        g.matSlot[mi] = slot;
+        g.matReady[mi] = 1;
+    }
     ensure_color(d);
-    uint64_t off = vert_upload(d, xyz, (uint64_t)nvert * 48ull);
-    if (off == ~0ull) return;
-    uint32_t dyn = (uint32_t)slot * 512u;
     d.CmdBindPipeline(d.cmd, 0, g.pipeMat[blend ? 1 : 0]);
-    d.CmdBindDescriptorSets(d.cmd, 0, g.layoutMat, 0, 1, &set, 1, &dyn);
-    d.CmdBindVertexBuffers(d.cmd, 0, 1, &d.vbuf, &off);
+    d.CmdBindDescriptorSets(d.cmd, 0, g.layoutMat, 0, 1, &set, 0, nullptr);
+    d.CmdBindVertexBuffers(d.cmd, 0, 1, &buf, &off);
+    d.CmdDraw(d.cmd, (uint32_t)nvert, 1, 0, 0);
+}
+
+inline void mat_draw(const float* xyz, int nvert, const void* draw, int blend, const Pix maps[5]) {
+    Dev& d = dev();
+    if (!xyz || nvert <= 0) return;
+    mat_draw_buf(d.vbuf, vert_upload(d, xyz, (uint64_t)nvert * 48ull), nvert, draw, blend, maps);
+}
+
+inline void mat_draw_kept(uint64_t off, int nvert, const void* draw, int blend, const Pix maps[5]) {
+    mat_draw_buf(dev().sbuf, off, nvert, draw, blend, maps);
+}
+
+inline void sky_draw_buf(uint64_t buf, uint64_t off, int nvert, const void* pc, const Pix faces[6]) {
+    Dev& d = dev();
+    Gpu& g = gpu();
+    if (!g.on || nvert <= 0 || !pc || !faces || !g.pipeSky || off == ~0ull || !buf) return;
+    int fresh = 0;
+    for (int i = 0; i < 6; ++i)
+        if (faces[i].p && faces[i].w > 0 && faces[i].h > 0 && !tex_hit(faces[i].p, faces[i].w, faces[i].h)) fresh = 1;
+    if (fresh) close_pass(d);
+    uint64_t views[6];
+    for (int i = 0; i < 6; ++i) {
+        uint64_t view = upload_rgba(d, faces[i].p, faces[i].p, faces[i].w, faces[i].h, 3);
+        views[i] = view ? view : g.white.view;
+    }
+    int same = g.skyReady;
+    if (same) for (int i = 0; i < 6; ++i) if (g.skySeen[i] != views[i]) same = 0;
+    if (!same) {
+        for (int i = 0; i < 6; ++i) {
+            write_img(d, g.setSky, (uint32_t)i, g.sampLin, views[i]);
+            g.skySeen[i] = views[i];
+        }
+        g.skyReady = 1;
+    }
+    ensure_color(d);
+    d.CmdBindPipeline(d.cmd, 0, g.pipeSky);
+    d.CmdBindDescriptorSets(d.cmd, 0, g.layoutSky, 0, 1, &g.setSky, 0, nullptr);
+    d.CmdPushConstants(d.cmd, g.layoutSky, 0x11, 0, 80, pc);
+    d.CmdBindVertexBuffers(d.cmd, 0, 1, &buf, &off);
     d.CmdDraw(d.cmd, (uint32_t)nvert, 1, 0, 0);
 }
 
 inline void sky_draw(const float* xyz, int nvert, const void* pc, const Pix faces[6]) {
     Dev& d = dev();
-    Gpu& g = gpu();
-    if (!g.on || !xyz || nvert <= 0 || !pc || !faces || !g.pipeSky) return;
-    close_pass(d);
-    for (int i = 0; i < 6; ++i) {
-        uint64_t view = upload_rgba(d, faces[i].p, faces[i].p, faces[i].w, faces[i].h, 3);
-        write_img(d, g.setSky, (uint32_t)i, g.sampLin, view ? view : g.white.view);
-    }
-    ensure_color(d);
-    uint64_t off = vert_upload(d, xyz, (uint64_t)nvert * 12ull);
-    if (off == ~0ull) return;
-    d.CmdBindPipeline(d.cmd, 0, g.pipeSky);
-    d.CmdBindDescriptorSets(d.cmd, 0, g.layoutSky, 0, 1, &g.setSky, 0, nullptr);
-    d.CmdPushConstants(d.cmd, g.layoutSky, 0x11, 0, 80, pc);
-    d.CmdBindVertexBuffers(d.cmd, 0, 1, &d.vbuf, &off);
-    d.CmdDraw(d.cmd, (uint32_t)nvert, 1, 0, 0);
+    if (!xyz || nvert <= 0) return;
+    sky_draw_buf(d.vbuf, vert_upload(d, xyz, (uint64_t)nvert * 12ull), nvert, pc, faces);
+}
+
+inline void sky_draw_kept(uint64_t off, int nvert, const void* pc, const Pix faces[6]) {
+    sky_draw_buf(dev().sbuf, off, nvert, pc, faces);
 }
 
 inline void part_draw(const float* xyz, int nvert, const unsigned char* rgba, int w, int h, const void* cam) {
     Dev& d = dev();
     Gpu& g = gpu();
-    if (!g.on || !xyz || nvert <= 0 || !cam || g.partN >= (int)g.partSets.size() || !g.pipePart) return;
-    close_pass(d);
+    if (!g.on || !xyz || nvert <= 0 || !cam || g.partN >= (int)g.partSets.size() || g.partN >= 64 || !g.pipePart) return;
+    if (rgba && w > 0 && h > 0 && !tex_hit(rgba, w, h)) close_pass(d);
     uint64_t view = upload_rgba(d, rgba, rgba, w, h, 4);
+    if (!view) view = g.white.view;
     if (g.partMap) std::memcpy(g.partMap, cam, 144);
-    uint64_t set = g.partSets[(size_t)g.partN++];
-    write_buf(d, set, 0, 6, g.partBuf, 144);
-    write_img(d, set, 1, g.sampLin, view ? view : g.white.view);
+    int pi = g.partN++;
+    uint64_t set = g.partSets[(size_t)pi];
+    if (!g.partReady[pi] || g.partView[pi] != view) {
+        write_buf(d, set, 0, 6, g.partBuf, 144);
+        write_img(d, set, 1, g.sampLin, view);
+        g.partView[pi] = view;
+        g.partReady[pi] = 1;
+    }
     ensure_color(d);
     uint64_t off = vert_upload(d, xyz, (uint64_t)nvert * 36ull);
     if (off == ~0ull) return;
@@ -868,7 +973,8 @@ inline void scene_finish(Dev& d) {
     }
     uint64_t view = (g.samples > 1 && g.resolve.view) ? g.resolve.view : g.color.view;
     if (g.pipeBlit && g.setBlit && view && d.imageIndex < d.fbs.size()) {
-        write_img(d, g.setBlit, 0, g.sampLin, view);
+        uint64_t samp = (g.rw == d.swapW && g.rh == d.swapH && g.sampNear) ? g.sampNear : g.sampLin;
+        write_img(d, g.setBlit, 0, samp, view);
         begin_pass(d, d.pass, d.fbs[d.imageIndex], (uint32_t)d.swapW, (uint32_t)d.swapH, 2, 0, 0, 0);
         set_viewport(d);
         d.CmdBindPipeline(d.cmd, 0, g.pipeBlit);

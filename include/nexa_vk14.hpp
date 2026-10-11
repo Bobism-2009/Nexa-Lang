@@ -60,6 +60,9 @@ struct Dev {
     uint64_t vbuf = 0, vmem = 0;
     void* vmap = nullptr;
     uint64_t vcap = 0, vused = 0;
+    uint64_t sbuf = 0, smem = 0;
+    void* smap = nullptr;
+    uint64_t scap = 0, sused = 0;
     uint64_t fence = 0, semImg = 0, semDraw = 0;
     uint64_t depthImg = 0, depthMem = 0, depthView = 0;
     uint32_t depthFmt = 0;
@@ -81,6 +84,11 @@ struct Dev {
     uint32_t memFlags[32] = {};
     const void* pendOv = nullptr;
     int pendW = 0, pendH = 0;
+    uint64_t readBuf = 0, readMem = 0;
+    void* readMap = nullptr;
+    uint64_t readCap = 0;
+    int readW = 0, readH = 0;
+    int wantRead = 0;
 
     using gp_t = void*(__stdcall*)(void*, const char*);
     gp_t GetInstanceProcAddr = nullptr;
@@ -145,11 +153,13 @@ struct Dev {
     NEXA_VK_FN(CmdBindDescriptorSets, void(__stdcall*)(void*, uint32_t, uint64_t, uint32_t, uint32_t, const uint64_t*, uint32_t, const uint32_t*))
     NEXA_VK_FN(CmdPipelineBarrier, void(__stdcall*)(void*, uint32_t, uint32_t, uint32_t, uint32_t, const void*, uint32_t, const void*, uint32_t, const void*))
     NEXA_VK_FN(CmdCopyBufferToImage, void(__stdcall*)(void*, uint64_t, uint64_t, uint32_t, uint32_t, const void*))
+    NEXA_VK_FN(CmdCopyImageToBuffer, void(__stdcall*)(void*, uint64_t, uint32_t, uint64_t, uint32_t, const void*))
     NEXA_VK_FN(CmdResolveImage, void(__stdcall*)(void*, uint64_t, uint32_t, uint64_t, uint32_t, uint32_t, const void*))
     NEXA_VK_FN(CreateBuffer, int32_t(__stdcall*)(void*, const void*, const void*, uint64_t*))
     NEXA_VK_FN(DestroyBuffer, void(__stdcall*)(void*, uint64_t, const void*))
     NEXA_VK_FN(GetBufferMemoryRequirements, void(__stdcall*)(void*, uint64_t, void*))
     NEXA_VK_FN(MapMemory, int32_t(__stdcall*)(void*, uint64_t, uint64_t, uint64_t, uint32_t, void**))
+    NEXA_VK_FN(FlushMappedMemoryRanges, int32_t(__stdcall*)(void*, uint32_t, const void*))
     NEXA_VK_FN(UnmapMemory, void(__stdcall*)(void*, uint64_t))
     NEXA_VK_FN(CreateFence, int32_t(__stdcall*)(void*, const void*, const void*, uint64_t*))
     NEXA_VK_FN(DestroyFence, void(__stdcall*)(void*, uint64_t, const void*))
@@ -212,7 +222,8 @@ inline int buffer_alloc(Dev& d, uint64_t size, uint32_t usage, uint64_t* buf, ui
     if (d.CreateBuffer(d.device, &info, nullptr, buf) != 0 || !*buf) return 0;
     MemReq req{};
     d.GetBufferMemoryRequirements(d.device, *buf, &req);
-    int mt = mem_type(d, req.bits, 2u | 4u);
+    int mt = mem_type(d, req.bits, 1u | 2u | 4u);
+    if (mt < 0) mt = mem_type(d, req.bits, 2u | 4u);
     if (mt < 0) return 0;
     struct AI { uint32_t sType; const void* pNext; uint64_t size; uint32_t index; } ai{};
     ai.sType = 5;
@@ -400,7 +411,7 @@ inline int rebuild_swapchain(Dev& d, int wantW, int wantH) {
         Ext extent; uint32_t layers, usage, sharing, qcount; const void* qidx; uint32_t pre, composite, present, clipped; uint64_t old;
     } sci{};
     sci.sType = 1000001000; sci.surface = d.surface; sci.minCount = count; sci.format = fmt; sci.extent = { w, h };
-    sci.layers = 1; sci.usage = 0x10; sci.pre = caps.currentTransform ? caps.currentTransform : 1; sci.composite = alpha; sci.present = mode; sci.clipped = 1;
+    sci.layers = 1; sci.usage = 0x10 | 0x1; sci.pre = caps.currentTransform ? caps.currentTransform : 1; sci.composite = alpha; sci.present = mode; sci.clipped = 1;
     if (d.CreateSwapchainKHR(d.device, &sci, nullptr, &d.swapchain) != 0) return 0;
 
     uint32_t ic = 0;
@@ -552,7 +563,13 @@ inline void draw_overlay(Dev& d, const void* bgra, int w, int h) {
 
 #include "nexa_vk14_scene.hpp"
 
+inline int& keep_epoch() {
+    static int n = 1;
+    return n;
+}
+
 inline void shutdown() {
+    keep_epoch()++;
     Dev& d = dev();
     if (d.device && d.DeviceWaitIdle) d.DeviceWaitIdle(d.device);
     scene_down(d);
@@ -561,9 +578,17 @@ inline void shutdown() {
     if (d.ovView && d.DestroyImageView) d.DestroyImageView(d.device, d.ovView, nullptr);
     if (d.ovImg && d.DestroyImage) d.DestroyImage(d.device, d.ovImg, nullptr);
     if (d.ovMem && d.FreeMemory) d.FreeMemory(d.device, d.ovMem, nullptr);
+    if (d.readMap && d.UnmapMemory) d.UnmapMemory(d.device, d.readMem);
+    if (d.readBuf && d.DestroyBuffer) d.DestroyBuffer(d.device, d.readBuf, nullptr);
+    if (d.readMem && d.FreeMemory) d.FreeMemory(d.device, d.readMem, nullptr);
+    d.readMap = nullptr; d.readBuf = d.readMem = 0; d.readCap = 0;
     if (d.ovMap && d.UnmapMemory) d.UnmapMemory(d.device, d.ovStageMem);
     if (d.ovStage && d.DestroyBuffer) d.DestroyBuffer(d.device, d.ovStage, nullptr);
     if (d.ovStageMem && d.FreeMemory) d.FreeMemory(d.device, d.ovStageMem, nullptr);
+    if (d.smap && d.UnmapMemory) d.UnmapMemory(d.device, d.smem);
+    if (d.sbuf && d.DestroyBuffer) d.DestroyBuffer(d.device, d.sbuf, nullptr);
+    if (d.smem && d.FreeMemory) d.FreeMemory(d.device, d.smem, nullptr);
+    d.smap = nullptr; d.sbuf = d.smem = 0; d.scap = d.sused = 0;
     if (d.vmap && d.UnmapMemory) d.UnmapMemory(d.device, d.vmem);
     if (d.vbuf && d.DestroyBuffer) d.DestroyBuffer(d.device, d.vbuf, nullptr);
     if (d.vmem && d.FreeMemory) d.FreeMemory(d.device, d.vmem, nullptr);
@@ -730,11 +755,13 @@ inline int open(void* hwnd, int vsyncOn) {
     NEXA_LOAD(CmdBindDescriptorSets, "vkCmdBindDescriptorSets")
     NEXA_LOAD(CmdPipelineBarrier, "vkCmdPipelineBarrier")
     NEXA_LOAD(CmdCopyBufferToImage, "vkCmdCopyBufferToImage")
+    NEXA_LOAD(CmdCopyImageToBuffer, "vkCmdCopyImageToBuffer")
     NEXA_LOAD(CmdResolveImage, "vkCmdResolveImage")
     NEXA_LOAD(CreateBuffer, "vkCreateBuffer")
     NEXA_LOAD(DestroyBuffer, "vkDestroyBuffer")
     NEXA_LOAD(GetBufferMemoryRequirements, "vkGetBufferMemoryRequirements")
     NEXA_LOAD(MapMemory, "vkMapMemory")
+    NEXA_LOAD(FlushMappedMemoryRanges, "vkFlushMappedMemoryRanges")
     NEXA_LOAD(UnmapMemory, "vkUnmapMemory")
     NEXA_LOAD(CreateFence, "vkCreateFence")
     NEXA_LOAD(DestroyFence, "vkDestroyFence")
@@ -810,6 +837,11 @@ inline int open(void* hwnd, int vsyncOn) {
 
     if (!buffer_alloc(d, 16ull * 1024ull * 1024ull, 0x80, &d.vbuf, &d.vmem, &d.vmap)) { fail("vertex buffer"); shutdown(); return 0; }
     d.vcap = 16ull * 1024ull * 1024ull;
+    d.scap = 32ull << 20;
+    if (!buffer_alloc(d, d.scap, 0x80, &d.sbuf, &d.smem, &d.smap)) {
+        d.sbuf = 0; d.smem = 0; d.smap = nullptr; d.scap = 0;
+    }
+    d.sused = 0;
     float quad[24] = {
         -1, 1, 0, 0,  1, 1, 1, 0,  1, -1, 1, 1,
         -1, 1, 0, 0,  1, -1, 1, 1,  -1, -1, 0, 1
@@ -897,6 +929,31 @@ inline void set_overlay(const void* bgra, int w, int h) {
     d.pendH = h;
 }
 
+inline void record_read(Dev& d) {
+    if (!d.wantRead || d.imageIndex >= d.images.size() || d.swapW < 1 || d.swapH < 1) return;
+    uint64_t bytes = (uint64_t)d.swapW * (uint64_t)d.swapH * 4ull;
+    if (d.readCap < bytes || !d.readBuf) {
+        if (d.readMap && d.UnmapMemory) d.UnmapMemory(d.device, d.readMem);
+        if (d.readBuf && d.DestroyBuffer) d.DestroyBuffer(d.device, d.readBuf, nullptr);
+        if (d.readMem && d.FreeMemory) d.FreeMemory(d.device, d.readMem, nullptr);
+        d.readMap = nullptr; d.readBuf = d.readMem = 0; d.readCap = 0;
+        if (!buffer_alloc(d, bytes, 0x2, &d.readBuf, &d.readMem, &d.readMap)) return;
+        d.readCap = bytes;
+    }
+    struct Range { uint32_t aspect, mip, levels, layer, layers; };
+    struct Barr { uint32_t sType; const void* pNext; uint32_t srcA, dstA, oldL, newL, srcQ, dstQ; uint64_t image; Range range; } b{};
+    b.sType = 45; b.srcA = 0x100; b.dstA = 0x800; b.oldL = 1000001002; b.newL = 6; b.srcQ = ~0u; b.dstQ = ~0u;
+    b.image = d.images[d.imageIndex]; b.range = { 1, 0, 1, 0, 1 };
+    d.CmdPipelineBarrier(d.cmd, 0x400, 0x1000, 0, 0, nullptr, 0, nullptr, 1, &b);
+    struct Subr { uint32_t aspect, mip, layer, count; };
+    struct Copy { uint64_t off; uint32_t row, height; Subr sub; int32_t x, y, z; uint32_t w, h, dep; } copy{};
+    copy.sub = { 1, 0, 0, 1 }; copy.w = (uint32_t)d.swapW; copy.h = (uint32_t)d.swapH; copy.dep = 1;
+    d.CmdCopyImageToBuffer(d.cmd, d.images[d.imageIndex], 6, d.readBuf, 1, &copy);
+    b.srcA = 0x800; b.dstA = 0; b.oldL = 6; b.newL = 1000001002;
+    d.CmdPipelineBarrier(d.cmd, 0x1000, 0x2000, 0, 0, nullptr, 0, nullptr, 1, &b);
+    d.readW = d.swapW; d.readH = d.swapH;
+}
+
 inline void present(const void* bgra, int bw, int bh) {
     Dev& d = dev();
     if (!d.framing) return;
@@ -906,6 +963,7 @@ inline void present(const void* bgra, int bw, int bh) {
     else if (scene_simple_open()) d.CmdEndRenderPass(d.cmd);
     scene_note_done();
     if (bgra && bw > 0 && bh > 0) draw_overlay(d, bgra, bw, bh);
+    if (d.wantRead) record_read(d);
     d.EndCommandBuffer(d.cmd);
     if (d.ResetFences(d.device, 1, &d.fence) != 0) { d.framing = 0; return; }
     uint32_t stage = 0x400;
@@ -949,20 +1007,49 @@ inline int scene_begin(int ww, int wh, int rw, int rh, int samples, float r, flo
 inline void scene_uniforms(const void* bytes, int n) { detail::scene_uniforms(bytes, n); }
 inline int shadow_begin() { return detail::shadow_begin(); }
 inline void shadow_draw(const float* xyz, int nvert, const float* mvp) { detail::shadow_draw(xyz, nvert, mvp); }
+inline void shadow_draw_kept(uint64_t off, int nvert, const float* mvp) { detail::shadow_draw_kept(off, nvert, mvp); }
 inline void shadow_end() { detail::shadow_end(); }
 inline void mesh_draw(const float* xyz, int nvert, const void* draw, int kind) { detail::mesh_draw(xyz, nvert, draw, kind); }
+inline void mesh_draw_kept(uint64_t off, int nvert, const void* draw, int kind) { detail::mesh_draw_kept(off, nvert, draw, kind); }
 inline void mat_draw(const float* xyz, int nvert, const void* draw, int blend, const detail::Pix maps[5]) {
     detail::mat_draw(xyz, nvert, draw, blend, maps);
+}
+inline void mat_draw_kept(uint64_t off, int nvert, const void* draw, int blend, const detail::Pix maps[5]) {
+    detail::mat_draw_kept(off, nvert, draw, blend, maps);
 }
 inline void sky_draw(const float* xyz, int nvert, const void* pc, const detail::Pix faces[6]) {
     detail::sky_draw(xyz, nvert, pc, faces);
 }
+inline void sky_draw_kept(uint64_t off, int nvert, const void* pc, const detail::Pix faces[6]) {
+    detail::sky_draw_kept(off, nvert, pc, faces);
+}
+inline uint64_t vert_keep(const void* data, uint64_t bytes) { return detail::vert_keep(data, bytes); }
+inline int epoch() { return detail::keep_epoch(); }
 inline void part_draw(const float* xyz, int nvert, const unsigned char* rgba, int w, int h, const void* cam) {
     detail::part_draw(xyz, nvert, rgba, w, h, cam);
 }
 inline void depth_range(float a, float b) { detail::depth_range(a, b); }
 inline void draw_tex(const float* xyz, int nvert, const unsigned char* rgba, int w, int h, int cutout, int twoSided, const float* mvp) {
     detail::draw_tex(xyz, nvert, rgba, w, h, cutout, twoSided, mvp);
+}
+inline void arm_read(int on) { detail::dev().wantRead = on ? 1 : 0; }
+inline int take_read(std::vector<unsigned char>& rgba, int& w, int& h) {
+    detail::Dev& d = detail::dev();
+    w = 0; h = 0;
+    if (!d.readMap || d.readW < 1 || d.readH < 1) return 0;
+    if (d.WaitForFences(d.device, 1, &d.fence, 1, ~0ull) != 0) return 0;
+    w = d.readW; h = d.readH;
+    rgba.resize((size_t)w * (size_t)h * 4);
+    const unsigned char* src = (const unsigned char*)d.readMap;
+    int bgra = d.colorFmt == 44;
+    for (int i = 0; i < w * h; ++i) {
+        unsigned char b0 = src[i * 4], b1 = src[i * 4 + 1], b2 = src[i * 4 + 2], b3 = src[i * 4 + 3];
+        if (bgra) { rgba[(size_t)i * 4] = b2; rgba[(size_t)i * 4 + 1] = b1; rgba[(size_t)i * 4 + 2] = b0; }
+        else { rgba[(size_t)i * 4] = b0; rgba[(size_t)i * 4 + 1] = b1; rgba[(size_t)i * 4 + 2] = b2; }
+        rgba[(size_t)i * 4 + 3] = b3;
+    }
+    d.wantRead = 0;
+    return 1;
 }
 
 } // namespace nexa_vk14
