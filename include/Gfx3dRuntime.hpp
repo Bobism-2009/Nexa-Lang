@@ -2892,6 +2892,25 @@ static int __nexa_g3_mesh_submit(__nexa_G3Mesh& m, __nexa_G3Mesh::Lit& L, const 
     if (__nexa_g3.vulkan) {
         const size_t n = m.pos.size() / 3;
         if (n == 0 || L.col.size() < n * 3) return 0;
+        float mvp[16];
+        __nexa_g3_core_mvp(M, mvp);
+        const int tex = (m.uv.size() >= n * 2) ? __nexa_g3_tex_cur : 0;
+        if (tex > 0 && (size_t)tex < __nexa_g3_texs.size() && !__nexa_g3_texs[(size_t)tex].px.empty()) {
+            const __nexa_G3Tex& t = __nexa_g3_texs[(size_t)tex];
+            std::vector<float> tmp(n * 8);
+            for (size_t i = 0; i < n; ++i) {
+                tmp[i * 8]     = m.pos[i * 3];
+                tmp[i * 8 + 1] = m.pos[i * 3 + 1];
+                tmp[i * 8 + 2] = m.pos[i * 3 + 2];
+                tmp[i * 8 + 3] = L.col[i * 3];
+                tmp[i * 8 + 4] = L.col[i * 3 + 1];
+                tmp[i * 8 + 5] = L.col[i * 3 + 2];
+                tmp[i * 8 + 6] = m.uv[i * 2];
+                tmp[i * 8 + 7] = m.uv[i * 2 + 1];
+            }
+            nexa_vk14::draw_tex(tmp.data(), (int)n, t.px.data(), t.w, t.h, t.cutout, m.two_sided || t.cutout, mvp);
+            return 1;
+        }
         std::vector<float> tmp(n * 6);
         for (size_t i = 0; i < n; ++i) {
             tmp[i * 6]     = m.pos[i * 3];
@@ -2901,8 +2920,6 @@ static int __nexa_g3_mesh_submit(__nexa_G3Mesh& m, __nexa_G3Mesh::Lit& L, const 
             tmp[i * 6 + 4] = L.col[i * 3 + 1];
             tmp[i * 6 + 5] = L.col[i * 3 + 2];
         }
-        float mvp[16];
-        __nexa_g3_core_mvp(M, mvp);
         nexa_vk14::draw(tmp.data(), (int)n, 0, m.two_sided, mvp);
         return 1;
     }

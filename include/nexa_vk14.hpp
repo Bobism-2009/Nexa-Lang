@@ -145,6 +145,7 @@ struct Dev {
     NEXA_VK_FN(CmdBindDescriptorSets, void(__stdcall*)(void*, uint32_t, uint64_t, uint32_t, uint32_t, const uint64_t*, uint32_t, const uint32_t*))
     NEXA_VK_FN(CmdPipelineBarrier, void(__stdcall*)(void*, uint32_t, uint32_t, uint32_t, uint32_t, const void*, uint32_t, const void*, uint32_t, const void*))
     NEXA_VK_FN(CmdCopyBufferToImage, void(__stdcall*)(void*, uint64_t, uint64_t, uint32_t, uint32_t, const void*))
+    NEXA_VK_FN(CmdResolveImage, void(__stdcall*)(void*, uint64_t, uint32_t, uint64_t, uint32_t, uint32_t, const void*))
     NEXA_VK_FN(CreateBuffer, int32_t(__stdcall*)(void*, const void*, const void*, uint64_t*))
     NEXA_VK_FN(DestroyBuffer, void(__stdcall*)(void*, uint64_t, const void*))
     NEXA_VK_FN(GetBufferMemoryRequirements, void(__stdcall*)(void*, uint64_t, void*))
@@ -340,8 +341,12 @@ inline int make_view(Dev& d, uint64_t image, uint32_t format, uint32_t aspect, u
     return d.CreateImageView(d.device, &view, nullptr, out) == 0;
 }
 
+inline void scene_drop_swapchain(Dev&);
+inline void scene_swapchain(Dev&);
+
 inline int rebuild_swapchain(Dev& d, int wantW, int wantH) {
     if (d.device && d.DeviceWaitIdle) d.DeviceWaitIdle(d.device);
+    scene_drop_swapchain(d);
     destroy_swapchain(d);
 
     struct Ext { uint32_t w, h; };
@@ -455,6 +460,7 @@ inline int rebuild_swapchain(Dev& d, int wantW, int wantH) {
     d.swapW = (int)w;
     d.swapH = (int)h;
     d.dirty = 0;
+    scene_swapchain(d);
     return 1;
 }
 
@@ -544,9 +550,12 @@ inline void draw_overlay(Dev& d, const void* bgra, int w, int h) {
     d.CmdEndRenderPass(d.cmd);
 }
 
+#include "nexa_vk14_scene.hpp"
+
 inline void shutdown() {
     Dev& d = dev();
     if (d.device && d.DeviceWaitIdle) d.DeviceWaitIdle(d.device);
+    scene_down(d);
     d.framing = 0;
     destroy_swapchain(d);
     if (d.ovView && d.DestroyImageView) d.DestroyImageView(d.device, d.ovView, nullptr);
@@ -721,6 +730,7 @@ inline int open(void* hwnd, int vsyncOn) {
     NEXA_LOAD(CmdBindDescriptorSets, "vkCmdBindDescriptorSets")
     NEXA_LOAD(CmdPipelineBarrier, "vkCmdPipelineBarrier")
     NEXA_LOAD(CmdCopyBufferToImage, "vkCmdCopyBufferToImage")
+    NEXA_LOAD(CmdResolveImage, "vkCmdResolveImage")
     NEXA_LOAD(CreateBuffer, "vkCreateBuffer")
     NEXA_LOAD(DestroyBuffer, "vkDestroyBuffer")
     NEXA_LOAD(GetBufferMemoryRequirements, "vkGetBufferMemoryRequirements")
@@ -812,6 +822,7 @@ inline int open(void* hwnd, int vsyncOn) {
     GetClientRect((HWND)hwnd, &rc);
     int ww = rc.right > 0 ? rc.right : 16;
     int hh = rc.bottom > 0 ? rc.bottom : 16;
+    scene_boot(d);
     if (!rebuild_swapchain(d, ww, hh)) { fail("swapchain build"); shutdown(); return 0; }
     return 1;
 }
@@ -852,6 +863,7 @@ inline int begin(float r, float g, float b, int w, int h) {
     set_viewport(d);
     d.framing = 1;
     d.vused = 0;
+    scene_note_simple();
     return 1;
 }
 
@@ -890,7 +902,9 @@ inline void present(const void* bgra, int bw, int bh) {
     if (!d.framing) return;
     if (!bgra && d.pendOv) { bgra = d.pendOv; bw = d.pendW; bh = d.pendH; }
     d.pendOv = nullptr;
-    d.CmdEndRenderPass(d.cmd);
+    if (scene_on()) scene_finish(d);
+    else if (scene_simple_open()) d.CmdEndRenderPass(d.cmd);
+    scene_note_done();
     if (bgra && bw > 0 && bh > 0) draw_overlay(d, bgra, bw, bh);
     d.EndCommandBuffer(d.cmd);
     if (d.ResetFences(d.device, 1, &d.fence) != 0) { d.framing = 0; return; }
@@ -916,6 +930,8 @@ inline void set_vsync(int on) {
 
 } // namespace detail
 
+using Pix = detail::Pix;
+
 inline int open(void* hwnd, int vsyncOn) { return detail::open(hwnd, vsyncOn); }
 inline void shutdown() { detail::shutdown(); }
 inline int alive() { return detail::alive(); }
@@ -926,5 +942,27 @@ inline void draw(const float* xyzrgb, int nvert, int lines, int twoSided, const 
 inline void set_overlay(const void* bgra, int w, int h) { detail::set_overlay(bgra, w, h); }
 inline void present(const void* bgra, int bw, int bh) { detail::present(bgra, bw, bh); }
 inline void set_vsync(int on) { detail::set_vsync(on); }
+inline int scene_ok() { return detail::scene_ok(); }
+inline int scene_begin(int ww, int wh, int rw, int rh, int samples, float r, float g, float b) {
+    return detail::scene_begin(ww, wh, rw, rh, samples, r, g, b);
+}
+inline void scene_uniforms(const void* bytes, int n) { detail::scene_uniforms(bytes, n); }
+inline int shadow_begin() { return detail::shadow_begin(); }
+inline void shadow_draw(const float* xyz, int nvert, const float* mvp) { detail::shadow_draw(xyz, nvert, mvp); }
+inline void shadow_end() { detail::shadow_end(); }
+inline void mesh_draw(const float* xyz, int nvert, const void* draw, int kind) { detail::mesh_draw(xyz, nvert, draw, kind); }
+inline void mat_draw(const float* xyz, int nvert, const void* draw, int blend, const detail::Pix maps[5]) {
+    detail::mat_draw(xyz, nvert, draw, blend, maps);
+}
+inline void sky_draw(const float* xyz, int nvert, const void* pc, const detail::Pix faces[6]) {
+    detail::sky_draw(xyz, nvert, pc, faces);
+}
+inline void part_draw(const float* xyz, int nvert, const unsigned char* rgba, int w, int h, const void* cam) {
+    detail::part_draw(xyz, nvert, rgba, w, h, cam);
+}
+inline void depth_range(float a, float b) { detail::depth_range(a, b); }
+inline void draw_tex(const float* xyz, int nvert, const unsigned char* rgba, int w, int h, int cutout, int twoSided, const float* mvp) {
+    detail::draw_tex(xyz, nvert, rgba, w, h, cutout, twoSided, mvp);
+}
 
 } // namespace nexa_vk14
