@@ -48,7 +48,7 @@ float shadow_pcf(vec4 clip) {
         vec2(0.19984126, 0.78641367), vec2(0.14383161, -0.14100790)
     );
     float s = 0.0;
-    float scale = 10.0 / 4096.0;
+    float scale = 48.0 / 4096.0;
     for (int i = 0; i < 16; i++) {
         float dep = texture(uShadow, p.xy + kOff[i] * scale).r;
         s += (p.z - 0.0012 > dep) ? 0.0 : 1.0;
