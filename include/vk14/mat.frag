@@ -36,16 +36,17 @@ layout(location = 0) out vec4 frag;
 float shadow_pcf(vec4 clip) {
     if (clip.w <= 0.0) return 1.0;
     vec3 p = clip.xyz / clip.w * 0.5 + 0.5;
-    if (p.z > 1.0) return 1.0;
+    if (p.z > 1.0 || p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0) return 1.0;
     float s = 0.0;
-    vec2 o = vec2(1.5 / 2048.0);
-    for (int y = -1; y <= 1; y++) {
-        for (int x = -1; x <= 1; x++) {
+    /* Soft edges: 5x5 PCF across ~5 texels on the 2048 shadow map. */
+    vec2 o = vec2(2.5 / 2048.0);
+    for (int y = -2; y <= 2; y++) {
+        for (int x = -2; x <= 2; x++) {
             float dep = texture(uShadow, p.xy + vec2(float(x), float(y)) * o).r;
-            s += (p.z - 0.002 > dep) ? 0.0 : 1.0;
+            s += (p.z - 0.0015 > dep) ? 0.0 : 1.0;
         }
     }
-    return s / 9.0;
+    return s / 25.0;
 }
 vec3 shade(vec3 n, vec3 pe, vec3 albedo, float metal, float rough) {
     vec3 direct = vec3(0.0);
