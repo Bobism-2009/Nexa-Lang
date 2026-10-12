@@ -203,9 +203,9 @@ inline void vp_scene(Dev& d) {
 
 inline void vp_shadow(Dev& d) {
     struct Vp { float x, y, w, h, mind, maxd; } vp{};
-    vp.w = 2048; vp.h = 2048; vp.maxd = 1;
+    vp.w = 4096; vp.h = 4096; vp.maxd = 1;
     d.CmdSetViewport(d.cmd, 0, 1, &vp);
-    struct Sc { int32_t x, y; uint32_t w, h; } sc{ 0, 0, 2048, 2048 };
+    struct Sc { int32_t x, y; uint32_t w, h; } sc{ 0, 0, 4096, 4096 };
     d.CmdSetScissor(d.cmd, 0, 1, &sc);
 }
 
@@ -427,7 +427,7 @@ inline int ensure_target(Dev& d, int w, int h, int samples) {
 inline int ensure_shadow(Dev& d) {
     Gpu& g = gpu();
     if (g.shadow.image && g.pipeShadow) return 1;
-    if (!make_image(d, g.shadow, 126, 2048, 2048, 1, 0x20 | 0x4, 2)) { fail("shadow image"); return 0; }
+    if (!make_image(d, g.shadow, 126, 4096, 4096, 1, 0x20 | 0x4, 2)) { fail("shadow image"); return 0; }
     struct Att { uint32_t flags, format, samples, load, store, sload, sstore, initial, final; } at{};
     at.format = 126; at.samples = 1; at.load = 1; at.store = 0; at.sload = 2; at.sstore = 1; at.initial = 3; at.final = 5;
     struct Ref { uint32_t attachment, layout; } depth{ 0, 3 };
@@ -436,7 +436,7 @@ inline int ensure_shadow(Dev& d) {
     struct RP { uint32_t sType; const void* pNext; uint32_t flags; uint32_t ac; const Att* a; uint32_t sc; const Sub* s; uint32_t dc; const void* dep; } rp{};
     rp.sType = 38; rp.ac = 1; rp.a = &at; rp.sc = 1; rp.s = &sub;
     if (d.CreateRenderPass(d.device, &rp, nullptr, &g.passSh) != 0) { fail("shadow pass"); return 0; }
-    if (!make_fb(d, g.passSh, g.shadow.view, 0, 2048, 2048, &g.fbSh)) { fail("shadow fb"); return 0; }
+    if (!make_fb(d, g.passSh, g.shadow.view, 0, 4096, 4096, &g.fbSh)) { fail("shadow fb"); return 0; }
     const At atv[] = { {0, 0, 106, 0} };
     if (!pipe_ex(d, g.sh[2], 0, 3, 0, 1, 1, 1, 0, 1, 1, 2.0f, 1.5f, 0, 0, 36, atv, 1, 0, g.layoutDepth, g.passSh, &g.pipeShadow)) { fail("shadow pipe"); return 0; }
     g.shadowLayout = 0;
@@ -561,7 +561,7 @@ inline int scene_boot(Dev& d) {
     g.texSets.clear();
     if (!alloc_sets(d, g.slTex, 128, g.texSets)) { fail("tex sets"); scene_down(d); return 0; }
     if (!buffer_alloc(d, 1072, 0x10, &g.sceneBuf, &g.sceneMem, &g.sceneMap)) { fail("scene ubo"); scene_down(d); return 0; }
-    if (!buffer_alloc(d, 4096ull * 512ull, 0x10, &g.drawBuf, &g.drawMem, &g.drawMap)) { fail("draw ubo"); scene_down(d); return 0; }
+    if (!buffer_alloc(d, 2048ull * 512ull, 0x10, &g.drawBuf, &g.drawMem, &g.drawMap)) { fail("draw ubo"); scene_down(d); return 0; }
     if (!buffer_alloc(d, 256, 0x10, &g.partBuf, &g.partMem, &g.partMap)) { fail("part ubo"); scene_down(d); return 0; }
     if (!grow_stage(d, g.stage, 8ull << 20)) { fail("stage"); scene_down(d); return 0; }
     uint32_t props[4] = {};
@@ -666,7 +666,7 @@ inline void ensure_shadow_readable(Dev& d) {
         barrier(d, g.shadow.image, 2, 1, 0x200, 0, 0x400, (uint32_t)g.shadowLayout, 3);
         g.shadowLayout = 3;
     }
-    begin_pass(d, g.passSh, g.fbSh, 2048, 2048, 1, 1, 1, 1);
+    begin_pass(d, g.passSh, g.fbSh, 4096, 4096, 1, 1, 1, 1);
     d.CmdEndRenderPass(d.cmd);
     g.shadowLayout = 5; g.shadowReady = 1;
 }
@@ -694,7 +694,7 @@ inline uint64_t vert_upload(Dev& d, const void* data, uint64_t bytes) {
 
 inline int draw_slot(const void* draw) {
     Gpu& g = gpu();
-    if (!draw || g.drawN >= 4096 || !g.drawMap) return -1;
+    if (!draw || g.drawN >= 2048 || !g.drawMap) return -1;
     std::memcpy((char*)g.drawMap + (size_t)g.drawN * 512, draw, 320);
     return g.drawN++;
 }
@@ -735,7 +735,7 @@ inline int shadow_begin() {
         barrier(d, g.shadow.image, 2, 1, 0x200, 0, 0x400, (uint32_t)g.shadowLayout, 3);
         g.shadowLayout = 3;
     }
-    begin_pass(d, g.passSh, g.fbSh, 2048, 2048, 1, 1, 1, 1);
+    begin_pass(d, g.passSh, g.fbSh, 4096, 4096, 1, 1, 1, 1);
     vp_shadow(d);
     d.CmdBindPipeline(d.cmd, 0, g.pipeShadow);
     g.inShadow = 1; g.shadowReady = 0;
