@@ -1737,31 +1737,38 @@ inline int ensure_target(Dev& d, int w, int h, int samples) {
     if (w < 1) w = 1;
     if (h < 1) h = 1;
     uint32_t want = samples < 2 ? 1u : (uint32_t)samples;
-    if (g.color.image && g.rw == w && g.rh == h && g.reqSamples == want) return 1;
+    if (g.color.image && g.pipeMesh[0] && g.rw == w && g.rh == h && g.reqSamples == want) return 1;
+    /* The frame that just finished can still be reading the old picture.
+       Destroying it first loses the device, and the view stays black. */
+    if ((g.color.image || g.depth.image || g.resolve.image) && d.DeviceWaitIdle)
+        d.DeviceWaitIdle(d.device);
     destroy_target(d);
     uint32_t tried = want;
     for (;;) {
         uint32_t usage = tried > 1 ? (0x10u | 0x1u) : (0x10u | 0x4u);
-        if (make_image(d, g.color, 37, (uint32_t)w, (uint32_t)h, tried, usage, 1)) break;
+        int ok = make_image(d, g.color, 37, (uint32_t)w, (uint32_t)h, tried, usage, 1);
+        if (ok) {
+            g.samples = tried;
+            ok = tried <= 1 || make_image(d, g.resolve, 37, (uint32_t)w, (uint32_t)h, 1, 0x2 | 0x4, 1);
+        }
+        if (ok) ok = make_image(d, g.depth, g.depthFmt, (uint32_t)w, (uint32_t)h, g.samples, 0x20, g.depthAspect) ? 1 : 0;
+        int stencil = g.depthAspect == 6;
+        if (ok) ok = make_pass(d, 37, g.depthFmt, g.samples, 1, stencil, &g.passC);
+        if (ok) ok = make_pass(d, 37, g.depthFmt, g.samples, 0, stencil, &g.passL);
+        if (ok) ok = make_fb(d, g.passC, g.color.view, g.depth.view, (uint32_t)w, (uint32_t)h, &g.fbC);
+        if (ok) ok = make_fb(d, g.passL, g.color.view, g.depth.view, (uint32_t)w, (uint32_t)h, &g.fbL);
+        if (ok) ok = make_scene_pipes(d);
+        if (ok) {
+            g.rw = w; g.rh = h; g.reqSamples = want;
+            g.colorLayout = 0; g.depthLayout = 0; g.resolveLayout = 0;
+            return 1;
+        }
+        destroy_target(d);
         if (tried == 8) tried = 4;
         else if (tried == 4) tried = 2;
         else if (tried == 2) tried = 1;
         else { fail("color image"); return 0; }
     }
-    g.samples = tried;
-    if (g.samples > 1) {
-        if (!make_image(d, g.resolve, 37, (uint32_t)w, (uint32_t)h, 1, 0x2 | 0x4, 1)) { fail("resolve image"); return 0; }
-    }
-    if (!make_image(d, g.depth, g.depthFmt, (uint32_t)w, (uint32_t)h, g.samples, 0x20, g.depthAspect)) { fail("depth image"); return 0; }
-    int stencil = g.depthAspect == 6;
-    if (!make_pass(d, 37, g.depthFmt, g.samples, 1, stencil, &g.passC)) { fail("color pass"); return 0; }
-    if (!make_pass(d, 37, g.depthFmt, g.samples, 0, stencil, &g.passL)) { fail("load pass"); return 0; }
-    if (!make_fb(d, g.passC, g.color.view, g.depth.view, (uint32_t)w, (uint32_t)h, &g.fbC)) { fail("color fb"); return 0; }
-    if (!make_fb(d, g.passL, g.color.view, g.depth.view, (uint32_t)w, (uint32_t)h, &g.fbL)) { fail("load fb"); return 0; }
-    if (!make_scene_pipes(d)) return 0;
-    g.rw = w; g.rh = h; g.reqSamples = want;
-    g.colorLayout = 0; g.depthLayout = 0; g.resolveLayout = 0;
-    return 1;
 }
 
 inline int ensure_shadow(Dev& d) {
@@ -1969,7 +1976,7 @@ inline int scene_begin(int ww, int wh, int rw, int rh, int samples, float red, f
     Dev& d = dev();
     Gpu& g = gpu();
     if (!g.booted) return 0;
-    if (!ensure_target(d, rw, rh, samples) && !g.color.image) return 0;
+    if (!ensure_target(d, rw, rh, samples) || !g.pipeMesh[0]) return 0;
     if (!open_frame(d, ww, wh)) return 0;
     g.on = 1; g.simpleOpen = 0; g.inColor = 0; g.inShadow = 0; g.needLoad = 0; g.drewColor = 0;
     g.shadowReady = 0; g.drawN = 0; g.meshN = 0; g.matN = 0; g.partN = 0; g.texN = 0; g.stage.used = 0;
