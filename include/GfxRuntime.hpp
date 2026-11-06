@@ -88,7 +88,7 @@ namespace nexa {
 // per name.
 // Defined at the end of the file: the gamepad reader, which this runtime emits
 // in place and std/gfx3d reaches on its own.
-inline std::string gfxPadStackCpp();
+inline std::string gfxPadStackCpp(bool rumble);
 
 struct GfxNeed {
     bool alpha = false;          // gfx.alpha() -- the reader; the setter is core
@@ -131,6 +131,9 @@ struct GfxNeed {
     // it (see gfxPadStackCpp). gfx still wants its poll hook and its forward
     // declaration; what it must not do is write the reader out a second time.
     bool padShared = false;
+    // gfx.rumble. Sliced apart from reading: a program that reads a pad and
+    // never shakes one carries no XInputSetState and no lookup for it.
+    bool padRumble = false;
 };
 
 // gfx.sound / play / loop / stop / volume: a WAV loader and a polyphonic
@@ -4506,7 +4509,7 @@ static int __nexa_gfx_wheel_x() {
     // std/gfx program is generated exactly as it was before std/gfx3d learned
     // to read them too. The block itself now lives in gfxPadStackCpp, because
     // gfx3d reaches it without this runtime being emitted at all.
-    if (need.pad && !need.padShared) out += gfxPadStackCpp();
+    if (need.pad && !need.padShared) out += gfxPadStackCpp(need.padRumble);
     if (need.typed) out += R"NEXA_GFX(
 // Consuming, like gfx.drop(): the text belongs to whoever asks for it first.
 static std::string __nexa_gfx_typed() {
@@ -6279,8 +6282,8 @@ inline std::string gfxPadHeadersCpp() {
 )NEXA_GFX";
 }
 
-inline std::string gfxPadStackCpp() {
-    return R"NEXA_GFX(
+inline std::string gfxPadStackCpp(bool rumble) {
+    std::string out = R"NEXA_GFX(
 struct __nexa_GfxPad {
     int on;              // connected
     unsigned now, prev;  // one bit a button, this sample and the one before
@@ -6542,6 +6545,68 @@ static double __nexa_gfx_pad_axis(int i, const std::string& name) {
     return p->ax[at > 5 ? at - 6 : at];
 }
 )NEXA_GFX";
+    // gfx.rumble. Its own block, and its own XInput lookup rather than a handle
+    // kept by the reader above: a program that reads a pad and never shakes it
+    // is then generated exactly as it was before rumble existed, which is the
+    // whole point of slicing. LoadLibraryA on a module already loaded only adds
+    // a reference, so asking twice costs nothing.
+    if (rumble) out += R"NEXA_GFX(
+// Which of the four hardware slots the i'th connected pad is in. The readers
+// above hand back a pointer and never need to know; rumble is sent to a slot.
+static int __nexa_gfx_pad_slot(int i) {
+    if (!__nexa_pad_polled) __nexa_gfx_pad_sample();
+    if (i < 0) return -1;
+    for (int k = 0; k < 4; k++) {
+        if (__nexa_pads[k].on && i-- == 0) return k;
+    }
+    return -1;
+}
+
+#ifdef _WIN32
+struct __nexa_XInputVibration {
+    WORD left, right;  // the heavy motor and the light one, 0 .. 65535
+};
+typedef DWORD (WINAPI *__nexa_XInputSetState)(DWORD, __nexa_XInputVibration*);
+static __nexa_XInputSetState __nexa_xinput_set = nullptr;
+static int __nexa_xinput_set_init = 0;
+#endif
+
+// A level, not a pulse: it is what the motors are doing until something says
+// otherwise, which is what the hardware itself offers. 0 stops them.
+// 1 if the pad took it, 0 if there is no such pad or the platform has no
+// rumble to offer -- so a program can ask once and know.
+static int __nexa_gfx_rumble(int i, double low, double high) {
+    const int k = __nexa_gfx_pad_slot(i);
+    if (k < 0) return 0;
+    if (low < 0.0) low = 0.0;
+    if (low > 1.0) low = 1.0;
+    if (high < 0.0) high = 0.0;
+    if (high > 1.0) high = 1.0;
+#ifdef _WIN32
+    if (!__nexa_xinput_set_init) {
+        __nexa_xinput_set_init = 1;
+        const char* const dlls[] = { "xinput1_4.dll", "xinput9_1_0.dll", "xinput1_3.dll" };
+        for (int d = 0; d < 3 && !__nexa_xinput_set; d++) {
+            HMODULE h = LoadLibraryA(dlls[d]);
+            if (h) __nexa_xinput_set = (__nexa_XInputSetState)(void*)GetProcAddress(h, "XInputSetState");
+        }
+    }
+    if (!__nexa_xinput_set) return 0;
+    __nexa_XInputVibration v;
+    v.left = (WORD)(low * 65535.0 + 0.5);
+    v.right = (WORD)(high * 65535.0 + 0.5);
+    return __nexa_xinput_set((DWORD)k, &v) == 0 ? 1 : 0;
+#else
+    // Linux drives force feedback through the evdev node, not the joystick one
+    // the reader opens, and the browser through a Gamepad API this does not
+    // reach yet. Both answer 0 rather than pretending.
+    (void)low;
+    (void)high;
+    return 0;
+#endif
+}
+)NEXA_GFX";
+    return out;
 }
 
 }  // namespace nexa

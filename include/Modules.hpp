@@ -168,7 +168,10 @@ public:
         bool termSize = false;       // term.width/height
         bool termProgress = false;   // term.progress
         bool termSpinner = false;    // term.spinner
-        bool gfxPad = false;         // gfx.pads, pad, pad_pressed, pad_axis
+        bool gfxPad = false;               // gfx.pads, pad, pad_pressed, pad_axis
+        // gfx.rumble, sliced apart from reading a pad: shaking one and reading
+        // one are separate costs, and most programs that read never shake.
+        bool gfxPadRumble = false;
         bool gfxImageStore = false;
         bool gfxUpload = false;     // gfx.upload: an image from the program's own pixels
         bool gfxBlit = false;
@@ -205,6 +208,9 @@ public:
         // emitted for the two modules together, so a program that draws a
         // cube and reads no pad carries neither it nor XInput.
         bool gfx3dPad = false;
+        // gfx3d.rumble, sliced apart from reading it for the same reason
+        // gfx.rumble is: shaking a pad and reading one are separate costs.
+        bool gfx3dPadRumble = false;
         bool json = false;
         bool result = false;
     };
@@ -2092,10 +2098,18 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
         // Only std/gfx3d's use brings it up here. std/gfx goes on writing the
         // reader out where it always did, in the middle of its own runtime, so
         // a program that was reading pads before this is generated unchanged.
-        const bool padAhead = hasGfx3d() && usage.gfx3d && usage.gfx3dPad;
+        // Rumbling a pad needs the table and the sampler under it, so either
+        // call brings the block; reading one does not bring the rumble.
+        const bool g3Pad = hasGfx3d() && usage.gfx3d && (usage.gfx3dPad || usage.gfx3dPadRumble);
+        const bool gfxPad = hasGfx() && usage.gfx && (usage.gfxPad || usage.gfxPadRumble);
+        const bool wantRumble = (hasGfx() && usage.gfx && usage.gfxPadRumble) ||
+                                (hasGfx3d() && usage.gfx3d && usage.gfx3dPadRumble);
+        const bool padAhead = g3Pad;
         if (padAhead) {
             out += gfxPadHeadersCpp();
-            out += gfxPadStackCpp();
+            // wantRumble, not gfx3d's alone: when the block comes up here it is
+            // the only copy, so it has to carry whichever module asked to rumble.
+            out += gfxPadStackCpp(wantRumble);
         }
         if (hasGfx() && usage.gfx) {
             GfxNeed need;
@@ -2116,7 +2130,8 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
             need.keyEdge = usage.gfxKeyEdge;
             need.typed = usage.gfxTyped;
             need.wheel = usage.gfxWheel;
-            need.pad = usage.gfxPad;
+            need.pad = gfxPad;
+            need.padRumble = wantRumble;
             // Already written out above, for gfx3d. gfx keeps its poll hook.
             need.padShared = padAhead;
             need.imageStore = usage.gfxImageStore;

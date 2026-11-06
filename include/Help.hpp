@@ -587,6 +587,7 @@ or an Emscripten canvas; no extra library to install on any of them.
             gfx.mouse(button)  gfx.mouse_x()  gfx.mouse_y()
             gfx.pads()  gfx.pad(i, button)  gfx.pad_pressed(i, button)
             gfx.pad_axis(i, axis)                 gamepads; no window needed
+            gfx.rumble(i, strength[, high])       shake one; Windows only so far
             gfx.drop()     gfx.opendialog([filter]) / gfx.openfile(...)
 
   fn main() {
@@ -643,6 +644,7 @@ no array of pixels to read back.
             gfx3d.pads()         gfx3d.pad(i, button)
             gfx3d.pad_pressed(i, button)   gfx3d.pad_axis(i, axis)
                                       gamepads: no window needed, focused or not
+            gfx3d.rumble(i, strength[, high])   Windows only so far
   renderer  gfx3d.renderer(name)      ask, before open; "opengl", "opengl 1.1",
                                       "opengl 3.3", "vulkan" or "vulkan 1.4"
             gfx3d.backend()           what the window actually opened with

@@ -1082,6 +1082,21 @@ ARGUMENT TYPES
                                    page is shown a pad only after a button on it is pressed.
                                    macOS: not read yet -- gfx.pads() is 0.
                                    A program that calls none of these carries none of it.
+  gfx.rumble(i, strength)        - shake gamepad i. strength is 0.0 to 1.0, and it is a
+  gfx.rumble(i, low, high)         level rather than a pulse: the motors run at it until
+                                   something sets another, and 0.0 stops them. Two
+                                   numbers drive the motors apart -- "low" the heavy one
+                                   that rumbles, "high" the light one that buzzes.
+                                   Answers 1 if the pad took it, 0 if there is no pad i
+                                   or the platform has no rumble, so a program can ask
+                                   once and find out.
+                                   Windows: XInput, the same reader gfx.pad uses.
+                                   Linux, wasm, macOS: 0 -- not driven yet. Linux rumble
+                                   goes through a different device than the joystick the
+                                   reader opens, and the browser through an API this does
+                                   not reach.
+                                   Sliced apart from reading: a program that reads a pad
+                                   and never shakes one carries none of this.
   gfx.drop()                     - path of a file dropped on the window (consumes; empty if none)
   gfx.opendialog([filter])       - native file picker; filter like "*.ch8;*.hex" (empty if cancelled)
                                    alias: gfx.openfile([filter])
@@ -1334,6 +1349,9 @@ ARGUMENT TYPES
                                    or open at all.
                                    macOS: not read yet -- gfx3d.pads() is 0.
                                    A program that calls none of these carries none of it.
+  gfx3d.rumble(i, strength)      - shake gamepad i, exactly as gfx.rumble does; see it
+  gfx3d.rumble(i, low, high)       above for the levels, the two motors and which
+                                   platforms drive them.
   Input is read only while the window is focused, exactly as std/gfx reads it.
   Input that arrives while it is not focused is dropped rather than saved up to
   arrive the moment it is. Before the first gfx3d.open, and after gfx3d.close,

@@ -16,6 +16,8 @@
 #            and a program using both modules still carries only one copy.
 #   hook3d   gfx3d.poll takes the snapshot pad_pressed measures against, and a
 #            gfx3d program that reads no pad has no call to it at all.
+#   rumble   gfx.rumble and gfx3d.rumble reach XInputSetState, and a program
+#            that reads a pad without shaking one carries none of that.
 #   reads    the test program, against its expected output.
 #
 # Linux only; skipped, loudly, without a C++ compiler.
@@ -117,6 +119,61 @@ if grep -q '__nexa_gfx_pad_frame' "$WORK/nopad3d.cpp"; then
 else
     echo "ok hook3d: no pad, no snapshot and no stub"
 fi
+
+# gfx.rumble / gfx3d.rumble. Sliced apart from reading, because most programs
+# that read a pad never shake one: the reader must come out with no
+# XInputSetState and no slot lookup in it.
+printf '#include <std/io>
+#include <std/gfx>
+fn main(): int {
+    io.println(gfx.pad(0, "a"));
+    io.println(gfx.rumble(0, 1.0));
+    io.println(gfx.rumble(0, 0.0, 0.5));
+    return 0;
+}
+' > "$WORK/rum.nxa"
+printf '#include <std/io>
+#include <std/gfx3d>
+fn main(): int {
+    io.println(gfx3d.rumble(0, 0.5));
+    return 0;
+}
+' > "$WORK/rum3d.nxa"
+for case in rum rum3d; do
+    if ! "$NEXAC" "$WORK/$case.nxa" --source "$WORK/$case.cpp" > "$WORK/t.log" 2>&1; then
+        echo "FAIL rumble: NexaC could not transpile $case"
+        sed 's/^/  /' "$WORK/t.log" | tail -5
+        fails=$((fails + 1))
+    elif ! grep -q 'XInputSetState' "$WORK/$case.cpp"; then
+        echo "FAIL rumble: $case does not reach XInputSetState"
+        fails=$((fails + 1))
+    elif ! grep -q '__nexa_gfx_rumble' "$WORK/$case.cpp"; then
+        echo "FAIL rumble: $case has no rumble call"
+        fails=$((fails + 1))
+    else
+        echo "ok rumble: $case drives the motors"
+    fi
+done
+
+# One strength shakes both motors; two drive them apart. Checked in the emitted
+# call rather than by running it, so this holds on a machine with no pad.
+if grep -q '__nexa_gfx_rumble(0, 1.0, 1.0)' "$WORK/rum.cpp" &&
+   grep -q '__nexa_gfx_rumble(0, 0.0, 0.5)' "$WORK/rum.cpp"; then
+    echo "ok rumble: one strength drives both motors, two drive them apart"
+else
+    echo "FAIL rumble: the two forms do not emit the motor pair expected"
+    grep -n '__nexa_gfx_rumble' "$WORK/rum.cpp" | sed 's/^/  /'
+    fails=$((fails + 1))
+fi
+
+for case in nopad pad3d padboth; do
+    if grep -q 'XInputSetState\|__nexa_gfx_pad_slot' "$WORK/$case.cpp"; then
+        echo "FAIL rumble: $case reads a pad but still carries the rumble code"
+        fails=$((fails + 1))
+    else
+        echo "ok rumble: $case reads without carrying rumble"
+    fi
+done
 
 CXX="${NEXA_CXX:-}"
 if [ -z "$CXX" ]; then

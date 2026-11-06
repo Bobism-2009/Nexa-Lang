@@ -4977,6 +4977,8 @@ private:
                  || method == "wheel" || method == "wheel_x" || method == "typed" || method == "pads"
                  || method == "audio_queued" || method == "audio_flush") argc = 0;
         else if (method == "pad" || method == "pad_pressed" || method == "pad_axis") argc = 2;
+        // One strength shakes both motors, two drive them apart.
+        else if (method == "rumble") { argc = 2; argcMax = 3; }
         else if (method == "fullscreen" || method == "borderless"
                  || method == "ontop" || method == "transparent") { argc = 0; argcMax = 1; }
         else if (method == "key" || method == "pressed" || method == "released"
@@ -5013,7 +5015,7 @@ private:
         else {
             throw std::runtime_error("Unknown gfx method 'gfx." + method +
                 "' at line " + std::to_string(methodTok.line) +
-                " (use open, close, resize, width, height, scale, title, icon, cursor, poll, closed, clear, plot, fill, rect, round_rect, fill_round_rect, line, circle, fill_circle, ellipse, fill_ellipse, arc, pie, tri, fill_tri, poly, fill_poly, text, text_size, text_width, text_height, get, present, image, decode, image_w, image_h, upload, blit, blit_rot, alpha, save, key, pressed, released, wheel, wheel_x, typed, mouse_x, mouse_y, mouse, pads, pad, pad_pressed, pad_axis, audio, sample, audio_queued, audio_flush, sound, play, loop, stop, volume, fullscreen, borderless, ontop, transparent, maxfps)");
+                " (use open, close, resize, width, height, scale, title, icon, cursor, poll, closed, clear, plot, fill, rect, round_rect, fill_round_rect, line, circle, fill_circle, ellipse, fill_ellipse, arc, pie, tri, fill_tri, poly, fill_poly, text, text_size, text_width, text_height, get, present, image, decode, image_w, image_h, upload, blit, blit_rot, alpha, save, key, pressed, released, wheel, wheel_x, typed, mouse_x, mouse_y, mouse, pads, pad, pad_pressed, pad_axis, rumble, audio, sample, audio_queued, audio_flush, sound, play, loop, stop, volume, fullscreen, borderless, ontop, transparent, maxfps)");
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after gfx." + method + " at line " + std::to_string(peek().line));
@@ -5113,6 +5115,10 @@ private:
                 }
                 if (method == "cursor") {
                     throw std::runtime_error("gfx.cursor() or gfx.cursor(on) at line " + std::to_string(line));
+                }
+                if (method == "rumble") {
+                    throw std::runtime_error("gfx.rumble(index, strength) or gfx.rumble(index, low, high) at line " +
+                        std::to_string(line));
                 }
                 throw std::runtime_error("gfx.open(title, w, h[, scale]) at line " + std::to_string(line));
             }
@@ -5237,6 +5243,8 @@ private:
         // same reader underneath -- see gfxPadStackCpp in GfxRuntime.hpp.
         else if (method == "pad" || method == "pad_pressed"
                  || method == "pad_axis") argc = 2;
+        // One strength shakes both motors, two drive them apart.
+        else if (method == "rumble") { argc = 2; argcMax = 3; }
         else if (method == "clear") argc = 3;
         else if (method == "perspective") argc = 3;
         else if (method == "camera") argc = 6;
@@ -5254,7 +5262,7 @@ private:
                 " line3, grid, translate, rotate, scale, reset, light, ambient,"
                 " maxfps, vsync, renderer, backend, key, pressed,"
                 " released, typed, wheel, wheel_x, mouse, mouse_x, mouse_y,"
-                " pads, pad, pad_pressed, pad_axis,"
+                " pads, pad, pad_pressed, pad_axis, rumble,"
                 " model, draw, model_tris, texture, use,"
                 " sound, play, loop, stop, volume,"
                 " audio, sample, audio_queued, audio_flush)");
@@ -5316,6 +5324,7 @@ private:
             else if (method == "pad") sig = "gfx3d.pad(index, button)";
             else if (method == "pad_pressed") sig = "gfx3d.pad_pressed(index, button)";
             else if (method == "pad_axis") sig = "gfx3d.pad_axis(index, axis)";
+            else if (method == "rumble") sig = "gfx3d.rumble(index, strength) or gfx3d.rumble(index, low, high)";
             else if (method == "model") sig = "gfx3d.model(path)";
             else if (method == "model_tris") sig = "gfx3d.model_tris(id)";
             else if (method == "draw") sig = "gfx3d.draw(id, x, y, z, scale, r, g, b)";

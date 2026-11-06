@@ -3101,6 +3101,7 @@ private:
                 if (e.value == "pad_axis") return "float";
                 if (e.value == "closed" || e.value == "key" || e.value == "pressed"
                     || e.value == "pads" || e.value == "pad" || e.value == "pad_pressed"
+                    || e.value == "rumble"
                     || e.value == "released" || e.value == "wheel" || e.value == "wheel_x"
                     || e.value == "open" || e.value == "resize"
                     || e.value == "mouse_x" || e.value == "mouse_y" || e.value == "mouse"
@@ -4576,6 +4577,7 @@ private:
             {"pad",         "gfx3d.pad(index, button)",                               "nt"},
             {"pad_pressed", "gfx3d.pad_pressed(index, button)",                       "nt"},
             {"pad_axis",    "gfx3d.pad_axis(index, axis)",                            "nt"},
+            {"rumble",      "gfx3d.rumble(index, strength[, high])",                  "nnn"},
             {"model",       "gfx3d.model(path)",                                      "t"},
             {"model_tris",  "gfx3d.model_tris(id)",                                   "n"},
             {"draw",        "gfx3d.draw(id, x, y, z, scale, r, g, b)",                "nnnnnnnn"},
@@ -4606,6 +4608,7 @@ private:
             {"pad",             "gfx.pad(index, button)",                          "nt"},
             {"pad_pressed",     "gfx.pad_pressed(index, button)",                  "nt"},
             {"pad_axis",        "gfx.pad_axis(index, axis)",                       "nt"},
+            {"rumble",          "gfx.rumble(index, strength[, high])",             "nnn"},
             {"clear",           "gfx.clear(r, g, b)",                              "nnn"},
             {"plot",            "gfx.plot(x, y, r, g, b)",                         "nnnnn"},
             {"get",             "gfx.get(x, y)",                                   "nn"},
@@ -8760,6 +8763,12 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (fn == "pad") return "__nexa_gfx_pad(" + a(0) + ", " + a(1) + ")";
                 if (fn == "pad_pressed") return "__nexa_gfx_pad_pressed(" + a(0) + ", " + a(1) + ")";
                 if (fn == "pad_axis") return "__nexa_gfx_pad_axis(" + a(0) + ", " + a(1) + ")";
+                // One strength drives both motors; two drive them apart, the
+                // heavy one and then the light one.
+                if (fn == "rumble") {
+                    const std::string hi = e.children.size() >= 3 ? a(2) : a(1);
+                    return "__nexa_gfx_rumble(" + a(0) + ", " + a(1) + ", " + hi + ")";
+                }
                 if (fn == "audio_queued") return "__nexa_gfx_audio_queued()";
                 // Flushing is "start playing what I have queued", so the mixer
                 // gets its turn first.
@@ -8859,6 +8868,12 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (fn == "pad") return "__nexa_gfx_pad(" + a(0) + ", " + a(1) + ")";
                 if (fn == "pad_pressed") return "__nexa_gfx_pad_pressed(" + a(0) + ", " + a(1) + ")";
                 if (fn == "pad_axis") return "__nexa_gfx_pad_axis(" + a(0) + ", " + a(1) + ")";
+                // One strength drives both motors; two drive them apart, the
+                // heavy one and then the light one.
+                if (fn == "rumble") {
+                    const std::string hi = e.children.size() >= 3 ? a(2) : a(1);
+                    return "__nexa_gfx_rumble(" + a(0) + ", " + a(1) + ", " + hi + ")";
+                }
                 if (fn == "wheel") return "__nexa_gfx_wheel()";
                 if (fn == "wheel_x") return "__nexa_gfx_wheel_x()";
                 if (fn == "typed") return "__nexa_gfx_typed()";
@@ -9716,6 +9731,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             // The shared gamepad reader, and on Windows the XInput DLL it
             // loads: a program that draws in 3D and reads no pad has neither.
             cppUsage.gfx3dPad = true;
+        } else if (fn == "rumble") {
+            cppUsage.gfx3dPadRumble = true;
         } else if (fn == "sound" || fn == "play" || fn == "loop" ||
                    fn == "stop" || fn == "volume") {
             // Both forms of gfx3d.volume pull the mixer in, for the reason
@@ -9770,6 +9787,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             cppUsage.gfxTyped = true;
         } else if (fn == "wheel" || fn == "wheel_x") {
             cppUsage.gfxWheel = true;
+        } else if (fn == "rumble") {
+            cppUsage.gfxPadRumble = true;
         } else if (fn == "pads" || fn == "pad" || fn == "pad_pressed" || fn == "pad_axis") {
             cppUsage.gfxPad = true;
         } else if (fn == "image" || fn == "decode") {
