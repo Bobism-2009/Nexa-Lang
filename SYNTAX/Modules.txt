@@ -1673,7 +1673,8 @@ ARGUMENT TYPES
 #include <std/file>
   file.read(path)       - Read entire file as binary, returns string
   file.lines(path)      - The file as a []string of lines: split at 
-, a  before it
+, a 
+ before it
                           dropped (so Windows text reads the same), a blank line kept,
                           and no empty last line for the newline a text file ends
                           with. A missing file is an empty list.

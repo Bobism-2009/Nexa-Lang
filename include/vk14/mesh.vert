@@ -89,4 +89,11 @@ void main() {
             vSunB = vSunF;
         }
     }
+    if (d.color.g > 0.7 && d.color.r < 0.4) {
+        vec3 n = normalize(mat3(d.nmat) * aNrm);
+        vec3 toL = u.info.x > 0 ? normalize(u.lpos[0].xyz) : vec3(0.0);
+        float ndl = dot(n, toL);
+        vFront = vec3(ndl * 0.5 + 0.5, n.y * 0.5 + 0.5, u.ldif[0].x);
+        vAlpha = 2.0;
+    }
 }
