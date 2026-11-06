@@ -1,0 +1,8 @@
+// "or vulkan" reads like a second value to match, but means "or true", so the
+// test would pass whatever the left side said. Say so instead of building it.
+#include <std/io>
+
+fn main() {
+    let backend: string = "opengl";
+    if (backend == "opengl" || "vulkan") { io.println("x"); }
+}

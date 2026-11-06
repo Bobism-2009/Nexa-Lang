@@ -43,6 +43,35 @@ COMPARISONS
   Arithmetic and bitwise operators bind tighter than any comparison:
   x & 2 == 2 is (x & 2) == 2 (unlike C).
 
+MATCHING SEVERAL VALUES
+  x in [a, b, c]           - true when x equals any of them
+  Binds like == and != -- the same level, chaining left to right.
+
+    if (gfx3d.backend() in ["opengl 3.3", "vulkan 1.4"]) { ... }
+    if (name in ["y", "yes"]) { ... }
+    if (!(ext in [".png", ".jpg"])) { ... }
+
+  x is named once and read once, which is the point of the form. Spelled out
+  by hand the value appears once per comparison:
+
+    if (gfx3d.backend() == "opengl 3.3" || gfx3d.backend() == "vulkan 1.4")
+
+  which calls backend() twice, and with something like io.read_line() on the
+  left would read two lines. x in [...] reads it once.
+
+  The list is written out where it is used, so nothing is allocated and no
+  list exists at runtime: it compiles to the same chain of comparisons, with
+  one read of x.
+  To test membership of a slice or a map that a program already holds, those
+  have their own methods -- xs.contains(v) / xs.has(v), m.has(key).
+
+  Writing text on its own as a condition is an error rather than a surprise:
+
+    if (backend() == "opengl" || "vulkan")      // rejected
+
+  reads as "or vulkan" but means "or true", so the test would pass whatever
+  backend() answered. NexaC says so and names both ways to write it.
+
 LOGICAL OPERATORS
   &&   and
   ||   or

@@ -1,0 +1,36 @@
+// x in [a, b, c]: true when x equals any of them, with x read once.
+#include <std/io>
+
+fn reads(): string {
+    io.println("read");
+    return "vulkan";
+}
+
+fn main() {
+    let s: string = "zebra";
+    io.println(s in ["apple", "banana"]);
+    io.println(s in ["apple", "zebra"]);
+    io.println(s in ["zebra"]);
+
+    let n: int = 7;
+    io.println(n in [1, 7, 9]);
+    io.println(n in [1, 2]);
+    io.println(n in [7,]);
+
+    // Once, not once per value: two "read" lines here would mean the value is
+    // being re-evaluated for every comparison.
+    if (reads() in ["opengl", "vulkan"]) {
+        io.println("matched");
+    }
+
+    // Alongside the other operators, and under a negation.
+    if (s in ["zebra"] && n in [7, 8]) { io.println("both"); }
+    if (!(s in ["apple"])) { io.println("negated"); }
+
+    // Binds at the equality level, so this is (n in [7]) == true.
+    io.println(n in [7] == true);
+
+    // The values may be expressions, not just literals.
+    let base: int = 5;
+    io.println(n in [base + 2, base]);
+}

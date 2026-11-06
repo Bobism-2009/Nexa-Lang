@@ -1,0 +1,7 @@
+// An empty list could never match, so it is a mistake rather than a false.
+#include <std/io>
+
+fn main() {
+    let s: string = "a";
+    if (s in []) { io.println("x"); }
+}

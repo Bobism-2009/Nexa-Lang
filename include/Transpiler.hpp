@@ -3193,6 +3193,7 @@ private:
             // Comparisons and the logical operators yield bool, not int — overload
             // resolution needs this to match `fn f(x: bool)` against `f(a == b)`.
             case AstNode::Type::CondNot:
+            case AstNode::Type::CondIn:
             case AstNode::Type::CondEq:
             case AstNode::Type::CondNe:
             case AstNode::Type::CondLt:
@@ -7744,6 +7745,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             case AstNode::Type::CondGe:
             case AstNode::Type::CondAnd:
             case AstNode::Type::CondOr:
+            case AstNode::Type::CondIn:
                 return "(" + emitCond(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             default:
                 return emitExpr(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
@@ -7832,6 +7834,36 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         return lhs + " " + op + " " + rhs;
     }
 
+    // x in [a, b, c].
+    //
+    // The value is named once, which is the point of the form: written out by
+    // hand as x == a || x == b, a call on the left runs once per value, and
+    // something like io.read_line() in ["y", "yes"] would read two lines. A
+    // lambda is how an expression gets a name without a statement to put it in;
+    // it inlines away, so what is left is the same chain of comparisons.
+    //
+    // Operands go through emitCmpOperand, so == means here exactly what it
+    // means in a comparison. A bare C++ string literal on the left is promoted
+    // the way emitComparison promotes it: bound to const auto& it would be a
+    // char array, and comparing one with == compares addresses.
+    std::string emitIn(const AstNode& c,
+                       const std::map<std::string, std::string>& varMap,
+                       const std::map<std::string, bool>* varIsString,
+                       const std::map<std::string, bool>* varIsFloat,
+                       const std::map<std::string, bool>* varIsChar,
+                       const std::map<std::string, bool>* varIsBool) {
+        std::string lhs = emitCmpOperand(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+        if (isBareCppStringLiteral(lhs)) lhs = asCppStdString(lhs);
+        std::string out = "[&]() { const auto& __nexa_in = (" + lhs + "); return ";
+        for (size_t k = 1; k < c.children.size(); k++) {
+            if (k > 1) out += " || ";
+            out += "__nexa_in == " +
+                   emitCmpOperand(c.children[k], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+        }
+        out += "; }()";
+        return out;
+    }
+
     // A value written where a condition goes.
     //
     // Nexa's truthiness rules are not written down anywhere else, so they are
@@ -7878,6 +7910,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                          const std::map<std::string, bool>* varIsChar = nullptr,
                          const std::map<std::string, bool>* varIsBool = nullptr) {
         switch (c.type) {
+            case AstNode::Type::CondIn:
+                return emitIn(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::CondEq:
                 return emitComparison(c, "==", varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             case AstNode::Type::CondNe:
@@ -9495,6 +9529,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             case AstNode::Type::CondLe:
             case AstNode::Type::CondGt:
             case AstNode::Type::CondGe:
+            case AstNode::Type::CondIn:
                 return "(" + emitCond(e, varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
             default:
                 return "0";

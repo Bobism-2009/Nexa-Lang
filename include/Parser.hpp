@@ -75,6 +75,8 @@ struct AstNode {
                       StmtDelete,
                       ExprSizeof,
                       CondEq, CondNe, CondLt, CondGt, CondLe, CondGe,
+                      CondIn,   // x in [a, b, c] -- children[0] is x, the rest the list
+
                       CondAnd, CondOr, CondNot,
                       ExprTernary, ExprTry,
                       ExprLambda,
@@ -2104,6 +2106,36 @@ private:
                 left = AstNode{AstNode::Type::CondEq, "", {std::move(left), parseRelational()}};
             } else if (match(TokenType::NotEquals)) {
                 left = AstNode{AstNode::Type::CondNe, "", {std::move(left), parseRelational()}};
+            } else if (peek().type == TokenType::Identifier && peek().value == "in") {
+                // x in [a, b, c] -- true when x equals any of them. Written out
+                // by hand this is x == a || x == b || x == c, which names x once
+                // per value; here it is named once and read once, so a call on
+                // the left happens a single time.
+                //
+                // "in" is the word the loops already use (for (x in xs)), and
+                // the loop header takes its own path through the parser before
+                // any expression is parsed, so the two do not meet.
+                const size_t inLine = peek().line;
+                advance();
+                if (!match(TokenType::LBracket)) {
+                    throw std::runtime_error("'in' takes a list of values to match against: write "
+                                             "x in [a, b, c] at line " + std::to_string(inLine));
+                }
+                AstNode n{AstNode::Type::CondIn, "", {std::move(left)}};
+                if (peek().type == TokenType::RBracket) {
+                    throw std::runtime_error("'in' needs at least one value to match: x in [] could never "
+                                             "be true, at line " + std::to_string(inLine));
+                }
+                n.children.push_back(parseValueExpr());
+                while (match(TokenType::Comma)) {
+                    if (peek().type == TokenType::RBracket) break;  // a trailing comma is fine
+                    n.children.push_back(parseValueExpr());
+                }
+                if (!match(TokenType::RBracket)) {
+                    throw std::runtime_error("Expected ']' to close the list after 'in' at line " +
+                                             std::to_string(peek().line));
+                }
+                left = std::move(n);
             } else {
                 break;
             }
@@ -2111,10 +2143,31 @@ private:
         return left;
     }
 
+    // Text on its own as a condition is always the same answer, so it is
+    // never what someone meant to write. It turns up one way: reaching for a
+    // shorthand that does not exist, and writing
+    //
+    //     if (backend() == "opengl" || "vulkan")
+    //
+    // which reads as "or vulkan" and means "or true" -- the if is taken
+    // whatever backend() said. Caught here, with the two ways to say it.
+    void rejectLiteralCondition(const AstNode& side, const char* op, size_t line) {
+        if (side.type != AstNode::Type::ExprStringLiteral) return;
+        throw std::runtime_error(std::string("text on its own cannot be a condition: '") + op +
+            " \"" + side.value + "\"' is always true, so the test would pass whatever the other "
+            "side said. Write x in [a, \"" + side.value + "\"] to match any of several values, or "
+            "spell the comparison out: x == a " + op + " x == \"" + side.value + "\" at line " +
+            std::to_string(line));
+    }
+
     AstNode parseLogicalOr() {
         AstNode left = parseLogicalAnd();
         while (match(TokenType::Or)) {
-            AstNode n{AstNode::Type::CondOr, "", {left, parseLogicalAnd()}};
+            const size_t line = tokens_[pos_ - 1].line;
+            AstNode right = parseLogicalAnd();
+            rejectLiteralCondition(right, "||", line);
+            rejectLiteralCondition(left, "||", line);
+            AstNode n{AstNode::Type::CondOr, "", {left, right}};
             left = n;
         }
         return left;
@@ -2134,7 +2187,11 @@ private:
     AstNode parseLogicalAnd() {
         AstNode left = parseLogicalNot();
         while (match(TokenType::And)) {
-            AstNode n{AstNode::Type::CondAnd, "", {left, parseLogicalNot()}};
+            const size_t line = tokens_[pos_ - 1].line;
+            AstNode right = parseLogicalNot();
+            rejectLiteralCondition(right, "&&", line);
+            rejectLiteralCondition(left, "&&", line);
+            AstNode n{AstNode::Type::CondAnd, "", {left, right}};
             left = n;
         }
         return left;
