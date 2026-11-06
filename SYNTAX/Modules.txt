@@ -923,6 +923,50 @@ ARGUMENT TYPES
                                    without ever calling gfx.sample. It pumps only while
                                    something is playing, so a program that synthesises
                                    its own samples with gfx.sample can still use gfx.play
+
+  SOUND WITHOUT A WINDOW
+  Nothing here needs one. The stream is opened straight on the device -- waveOut
+  on Windows, /dev/snd on Linux, AudioQueue on macOS, Web Audio in a page -- and
+  no part of it goes through the window, so there is no invisible window to make
+  and none is made. gfx.play opens the stream itself, which makes gfx.audio()
+  optional (it stays the way to ask whether there is a card at all: 1 if a
+  stream opened, 0 if not).
+
+  The one thing to know is that gfx.poll() is what pumps the mixer, and it does
+  that before it looks at the window -- deliberately, so that this works. A
+  windowless program therefore still polls; what it stops doing is drawing:
+
+      #include <std/gfx>
+      #include <std/time>
+
+      fn main() {
+          let s: int = gfx.sound("tone.wav");
+          gfx.play(s);
+          let i: int = 0;
+          while (i < 200) {        // about three seconds of it
+              gfx.poll();          // tops the card up; no window needed
+              time.sleep(16);
+              i = i + 1;
+          }
+      }
+
+  Leave the poll out and the card is never fed: gfx.play starts a voice, and
+  without a pump nothing is mixed into the stream, so a program that only sleeps
+  plays silence. gfx.audio_flush() is not a substitute -- it submits what is
+  already queued rather than keeping a sound going.
+
+  Raw output is the exception: gfx.sample queues onto the stream itself, so a
+  program generating its own samples needs no poll.
+
+  A main that returns takes the stream with it, so a sound has to be waited for
+  one way or another.
+
+  What such a program still carries is the window code it is not using -- about
+  7KB on Windows, 48KB on a static Linux cross build. On a Linux build for the
+  machine it is built on it also links X11, baked in by default (around 1.1MB,
+  or 23KB with "x11": "system" in nexapkg.json -- see std/nexapkg). The mixer is
+  one block shared between std/gfx and std/gfx3d, so including either gives the
+  whole of sound, and there is no smaller door onto it than this.
   gfx.image(path)                - load PNG/JPEG/BMP/GIF (and OS formats); handle, or 0
                                    the result is cached: the same path gives the same handle
   gfx.decode(bytes)              - same decode from a string (os.load / http.get(...).value())

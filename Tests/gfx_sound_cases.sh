@@ -12,6 +12,16 @@
 #             runtime, so no behavioural test can see them. Transpile only
 #             (--source), so this half runs anywhere NexaC does.
 #
+#   nowindow  Sound does not need a window, which the reference now says in so
+#             many words, so it has to stay true. Two things make it true and
+#             neither is obvious from the outside: a program that only plays a
+#             sound still gets the whole platform audio block, and gfx.poll()
+#             pumps the mixer BEFORE it gives up on there being no window. Get
+#             the order wrong and a windowless program feeds the card nothing --
+#             gfx.play starts a voice, the mixer never mixes it, and the program
+#             plays silence while every call still answers as though it worked.
+#             Checked in the emitted C++, so no audio device is needed.
+#
 #   semantics Tests/gfx_sound_semantics.cpp builds the generated runtime and
 #             drives the WAV reader and the mixer directly. Skipped, loudly,
 #             when there is no C++ compiler.
@@ -148,6 +158,15 @@ pick_cxx() {
 
 CXX=$(pick_cxx)
 
+# Even a program that only plays a sound carries the window code -- gfx.poll
+# names IsWindow, TranslateMessage and DispatchMessage -- so the driver links
+# user32 on Windows, as a real NexaC build does. Without it the link failed on
+# "undefined symbol: IsWindow" and the semantics half never ran here.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*|Windows*) WINLIBS="-luser32" ;;
+    *)                             WINLIBS= ;;
+esac
+
 echo "-- semantics: the WAV reader and the mixer"
 
 if [ -z "$CXX" ]; then
@@ -211,6 +230,7 @@ FAKE_AUDIO
                 -DNEXA_GEN="\"$WORK/patched.cpp\"" \
                 -DNEXA_WAV_DIR="\"$HERE\"" \
                 "$HERE/gfx_sound_semantics.cpp" "$HERE/gfx_x11_stub/x11_stub.cpp" \
+                $WINLIBS \
                 -o "$WORK/semantics" > "$WORK/build.log" 2>&1; then
             echo "FAIL semantics: could not build the driver"
             sed 's/^/  /' "$WORK/build.log"
@@ -224,6 +244,46 @@ FAKE_AUDIO
                 fails=$((fails + 1))
             fi
         fi
+    fi
+fi
+
+# A program that plays a sound and never opens a window.
+printf '#include <std/gfx>
+fn main(): int {
+    gfx.play(gfx.sound("s.wav"));
+    gfx.poll();
+    return 0;
+}
+' > "$WORK/nowin.nxa"
+if ! "$NEXAC" "$WORK/nowin.nxa" --source "$WORK/nowin.cpp" > "$WORK/nw.log" 2>&1; then
+    echo "FAIL nowindow: NexaC could not transpile a windowless sound program"
+    sed 's/^/  /' "$WORK/nw.log" | tail -4
+    fails=$((fails + 1))
+else
+    if grep -q '__nexa_gfx_audio' "$WORK/nowin.cpp" && grep -q '__nexa_gfx_mix_pump' "$WORK/nowin.cpp"; then
+        echo "ok nowindow: a program that only plays a sound still gets the stream and the mixer"
+    else
+        echo "FAIL nowindow: no audio stream or no mixer in a program that calls gfx.play"
+        fails=$((fails + 1))
+    fi
+    # The order inside gfx.poll is the whole of it: the pump has to come before
+    # the "no window, nothing to do" return.
+    body=$(awk '/^static void __nexa_gfx_poll/ {on=1} on {print} on && /^}/ {exit}' "$WORK/nowin.cpp")
+    pump=$(printf '%s
+' "$body" | grep -n '__nexa_gfx_mix_pump' | head -1 | cut -d: -f1)
+    ready=$(printf '%s
+' "$body" | grep -n 'ready) return' | head -1 | cut -d: -f1)
+    if [ -z "$pump" ]; then
+        echo "FAIL nowindow: gfx.poll does not pump the mixer at all"
+        fails=$((fails + 1))
+    elif [ -z "$ready" ]; then
+        echo "ok nowindow: gfx.poll pumps the mixer with no window check to clear"
+    elif [ "$pump" -lt "$ready" ]; then
+        echo "ok nowindow: gfx.poll pumps the mixer before it checks for a window"
+    else
+        echo "FAIL nowindow: gfx.poll checks for a window before pumping, so a"
+        echo "               windowless program would play silence"
+        fails=$((fails + 1))
     fi
 fi
 
