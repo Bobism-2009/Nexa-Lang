@@ -8,8 +8,9 @@
 // plugged in it says so and keeps looking: gfx.pads() is counted every frame,
 // so one plugged in while this is running simply appears.
 //
-// Hold A (cross) to run both motors; the bumpers drive one each. Rumble is
-// Windows-only so far, which is why the readout says whether it was taken.
+// Hold A (cross) to run both motors; the bumpers drive one each. Whether a
+// pad will rumble depends on the platform and, on Linux, on write access to
+// the event node, so the readout says whether the pad took it.
 #include <std/gfx>
 
 // The sixteen buttons, in the order gfx.pad names them, laid out as four rows

@@ -16,8 +16,12 @@
 #            and a program using both modules still carries only one copy.
 #   hook3d   gfx3d.poll takes the snapshot pad_pressed measures against, and a
 #            gfx3d program that reads no pad has no call to it at all.
-#   rumble   gfx.rumble and gfx3d.rumble reach XInputSetState, and a program
-#            that reads a pad without shaking one carries none of that.
+#   rumble   gfx.rumble and gfx3d.rumble reach the host's own motor driver --
+#            XInputSetState on Windows, the kernel's EVIOCSFF on Linux, the
+#            Gamepad API in a browser build -- and a program that reads a pad
+#            without shaking one carries none of it. The backend is chosen by
+#            the platform #ifs, so which name to look for depends on where
+#            this runs; the wasm one is checked by building for wasm.
 #   reads    the test program, against its expected output.
 #
 # Linux only; skipped, loudly, without a C++ compiler.
@@ -123,6 +127,14 @@ fi
 # gfx.rumble / gfx3d.rumble. Sliced apart from reading, because most programs
 # that read a pad never shake one: the reader must come out with no
 # XInputSetState and no slot lookup in it.
+# NexaC strips the platform #ifs out of the C++ it writes, so the motor driver
+# named in it is the host's. macOS has no reader and so no rumble to find.
+case "$(uname -s)" in
+    Linux*)            RUMBLE_BACKEND=EVIOCSFF ;;
+    Darwin*)           RUMBLE_BACKEND= ;;
+    *)                 RUMBLE_BACKEND=XInputSetState ;;
+esac
+
 printf '#include <std/io>
 #include <std/gfx>
 fn main(): int {
@@ -144,16 +156,34 @@ for case in rum rum3d; do
         echo "FAIL rumble: NexaC could not transpile $case"
         sed 's/^/  /' "$WORK/t.log" | tail -5
         fails=$((fails + 1))
-    elif ! grep -q 'XInputSetState' "$WORK/$case.cpp"; then
-        echo "FAIL rumble: $case does not reach XInputSetState"
-        fails=$((fails + 1))
     elif ! grep -q '__nexa_gfx_rumble' "$WORK/$case.cpp"; then
         echo "FAIL rumble: $case has no rumble call"
         fails=$((fails + 1))
+    elif [ -z "$RUMBLE_BACKEND" ]; then
+        echo "skip rumble: $case -- no rumble backend on this platform"
+    elif ! grep -q "$RUMBLE_BACKEND" "$WORK/$case.cpp"; then
+        echo "FAIL rumble: $case does not reach $RUMBLE_BACKEND"
+        fails=$((fails + 1))
     else
-        echo "ok rumble: $case drives the motors"
+        echo "ok rumble: $case drives the motors ($RUMBLE_BACKEND)"
     fi
 done
+
+# The browser backend, which no host is: --source needs no toolchain, so this
+# is checked everywhere rather than only where Emscripten is installed.
+if ! "$NEXAC" "$WORK/rum.nxa" --wasm --source "$WORK/rumw.cpp" > "$WORK/t.log" 2>&1; then
+    echo "FAIL rumble: NexaC could not transpile the rumble program for wasm"
+    sed 's/^/  /' "$WORK/t.log" | tail -4
+    fails=$((fails + 1))
+elif ! grep -q 'vibrationActuator' "$WORK/rumw.cpp"; then
+    echo "FAIL rumble: the wasm build does not reach the Gamepad API"
+    fails=$((fails + 1))
+elif grep -q 'XInputSetState' "$WORK/rumw.cpp" || grep -q 'EVIOCSFF' "$WORK/rumw.cpp"; then
+    echo "FAIL rumble: the wasm build carries a native motor driver"
+    fails=$((fails + 1))
+else
+    echo "ok rumble: the wasm build drives the Gamepad API and nothing native"
+fi
 
 # One strength shakes both motors; two drive them apart. Checked in the emitted
 # call rather than by running it, so this holds on a machine with no pad.
@@ -167,7 +197,7 @@ else
 fi
 
 for case in nopad pad3d padboth; do
-    if grep -q 'XInputSetState\|__nexa_gfx_pad_slot' "$WORK/$case.cpp"; then
+    if grep -q '__nexa_gfx_pad_slot'"${RUMBLE_BACKEND:+\|$RUMBLE_BACKEND}" "$WORK/$case.cpp"; then
         echo "FAIL rumble: $case reads a pad but still carries the rumble code"
         fails=$((fails + 1))
     else

@@ -1094,10 +1094,19 @@ ARGUMENT TYPES
                                    or the platform has no rumble, so a program can ask
                                    once and find out.
                                    Windows: XInput, the same reader gfx.pad uses.
-                                   Linux, wasm, macOS: 0 -- not driven yet. Linux rumble
-                                   goes through a different device than the joystick the
-                                   reader opens, and the browser through an API this does
-                                   not reach.
+                                   Linux: the kernel's force feedback, through the evdev
+                                   node beside the joystick one the reader opens (found
+                                   through /sys/class/input/js<n>/device, since the two
+                                   numberings need not agree). Reading a joystick is open
+                                   to anyone; writing to an event node wants the input
+                                   group, or a seat udev has handed over -- without it
+                                   there is no rumble and this answers 0.
+                                   wasm: the browser's Gamepad API. Effects there have a
+                                   duration rather than being a level, so each call starts
+                                   a fresh one: a program that holds a level by calling
+                                   once a frame rumbles without a gap, and one that sets a
+                                   level and walks away gets about a second of it.
+                                   macOS: 0 -- there is no reader there, so never a pad.
                                    Sliced apart from reading: a program that reads a pad
                                    and never shakes one carries none of this.
   gfx.drop()                     - path of a file dropped on the window (consumes; empty if none)

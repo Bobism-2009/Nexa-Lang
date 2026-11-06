@@ -6569,6 +6569,50 @@ struct __nexa_XInputVibration {
 typedef DWORD (WINAPI *__nexa_XInputSetState)(DWORD, __nexa_XInputVibration*);
 static __nexa_XInputSetState __nexa_xinput_set = nullptr;
 static int __nexa_xinput_set_init = 0;
+#elif !defined(__EMSCRIPTEN__) && !defined(__APPLE__)
+// Force feedback is the evdev node's, not the joystick node's the reader
+// opens, so the kernel's own input structures are needed here -- and only
+// here, which is why the header is inside the rumble block rather than beside
+// the reader's fcntl/unistd.
+#include <linux/input.h>
+#include <sys/ioctl.h>
+#include <dirent.h>
+#include <cstring>
+
+static int __nexa_pad_ff_fd[4];
+static int __nexa_pad_ff_id[4];
+static int __nexa_pad_ff_init = 0;
+
+// The event node for the device /dev/input/js<k> belongs to.
+// /sys/class/input/js<k>/device is that device, and the event node sits inside
+// it named event<N> -- which beats guessing, because the event numbering does
+// not have to line up with the joystick numbering.
+static int __nexa_gfx_pad_ff(int k) {
+    if (!__nexa_pad_ff_init) {
+        __nexa_pad_ff_init = 1;
+        for (int i = 0; i < 4; i++) { __nexa_pad_ff_fd[i] = -1; __nexa_pad_ff_id[i] = -1; }
+    }
+    if (__nexa_pad_ff_fd[k] >= 0) return __nexa_pad_ff_fd[k];
+    char dir[64];
+    std::snprintf(dir, sizeof(dir), "/sys/class/input/js%d/device", k);
+    DIR* d = opendir(dir);
+    if (!d) return -1;
+    char node[64];
+    node[0] = 0;
+    for (struct dirent* e = readdir(d); e; e = readdir(d)) {
+        if (std::strncmp(e->d_name, "event", 5) == 0) {
+            std::snprintf(node, sizeof(node), "/dev/input/%s", e->d_name);
+            break;
+        }
+    }
+    closedir(d);
+    if (!node[0]) return -1;
+    // Rumbling asks for more than reading did: the joystick node is readable by
+    // anyone, an event node is writable by the input group or by whoever udev
+    // handed the seat to. No write, no rumble, and gfx.rumble answers 0.
+    __nexa_pad_ff_fd[k] = open(node, O_RDWR | O_CLOEXEC);
+    return __nexa_pad_ff_fd[k];
+}
 #endif
 
 // A level, not a pulse: it is what the motors are doing until something says
@@ -6596,13 +6640,58 @@ static int __nexa_gfx_rumble(int i, double low, double high) {
     v.left = (WORD)(low * 65535.0 + 0.5);
     v.right = (WORD)(high * 65535.0 + 0.5);
     return __nexa_xinput_set((DWORD)k, &v) == 0 ? 1 : 0;
-#else
-    // Linux drives force feedback through the evdev node, not the joystick one
-    // the reader opens, and the browser through a Gamepad API this does not
-    // reach yet. Both answer 0 rather than pretending.
+#elif defined(__EMSCRIPTEN__)
+    // The browser's Gamepad API. Its effects have a duration rather than being
+    // a level, so each call starts a fresh one: a program holding a level by
+    // calling once a frame -- which a game loop does anyway -- rumbles without
+    // a gap, and one that sets a level and walks away gets about a second of
+    // it. Nothing here is reached unless the page has seen a button pressed,
+    // which is also what it takes for the pad to be visible at all.
+    return EM_ASM_INT({
+        var pads = (navigator.getGamepads && navigator.getGamepads()) || [];
+        var g = pads[$0];
+        if (!g || !g.vibrationActuator || !g.vibrationActuator.playEffect) return 0;
+        if ($1 <= 0 && $2 <= 0) {
+            if (g.vibrationActuator.reset) g.vibrationActuator.reset();
+            else g.vibrationActuator.playEffect("dual-rumble",
+                { duration: 0, strongMagnitude: 0, weakMagnitude: 0 });
+            return 1;
+        }
+        g.vibrationActuator.playEffect("dual-rumble",
+            { duration: 1000, strongMagnitude: $1, weakMagnitude: $2 });
+        return 1;
+    }, k, low, high);
+#elif defined(__APPLE__)
+    // No reader here either, so there is never a pad to shake.
     (void)low;
     (void)high;
     return 0;
+#else
+    const int fd = __nexa_gfx_pad_ff(k);
+    if (fd < 0) return 0;
+    struct ff_effect fx;
+    std::memset(&fx, 0, sizeof(fx));
+    fx.type = FF_RUMBLE;
+    // -1 the first time, so the kernel assigns an id; the id it gives back is
+    // reused after that, which updates the effect in place rather than piling
+    // up a new one for every frame a game holds the level.
+    fx.id = (__s16)__nexa_pad_ff_id[k];
+    fx.u.rumble.strong_magnitude = (__u16)(low * 65535.0 + 0.5);
+    fx.u.rumble.weak_magnitude = (__u16)(high * 65535.0 + 0.5);
+    // replay.length is milliseconds in a 16-bit field, so the longest a single
+    // effect can run is about 65 seconds. gfx.rumble is a level, and the way to
+    // say that here is the longest effect the interface allows, refreshed by
+    // the next call.
+    fx.replay.length = 0xFFFF;
+    fx.replay.delay = 0;
+    if (ioctl(fd, EVIOCSFF, &fx) < 0) return 0;
+    __nexa_pad_ff_id[k] = fx.id;
+    struct input_event play;
+    std::memset(&play, 0, sizeof(play));
+    play.type = EV_FF;
+    play.code = (__u16)fx.id;
+    play.value = (low > 0.0 || high > 0.0) ? 1 : 0;  // 0 stops the motors
+    return write(fd, &play, sizeof(play)) == (ssize_t)sizeof(play) ? 1 : 0;
 #endif
 }
 )NEXA_GFX";
