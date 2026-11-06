@@ -200,6 +200,11 @@ public:
         bool gfx3dModel = false;
         // gfx3d.texture / use: the image decoder std/gfx uses for gfx.image.
         bool gfx3dTexture = false;
+        // gfx3d.pads / pad / pad_pressed / pad_axis. Gated like the sound
+        // flags, and for the same reason: the reader is the one std/gfx has,
+        // emitted for the two modules together, so a program that draws a
+        // cube and reads no pad carries neither it nor XInput.
+        bool gfx3dPad = false;
         bool json = false;
         bool result = false;
     };
@@ -2078,6 +2083,20 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
         if ((hasGfx() && usage.gfx) || (hasGfx3d() && usage.gfx3d)) {
             out += soundHooksCpp(wantAudio, wantSound);
         }
+        // Gamepads, the same bargain as the mixer above: one reader behind
+        // std/gfx and std/gfx3d, emitted once ahead of both. Two copies would
+        // be two XInput handles and two open joystick descriptors reading the
+        // same four pads, and on Linux the second open is the one that fails.
+        // Nothing in the reader touches a window, so gfx3d gets all of it
+        // without std/gfx being included at all.
+        // Only std/gfx3d's use brings it up here. std/gfx goes on writing the
+        // reader out where it always did, in the middle of its own runtime, so
+        // a program that was reading pads before this is generated unchanged.
+        const bool padAhead = hasGfx3d() && usage.gfx3d && usage.gfx3dPad;
+        if (padAhead) {
+            out += gfxPadHeadersCpp();
+            out += gfxPadStackCpp();
+        }
         if (hasGfx() && usage.gfx) {
             GfxNeed need;
             need.alpha = usage.gfxAlpha;
@@ -2098,6 +2117,8 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
             need.typed = usage.gfxTyped;
             need.wheel = usage.gfxWheel;
             need.pad = usage.gfxPad;
+            // Already written out above, for gfx3d. gfx keeps its poll hook.
+            need.padShared = padAhead;
             need.imageStore = usage.gfxImageStore;
             need.imageLoad = usage.gfxImage;
             need.blit = usage.gfxBlit;
@@ -2140,7 +2161,11 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
             if (usage.ui) out += uiForwardDeclsCpp();
         }
         if (hasGfx3d() && usage.gfx3d) {
-            out += gfx3dRuntimeCpp();
+            // The flag is gfx3d's own use, not wantPad: when it is std/gfx that
+            // reads the pads, gfx.poll takes the snapshot and a second one taken
+            // by gfx3d.poll in the same frame would leave pad_pressed with
+            // nothing between the two samples to report.
+            out += gfx3dRuntimeCpp(usage.gfx3dPad);
             // After the runtime, not before: the model block draws through
             // __nexa_g3_vert_n and the vertex batch, which are defined up there.
             if (usage.gfx3dModel) out += gfx3dModelCpp();

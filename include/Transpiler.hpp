@@ -3081,6 +3081,8 @@ private:
                 // backend() is the only one that answers with text; the rest
                 // are 1/0 or a size, and the draws are statements.
                 if (e.value == "backend" || e.value == "typed") return "string";
+                // An axis reads -1.0 .. 1.0: the one gfx3d call not whole.
+                if (e.value == "pad_axis") return "float";
                 return "int";  // ambient reads back a level; the rest are 1/0 or a size
             case AstNode::Type::UiCall: {
                 const std::string& m = e.value;
@@ -4570,6 +4572,10 @@ private:
             {"pressed",     "gfx3d.pressed(name)",                                    "t"},
             {"released",    "gfx3d.released(name)",                                   "t"},
             {"mouse",       "gfx3d.mouse(button)",                                    "t"},
+            // Gamepads, spelled as std/gfx spells them: it is the same reader.
+            {"pad",         "gfx3d.pad(index, button)",                               "nt"},
+            {"pad_pressed", "gfx3d.pad_pressed(index, button)",                       "nt"},
+            {"pad_axis",    "gfx3d.pad_axis(index, axis)",                            "nt"},
             {"model",       "gfx3d.model(path)",                                      "t"},
             {"model_tris",  "gfx3d.model_tris(id)",                                   "n"},
             {"draw",        "gfx3d.draw(id, x, y, z, scale, r, g, b)",                "nnnnnnnn"},
@@ -6135,6 +6141,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         if (e.type == AstNode::Type::MathCall) return true;
         if (e.type == AstNode::Type::RandomCall) return e.value == "float";
         if (e.type == AstNode::Type::GfxCall) return e.value == "pad_axis";
+        if (e.type == AstNode::Type::Gfx3dCall) return e.value == "pad_axis";
         if (e.type == AstNode::Type::ExprVarRef) {
             auto it = varIsFloat.find(e.value);
             return it != varIsFloat.end() && it->second;
@@ -8745,6 +8752,14 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     return "__nexa_gfx_audio(" + (e.children.empty() ? "44100" : args) + ")";
                 }
                 if (fn == "sample") return "__nexa_gfx_sample(" + args + ")";
+                // Gamepads go to the shared reader for the reason sound does:
+                // there is one reader behind both modules (gfxPadStackCpp in
+                // GfxRuntime.hpp), so a set of gfx3d-named forwarders would be
+                // nothing but a second name for it.
+                if (fn == "pads") return "__nexa_gfx_pads()";
+                if (fn == "pad") return "__nexa_gfx_pad(" + a(0) + ", " + a(1) + ")";
+                if (fn == "pad_pressed") return "__nexa_gfx_pad_pressed(" + a(0) + ", " + a(1) + ")";
+                if (fn == "pad_axis") return "__nexa_gfx_pad_axis(" + a(0) + ", " + a(1) + ")";
                 if (fn == "audio_queued") return "__nexa_gfx_audio_queued()";
                 // Flushing is "start playing what I have queued", so the mixer
                 // gets its turn first.
@@ -9696,6 +9711,11 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         } else if (fn == "audio" || fn == "sample" || fn == "audio_queued" ||
             fn == "audio_flush") {
             cppUsage.gfx3dAudio = true;
+        } else if (fn == "pads" || fn == "pad" || fn == "pad_pressed" ||
+                   fn == "pad_axis") {
+            // The shared gamepad reader, and on Windows the XInput DLL it
+            // loads: a program that draws in 3D and reads no pad has neither.
+            cppUsage.gfx3dPad = true;
         } else if (fn == "sound" || fn == "play" || fn == "loop" ||
                    fn == "stop" || fn == "volume") {
             // Both forms of gfx3d.volume pull the mixer in, for the reason

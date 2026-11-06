@@ -65,10 +65,10 @@ namespace nexa {
 
 // Defined below; the runtime is assembled from these three pieces.
 inline std::string gfx3dPlatformCpp();
-inline std::string gfx3dApiCpp();
+inline std::string gfx3dApiCpp(bool pad);
 inline std::string gfx3dModelCpp();
 
-inline std::string gfx3dRuntimeCpp() {
+inline std::string gfx3dRuntimeCpp(bool pad) {
     return R"NEXA_GFX3D(
 // ---------------------------------------------------------------------------
 // std/gfx3d runtime
@@ -606,7 +606,7 @@ static double __nexa_g3_now_ms(void) {
     return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;
 #endif
 }
-)NEXA_GFX3D" + gfx3dPlatformCpp() + gfx3dApiCpp();
+)NEXA_GFX3D" + gfx3dPlatformCpp() + gfx3dApiCpp(pad);
 }
 
 
@@ -3024,8 +3024,10 @@ static void __nexa_g3_batch_submit(void) {
 }
 
 // The fifteen calls std/gfx3d offers, in the shape std/gfx offers its own.
-inline std::string gfx3dApiCpp() {
-    return R"NEXA_GFX3D(
+// "pad" is the one line of it that is sliced: see __nexa_gfx3d_poll below.
+inline std::string gfx3dApiCpp(bool pad) {
+    std::string out;
+    out += R"NEXA_GFX3D(
 // --- the module -------------------------------------------------------------
 
 // Where a std/gfx framebuffer is laid over this window. Always named, always
@@ -3098,7 +3100,15 @@ static void __nexa_gfx3d_poll(void) {
     // of the speaker, and a program that plays a sound while no window is open
     // still reaches poll. Empty when there is no mixer.
     __nexa_gfx_mix_pump();
-    if (!__nexa_g3.ready) return;
+)NEXA_GFX3D";
+    // The gamepad snapshot, which is what gfx3d.pad_pressed measures against,
+    // the way gfx.poll takes its own -- and emitted the way gfx.poll emits it,
+    // as a line simply absent from a program that reads no pad rather than a
+    // call to an empty stub. Ahead of the window check: a pad is read through
+    // XInput or /dev/input, not through the window, so it answers whether or
+    // not one is open.
+    if (pad) out += "    __nexa_gfx_pad_frame();\n";
+    out += R"NEXA_GFX3D(    if (!__nexa_g3.ready) return;
     // The wheel reports one frame and the next poll replaces it, so it is
     // cleared before the events that fill it are drained rather than after.
     __nexa_g3.wheel_y = 0;
@@ -3631,6 +3641,7 @@ static std::string __nexa_gfx3d_backend(void) {
     return std::string("opengl");
 }
 )NEXA_GFX3D";
+    return out;
 }
 
 

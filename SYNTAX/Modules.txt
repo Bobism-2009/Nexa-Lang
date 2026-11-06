@@ -1318,6 +1318,22 @@ ARGUMENT TYPES
                                    where gfx and gfx3d differ: gfx.mouse_x is a
                                    framebuffer pixel because gfx scales its buffer up,
                                    and gfx3d has no buffer and no scale to divide by
+  gfx3d.pads()                   - how many gamepads are connected, 0 to 4
+  gfx3d.pad(i, button)           - 1 if that button of gamepad i is down
+  gfx3d.pad_pressed(i, button)   - 1 if it went down since the last gfx3d.poll()
+  gfx3d.pad_axis(i, axis)        - a float: the sticks -1 to 1, the triggers 0 to 1
+                                   The same four calls std/gfx has, reading the same
+                                   pads through the same reader, with the same button
+                                   and axis names and the same dead zone -- see
+                                   gfx.pad above for the full list of both. A program
+                                   including std/gfx and std/gfx3d together carries one
+                                   copy of the reader, not two, and either module's
+                                   poll may be the one that takes the reading.
+                                   Unlike the keyboard and the mouse below, a pad needs
+                                   no window and is read whether or not one is focused,
+                                   or open at all.
+                                   macOS: not read yet -- gfx3d.pads() is 0.
+                                   A program that calls none of these carries none of it.
   Input is read only while the window is focused, exactly as std/gfx reads it.
   Input that arrives while it is not focused is dropped rather than saved up to
   arrive the moment it is. Before the first gfx3d.open, and after gfx3d.close,

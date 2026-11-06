@@ -11,6 +11,11 @@
 # Tests/gfx_x11_stub, as the other gfx layers are; no window is opened.
 #
 #   sliced   a gfx program that reads no pad carries none of the reader.
+#   sliced3d a gfx3d program that reads no pad carries none of it either.
+#   shared   a gfx3d program that reads one carries the reader exactly once,
+#            and a program using both modules still carries only one copy.
+#   hook3d   gfx3d.poll takes the snapshot pad_pressed measures against, and a
+#            gfx3d program that reads no pad has no call to it at all.
 #   reads    the test program, against its expected output.
 #
 # Linux only; skipped, loudly, without a C++ compiler.
@@ -39,6 +44,78 @@ elif grep -q '__nexa_gfx_pad\|__nexa_pads\|XInputGetState\|NEXA_GFX_PAD_PATH' "$
     fails=$((fails + 1))
 else
     echo "ok sliced: no pad call, no pad code"
+fi
+
+# std/gfx3d reads the same pads through the same reader, emitted once ahead of
+# both runtimes rather than inside gfx's (gfxPadStackCpp in GfxRuntime.hpp).
+# What that must not do is put the reader into a 3D program that never asks for
+# a pad, or two copies of it into one that draws with both modules.
+printf '#include <std/gfx3d>
+fn main(): int {
+    gfx3d.open("x", 8, 8);
+    gfx3d.poll();
+    gfx3d.close();
+    return 0;
+}
+' > "$WORK/nopad3d.nxa"
+if ! "$NEXAC" "$WORK/nopad3d.nxa" --source "$WORK/nopad3d.cpp" > "$WORK/t.log" 2>&1; then
+    echo "FAIL sliced3d: NexaC could not transpile a gfx3d program"
+    fails=$((fails + 1))
+elif grep -q '__nexa_gfx_pad\|__nexa_pads\|XInputGetState\|NEXA_GFX_PAD_PATH' "$WORK/nopad3d.cpp"; then
+    echo "FAIL sliced3d: a 3D program that reads no gamepad carries the reader"
+    fails=$((fails + 1))
+else
+    echo "ok sliced3d: no pad call, no pad code"
+fi
+
+printf '#include <std/io>
+#include <std/gfx3d>
+fn main(): int {
+    io.println(gfx3d.pads());
+    io.println(gfx3d.pad(0, "a"));
+    io.println(gfx3d.pad_pressed(0, "start"));
+    return 0;
+}
+' > "$WORK/pad3d.nxa"
+printf '#include <std/io>
+#include <std/gfx>
+#include <std/gfx3d>
+fn main(): int {
+    io.println(gfx.pads());
+    io.println(gfx3d.pad(0, "a"));
+    return 0;
+}
+' > "$WORK/padboth.nxa"
+for case in pad3d padboth; do
+    if ! "$NEXAC" "$WORK/$case.nxa" --source "$WORK/$case.cpp" > "$WORK/t.log" 2>&1; then
+        echo "FAIL shared: NexaC could not transpile $case"
+        sed 's/^/  /' "$WORK/t.log" | tail -5
+        fails=$((fails + 1))
+    else
+        n=$(grep -c '^static void __nexa_gfx_pad_sample' "$WORK/$case.cpp")
+        if [ "$n" = "1" ]; then
+            echo "ok shared: $case carries one reader"
+        else
+            echo "FAIL shared: $case carries $n copies of the reader, want 1"
+            fails=$((fails + 1))
+        fi
+    fi
+done
+
+# The snapshot gfx3d.poll takes. Absent from a 3D program that reads no pad --
+# not a call to an empty stub, which is what would make a pad-free program's C++
+# differ from what it was before gfx3d could read one at all.
+if grep -q '__nexa_gfx_pad_frame();' "$WORK/pad3d.cpp"; then
+    echo "ok hook3d: gfx3d.poll takes the pad snapshot"
+else
+    echo "FAIL hook3d: gfx3d.poll does not sample the pads"
+    fails=$((fails + 1))
+fi
+if grep -q '__nexa_gfx_pad_frame' "$WORK/nopad3d.cpp"; then
+    echo "FAIL hook3d: a pad-free gfx3d program still names the snapshot"
+    fails=$((fails + 1))
+else
+    echo "ok hook3d: no pad, no snapshot and no stub"
 fi
 
 CXX="${NEXA_CXX:-}"

@@ -5204,7 +5204,8 @@ private:
                  || method == "width" || method == "height" || method == "backend"
                  || method == "reset"
                  || method == "mouse_x" || method == "mouse_y"
-                 || method == "wheel" || method == "wheel_x" || method == "typed") argc = 0;
+                 || method == "wheel" || method == "wheel_x" || method == "typed"
+                 || method == "pads") argc = 0;
         else if (method == "scale") argc = 1;
         else if (method == "ambient") { argc = 0; argcMax = 1; }
         else if (method == "vsync") { argc = 0; argcMax = 1; }
@@ -5232,6 +5233,10 @@ private:
         else if (method == "maxfps" || method == "renderer"
                  || method == "key" || method == "pressed" || method == "released"
                  || method == "mouse") argc = 1;
+        // Gamepads. The same names and arities as std/gfx, because it is the
+        // same reader underneath -- see gfxPadStackCpp in GfxRuntime.hpp.
+        else if (method == "pad" || method == "pad_pressed"
+                 || method == "pad_axis") argc = 2;
         else if (method == "clear") argc = 3;
         else if (method == "perspective") argc = 3;
         else if (method == "camera") argc = 6;
@@ -5249,6 +5254,7 @@ private:
                 " line3, grid, translate, rotate, scale, reset, light, ambient,"
                 " maxfps, vsync, renderer, backend, key, pressed,"
                 " released, typed, wheel, wheel_x, mouse, mouse_x, mouse_y,"
+                " pads, pad, pad_pressed, pad_axis,"
                 " model, draw, model_tris, texture, use,"
                 " sound, play, loop, stop, volume,"
                 " audio, sample, audio_queued, audio_flush)");
@@ -5307,6 +5313,9 @@ private:
             else if (method == "pressed") sig = "gfx3d.pressed(name)";
             else if (method == "released") sig = "gfx3d.released(name)";
             else if (method == "mouse") sig = "gfx3d.mouse(button)";
+            else if (method == "pad") sig = "gfx3d.pad(index, button)";
+            else if (method == "pad_pressed") sig = "gfx3d.pad_pressed(index, button)";
+            else if (method == "pad_axis") sig = "gfx3d.pad_axis(index, axis)";
             else if (method == "model") sig = "gfx3d.model(path)";
             else if (method == "model_tris") sig = "gfx3d.model_tris(id)";
             else if (method == "draw") sig = "gfx3d.draw(id, x, y, z, scale, r, g, b)";

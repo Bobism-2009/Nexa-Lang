@@ -604,7 +604,7 @@ clockwise. With no window open nothing is an error: drawing does nothing and
 the readers answer 0. The drawing calls hand nothing back and are statements
 only, so `let R = gfx.rect(...);` is an error naming the call.)HELP" },
 
-{ "std/gfx3d", "gfx3d 3d three opengl vulkan gl cube mesh model obj wavefront camera render sound audio wav play", Group::Module,
+{ "std/gfx3d", "gfx3d 3d three opengl vulkan gl cube mesh model obj wavefront camera render sound audio wav play gamepad pad controller joystick xinput", Group::Module,
   "3D window: camera, triangles and cubes, on OpenGL",
   R"HELP(std/gfx3d - a 3D window
   #include <std/gfx3d>
@@ -640,6 +640,9 @@ no array of pixels to read back.
             gfx3d.typed()    gfx3d.wheel()        gfx3d.wheel_x()
             gfx3d.mouse(button)  gfx3d.mouse_x()  gfx3d.mouse_y()
                                       the names std/gfx uses, read while focused
+            gfx3d.pads()         gfx3d.pad(i, button)
+            gfx3d.pad_pressed(i, button)   gfx3d.pad_axis(i, axis)
+                                      gamepads: no window needed, focused or not
   renderer  gfx3d.renderer(name)      ask, before open; "opengl", "opengl 1.1",
                                       "opengl 3.3", "vulkan" or "vulkan 1.4"
             gfx3d.backend()           what the window actually opened with
