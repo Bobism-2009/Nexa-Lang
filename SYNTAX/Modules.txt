@@ -1856,6 +1856,10 @@ PACKAGES (nexapkg)
                         "system" links the shared libX11, the way std/gfx3d always
                                  has. About 23KB instead, and libX11.so has to be
                                  there when it runs.
+                      "embed" is the default on purpose: Nexa is meant to run on
+                      anything, and a small binary that will not start where
+                      there is no libX11.so is not that. The small build is the
+                      one a project opts into, knowing where it ships.
                       Anything else is an error, reported on every platform rather
                       than only on the one where it matters. It applies to
                       executables: a --dll / --shared build already links the

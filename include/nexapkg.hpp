@@ -154,6 +154,12 @@ struct Manifest {
     //   "system" links the system libX11, as std/gfx3d always has. Around 23KB
     //            instead, and libX11.so has to be there when it runs.
     // Empty means unset, which reads as "embed".
+    //
+    // "embed" is the default on purpose, and not merely because it is what
+    // NexaC did first: Nexa is advertised as running on anything, and a 23KB
+    // program that will not start on a machine without libX11.so is not that.
+    // The small build is the one a project opts into, knowing where it ships.
+    // Settled 2026-11-06; size alone is not a reason to turn this around.
     std::string x11;
     // Ordered include-path -> source (source may carry a trailing @ref).
     std::vector<std::pair<std::string, std::string>> deps;
