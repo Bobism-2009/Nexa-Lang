@@ -224,7 +224,16 @@ pick_cxx() {
 }
 
 CXX=$(pick_cxx)
-if [ -z "$CXX" ]; then
+# These drive the X11 backend: the driver is built against the fake X server in
+# Tests/gfx_x11_stub and calls into it (nexa_x11_stub_reset and the rest). That
+# needs the Linux emission, and a host compiler that can build it -- so a
+# Windows or macOS box can transpile for Linux but cannot compile the result,
+# and there is nothing here for it to run. Said out loud rather than failing on
+# "use of undeclared identifier 'nexa_x11_stub_reset'", which is what it did.
+if [ "$(uname -s)" != "Linux" ]; then
+    echo "skip gfx input semantics: the X11 backend and its stub are Linux's"
+    echo "  (the codegen layer above ran; this layer needs a Linux host)"
+elif [ -z "$CXX" ]; then
     echo "skip gfx input semantics: no C++ compiler (set NEXA_CXX to force one)"
 else
     # The driver program has to call everything the driver below reaches: the

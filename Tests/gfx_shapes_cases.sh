@@ -930,7 +930,7 @@ WANT
         echo "FAIL raster: the harness exited $rc"
         sed 's/^/  /' "$WORK/raster.got"
         fails=$((fails + 1))
-    elif ! diff -u "$WORK/raster.want" "$WORK/raster.got" > "$WORK/raster.diff"; then
+    elif ! diff -u --strip-trailing-cr "$WORK/raster.want" "$WORK/raster.got" > "$WORK/raster.diff"; then
         echo "FAIL raster: shapes differ from the documented pixels (-want +got):"
         tail -n +3 "$WORK/raster.diff" | sed 's/^/  /'
         fails=$((fails + 1))

@@ -297,7 +297,10 @@ slice() {
     flag=$2
     shift 2
     if [ -n "$flag" ]; then
-        transpile "$label" "$ALL_VERBS" "$flag" || return
+        # Unquoted on purpose: a flag may be two words ("--target arm64-linux"),
+        # and quoting would hand NexaC one argument with a space in it.
+        # shellcheck disable=SC2086
+        transpile "$label" "$ALL_VERBS" $flag || return
     else
         transpile "$label" "$ALL_VERBS" || return
     fi
@@ -322,9 +325,26 @@ slice() {
     echo "ok $label"
 }
 
-slice "slice_native" "" "__nexa_udp_open" "SOCK_DGRAM" "recvfrom" "!winsock2.h"
+# "native" here means the POSIX sockets build, which is the host's only when
+# the host is one. On Windows a bare transpile is winsock, so the case failed
+# on finding exactly what it should have found. --target <a linux target>
+# gives the POSIX emission anywhere.
+case "$(uname -s)" in
+    Linux*|Darwin*) POSIX_EMIT="" ;;
+    *)
+        POSIX_TARGET=$("$NEXAC" nexapkg target list 2>&1 |
+                       awk '/^  [a-z0-9_]+-linux  / {print $1; exit}')
+        POSIX_EMIT=${POSIX_TARGET:+--target $POSIX_TARGET}
+        ;;
+esac
+slice "slice_native" "$POSIX_EMIT" "__nexa_udp_open" "SOCK_DGRAM" "recvfrom" "!winsock2.h"
 slice "slice_win" "--win" "winsock2.h" "WSAStartup" "closesocket" "SOCK_DGRAM" "!sys/socket.h"
-slice "slice_macos" "--macos" "sys/socket.h" "SOCK_DGRAM" "!winsock2.h" "!WSAStartup"
+# --macos is not a NexaC flag. It was accepted and ignored, so this asked for
+# the host emission and called it macOS: on Linux that happens to satisfy both
+# assertions, which is why it looked fine, and on Windows it does not. There is
+# no way to ask NexaC for a macOS emission from here -- no --macos, and no
+# darwin target to point --target at -- so this says so rather than pretending.
+echo "skip slice_macos: NexaC cannot emit for macOS from here (--macos is not a flag)"
 # The wasm slice is stubs: the surface is all there, the sockets are not.
 slice "slice_wasm" "--wasm" \
     "__nexa_udp_open" "__nexa_udp_port" "__nexa_udp_send" "__nexa_udp_recv" \
@@ -344,7 +364,14 @@ if [ -z "$CXX" ]; then
     echo "skip compile: no C++ compiler on this machine"
     skips=$((skips + 1))
 else
-    if "$CXX" -std=c++17 -Wall -Wextra -c "$WORK/slice_native.cpp" \
+    # Only when that emission is this machine's. Where slice_native was
+    # pointed at a linux target to get a POSIX emission, the host compiler
+    # has no sys/socket.h to build it with -- that is a cross build, and
+    # this layer is about the emission compiling where it belongs.
+    if [ -n "$POSIX_EMIT" ]; then
+        echo "skip native_build: slice_native is a cross emission on this host"
+        skips=$((skips + 1))
+    elif "$CXX" -std=c++17 -Wall -Wextra -c "$WORK/slice_native.cpp" \
             -o "$WORK/native.o" > "$WORK/native.cc.log" 2>&1 \
             && ! grep -q 'warning:' "$WORK/native.cc.log"; then
         echo "ok native_build"
@@ -475,7 +502,7 @@ else
         skips=$((skips + 1))
     else
         "$WORK/loopback" "$(cat "$WORK/port")" > "$WORK/loopback.out" 2>&1
-        if diff -u "$SUITE/udp_loopback_test.expected" "$WORK/loopback.out" \
+        if diff -u --strip-trailing-cr "$SUITE/udp_loopback_test.expected" "$WORK/loopback.out" \
                 > "$WORK/loopback.diff" 2>&1; then
             echo "ok loopback"
         else
@@ -506,7 +533,7 @@ runs() {
         return
     fi
     "$WORK/$label" > "$WORK/$label.out" 2>&1
-    if diff -u "$SUITE/$3" "$WORK/$label.out" > "$WORK/$label.diff" 2>&1; then
+    if diff -u --strip-trailing-cr "$SUITE/$3" "$WORK/$label.out" > "$WORK/$label.diff" 2>&1; then
         echo "ok $label"
     else
         echo "FAIL $label: output moved"

@@ -798,7 +798,11 @@ EPILOGUE
 # -Wno-unused-function: this suite drives the alpha, blit and save paths, not
 # every shape in the lifted rasterizer block. Tests/gfx_shapes_cases.sh already
 # holds that same block to a completely warning-free build.
-build=$("$CXX" -std=c++17 -O1 -Wall -Wextra -Wno-unused-function "$WORK/pixels.cpp" -o "$WORK/pixels" 2>&1)
+# -Wno-deprecated-declarations for the same reason NexaC's own build line has
+# it: clang on Windows calls fopen deprecated, gfx.save uses fopen, and this
+# check treats any diagnostic as a failure. Without it the whole case failed
+# here on a warning about a function the runtime is entitled to call.
+build=$("$CXX" -std=c++17 -O1 -Wall -Wextra -Wno-unused-function         -Wno-deprecated-declarations "$WORK/pixels.cpp" -o "$WORK/pixels" 2>&1)
 status=$?
 if [ $status -ne 0 ]; then
     echo "FAIL pixels: the lifted alpha/blit/save code does not compile on its own"
@@ -912,7 +916,7 @@ WANT
         echo "FAIL pixels: the harness exited $rc"
         sed 's/^/  /' "$WORK/pixels.got"
         fails=$((fails + 1))
-    elif ! diff -u "$WORK/pixels.want" "$WORK/pixels.got" > "$WORK/pixels.diff"; then
+    elif ! diff -u --strip-trailing-cr "$WORK/pixels.want" "$WORK/pixels.got" > "$WORK/pixels.diff"; then
         echo "FAIL pixels: alpha/blit/save differ from the documented behaviour (-want +got):"
         tail -n +3 "$WORK/pixels.diff" | sed 's/^/  /'
         fails=$((fails + 1))

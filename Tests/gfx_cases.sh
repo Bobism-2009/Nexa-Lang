@@ -378,7 +378,7 @@ expect_program() {
         echo "FAIL $label: output differs from $(basename "$want") (-want +got):"
         cat "$want" > "$WORK/want"
         printf '%s\n' "$got" > "$WORK/got"
-        diff -u "$WORK/want" "$WORK/got" | tail -n +3 | sed 's/^/  /'
+        diff -u --strip-trailing-cr "$WORK/want" "$WORK/got" | tail -n +3 | sed 's/^/  /'
         fails=$((fails + 1))
         return 0
     fi

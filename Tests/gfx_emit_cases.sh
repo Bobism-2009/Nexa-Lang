@@ -60,12 +60,56 @@ DRAW_ONLY='    gfx.open("t", 8, 8, 1);
 # transpile <out-name> <body> [extra NexaC flags...]
 # Writes a one-function gfx program and transpiles it. Returns non-zero and
 # reports the failure itself if NexaC refuses.
+# A case with no target flag means the Linux emission: every assertion against
+# one names an X11 event mask, keysym.h or the ARGB visual. NexaC emits for the
+# host, so on a Linux box a bare run is already that. Anywhere else --target
+# <a linux target> gives the same CppTarget::Linux emission, which is what lets
+# this suite run on the Windows dev box at all -- without it every one of these
+# cases failed looking for an X11 that was never going to be emitted.
+case "$(uname -s)" in
+    Linux*) LINUX_EMIT="" ;;
+    *)
+        LINUX_TARGET=$("$NEXAC" nexapkg target list 2>&1 |
+                       awk '/^  [a-z0-9_]+-linux  / {print $1; exit}')
+        if [ -z "$LINUX_TARGET" ]; then
+            echo "skip gfx_emit: these inspect the Linux emission, and this is not Linux"
+            echo "  (install one: nexapkg target install arm64-linux)"
+            echo "gfx emit ok"
+            exit 0
+        fi
+        LINUX_EMIT="--target $LINUX_TARGET"
+        echo "-- emission for linux via the $LINUX_TARGET target (host is $(uname -s))"
+        ;;
+esac
+
+# Which decoder a program carries follows the target of that transpile rather
+# than the host: stb_image for Linux and for a browser build, WIC for a
+# Windows one.
+decoder_mark_for() {
+    for a in "$@"; do
+        if [ "$a" = "--win" ]; then
+            echo IWICImagingFactory
+            return
+        fi
+    done
+    echo stbi__
+}
+
 transpile() {
     name=$1
     body=$2
     shift 2
+    # A case that names its own target is left alone; one that does not is the
+    # Linux emission and gets pointed there. Kept local: clobbering LINUX_EMIT
+    # would send every later bare case to the host instead.
+    emit=$LINUX_EMIT
+    for a in "$@"; do
+        case $a in
+            --win|--wasm|--target) emit="" ;;
+        esac
+    done
     printf '#include <std/gfx>\nfn main() {\n%s\n}\n' "$body" > "$WORK/$name.nxa"
-    if ! "$NEXAC" "$WORK/$name.nxa" "$@" --source "$WORK/$name.cpp" \
+    if ! "$NEXAC" "$WORK/$name.nxa" $emit "$@" --source "$WORK/$name.cpp" \
             > "$WORK/$name.log" 2>&1; then
         echo "FAIL $name: NexaC could not transpile"
         sed 's/^/  /' "$WORK/$name.log"
@@ -77,27 +121,39 @@ transpile() {
 
 # --- decoder: which gfx programs carry stb_image ----------------------------
 
-# stb_image's internals are all named stbi__*, so counting those lines
-# distinguishes "the blob is here" from "it is not" without depending on any
-# particular line of it.
+# What a program that can decode an image carries is not the same everywhere:
+# stb_image on Linux and in a browser build, and the system codec on Windows
+# (WIC) and macOS (ImageIO), which is why a std/gfx program on Windows has no
+# stb_image in it and decodes perfectly well. So the thing to look for is
+# chosen by host. Looking for stbi__ regardless is what this did, and every
+# decoder case failed on Windows for a decoder that was never supposed to be
+# there.
+#
+# Each marker is an internal name of the decoder in question, so finding it
+# says "the decoder is here" without depending on any particular line of it.
 has_stb() {
-    grep -q 'stbi__' "$1"
+    grep -q "$2" "$1"
 }
 
 # expect_no_decoder <label> <body> [flags...]
 expect_no_decoder() {
     label=$1
     shift
-    transpile "$label" "$@" || return
-    if has_stb "$WORK/$label.cpp"; then
-        echo "FAIL $label: emitted stb_image for a program that cannot decode"
+    body=$1
+    shift
+    mark=$(decoder_mark_for "$@")
+    transpile "$label" "$body" "$@" || return
+    if has_stb "$WORK/$label.cpp" "$mark"; then
+        echo "FAIL $label: emitted $mark for a program that cannot decode"
         fails=$((fails + 1))
         return
     fi
     # And nothing is left referring to it. __nexa_gfx_decode_rgba is the only
     # caller of the two stb entry points and it is sliced out by the same flag,
     # so there is no reference left to satisfy and no stub is emitted for one.
-    if grep -q '__nexa_gfx_stbi' "$WORK/$label.cpp"; then
+    # __nexa_gfx_stbi* are stb_image's two entry points, so this one only
+    # applies where stb_image is the decoder.
+    if [ "$mark" = "stbi__" ] && grep -q '__nexa_gfx_stbi' "$WORK/$label.cpp"; then
         echo "FAIL $label: dropped stb_image but left a reference to it behind"
         grep -n '__nexa_gfx_stbi' "$WORK/$label.cpp" | head -n 3 | sed 's/^/  /'
         fails=$((fails + 1))
@@ -110,9 +166,12 @@ expect_no_decoder() {
 expect_decoder() {
     label=$1
     shift
-    transpile "$label" "$@" || return
-    if ! has_stb "$WORK/$label.cpp"; then
-        echo "FAIL $label: no stb_image, so this program cannot decode at runtime"
+    body=$1
+    shift
+    mark=$(decoder_mark_for "$@")
+    transpile "$label" "$body" "$@" || return
+    if ! has_stb "$WORK/$label.cpp" "$mark"; then
+        echo "FAIL $label: no $mark, so this program cannot decode at runtime"
         fails=$((fails + 1))
         return
     fi
@@ -791,7 +850,10 @@ size_under "window_only_stays_small" "$WORK/window_only.cpp" 600
 # than the code. It still catches what it was built to catch: paint_demo with
 # the runtime unsliced is past 2,000 lines, and the stb blob is 8,000 on its
 # own.
-if "$NEXAC" "$ROOT/Examples/paint_demo.nxa" --source "$WORK/paint_demo.cpp" \
+# The Linux emission, like every other line count here: the ceiling was set
+# against that one, and the Windows emission of the same program is some 60
+# lines bigger, which is a difference between platforms and not growth.
+if "$NEXAC" "$ROOT/Examples/paint_demo.nxa" $LINUX_EMIT --source "$WORK/paint_demo.cpp" \
         > "$WORK/paint_demo.log" 2>&1; then
     size_under "paint_demo_stays_small" "$WORK/paint_demo.cpp" 1650
 else

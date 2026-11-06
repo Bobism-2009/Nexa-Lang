@@ -356,7 +356,7 @@ else
         fails=$((fails + 1))
     else
         "$WORK/loopback" "http://127.0.0.1:$(cat "$WORK/port")" > "$WORK/loopback.out" 2>&1
-        if diff -u "$SUITE/http_loopback_test.expected" "$WORK/loopback.out" \
+        if diff -u --strip-trailing-cr "$SUITE/http_loopback_test.expected" "$WORK/loopback.out" \
                 > "$WORK/loopback.diff" 2>&1; then
             echo "ok loopback"
         else
@@ -381,7 +381,7 @@ elif ! "$NEXAC" "$SUITE/http_server_test.nxa" -o "$WORK/server_test" \
     fails=$((fails + 1))
 else
     "$WORK/server_test" > "$WORK/server_test.out" 2>&1
-    if diff -u "$SUITE/http_server_test.expected" "$WORK/server_test.out" \
+    if diff -u --strip-trailing-cr "$SUITE/http_server_test.expected" "$WORK/server_test.out" \
             > "$WORK/server_test.diff" 2>&1; then
         echo "ok server"
     else

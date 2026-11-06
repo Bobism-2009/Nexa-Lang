@@ -64,7 +64,11 @@ expect_run() {
         return
     fi
 
-    got=$("$WORK/case")
+    # A program built on Windows writes CRLF, and the wanted text here is
+    # written with plain newlines, so the carriage returns come off first.
+    # Without this every multi-line case fails on Windows while printing a
+    # "want" and a "got" that look identical.
+    got=$("$WORK/case" | tr -d '\r')
     if [ "$got" != "$want" ]; then
         echo "FAIL $label: wrong output"
         echo "  want: $(printf '%s' "$want" | tr '\n' '|')"
