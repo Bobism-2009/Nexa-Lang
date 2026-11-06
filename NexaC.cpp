@@ -587,6 +587,48 @@ static bool nexaEnsureHostTool(const std::string& cmd, const char* wingetId, con
 #endif
 }
 
+// Build settings from the project's nexapkg.json. They live in the manifest
+// rather than behind command-line flags, so how a project is built travels
+// with the project instead of with the line someone typed. NexaC reads the
+// manifest itself, which is why "NexaC build" needs no new argument to pass
+// one down to the compile it spawns.
+//
+// "x11": what a Linux std/gfx or std/ui executable does about Xlib -- "embed"
+// (the default) bakes a static one in, "system" links the shared libX11.
+// Empty is unset. Read on every platform, so a typo is an error on the machine
+// the author is sitting at rather than only on Linux.
+static std::string nexaProjectX11;
+
+// The manifest covering a source file: nexapkg.json in its directory, or in
+// the nearest parent that has one. A file built outside any project finds
+// none and keeps the defaults.
+static void nexaLoadProjectSettings(const std::string& sourceFile) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path dir = fs::absolute(fs::path(sourceFile), ec).parent_path();
+    for (int up = 0; up < 24 && !dir.empty(); up++) {
+        fs::path candidate = dir / "nexapkg.json";
+        if (fs::exists(candidate, ec)) {
+            nexa::pkg::Manifest m;
+            if (nexa::pkg::readManifest(candidate, m)) nexaProjectX11 = m.x11;
+            return;
+        }
+        fs::path parent = dir.parent_path();
+        if (parent == dir) break;
+        dir = parent;
+    }
+}
+
+// Said plainly and early, because the alternative is a link that silently did
+// something other than what the project asked for.
+static bool nexaCheckProjectSettings() {
+    if (nexaProjectX11.empty() || nexaProjectX11 == "embed" || nexaProjectX11 == "system") return true;
+    std::cerr << "[Nexa] Error: nexapkg.json \"x11\" is \"" << nexaProjectX11
+              << "\"; it takes \"embed\" (a static X11 baked in, the default) or "
+                 "\"system\" (the shared libX11)\n";
+    return false;
+}
+
 #if !defined(_WIN32) && !defined(__APPLE__)
 static std::string nexaPopenTrim(const std::string& cmd) {
     FILE* f = popen(cmd.c_str(), "r");
@@ -1844,11 +1886,18 @@ static std::string nexaBuildCompileCmd(
         cmd += " -lX11";
     } else if (linkGfx) {
         const bool elfExe = !buildWin && !buildDll && !buildShared;
-        if (elfExe) {
+        // "system" in the project's nexapkg.json asks for the shared libX11
+        // std/gfx3d always uses: roughly 23KB of program instead of 1.1MB, in
+        // exchange for needing libX11.so wherever it runs. Unset bakes it in,
+        // which is what every build did before the setting existed.
+        if (elfExe && nexaProjectX11 != "system") {
             // Bake X11 into the binary so the program runs without libX11.so.
             cmd += nexaLinuxGfxEmbedFlags();
         } else {
             cmd += " -lX11";
+            // nexaLinuxGfxEmbedFlags ends with these, and the shared Xlib
+            // wants them just as the embedded one does.
+            if (elfExe) cmd += " -lpthread -ldl";
         }
     }
 #endif
@@ -2108,6 +2157,13 @@ int main(int argc, char* argv[]) {
             return 1;
         }
     }
+
+    // The project the source belongs to, if any: its nexapkg.json carries the
+    // build settings. Read here, once the input is known to be a real .nxa, so
+    // that a direct "NexaC src/main.nxa" inside a project builds the way the
+    // project says rather than differently from "NexaC build".
+    nexaLoadProjectSettings(inputPath);
+    if (!nexaCheckProjectSettings()) return 1;
 
     if (runAfterBuild && (buildDll || buildShared || buildWin)) {
         std::cerr << "[Nexa] Error: --run cannot be used with --dll, --shared, or --win\n";

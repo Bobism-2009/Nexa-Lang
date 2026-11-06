@@ -579,6 +579,9 @@ ARGUMENT TYPES
   macOS links Cocoa automatically. Linux executables embed X11 statically
   (need libx11-dev / libxcb1-dev on the *build* machine). The binary does not
   need libX11.so at runtime. libc stays dynamic (present on every Linux).
+  That embedded X11 is about 1.1MB. A project that would rather link the
+  shared libX11, as std/gfx3d does, and ship about 23KB instead sets
+  "x11": "system" in its nexapkg.json -- see the std/nexapkg section.
   gfx.open(title, w, h[, scale]) - create a w*h framebuffer scaled up (default scale 12); 1/0
                                    w,h clamp into 1..4096 and scale into 1..64 rather than
                                    failing; a scale below 1 means the default
@@ -1839,9 +1842,28 @@ PACKAGES (nexapkg)
 
   Files:
     nexapkg.json   - Manifest: { "name", "entry", "output", "dll", "dllOutput",
-                     "dependencies": { "include/path": "source" } }
+                     "x11", "dependencies": { "include/path": "source" } }
     dll / dllOutput - Optional. NexaC build also compiles that .nxa as a .dll (Windows),
                       .dylib (macOS), or .so (Linux), with names preserved for dll.call.
+    x11             - Optional, Linux only, and how a std/gfx or std/ui executable
+                      gets Xlib. Build settings live in the manifest rather than
+                      behind command-line options, so how a project is built
+                      travels with the project.
+                        "embed"  (the default) bakes a static X11 into the binary,
+                                 so it runs on a machine with no libX11.so at all --
+                                 a container, an appliance image, a box with no
+                                 desktop. About 1.1MB.
+                        "system" links the shared libX11, the way std/gfx3d always
+                                 has. About 23KB instead, and libX11.so has to be
+                                 there when it runs.
+                      Anything else is an error, reported on every platform rather
+                      than only on the one where it matters. It applies to
+                      executables: a --dll / --shared build already links the
+                      system libX11, and std/gfx3d always has.
+                      NexaC reads the manifest itself, looking in the source file's
+                      folder and then its parents, so a plain
+                      "NexaC src/main.nxa" inside a project is built the same way
+                      "NexaC build" builds it.
     nexapkg.lock   - Resolved git commit per dependency (commit this for reproducible builds)
 
   Resolution order for #include <pkg/module>:  ./.nexa/packages/  then  ~/.nexa/packages/

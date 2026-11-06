@@ -143,6 +143,18 @@ struct Manifest {
     std::string output;  // executable base name or path for NexaC build (-o)
     std::string dll;       // .nxa to compile as a shared library (.dll / .so / .dylib)
     std::string dllOutput; // library base name or path (default: stem of dll)
+    // Build settings live here rather than behind command-line flags: how a
+    // project is built is a property of the project, not of the line someone
+    // happened to type.
+    //
+    // x11 -- what a Linux std/gfx or std/ui executable does about Xlib:
+    //   "embed"  (the default) bakes a static X11 in, so the program runs on a
+    //            machine with no libX11.so at all: a container, an appliance
+    //            image, a box with no desktop. Costs roughly 1.1MB.
+    //   "system" links the system libX11, as std/gfx3d always has. Around 23KB
+    //            instead, and libX11.so has to be there when it runs.
+    // Empty means unset, which reads as "embed".
+    std::string x11;
     // Ordered include-path -> source (source may carry a trailing @ref).
     std::vector<std::pair<std::string, std::string>> deps;
 
@@ -176,6 +188,7 @@ static bool readManifest(const fs::path& path, Manifest& m) {
     m.output = findStringField(content, "output");
     m.dll = findStringField(content, "dll");
     m.dllOutput = findStringField(content, "dllOutput");
+    m.x11 = findStringField(content, "x11");
 
     m.deps.clear();
     size_t i = content.find("\"dependencies\"");
@@ -208,6 +221,7 @@ static void writeManifest(const fs::path& path, const Manifest& m) {
     if (!m.output.empty()) out << "  \"output\": \"" << jsonEscape(m.output) << "\",\n";
     if (!m.dll.empty()) out << "  \"dll\": \"" << jsonEscape(m.dll) << "\",\n";
     if (!m.dllOutput.empty()) out << "  \"dllOutput\": \"" << jsonEscape(m.dllOutput) << "\",\n";
+    if (!m.x11.empty()) out << "  \"x11\": \"" << jsonEscape(m.x11) << "\",\n";
     out << "  \"dependencies\": {";
     for (size_t k = 0; k < m.deps.size(); k++) {
         out << (k == 0 ? "\n" : ",\n");
