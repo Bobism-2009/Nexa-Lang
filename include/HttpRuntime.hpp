@@ -164,10 +164,19 @@ static std::string __nexa_http_perform(const std::string& method, const std::str
     WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
   if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return "could not open request"; }
   std::wstring extraHdrs;
+  bool userType = false;
   for (size_t i = 0; i < headers.size(); i++) {
     if (headers[i].empty()) continue;
+    if (__nexa_http_header_named(headers[i], "Content-Type")) userType = true;
     extraHdrs += __nexa_http_widen(headers[i]);
     extraHdrs += L"\r\n";
+  }
+  // The default the POSIX path sends, and the one the reference promises:
+  // "a Content-Type you supply replaces the default application/octet-stream".
+  // WinHTTP adds none of its own, so a PUT or PATCH from Windows went out
+  // without one while the same program on Linux sent it.
+  if (!body.empty() && !userType) {
+    extraHdrs += L"Content-Type: application/octet-stream\r\n";
   }
   BOOL ok = WinHttpSendRequest(hRequest,
     extraHdrs.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : extraHdrs.c_str(),
@@ -175,7 +184,21 @@ static std::string __nexa_http_perform(const std::string& method, const std::str
     body.empty() ? WINHTTP_NO_REQUEST_DATA : (LPVOID)body.data(),
     (DWORD)body.size(), (DWORD)body.size(), 0);
   if (!ok || !WinHttpReceiveResponse(hRequest, nullptr)) {
+    // WinHTTP follows redirects itself and gives up after its own limit.
+    // That is the condition the POSIX path reports as "too many redirects",
+    // and answering "request failed" for it said nothing about why.
+    const DWORD err = GetLastError();
     WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
+    // WinHttpConnect only makes a handle, so everything that can go wrong
+    // between here and a reply comes back from this one call. Reported with
+    // the same words the POSIX path uses, so a program reads the same reason
+    // whichever platform it runs on rather than a flat "request failed".
+    if (err == ERROR_WINHTTP_REDIRECT_FAILED) return "too many redirects";
+    if (err == ERROR_WINHTTP_NAME_NOT_RESOLVED) return "could not resolve host";
+    if (err == ERROR_WINHTTP_CANNOT_CONNECT) return "could not connect";
+    if (err == ERROR_WINHTTP_CONNECTION_ERROR) return "could not connect";
+    if (err == ERROR_WINHTTP_TIMEOUT) return "timed out";
+    if (err == ERROR_WINHTTP_SECURE_FAILURE) return "TLS handshake failed";
     return "request failed";
   }
   DWORD code = 0, codeLen = sizeof(code);
