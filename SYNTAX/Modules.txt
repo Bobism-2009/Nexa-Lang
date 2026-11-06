@@ -1882,6 +1882,11 @@ PACKAGES (nexapkg)
                         "system" links the shared libX11, the way std/gfx3d always
                                  has. About 23KB instead, and libX11.so has to be
                                  there when it runs.
+                      It applies to a build for the machine NexaC is running on.
+                      A cross build named in "targets" brings its own X11 -- the
+                      arm64-linux target, for one, compiles it from source -- so
+                      this setting does not reach those and is not consulted for
+                      them.
                       "embed" is the default on purpose: Nexa is meant to run on
                       anything, and a small binary that will not start where
                       there is no libX11.so is not that. The small build is the

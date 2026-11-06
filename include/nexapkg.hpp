@@ -182,6 +182,11 @@ struct Manifest {
     //            instead, and libX11.so has to be there when it runs.
     // Empty means unset, which reads as "embed".
     //
+    // Only for a build aimed at the machine NexaC is running on. A cross build
+    // from "targets" goes through nexa::target::buildProgram, which links what
+    // the target package carries -- arm64-linux compiles X11 from source -- so
+    // this is not consulted there.
+    //
     // "embed" is the default on purpose, and not merely because it is what
     // NexaC did first: Nexa is advertised as running on anything, and a 23KB
     // program that will not start on a machine without libX11.so is not that.
