@@ -3140,12 +3140,18 @@ static void __nexa_gfx3d_clear(int r, int g, int b) {
     if (r < 0) r = 0; if (r > 255) r = 255;
     if (g < 0) g = 0; if (g > 255) g = 255;
     if (b < 0) b = 0; if (b > 255) b = 255;
+    // Vulkan is Windows's alone, and so is the namespace behind it: the embed
+    // is written into the _WIN32 half of the platform block, so naming it from
+    // shared code is a build error everywhere else. __nexa_g3.vulkan is only
+    // ever set in that same half, so off Windows this branch is dead anyway.
+#if defined(_WIN32)
     if (__nexa_g3.vulkan) {
         __nexa_g3_apply_camera();
         nexa_vk14::begin((float)r / 255.0f, (float)g / 255.0f, (float)b / 255.0f, __nexa_g3.w, __nexa_g3.h);
         __nexa_g3_overlay_frame(__nexa_g3.w, __nexa_g3.h);
         return;
     }
+#endif
     __nexa_gl.ClearColor((float)r / 255.0f, (float)g / 255.0f, (float)b / 255.0f, 1.0f);
     __nexa_gl.Clear(NEXA_GL_COLOR_BUFFER_BIT | NEXA_GL_DEPTH_BUFFER_BIT);
     // The camera is pushed here rather than in every draw call: clear is the
