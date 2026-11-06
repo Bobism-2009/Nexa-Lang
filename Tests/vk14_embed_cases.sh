@@ -16,7 +16,14 @@
 # this rebuilds it and compares. The headers are the source; the embed is the
 # copy, and this is what keeps it one.
 #
-#   embed   nexa_vk14_embed.inc is the headers, expanded.
+#   embed    nexa_vk14_embed.inc is the headers, expanded.
+#   guarded  every nexa_vk14:: call in Gfx3dRuntime.hpp is inside #if
+#            defined(_WIN32). The renderer is Windows's alone and the embed is
+#            written into the _WIN32 half of the platform block, so a call from
+#            shared code is "use of undeclared identifier 'nexa_vk14'" on every
+#            other platform. That shipped once: gfx3d.clear reached
+#            nexa_vk14::begin unguarded and std/gfx3d would not build for wasm,
+#            Linux or macOS at all.
 #
 #   sh Tests/vk14_embed_cases.sh                (from the repo root)
 #   sh Tests/vk14_embed_cases.sh --write        rewrite the embed from the headers
@@ -65,6 +72,37 @@ expand() {
         mv "$WORK/e2" "$WORK/e"
     done
 }
+
+# Every call of the renderer, and the branch it sits in. #else is never
+# Windows, so the else half of a _WIN32 guard counts as unguarded.
+awk '
+    /^[ 	]*#[ 	]*if/ {
+        depth++
+        win[depth] = ($0 ~ /defined\(_WIN32\)/ || $0 ~ /#[ 	]*ifdef[ 	]+_WIN32/) &&
+                     $0 !~ /![ 	]*defined\(_WIN32\)/ && $0 !~ /#[ 	]*ifndef[ 	]+_WIN32/
+        next
+    }
+    /^[ 	]*#[ 	]*elif/ {
+        if (depth > 0) win[depth] = ($0 ~ /defined\(_WIN32\)/) && ($0 !~ /![ 	]*defined\(_WIN32\)/)
+        next
+    }
+    /^[ 	]*#[ 	]*else/  { if (depth > 0) win[depth] = 0; next }
+    /^[ 	]*#[ 	]*endif/ { if (depth > 0) { win[depth] = 0; depth-- } next }
+    /nexa_vk14::/ {
+        ok = 0
+        for (d = 1; d <= depth; d++) if (win[d]) ok = 1
+        if (!ok) print NR ": " $0
+    }
+' "$ROOT/include/Gfx3dRuntime.hpp" > "$WORK/unguarded"
+
+if [ -s "$WORK/unguarded" ]; then
+    echo "FAIL guarded: nexa_vk14 is named outside #if defined(_WIN32)"
+    echo "  these build everywhere but only exist on Windows:"
+    sed 's/^/    /' "$WORK/unguarded"
+    exit 1
+fi
+calls=$(grep -c 'nexa_vk14::' "$ROOT/include/Gfx3dRuntime.hpp")
+echo "ok guarded: all $calls nexa_vk14 calls are behind #if defined(_WIN32)"
 
 expand "$INC/nexa_vk14.hpp"
 
