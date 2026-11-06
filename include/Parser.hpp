@@ -2118,8 +2118,19 @@ private:
                 const size_t inLine = peek().line;
                 advance();
                 if (!match(TokenType::LBracket)) {
-                    throw std::runtime_error("'in' takes a list of values to match against: write "
-                                             "x in [a, b, c] at line " + std::to_string(inLine));
+                    // Not a list, so it is a collection the program already
+                    // holds: a slice, a map, or a string. That is what
+                    // coll.contains(x) means, and the transpiler is where the
+                    // receiver's type is known, so this becomes exactly that
+                    // call and inherits its checking and its emission.
+                    AstNode coll = parseRelational();
+                    AstNode call{AstNode::Type::StrMethod, "contains",
+                                 {std::move(coll), std::move(left)}};
+                    // So an error about the receiver can quote what was
+                    // actually written, rather than the call this became.
+                    call.declType = "__from_in";
+                    left = std::move(call);
+                    continue;
                 }
                 AstNode n{AstNode::Type::CondIn, "", {std::move(left)}};
                 if (peek().type == TokenType::RBracket) {

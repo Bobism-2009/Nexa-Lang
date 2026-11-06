@@ -33,4 +33,31 @@ fn main() {
     // The values may be expressions, not just literals.
     let base: int = 5;
     io.println(n in [base + 2, base]);
+
+    // After "in" may be a collection rather than a list: a slice, a map or
+    // text. These are xs.contains(v), m.has(k) and s.contains(sub) the other
+    // way round, and must agree with them.
+    let names: []string = ["ann", "bob"];
+    io.println(s in names);
+    io.println("bob" in names);
+    io.println("bob" in names == names.contains("bob"));
+
+    let nums: []int = [1, 7, 9];
+    io.println(n in nums);
+    io.println(3 in nums);
+
+    let counts: map[string]int;
+    counts["a"] = 1;
+    io.println("a" in counts);
+    io.println("z" in counts);
+    io.println("a" in counts == counts.has("a"));
+    io.println(counts.contains("a"));
+
+    let url: string = "https://example.com";
+    io.println("://" in url);
+    io.println("ftp" in url);
+
+    // A loop's "in" is the loop's, not this one, even in the same function.
+    for (x in nums) { io.print(x in [1, 9] ? "y" : "n"); }
+    io.println("");
 }

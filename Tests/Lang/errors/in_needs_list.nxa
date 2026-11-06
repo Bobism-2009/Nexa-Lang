@@ -1,7 +1,0 @@
-// 'in' matches against a list, written out where it is used.
-#include <std/io>
-
-fn main() {
-    let s: string = "a";
-    if (s in "b") { io.println("x"); }
-}

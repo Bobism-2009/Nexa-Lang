@@ -62,8 +62,17 @@ MATCHING SEVERAL VALUES
   The list is written out where it is used, so nothing is allocated and no
   list exists at runtime: it compiles to the same chain of comparisons, with
   one read of x.
-  To test membership of a slice or a map that a program already holds, those
-  have their own methods -- xs.contains(v) / xs.has(v), m.has(key).
+  After "in" may also be a collection the program already holds, instead of a
+  list written out:
+
+    if (name in names) { ... }        // a slice: is that element in it
+    if (key in counts) { ... }        // a map: is that key in it
+    if ("://" in url) { ... }         // text: does it occur in it
+
+  which is xs.contains(v), m.has(key) and s.contains(sub) said the other way
+  round -- the same code, and those methods remain for when they read better.
+  A collection is searched at runtime, so unlike the list form this is work
+  proportional to its size (a map by lookup, a slice by scanning it).
 
   Writing text on its own as a condition is an error rather than a surprise:
 

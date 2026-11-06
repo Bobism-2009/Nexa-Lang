@@ -1,0 +1,8 @@
+// A number holds nothing to look inside, so 'in' has nowhere to look. The
+// message is about 'in', not about the contains() call it becomes.
+#include <std/io>
+
+fn main() {
+    let n: int = 5;
+    if (3 in n) { io.println("x"); }
+}

@@ -4314,6 +4314,14 @@ private:
                 (nexaIsNumericIntType(t) && (r.type == AstNode::Type::ExprIntLiteral ||
                                               (r.type == AstNode::Type::ExprVarRef && !lookupNexaDecl(r.value).empty())));
             if (sure) {
+                // "x in y" became y.contains(x); say "in" back to whoever
+                // wrote "in", and name the call to whoever wrote the call.
+                if (e.declType == "__from_in") {
+                    semError(e, "'in' looks inside text, a slice or a map, and " +
+                                std::string(t == "bool" ? "a bool" : "a number") +
+                                " holds nothing to look in. To test one value against several, write "
+                                "x in [a, b, c]");
+                }
                 const std::string sig = it->second.sig;
                 semError(e, sig + " works on text (or a slice), not on " + (t == "bool" ? "a bool" : "a number") +
                             "; turn it into text first: (\"\" + n)" + sig.substr(1));
@@ -9107,6 +9115,12 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     return "([](const std::string& __s){ return (int)__s.size(); })(" + R + ")";
                 }
                 if (m == "contains") {
+                    // A map holds keys, so containing one is finding it. This is
+                    // what "key in m" reaches, and it makes m.contains(k) mean
+                    // what m.has(k) means rather than failing in the C++.
+                    if (nexaIsMapType(inferExprNexaType(e.children[0]))) {
+                        return "((" + R + ").find(" + A0 + ") != (" + R + ").end())";
+                    }
                     if (nexaIsSliceType(inferExprNexaType(e.children[0]))) {
                         return "([&](){ const auto& __nexa_v = " + R + "; const auto& __nexa_x = " + A0 +
                             "; for (const auto& __nexa_e : __nexa_v) { if (__nexa_e == __nexa_x) return true; } return false; })()";
