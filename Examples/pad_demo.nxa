@@ -1,0 +1,114 @@
+// A gamepad tester: every button, both sticks, both triggers, and the motors.
+//
+//   build: NexaC Examples/pad_demo.nxa -o pad_demo && ./pad_demo
+//   quit:  escape, or close the window
+//
+// A pad needs no window and is read whether or not one is focused, so the
+// window here is only somewhere to draw what the pad is doing. With no pad
+// plugged in it says so and keeps looking: gfx.pads() is counted every frame,
+// so one plugged in while this is running simply appears.
+//
+// Hold A (cross) to run both motors; the bumpers drive one each. Rumble is
+// Windows-only so far, which is why the readout says whether it was taken.
+#include <std/gfx>
+
+// The sixteen buttons, in the order gfx.pad names them, laid out as four rows
+// of four so the whole pad is on screen at once.
+fn button_grid(pad: int): int {
+    let names: []string = [
+        "a", "b", "x", "y",
+        "lb", "rb", "lt", "rt",
+        "back", "start", "ls", "rs",
+        "up", "down", "left", "right"
+    ];
+    let i: int = 0;
+    while (i < 16) {
+        let col: int = i % 4;
+        let row: int = i / 4;
+        let x: int = 8 + col * 38;
+        let y: int = 28 + row * 16;
+        // A pressed button fills; an idle one is just its outline.
+        if (gfx.pad(pad, names[i]) == 1) {
+            gfx.fill(x, y, 34, 12, 90, 200, 120);
+        }
+        gfx.rect(x, y, 34, 12, 150, 150, 170);
+        gfx.text(x + 3, y + 3, names[i], 235, 235, 245);
+        i = i + 1;
+    }
+    return 0;
+}
+
+// A stick, drawn as a box with a dot in it. The axes read -1.0 to 1.0 with y
+// pointing down like the screen, so they map straight onto pixels.
+fn stick(cx: int, cy: int, r: int, dx: float, dy: float, label: string): int {
+    gfx.rect(cx - r, cy - r, r * 2, r * 2, 150, 150, 170);
+    gfx.line(cx - r, cy, cx + r, cy, 60, 60, 75);
+    gfx.line(cx, cy - r, cx, cy + r, 60, 60, 75);
+    let px: int = cx + (dx * r);
+    let py: int = cy + (dy * r);
+    gfx.fill_circle(px, py, 3, 240, 200, 90);
+    gfx.text(cx - r, cy + r + 3, label, 180, 180, 195);
+    return 0;
+}
+
+// A trigger, as a bar that fills from the bottom. 0.0 to 1.0.
+fn trigger(x: int, y: int, h: int, v: float, label: string): int {
+    let fill: int = v * h;
+    gfx.rect(x, y, 10, h, 150, 150, 170);
+    if (fill > 0) {
+        gfx.fill(x, y + h - fill, 10, fill, 200, 120, 90);
+    }
+    gfx.text(x - 1, y + h + 3, label, 180, 180, 195);
+    return 0;
+}
+
+fn main() {
+    gfx.open("Nexa gamepad", 200, 130, 4);
+
+    while (gfx.closed() != 1) {
+        gfx.poll();
+        if (gfx.pressed("escape") == 1) {
+            gfx.close();
+        }
+        gfx.clear(16, 16, 24);
+
+        let pads: int = gfx.pads();
+        if (pads == 0) {
+            gfx.text(8, 8, "no gamepad -- plug one in", 235, 235, 245);
+            gfx.text(8, 20, "escape to quit", 140, 140, 160);
+            gfx.present();
+        } else {
+            gfx.text(8, 8, f"pads: {pads}", 240, 200, 90);
+            gfx.text(80, 8, "hold A to rumble", 140, 140, 160);
+
+            button_grid(0);
+
+            stick(176, 44, 18, gfx.pad_axis(0, "lx"), gfx.pad_axis(0, "ly"), "left");
+            stick(176, 92, 18, gfx.pad_axis(0, "rx"), gfx.pad_axis(0, "ry"), "right");
+            trigger(8, 94, 22, gfx.pad_axis(0, "lt"), "lt");
+            trigger(24, 94, 22, gfx.pad_axis(0, "rt"), "rt");
+
+            // A is both motors; each bumper drives one on its own, so the two
+            // can be told apart by feel.
+            let heavy: float = 0.0;
+            let light: float = 0.0;
+            if (gfx.pad(0, "a") == 1) {
+                heavy = 1.0;
+                light = 1.0;
+            }
+            if (gfx.pad(0, "lb") == 1) {
+                heavy = 1.0;
+            }
+            if (gfx.pad(0, "rb") == 1) {
+                light = 1.0;
+            }
+            let took: int = gfx.rumble(0, heavy, light);
+            if (took == 0) {
+                gfx.text(44, 118, "no rumble here", 200, 120, 90);
+            }
+
+            gfx.present();
+        }
+    }
+    return;
+}
