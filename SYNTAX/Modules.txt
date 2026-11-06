@@ -1851,9 +1851,26 @@ PACKAGES (nexapkg)
 
   Files:
     nexapkg.json   - Manifest: { "name", "entry", "output", "dll", "dllOutput",
-                     "x11", "dependencies": { "include/path": "source" } }
+                     "x11", "targets", "dependencies": { "include/path": "source" } }
     dll / dllOutput - Optional. NexaC build also compiles that .nxa as a .dll (Windows),
                       .dylib (macOS), or .so (Linux), with names preserved for dll.call.
+    targets         - Optional. Other platforms "NexaC build" should produce as
+                      well as this machine's, so what a project ships is written
+                      down beside its name instead of being a command somebody
+                      has to remember:
+                        "targets": ["windows", "arm64-linux", "wasm"]
+                      Names are the ones --target already knows -- whatever
+                      "nexapkg target list" shows -- plus "windows" (a Windows
+                      .exe, as --win) and "wasm" (a browser page, as --wasm).
+                      The build for this machine always happens, so naming it
+                      ("host", "linux", "macos") is a note telling you to drop it
+                      rather than an error.
+                      Each one lands beside the host build with the target in its
+                      name: output "app" gives app.exe or app, app-windows.exe,
+                      app-arm64-linux, app-wasm.html and app-wasm.js.
+                      A target that fails does not stop the rest -- a
+                      multi-platform build is worth more when it reports all of
+                      them at once -- but the build still exits non-zero.
     x11             - Optional, Linux only, and how a std/gfx or std/ui executable
                       gets Xlib. Build settings live in the manifest rather than
                       behind command-line options, so how a project is built

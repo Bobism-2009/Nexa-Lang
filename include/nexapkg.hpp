@@ -120,6 +120,33 @@ static bool parseJsonString(const std::string& s, size_t& i, std::string& out) {
 }
 
 // Extract a top-level "key": "value" string field.
+// A JSON array of strings, for the manifest fields that take a list.
+static std::vector<std::string> findStringArray(const std::string& content, const std::string& key) {
+    std::vector<std::string> out;
+    std::string needle = "\"" + key + "\"";
+    size_t i = content.find(needle);
+    if (i == std::string::npos) return out;
+    i += needle.size();
+    auto skip = [&]() {
+        while (i < content.size()) {
+            const char c = content[i];
+            if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ':' || c == ',') i++;
+            else break;
+        }
+    };
+    skip();
+    if (i >= content.size() || content[i] != '[') return out;
+    i++;
+    while (i < content.size()) {
+        skip();
+        if (i >= content.size() || content[i] == ']') break;
+        std::string v;
+        if (!parseJsonString(content, i, v)) break;
+        if (!v.empty()) out.push_back(v);
+    }
+    return out;
+}
+
 static std::string findStringField(const std::string& content, const std::string& key) {
     std::string needle = "\"" + key + "\"";
     size_t i = content.find(needle);
@@ -161,6 +188,11 @@ struct Manifest {
     // The small build is the one a project opts into, knowing where it ships.
     // Settled 2026-11-06; size alone is not a reason to turn this around.
     std::string x11;
+    // targets -- extra platforms "NexaC build" should produce as well as the
+    // host's. Names are the ones --target already knows, from
+    // "nexapkg target list", plus "windows" and "wasm" which are built in.
+    // The host build always happens, so it is not named here.
+    std::vector<std::string> targets;
     // Ordered include-path -> source (source may carry a trailing @ref).
     std::vector<std::pair<std::string, std::string>> deps;
 
@@ -195,6 +227,7 @@ static bool readManifest(const fs::path& path, Manifest& m) {
     m.dll = findStringField(content, "dll");
     m.dllOutput = findStringField(content, "dllOutput");
     m.x11 = findStringField(content, "x11");
+    m.targets = findStringArray(content, "targets");
 
     m.deps.clear();
     size_t i = content.find("\"dependencies\"");
@@ -228,6 +261,13 @@ static void writeManifest(const fs::path& path, const Manifest& m) {
     if (!m.dll.empty()) out << "  \"dll\": \"" << jsonEscape(m.dll) << "\",\n";
     if (!m.dllOutput.empty()) out << "  \"dllOutput\": \"" << jsonEscape(m.dllOutput) << "\",\n";
     if (!m.x11.empty()) out << "  \"x11\": \"" << jsonEscape(m.x11) << "\",\n";
+    if (!m.targets.empty()) {
+        out << "  \"targets\": [";
+        for (size_t k = 0; k < m.targets.size(); k++) {
+            out << (k == 0 ? "" : ", ") << "\"" << jsonEscape(m.targets[k]) << "\"";
+        }
+        out << "],\n";
+    }
     out << "  \"dependencies\": {";
     for (size_t k = 0; k < m.deps.size(); k++) {
         out << (k == 0 ? "\n" : ",\n");

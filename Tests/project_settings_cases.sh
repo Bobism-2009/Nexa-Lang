@@ -16,6 +16,11 @@
 #   nested     the manifest is found from a subdirectory, not just beside it.
 #   build      "NexaC build" refuses the same bad value the child would.
 #   keeps      nexapkg rewriting the manifest does not drop the setting.
+#   targets    "targets" builds the other platforms too, names them apart from
+#              the host build, notes rather than fails when the host is named,
+#              and carries on past a target that fails while still ending in a
+#              non-zero exit. The cross-compiles themselves need an installed
+#              target, so that layer is skipped when none is.
 #
 # The link line the setting chooses is Linux's, and is not exercised here:
 # this runs where it runs. What it pins down is that the value is read,
@@ -127,6 +132,89 @@ if grep -q '"x11"' "$WORK/proj/nexapkg.json"; then
     echo "ok keeps: nexapkg rewrote the manifest and kept the setting"
 else
     echo "FAIL keeps: the setting was lost when nexapkg rewrote the manifest"
+    sed 's/^/  /' "$WORK/proj/nexapkg.json"
+    fails=$((fails + 1))
+fi
+
+# ---------------------------------------------------------------------------
+# targets: the other platforms one "NexaC build" should produce.
+# ---------------------------------------------------------------------------
+targets_manifest() {  # targets_manifest <json-array-body>
+    printf '{
+  "name": "proj",
+  "entry": "src/main.nxa",
+  "output": "app",
+  "targets": [%s],
+  "dependencies": {}
+}
+'         "$1" > "$WORK/proj/nexapkg.json"
+}
+
+# Naming this machine's build is a note, not a failure, and the host build
+# still happens. Needs no cross-compiler, so it runs everywhere.
+targets_manifest '"host", "linux"'
+rm -f "$WORK/proj/app" "$WORK/proj/app.exe"
+out=$(cd "$WORK/proj" && "$NEXAC" build . 2>&1)
+if [ $? -ne 0 ]; then
+    echo "FAIL targets: naming the host build failed the build"
+    printf '%s
+' "$out" | sed 's/^/  /' | tail -5
+    fails=$((fails + 1))
+elif ! printf '%s
+' "$out" | grep -qi 'note'; then
+    echo "FAIL targets: naming the host build said nothing about it"
+    fails=$((fails + 1))
+elif [ ! -f "$WORK/proj/app" ] && [ ! -f "$WORK/proj/app.exe" ]; then
+    echo "FAIL targets: the host build did not happen"
+    fails=$((fails + 1))
+else
+    echo "ok targets: the host build is a note, and still happens"
+fi
+
+# A name nothing provides must fail the build and say so, and must not stop
+# whatever else was asked for.
+targets_manifest '"no-such-target-here"'
+out=$(cd "$WORK/proj" && "$NEXAC" build . 2>&1)
+if [ $? -eq 0 ]; then
+    echo "FAIL targets: an unknown target built anyway"
+    fails=$((fails + 1))
+elif printf '%s
+' "$out" | grep -qi 'no-such-target-here'; then
+    echo "ok targets: an unknown target fails the build, by name"
+else
+    echo "FAIL targets: the unknown target was not named in the error"
+    printf '%s
+' "$out" | sed 's/^/  /' | tail -5
+    fails=$((fails + 1))
+fi
+
+# The real thing, for the first installed target there is.
+INSTALLED=$("$NEXAC" nexapkg target list 2>&1 | awk '/^  [a-z0-9]+-[a-z0-9]+  / {print $1; exit}')
+if [ -z "$INSTALLED" ]; then
+    echo "skip targets: no cross target installed (nexapkg target install ...)"
+else
+    targets_manifest "\"$INSTALLED\""
+    rm -f "$WORK/proj/app"*
+    out=$(cd "$WORK/proj" && "$NEXAC" build . 2>&1)
+    if [ $? -ne 0 ]; then
+        echo "skip targets: the $INSTALLED runtime is not built here"
+    elif [ -f "$WORK/proj/app-$INSTALLED" ]; then
+        echo "ok targets: one build produced the host's and $INSTALLED's, named apart"
+    else
+        echo "FAIL targets: no app-$INSTALLED beside the host build"
+        ls "$WORK/proj" | sed 's/^/  /'
+        fails=$((fails + 1))
+    fi
+fi
+
+# And the list has to survive nexapkg rewriting the manifest.
+targets_manifest '"wasm", "arm64-linux"'
+(cd "$WORK/proj" && "$NEXAC" nexapkg add "file:../dep" . > "$WORK/a2.log" 2>&1)
+if grep -q '"targets"' "$WORK/proj/nexapkg.json" &&
+   grep -q 'arm64-linux' "$WORK/proj/nexapkg.json"; then
+    echo "ok targets: the list survives nexapkg rewriting the manifest"
+else
+    echo "FAIL targets: the list was lost when nexapkg rewrote the manifest"
     sed 's/^/  /' "$WORK/proj/nexapkg.json"
     fails=$((fails + 1))
 fi

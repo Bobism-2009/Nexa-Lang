@@ -167,6 +167,46 @@ static int doBuild(const std::string& dir) {
         int dllRet = runNexaCChild("\"" + dllSrc.string() + "\" " + libFlag + " --preserve-names -o \"" + dllOut + "\"");
         if (dllRet != 0) return dllRet;
     }
+
+    // "targets" in nexapkg.json: the other platforms this project ships, built
+    // by the same "NexaC build" that built the host's. Each one is the existing
+    // --target / --win / --wasm path, driven from the manifest rather than from
+    // a line someone has to remember to type -- so what a project ships is
+    // written down once, next to its name.
+    //
+    // Outputs are suffixed with the target, so they sit beside the host build
+    // instead of overwriting it.
+    //
+    // A target that fails does not stop the others: a multi-platform build is
+    // worth more when it tells you about all of them at once rather than
+    // stopping at the first. The exit code is still a failure if any did.
+    int crossFailed = 0;
+    for (const std::string& t : manifest.targets) {
+        std::string low;
+        for (char c : t) low += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (low == "host" || low == "native" || low == "linux" || low == "macos" || low == "darwin") {
+            std::cerr << "[Nexa] Note: \"" << t << "\" in targets is the build that already "
+                         "happens; drop it from the list\n";
+            continue;
+        }
+        std::string flag;
+        if (low == "wasm" || low == "web" || low == "browser") flag = "--wasm";
+        else if (low == "windows" || low == "win") flag = "--win";
+        else flag = "--target \"" + t + "\"";
+        const std::string outFor = outBase + "-" + low;
+        // Flushed: the child writes straight to the console, so without this
+        // the announcements all arrive after the builds they announce.
+        std::cout << "[Nexa] Also building for " << t << "\n" << std::flush;
+        if (runNexaCChild("\"" + entry + "\" " + flag + " -o \"" + outFor + "\"") != 0) {
+            std::cerr << "[Nexa] Error: the " << t << " build failed\n";
+            crossFailed++;
+        }
+    }
+    if (crossFailed > 0) {
+        std::cerr << "[Nexa] " << crossFailed << " of " << manifest.targets.size()
+                  << " extra target(s) failed\n";
+        return 1;
+    }
     return 0;
 }
 
