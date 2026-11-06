@@ -13,6 +13,14 @@
 #             is meaningless without --wasm and is refused by name. Runs
 #             everywhere.
 #
+#   named     The output name is the loader's, but an Emscripten build writes a
+#             page as well, so a name that is really one of the other two has to
+#             be moved aside. Asking for the page by name -- "-o app.html",
+#             which is the obvious thing to type -- used to write the page over
+#             the loader: one file that included itself as its own script, from
+#             a build that reported success. Every spelling must end up as the
+#             same pair.
+#
 #   shape     Build for real and check what appears. Default: a .html and a .js
 #             and NO sibling .wasm, with nothing in the loader still reaching
 #             for one. Split: all three, with the loader fetching the .wasm.
@@ -98,6 +106,27 @@ else
         sed 's/^/  /' "$WORK/one.log" | tail -5
         fails=$((fails + 1))
     fi
+
+    # Whatever the output is called, the pair is <stem>.html and <stem>.js and
+    # the page points at the loader -- never at itself.
+    for spelling in n.html n.htm n.js n n.wasm; do
+        rm -f "$WORK/n.html" "$WORK/n.js" "$WORK/n.wasm" "$WORK/n.htm"
+        if ! "$NEXAC" "$WORK/h.nxa" --wasm -o "$WORK/$spelling" > "$WORK/n.log" 2>&1; then
+            echo "FAIL named: --wasm -o $spelling did not build"
+            sed 's/^/  /' "$WORK/n.log" | tail -4
+            fails=$((fails + 1))
+        elif [ ! -f "$WORK/n.html" ] || [ ! -f "$WORK/n.js" ]; then
+            echo "FAIL named: -o $spelling did not leave n.html and n.js"
+            ls "$WORK" | grep '^n\.' | sed 's/^/  /'
+            fails=$((fails + 1))
+        elif ! grep -q 'src="n\.js"' "$WORK/n.html"; then
+            echo "FAIL named: -o $spelling left a page not pointing at n.js"
+            grep -o 'src="[^"]*"' "$WORK/n.html" | sed 's/^/  /'
+            fails=$((fails + 1))
+        else
+            echo "ok named: -o $spelling gives n.html + n.js"
+        fi
+    done
 
     # split: three files, and the loader does fetch the module
     if "$NEXAC" "$WORK/h.nxa" --wasm --wasm-split -o "$WORK/three" > "$WORK/three.log" 2>&1; then

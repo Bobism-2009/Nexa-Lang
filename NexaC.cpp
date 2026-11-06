@@ -2608,8 +2608,18 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 
+        // An Emscripten build writes two things from one -o: the loader and the
+        // page that includes it. The name given here is the loader's, so a name
+        // that is plainly one of the other two has to be moved aside.
+        //
+        // ".html" especially, because asking for a page by name is the obvious
+        // thing to do. Left alone, the page was written over the loader -- one
+        // file that included itself as its own script, and a build that said it
+        // had succeeded. The name is kept for the page, which is what was meant,
+        // and the loader becomes the .js beside it.
         std::string wasmOut = exePath;
-        if (buildWasm && wasmTool.kind == WasmKind::Emscripten && nexaHasExt(exePath, ".wasm")) {
+        if (buildWasm && wasmTool.kind == WasmKind::Emscripten &&
+            (nexaHasExt(exePath, ".wasm") || nexaHasExt(exePath, ".html") || nexaHasExt(exePath, ".htm"))) {
             wasmOut = std::filesystem::path(exePath).replace_extension(".js").string();
         }
         // A page has no datagram socket -- there is no browser API that opens
