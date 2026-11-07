@@ -864,8 +864,17 @@ static std::string nexaDefaultEmsdkDir() {
 }
 
 // Yes/No install prompt. Windows uses a real MessageBox; macOS/Linux use the native dialog.
+static bool nexaStdinIsTerminal();
+
 static bool nexaAskYesNo(const char* title, const char* text) {
 #ifdef _WIN32
+    // No keyboard on standard input, no question. A modal put up where nobody
+    // can click it does not ask anything -- it stops the build until somebody
+    // notices, which is how a test suite, a CI step or a build launched from
+    // an editor ends up hanging. The caller says what is missing and carries
+    // on instead. Being wrong in this direction costs a prompt; being wrong in
+    // the other costs the build.
+    if (!nexaStdinIsTerminal()) return false;
     using MsgBoxFn = int (WINAPI*)(HWND, LPCSTR, LPCSTR, UINT);
     HMODULE user32 = LoadLibraryA("user32.dll");
     if (!user32) return false;
@@ -1721,6 +1730,110 @@ static bool nexaIsGnuDriver(const std::string& cxx) {
            base.rfind("g++-", 0) == 0 || base.rfind("gcc-", 0) == 0;
 }
 
+// A shader path in a program is written relative to the program, the way an
+// #include is. Tried as given first, so a path relative to the working
+// directory still works.
+static std::string nexaResolveShaderPath(const std::string& nxaPath, const std::string& rel) {
+    if (rel.empty() || nexaPathExists(rel)) return rel;
+    std::error_code ec;
+    std::filesystem::path base = std::filesystem::path(nxaPath).parent_path();
+    std::filesystem::path p = base / rel;
+    if (std::filesystem::exists(p, ec)) return p.string();
+    return rel;
+}
+
+// A SPIR-V compiler, for turning a program's GLSL into the .spv that Vulkan
+// takes. glslangValidator is Khronos's and ships with the Vulkan SDK; glslc
+// comes with shaderc and will do just as well. Returns the command to run, or
+// empty when there is none to be had.
+static std::string nexaFindSpirvCompiler() {
+#ifdef _WIN32
+    nexaRefreshWindowsToolPath();
+#endif
+    const char* names[] = { "glslangValidator", "glslc" };
+    for (const char* n : names) {
+        if (nexaCmdExists(n)) return n;
+    }
+#ifdef _WIN32
+    // The SDK sets VULKAN_SDK but does not always put its Bin on PATH for a
+    // shell that was already open.
+    if (const char* sdk = std::getenv("VULKAN_SDK")) {
+        if (sdk[0]) {
+            for (const char* n : names) {
+                std::string p = std::string(sdk) + "\\Bin\\" + n + ".exe";
+                if (nexaPathExists(p)) return "\"" + p + "\"";
+            }
+        }
+    }
+#endif
+    return "";
+}
+
+// Asked for only when a program actually names shader files, and only once.
+// The Vulkan SDK is what carries glslangValidator on Windows; apt and brew
+// have it on its own.
+static std::string nexaEnsureSpirvCompiler() {
+    std::string have = nexaFindSpirvCompiler();
+    if (!have.empty()) return have;
+    std::cout << "[Nexa] This program loads a shader, and Vulkan takes SPIR-V rather than GLSL.\n";
+    std::cout << "[Nexa] No SPIR-V compiler found (glslangValidator or glslc).\n";
+    std::cout.flush();
+    // Asked on every platform, because every platform's answer is to install
+    // something -- and on Linux that is a sudo apt-get, which nobody should be
+    // handed without being asked for it.
+    const char* what =
+        "This program calls gfx3d.shader, and the Vulkan renderer takes SPIR-V "
+        "rather than GLSL.\n\nNexaC can compile the shaders for you, but it needs "
+#ifdef _WIN32
+        "glslangValidator, which comes with the Vulkan SDK.\n\nInstall it now? "
+        "(winget: KhronosGroup.VulkanSDK)"
+#else
+        "glslangValidator.\n\nInstall it now? (glslang-tools)"
+#endif
+        "\n\nSay no and the build carries on -- the OpenGL 3.3 renderer compiles "
+        "GLSL itself, and gfx3d.shader_error() will say so if the program ends up "
+        "on Vulkan.";
+    if (!nexaAskYesNo("NexaC - install a SPIR-V compiler?", what)) {
+        std::cout << "[Nexa] Carrying on without one. Compile them yourself with:\n";
+        std::cout << "[Nexa]   glslangValidator -V shader.vert -o shader.vert.spv\n";
+        std::cout.flush();
+        return "";
+    }
+#ifdef _WIN32
+    if (!nexaEnsureHostTool("glslangValidator", "KhronosGroup.VulkanSDK", nullptr)) {
+        std::cerr << "[Nexa] The Vulkan SDK did not install, or its Bin is not on PATH yet.\n";
+        return "";
+    }
+#else
+    if (!nexaEnsureHostTool("glslangValidator", nullptr, "glslang-tools")) {
+        std::cerr << "[Nexa] Install glslang-tools (apt) or glslang (brew) for SPIR-V.\n";
+        return "";
+    }
+#endif
+    return nexaFindSpirvCompiler();
+}
+
+// One stage. The .spv lands beside its source, which is where the runtime
+// looks for it, so a program that ships its shaders ships these too.
+static bool nexaCompileOneSpirv(const std::string& tool, const std::string& src, int isVertex) {
+    if (src.empty() || !nexaPathExists(src)) return false;
+    const std::string out = src + ".spv";
+    std::string cmd = tool;
+    if (tool.find("glslc") != std::string::npos) {
+        cmd += isVertex ? " -fshader-stage=vert" : " -fshader-stage=frag";
+        cmd += " \"" + src + "\" -o \"" + out + "\"";
+    } else {
+        cmd += isVertex ? " -S vert" : " -S frag";
+        cmd += " -V \"" + src + "\" -o \"" + out + "\"";
+    }
+#ifdef _WIN32
+    cmd += " >nul 2>&1";
+#else
+    cmd += " >/dev/null 2>&1";
+#endif
+    return std::system(cmd.c_str()) == 0 && nexaPathExists(out);
+}
+
 static std::string nexaBuildCompileCmd(
     const std::string& cxx,
     const std::string& targetFlags,
@@ -2557,6 +2670,44 @@ int main(int argc, char* argv[]) {
         // io.to_int parses with strtol, so neither needs them. RTTI is never emitted by the
         // transpiler, so it is dropped unless inline_cpp is present.
         const nexa::Modules::CppUsage& usage = transpiler.cppUsage();
+        // A program that names its shader files gets them compiled for Vulkan,
+        // because nothing compiles GLSL at runtime there. The OpenGL renderer
+        // needs none of this -- its driver does the compiling -- so a failure
+        // here is a warning and not the end of the build.
+        if (modules.hasGfx3d() && !usage.gfx3dShaderFiles.empty()) {
+            // Which pairs there is anything to do about. A path that is
+            // already a .spv is compiled; one that is not on disk is somebody
+            // else's problem -- a file written later, or a path that is simply
+            // wrong -- and either way it is no reason to go asking for a
+            // compiler to be installed.
+            std::vector<std::pair<std::string, std::string>> todo;
+            for (const auto& pair : usage.gfx3dShaderFiles) {
+                const std::string v = nexaResolveShaderPath(inputPath, pair.first);
+                const std::string f = nexaResolveShaderPath(inputPath, pair.second);
+                if (nexaHasExt(v, ".spv") || nexaHasExt(f, ".spv")) continue;
+                if (!nexaPathExists(v) || !nexaPathExists(f)) continue;
+                todo.emplace_back(v, f);
+            }
+            if (!todo.empty()) {
+                const std::string spirv = nexaEnsureSpirvCompiler();
+                if (!spirv.empty()) {
+                    int made = 0, failed = 0;
+                    for (const auto& pair : todo) {
+                        if (nexaCompileOneSpirv(spirv, pair.first, 1) &&
+                            nexaCompileOneSpirv(spirv, pair.second, 0)) made++;
+                        else failed++;
+                    }
+                    if (made > 0) {
+                        std::cout << "[Nexa] Compiled " << made << " shader pair(s) to .spv for Vulkan.\n";
+                    }
+                    if (failed > 0) {
+                        std::cout << "[Nexa] Warning: " << failed << " shader pair(s) would not compile to"
+                                     " SPIR-V; they will still work on the OpenGL 3.3 renderer.\n";
+                    }
+                    std::cout.flush();
+                }
+            }
+        }
         // gfx3d.shader works on either renderer, but not from the same file:
         // the OpenGL 3.3 driver compiles GLSL, and Vulkan takes SPIR-V that was
         // compiled beforehand. A program naming neither gets whichever the

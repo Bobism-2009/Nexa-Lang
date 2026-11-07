@@ -12,6 +12,9 @@
 // the legacy profile has no shader to replace, so on either gfx3d.shader
 // answers 0 -- which is why this checks, prints the reason, and carries on with
 // the built-in shader rather than drawing nothing.
+//
+// shader_demo_vk.nxa is the same thing on Vulkan, where the shaders are
+// compiled to .spv at build time instead.
 #include <std/io>
 #include <std/gfx3d>
 #include <std/time>

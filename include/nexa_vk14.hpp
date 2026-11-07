@@ -63,6 +63,10 @@ struct Dev {
     uint64_t pipeCustomTri = 0, pipeCustomTwo = 0, pipeCustomLine = 0;
     uint64_t shCustom[2] = {};
     int customOn = 0;
+    // What gfx3d.shader_set writes. A Vulkan shader has no uniform to look up
+    // by name, so these go up as push constants after the transform and the
+    // shader reads them out of the same block.
+    float userPC[16] = {};
 // [nexa:vkshader-end]
     uint64_t shVs = 0, shFs = 0, shOvVs = 0, shOvFs = 0;
     uint64_t pool = 0;
@@ -819,7 +823,16 @@ inline int open(void* hwnd, int vsyncOn) {
     if (d.memCount > 32) d.memCount = 32;
     for (uint32_t i = 0; i < d.memCount; ++i) d.memFlags[i] = mp.types[i].flags;
 
+// [nexa:vkshader-begin]
+    // 64 bytes of transform, then sixteen floats for gfx3d.shader_set. Vulkan
+    // promises a layout may hold 128, so this asks for no more than every
+    // implementation has. Fragment as well as vertex: a value may be wanted in
+    // either, and a push must name every stage of the ranges it touches.
+    struct RangePC { uint32_t stage, offset, size; } pc{ 1 | 16, 0, 128 };
+// [nexa:vkshader-end]
+// [nexa:novkshader-begin]
     struct RangePC { uint32_t stage, offset, size; } pc{ 1, 0, 64 };
+// [nexa:novkshader-end]
     struct PL { uint32_t sType; const void* pNext; uint32_t flags; uint32_t setCount; const void* sets; uint32_t pcCount; const RangePC* pc; } pl{};
     pl.sType = 30; pl.pcCount = 1; pl.pc = &pc;
     if (d.CreatePipelineLayout(d.device, &pl, nullptr, &d.layout) != 0) { fail("layout"); shutdown(); return 0; }
@@ -973,6 +986,14 @@ inline int custom_use(int on) {
 }
 
 inline int custom_ready() { return dev().pipeCustomTri != 0; }
+
+// One of the sixteen. Takes effect on the next draw, since that is when the
+// block goes up.
+inline int custom_set(int slot, float v) {
+    if (slot < 0 || slot >= 16) return 0;
+    dev().userPC[slot] = v;
+    return 1;
+}
 // [nexa:vkshader-end]
 inline void draw(const float* xyzrgb, int nvert, int lines, int twoSided, const float* mvp) {
     Dev& d = dev();
@@ -997,7 +1018,15 @@ inline void draw(const float* xyzrgb, int nvert, int lines, int twoSided, const 
     uint64_t pipe = lines ? d.pipeLine : (twoSided ? d.pipeTwo : d.pipeTri);
 // [nexa:novkshader-end]
     d.CmdBindPipeline(d.cmd, 0, pipe);
+// [nexa:vkshader-begin]
+    // Both stages, because the range covers both; the user block only when
+    // there is a custom shader to read it.
+    d.CmdPushConstants(d.cmd, d.layout, 1 | 16, 0, 64, clip);
+    if (d.customOn) d.CmdPushConstants(d.cmd, d.layout, 1 | 16, 64, 64, d.userPC);
+// [nexa:vkshader-end]
+// [nexa:novkshader-begin]
     d.CmdPushConstants(d.cmd, d.layout, 1, 0, 64, clip);
+// [nexa:novkshader-end]
     uint64_t off = d.vused;
     d.CmdBindVertexBuffers(d.cmd, 0, 1, &d.vbuf, &off);
     d.CmdDraw(d.cmd, (uint32_t)nvert, 1, 0, 0);
@@ -1088,6 +1117,7 @@ inline int custom_up(const unsigned int* vw, size_t vbytes, const unsigned int* 
 }
 inline int custom_use(int on) { return detail::custom_use(on); }
 inline int custom_ready() { return detail::custom_ready(); }
+inline int custom_set(int slot, float v) { return detail::custom_set(slot, v); }
 // [nexa:vkshader-end]
 inline void present(const void* bgra, int bw, int bh) { detail::present(bgra, bw, bh); }
 inline void set_vsync(int on) { detail::set_vsync(on); }

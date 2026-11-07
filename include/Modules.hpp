@@ -214,6 +214,11 @@ public:
         // gfx3d.shader / use_shader / shader_set / shader_error: a custom GLSL
         // program, compiled by the graphics driver at runtime.
         bool gfx3dShader = false;
+        // The shader files a program names outright, as vertex/fragment pairs.
+        // Vulkan takes SPIR-V and nothing compiles GLSL at runtime there, so
+        // NexaC compiles these at build time when it can -- which it can only
+        // do for a path written as a literal.
+        std::vector<std::pair<std::string, std::string>> gfx3dShaderFiles;
         // Whether the program calls gfx3d.renderer at all. Not a slicing flag:
         // it is how the build can tell that a custom shader was asked for
         // without the one renderer that can compile it.

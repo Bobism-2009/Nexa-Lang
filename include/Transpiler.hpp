@@ -9790,6 +9790,13 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             cppUsage.gfx3dRendererAsked = true;
         } else if (fn == "shader" || fn == "use_shader" || fn == "shader_set" ||
                    fn == "shader_error") {
+            // Both paths written out? Then NexaC can compile them for Vulkan.
+            // A path built at runtime is the program's own business.
+            if (fn == "shader" && n.children.size() >= 2 &&
+                n.children[0].type == AstNode::Type::ExprStringLiteral &&
+                n.children[1].type == AstNode::Type::ExprStringLiteral) {
+                cppUsage.gfx3dShaderFiles.emplace_back(n.children[0].value, n.children[1].value);
+            }
             // The shader table, the file reader and the driver's info logs: a
             // program drawing with the built-in shader carries none of them.
             cppUsage.gfx3dShader = true;

@@ -1402,10 +1402,28 @@ ARGUMENT TYPES
                                        The graphics driver compiles them, so
                                        nothing is installed and nothing is
                                        compiled at build time.
-                                     Vulkan -- hand it SPIR-V, compiled before
-                                       the program runs:
+                                     Vulkan -- takes SPIR-V, because nothing
+                                       compiles GLSL at runtime there. NexaC
+                                       does that compiling as part of the
+                                       build: name the files in gfx3d.shader
+                                       as plain strings and it writes
+                                       a.vert.spv beside a.vert, which is where
+                                       the program then looks. It wants
+                                       glslangValidator or glslc for that, and
+                                       offers to install one -- console and
+                                       popup -- the first time a build needs it
+                                       (winget KhronosGroup.VulkanSDK on
+                                       Windows, apt glslang-tools, brew
+                                       glslang). Say no and the build carries
+                                       on: the OpenGL renderer needs none of
+                                       it, and you can compile them yourself
+                                       whenever you like --
                                          glslangValidator -V a.vert -o a.vert.spv
-                                       Nothing compiles GLSL at runtime there.
+                                       -- or hand gfx3d.shader the .spv itself.
+                                       A build whose input is redirected is
+                                       never asked: it prints what is missing
+                                       and carries on, so a script, a CI step
+                                       or a test run never stops on a dialog.
                                    Name the one you built for, before open:
                                      gfx3d.renderer("opengl 3.3");   or
                                      gfx3d.renderer("vulkan 1.4");
@@ -1424,17 +1442,34 @@ ARGUMENT TYPES
                                    which one a shape uses is still the shape's
                                    choice. It has to match what it replaces, and
                                    that is a smaller contract than the OpenGL one:
-                                     a vertex of position then colour, six floats,
-                                     and the transform as this renderer's push
-                                     constant. No descriptor set, no uTex.
+                                     layout(location = 0) in vec3 aPos;
+                                     layout(location = 1) in vec3 aCol;
+                                     the push constant below, and nothing else --
+                                     no uv, no descriptor set, no uTex.
+                                   Examples/shaders/wave_vk.vert and .frag are a
+                                   written-out pair, and Examples/shader_demo_vk.nxa
+                                   loads them.
                                    A module that disagrees is a pipeline the driver
                                    refuses, which is a 0 -- though a pair that
                                    merely reads what the other half never wrote
                                    compiles happily and draws nonsense, as any
                                    shader would.
-                                   gfx3d.shader_set is the OpenGL renderer's; a
-                                   Vulkan shader takes its values from the scene's
-                                   own uniforms rather than by name.
+                                   gfx3d.shader_set works on both, by different
+                                   means. On OpenGL the name is a uniform's, looked
+                                   up in the compiled program. Vulkan has no name
+                                   to look up, so this renderer pushes sixteen
+                                   floats after the transform and a name takes the
+                                   next free one the first time it is set:
+                                     layout(push_constant) uniform Nexa {
+                                         mat4 uMVP;
+                                         vec4 uUser[4];
+                                     } nexa;
+                                   One value is nexa.uUser[0].x; a second is
+                                   .y, then .z, .w, then uUser[1].x, in the order
+                                   the program first wrote them. Set them in a
+                                   fixed order -- near the top of main, or once
+                                   before the loop -- and the slots stay put.
+                                   Seventeen names is a 0 and a shader_error.
                                    Your shader is handed what the built-in one is
                                    handed, and that is the whole contract:
                                      attribute vec3 aPos;   per vertex

@@ -1025,6 +1025,191 @@ else
     fails=$((fails + 1))
 fi
 
+echo "-- shader: NexaC compiling GLSL to SPIR-V as part of the build"
+# Vulkan has no runtime GLSL compiler, so a program that names shader files gets
+# them compiled at build time. Done with a stand-in for glslangValidator: what
+# is being tested is NexaC's end -- that it looks for a compiler, runs it once
+# per stage, and writes the .spv where the runtime will look -- not whether
+# Khronos can compile GLSL.
+mkdir -p "$WORK/sp/shaders" "$WORK/sp/bin"
+printf 'void main(){}\n' > "$WORK/sp/shaders/a.vert"
+printf 'void main(){}\n' > "$WORK/sp/shaders/a.frag"
+# SPIR-V's magic word, little-endian, which is what the runtime sniffs for.
+printf '\003\002\043\007\000\000\001\000' > "$WORK/sp/magic.bin"
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*)
+        MAGIC_WIN=$(cd "$WORK/sp" && pwd -W 2>/dev/null || echo "$WORK/sp")
+        {
+            printf '@echo off\r\n'
+            printf 'set "OUT="\r\n'
+            printf ':loop\r\n'
+            printf 'if "%%~1"=="" goto done\r\n'
+            printf 'if /i "%%~1"=="-o" set "OUT=%%~2"\r\n'
+            printf 'shift\r\n'
+            printf 'goto loop\r\n'
+            printf ':done\r\n'
+            printf 'if "%%OUT%%"=="" exit /b 1\r\n'
+            printf 'copy /y "%s\magic.bin" "%%OUT%%" >nul\r\n' "$(echo "$MAGIC_WIN" | tr '/' '\134')"
+        } > "$WORK/sp/bin/glslangValidator.cmd"
+        ;;
+    *)
+        {
+            echo '#!/bin/sh'
+            echo 'OUT=""'
+            echo 'while [ $# -gt 0 ]; do'
+            echo '    if [ "$1" = "-o" ]; then OUT="$2"; fi'
+            echo '    shift'
+            echo 'done'
+            echo '[ -n "$OUT" ] || exit 1'
+            echo "cp \"$WORK/sp/magic.bin\" \"\$OUT\""
+        } > "$WORK/sp/bin/glslangValidator"
+        chmod +x "$WORK/sp/bin/glslangValidator"
+        ;;
+esac
+printf '%s' '#include <std/gfx3d>
+fn main() {
+    gfx3d.renderer("vulkan 1.4");
+    gfx3d.open("t", 320, 240);
+    let s: int = gfx3d.shader("shaders/a.vert", "shaders/a.frag");
+    gfx3d.use_shader(s);
+    return 0;
+}
+' > "$WORK/sp/p.nxa"
+spout=$(PATH="$WORK/sp/bin:$PATH" "$NEXAC" "$WORK/sp/p.nxa" --source "$WORK/sp/p.cpp" < /dev/null 2>&1)
+if [ -f "$WORK/sp/shaders/a.vert.spv" ] && [ -f "$WORK/sp/shaders/a.frag.spv" ]; then
+    echo "ok shader: the build wrote a .spv for each stage, beside its source"
+else
+    echo "FAIL shader: the build found a SPIR-V compiler but wrote no .spv"
+    echo "$spout" | sed 's/^/    /'
+    fails=$((fails + 1))
+fi
+if printf '%s' "$spout" | grep -q 'Compiled 1 shader pair'; then
+    echo "ok shader: and said so, once for the pair rather than once a stage"
+else
+    echo "FAIL shader: the build compiled shaders without reporting it"
+    fails=$((fails + 1))
+fi
+# A path in a program is written relative to the program, the way an #include
+# is, so compiling has to work from a directory that is not the program's.
+rm -f "$WORK/sp/shaders/a.vert.spv" "$WORK/sp/shaders/a.frag.spv"
+(cd "$WORK" && PATH="$WORK/sp/bin:$PATH" "$NEXAC" "sp/p.nxa" --source "$WORK/sp/p2.cpp" < /dev/null >/dev/null 2>&1)
+if [ -f "$WORK/sp/shaders/a.vert.spv" ]; then
+    echo "ok shader: a shader path is resolved against the program, not the cwd"
+else
+    echo "FAIL shader: shader paths only resolve when the cwd is the program's"
+    fails=$((fails + 1))
+fi
+# Without a compiler the build is not over: the OpenGL renderer compiles GLSL
+# itself, so this is a warning and a note about how to do it by hand. This case
+# also stands guard over something that is not an assertion: with input
+# redirected there must be no dialog to click, or the suite hangs here rather
+# than failing.
+nosp=$(PATH="$WORK/sp/empty:/usr/bin:/bin" VULKAN_SDK="" "$NEXAC" "$WORK/sp/p.nxa" --source "$WORK/sp/p3.cpp" < /dev/null 2>&1)
+if printf '%s' "$nosp" | grep -q 'glslangValidator'; then
+    echo "ok shader: with no compiler to be found, the build says what to install"
+else
+    echo "FAIL shader: a missing SPIR-V compiler is passed over in silence"
+    fails=$((fails + 1))
+fi
+if [ -f "$WORK/sp/p3.cpp" ]; then
+    echo "ok shader: and builds anyway, since one renderer needs no .spv"
+else
+    echo "FAIL shader: a missing SPIR-V compiler stopped the build"
+    fails=$((fails + 1))
+fi
+# Nothing to compile, nothing to ask about -- and that covers two things: a
+# program with no shader at all, and one naming files that are not on disk. The
+# second is what the rest of this suite does, over and over, so getting it wrong
+# does not fail a case: it stops the run on a dialog nobody can see.
+printf '%s' '#include <std/gfx3d>
+fn main() { gfx3d.open("t", 320, 240); gfx3d.close(); return 0; }
+' > "$WORK/sp/plain.nxa"
+quietsp=$(PATH="$WORK/sp/empty:/usr/bin:/bin" "$NEXAC" "$WORK/sp/plain.nxa" --source "$WORK/sp/plain.cpp" < /dev/null 2>&1 | grep -ci 'SPIR-V')
+if [ "$quietsp" = "0" ]; then
+    echo "ok shader: a 3D program with no shader is never asked about SPIR-V"
+else
+    echo "FAIL shader: a program with no shader was asked about SPIR-V anyway"
+    fails=$((fails + 1))
+fi
+# Named but absent: a path that is wrong, or a file written later by something
+# else. Not a reason to go asking for a compiler.
+printf '%s' '#include <std/gfx3d>
+fn main() {
+    gfx3d.renderer("vulkan 1.4");
+    gfx3d.open("t", 320, 240);
+    let s: int = gfx3d.shader("nowhere/a.vert", "nowhere/a.frag");
+    gfx3d.use_shader(s);
+    return 0;
+}
+' > "$WORK/sp/absent.nxa"
+absent=$(PATH="$WORK/sp/bin:$PATH" "$NEXAC" "$WORK/sp/absent.nxa" --source "$WORK/sp/absent.cpp" < /dev/null 2>&1 | grep -ci 'SPIR-V')
+if [ "$absent" = "0" ]; then
+    echo "ok shader: shader files that are not there are not asked about"
+else
+    echo "FAIL shader: a missing shader file set off the SPIR-V compiler hunt"
+    fails=$((fails + 1))
+fi
+
+# The other half: handed GLSL, the Vulkan runtime looks for the .spv the build
+# left beside it, so one path in the program serves both renderers.
+if grep -q 'vp + ".spv"' "$WORK/sp/p.cpp"; then
+    echo "ok shader: the Vulkan path falls back to the .spv beside the GLSL"
+else
+    echo "FAIL shader: nothing looks for the .spv the build writes"
+    fails=$((fails + 1))
+fi
+
+echo "-- shader: getting a value into a Vulkan shader"
+# gfx3d.shader_set has no uniform to look up on Vulkan, so the renderer pushes
+# sixteen floats after the transform and a name takes the next free one. The
+# push constant range has to grow to hold them, and name both stages -- a push
+# must name every stage of every range it touches -- and all of that belongs to
+# programs that load a shader and to no others.
+printf '%s' '#include <std/gfx3d>
+fn main() {
+    gfx3d.renderer("vulkan 1.4");
+    gfx3d.open("t", 320, 240);
+    let s: int = gfx3d.shader("a.vert", "a.frag");
+    gfx3d.use_shader(s);
+    gfx3d.shader_set(s, "uTime", 1.0);
+    return 0;
+}
+' > "$WORK/pcu.nxa"
+if ! "$NEXAC" "$WORK/pcu.nxa" --source "$WORK/pcu.cpp" < /dev/null > /dev/null 2>&1; then
+    echo "FAIL shader: NexaC could not transpile a program that writes a value"
+    fails=$((fails + 1))
+else
+    miss=""
+    grep -q 'float userPC\[16\]' "$WORK/pcu.cpp" || miss="$miss userPC"
+    grep -q 'pc{ 1 | 16, 0, 128 }' "$WORK/pcu.cpp" || miss="$miss push-range"
+    grep -q '64, 64, d.userPC' "$WORK/pcu.cpp" || miss="$miss the-push"
+    grep -q 'nexa_vk14::custom_set' "$WORK/pcu.cpp" || miss="$miss shader_set"
+    grep -q '__nexa_g3_vk_slots' "$WORK/pcu.cpp" || miss="$miss slot-table"
+    if [ -n "$miss" ]; then
+        echo "FAIL shader: a value cannot reach a Vulkan shader, missing:$miss"
+        fails=$((fails + 1))
+    else
+        echo "ok shader: a Vulkan shader is pushed the sixteen floats shader_set writes"
+    fi
+fi
+# And a 3D program that loads no shader keeps the layout it had: 64 bytes, the
+# vertex stage, and no block to push.
+if ! grep -q 'pc{ 1, 0, 64 }' "$WORK/sp/plain.cpp"; then
+    echo "FAIL shader: a plain 3D program's push constant range was widened for it"
+    fails=$((fails + 1))
+else
+    left=""
+    for sym in userPC __nexa_g3_vk_slots custom_set; do
+        grep -q "$sym" "$WORK/sp/plain.cpp" && left="$left $sym"
+    done
+    if [ -n "$left" ]; then
+        echo "FAIL shader: a program with no shader still carries:$left"
+        fails=$((fails + 1))
+    else
+        echo "ok shader: and a program without one keeps the 64-byte vertex-only range"
+    fi
+fi
+
 if [ $fails -eq 0 ]; then
     if [ $skips -gt 0 ]; then
         echo "gfx3d ok ($skips layer(s) skipped: see above)"

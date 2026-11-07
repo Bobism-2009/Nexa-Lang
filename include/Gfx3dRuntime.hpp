@@ -3730,6 +3730,13 @@ static int __nexa_g3_shader_n = 0;
 static __nexa_G3Shader __nexa_g3_shader_builtin;
 static int __nexa_g3_shader_active = 0;   // 0 is the built-in
 static std::string __nexa_g3_shader_log;  // what the driver last said
+#if defined(_WIN32)
+// gfx3d.shader_set on Vulkan: which of the sixteen pushed floats a name means.
+// Filled in the order the program first sets them and never reordered, so a
+// shader can count on uUser[0] staying what it was.
+static std::string __nexa_g3_vk_names[16];
+static int __nexa_g3_vk_slots = 0;
+#endif
 
 static std::string __nexa_g3_slurp(const std::string& path) {
     std::FILE* f = std::fopen(path.c_str(), "rb");
@@ -3900,10 +3907,23 @@ static int __nexa_gfx3d_shader(const std::string& vertPath, const std::string& f
     // Vulkan is the other renderer with a shader to replace. It takes SPIR-V,
     // so nothing is compiled here: the words go to the driver as they arrive.
     if (__nexa_g3.vulkan) {
-        const std::string vraw = __nexa_g3_slurp(vertPath);
-        if (vraw.empty()) { __nexa_g3_shader_log = "cannot read " + vertPath; return 0; }
-        const std::string fraw = __nexa_g3_slurp(fragPath);
-        if (fraw.empty()) { __nexa_g3_shader_log = "cannot read " + fragPath; return 0; }
+        // Given GLSL, look for the .spv beside it -- which is what NexaC leaves
+        // there when it compiled the program's shaders at build time. That way
+        // one path in the source works on both renderers: the driver compiles
+        // the GLSL on OpenGL, and the compiled twin is picked up here.
+        std::string vp = vertPath, fp = fragPath;
+        std::string vraw = __nexa_g3_slurp(vp);
+        if (!vraw.empty() && !__nexa_g3_is_spirv(vraw)) {
+            const std::string alt = __nexa_g3_slurp(vp + ".spv");
+            if (__nexa_g3_is_spirv(alt)) { vp += ".spv"; vraw = alt; }
+        }
+        if (vraw.empty()) { __nexa_g3_shader_log = "cannot read " + vp; return 0; }
+        std::string fraw = __nexa_g3_slurp(fp);
+        if (!fraw.empty() && !__nexa_g3_is_spirv(fraw)) {
+            const std::string alt = __nexa_g3_slurp(fp + ".spv");
+            if (__nexa_g3_is_spirv(alt)) { fp += ".spv"; fraw = alt; }
+        }
+        if (fraw.empty()) { __nexa_g3_shader_log = "cannot read " + fp; return 0; }
         if (!__nexa_g3_is_spirv(vraw) || !__nexa_g3_is_spirv(fraw)) {
             __nexa_g3_shader_log =
                 "this window is running Vulkan, which takes compiled SPIR-V rather than GLSL. "
@@ -4048,14 +4068,25 @@ static int __nexa_gfx3d_shader_set(int id, const std::string& name, double v) {
     if (!__nexa_g3.ready) return 0;
 #if defined(_WIN32)
     if (__nexa_g3.vulkan) {
-        // A Vulkan shader reads the scene's own uniform block and push
-        // constants; there is no named value to write into from here. Said
-        // plainly rather than answered with a quiet 1.
-        (void)id; (void)name; (void)v;
-        __nexa_g3_shader_log =
-            "gfx3d.shader_set is the OpenGL renderer's: a Vulkan shader takes its values from the "
-            "scene's own uniforms, not by name";
-        return 0;
+        if (id < 1 || id > __nexa_g3_shader_n) return 0;
+        // There is no uniform to look up by name on Vulkan: a custom shader
+        // reads the sixteen floats this renderer pushes after the transform.
+        // A name takes the next free slot the first time it is set, so one
+        // value is uUser[0].x, and more than one go in the order the program
+        // first wrote them.
+        int slot = -1;
+        for (int i = 0; i < __nexa_g3_vk_slots; ++i) {
+            if (name == __nexa_g3_vk_names[i]) { slot = i; break; }
+        }
+        if (slot < 0) {
+            if (__nexa_g3_vk_slots >= 16) {
+                __nexa_g3_shader_log = "a Vulkan shader has sixteen value slots and all are taken";
+                return 0;
+            }
+            slot = __nexa_g3_vk_slots++;
+            __nexa_g3_vk_names[slot] = name;
+        }
+        return nexa_vk14::custom_set(slot, (float)v);
     }
 #endif
     if (!__nexa_g3.core33) return 0;
