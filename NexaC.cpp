@@ -2557,38 +2557,34 @@ int main(int argc, char* argv[]) {
         // io.to_int parses with strtol, so neither needs them. RTTI is never emitted by the
         // transpiler, so it is dropped unless inline_cpp is present.
         const nexa::Modules::CppUsage& usage = transpiler.cppUsage();
-        // gfx3d.shader hands GLSL to the graphics driver, and only the OpenGL
-        // 3.3 renderer has one: Vulkan takes a compiled .spv instead, and the
-        // legacy profile has no shader to replace. A program asking for a
-        // custom shader without asking for that renderer gets 0 from
-        // gfx3d.shader on any machine that opened Vulkan -- which, since
-        // Windows tries Vulkan first, is most of them.
+        // gfx3d.shader works on either renderer, but not from the same file:
+        // the OpenGL 3.3 driver compiles GLSL, and Vulkan takes SPIR-V that was
+        // compiled beforehand. A program naming neither gets whichever the
+        // machine opens -- Vulkan first, on Windows -- so it can meet the wrong
+        // kind of file on somebody else's computer and only find out there.
         //
-        // Said at build time, where the program can still be changed, and in a
-        // popup as well as on the console for the reason the WASM toolchain
-        // prompt is one: a line in a build log is easy to walk past.
+        // Said at build time, where it can still be changed, and in a popup as
+        // well as on the console for the reason the WASM toolchain prompt is
+        // one: a line in a build log is easy to walk past.
         if (modules.hasGfx3d() && usage.gfx3dShader && !usage.gfx3dRendererAsked) {
             const std::string msg =
-                "This program calls gfx3d.shader, which compiles GLSL through the "
-                "graphics driver. Only the OpenGL 3.3 renderer does that:\n\n"
-                "  Vulkan takes a compiled .spv instead\n"
-                "  legacy OpenGL has no shader to replace\n\n"
-                "Ask for it before gfx3d.open:\n\n"
-                "  gfx3d.renderer(\"opengl 3.3\");\n\n"
-                "Without it gfx3d.shader returns 0 wherever Vulkan opens, and "
-                "gfx3d.shader_error() says so.";
-            std::cout << "[Nexa] Warning: gfx3d.shader needs the OpenGL 3.3 renderer,"
-                         " which this program never asks for.\n";
-            std::cout << "[Nexa] Add gfx3d.renderer(\"opengl 3.3\") before gfx3d.open.\n";
+                "This program calls gfx3d.shader without naming a renderer, and the two take "
+                "different files:\n\n"
+                "  OpenGL 3.3 compiles the .vert and .frag as they are\n"
+                "  Vulkan takes SPIR-V: glslangValidator -V a.vert -o a.vert.spv\n\n"
+                "Windows opens Vulkan by preference, so name the one you built for:\n\n"
+                "  gfx3d.renderer(\"opengl 3.3\");   before gfx3d.open\n\n"
+                "Given the other kind, gfx3d.shader returns 0 and gfx3d.shader_error() says "
+                "which was wanted.";
+            std::cout << "[Nexa] Warning: gfx3d.shader with no renderer named; OpenGL 3.3 wants"
+                         " GLSL and Vulkan wants SPIR-V.\n";
+            std::cout << "[Nexa] Name one before gfx3d.open, or ship the .spv alongside.\n";
             std::cout.flush();
-            // The popup only where a person is watching. nexaAlert's Windows
-            // half is a modal MessageBox with MB_SETFOREGROUND, which in a
-            // build script or a test run would take the focus and then wait
-            // for a click that is never coming -- and the suites transpile
-            // shader programs by the dozen. The console lines above are always
-            // printed, so nothing is lost when the box is skipped.
+            // The popup only where a person is watching: nexaAlert's Windows half
+            // is a modal MessageBox with MB_SETFOREGROUND, and in a build script or
+            // a test run it would take the focus and wait for a click that never comes.
             if (nexaStdinIsTerminal()) {
-                nexaAlert("NexaC - custom shader needs OpenGL 3.3", msg.c_str());
+                nexaAlert("NexaC - which shader did you build?", msg.c_str());
             } else {
                 std::cerr << "[Nexa] " << msg << "\n";
             }
