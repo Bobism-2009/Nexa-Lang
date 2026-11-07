@@ -31,6 +31,14 @@ struct Gpu {
     void* partMap = nullptr;
     int drawN = 0;
     uint64_t pipeMesh[10] = {};
+// [nexa:vkshader-begin]
+    // gfx3d.shader: the author's own SPIR-V, built into the same ten mesh
+    // pipelines so every shape draws through it. Bound in place of pipeMesh
+    // while customOn, and nothing else about the frame changes.
+    uint64_t pipeCustom[10] = {};
+    uint64_t shCustom[2] = {};
+    int customOn = 0;
+// [nexa:vkshader-end]
     uint64_t pipeMat[2] = {};
     uint64_t pipeSky = 0, pipePart = 0, pipeShadow = 0, pipeBlit = 0, pipeTex[2] = {};
     uint64_t passC = 0, passL = 0, passSh = 0, passSwapL = 0;
@@ -481,9 +489,20 @@ inline void scene_swapchain(Dev& d) {
     pipe_ex(d, g.sh[11], g.sh[12], 3, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0xF, 32, texAt, 3, 1, g.layoutTex, d.pass, &g.pipeTex[1]);
 }
 
+// [nexa:vkshader-begin] -- dropped for a program that loads no custom shader.
+// Not cosmetic: custom_up is pipe_ex's second caller, and with two of them
+// pipe_ex stops being inlined into make_scene_pipes, which costs every 3D
+// program about 2.3KB for a feature it is not using.
+inline void custom_down(Dev& d);   // defined below, with the rest of gfx3d.shader
+// [nexa:vkshader-end]
+
 inline void scene_down(Dev& d) {
     Gpu& g = gpu();
     if (d.device) {
+// [nexa:vkshader-begin]
+        // A custom shader's pipelines and modules are the scene's to free too.
+        custom_down(d);
+// [nexa:vkshader-end]
         destroy_pipes_swap(d);
         destroy_target(d);
         if (g.pipeShadow && d.DestroyPipeline) d.DestroyPipeline(d.device, g.pipeShadow, nullptr);
@@ -517,6 +536,79 @@ inline void scene_down(Dev& d) {
 }
 
 inline void prime_mesh_sets(Dev& d);
+
+// [nexa:vkshader-begin]
+// --- gfx3d.shader on Vulkan -------------------------------------------------
+//
+// Vulkan takes SPIR-V, so there is nothing here to compile: the words are
+// handed to the driver as they arrive and become two shader modules, then the
+// same ten mesh pipelines the built-in shader has. Drawing binds the custom
+// one while it is on, and nothing else about a frame changes.
+//
+// What the shader has to agree with is the mesh pipeline it is replacing: the
+// same descriptor set layout (layoutMesh), the same vertex input -- position,
+// colour, uv, 36 bytes a vertex -- and the same render pass. A module that
+// disagrees is a pipeline the driver will refuse, which comes back as 0.
+
+inline void custom_down(Dev& d) {
+    Gpu& g = gpu();
+    for (int i = 0; i < 10; ++i) {
+        if (g.pipeCustom[i] && d.DestroyPipeline) d.DestroyPipeline(d.device, g.pipeCustom[i], nullptr);
+        g.pipeCustom[i] = 0;
+    }
+    for (int i = 0; i < 2; ++i) {
+        if (g.shCustom[i] && d.DestroyShaderModule) d.DestroyShaderModule(d.device, g.shCustom[i], nullptr);
+        g.shCustom[i] = 0;
+    }
+    g.customOn = 0;
+}
+
+// 1 if the pipelines were built. Replaces whatever was there: a program that
+// loads a second shader is not asking for both.
+inline int custom_up(const uint32_t* vw, size_t vbytes, const uint32_t* fw, size_t fbytes) {
+    Dev& d = dev();
+    Gpu& g = gpu();
+    if (!g.booted || !d.device) return 0;
+    // The frame in flight may still be reading the pipelines about to go.
+    if (d.DeviceWaitIdle) d.DeviceWaitIdle(d.device);
+    custom_down(d);
+    if (!shader_mod(d, vw, vbytes / 4, &g.shCustom[0])) { custom_down(d); return 0; }
+    if (!shader_mod(d, fw, fbytes / 4, &g.shCustom[1])) { custom_down(d); return 0; }
+    struct Kind { int cull, blend, depthT, depthW, bias, stencil; uint32_t mask; float bc, bs; uint32_t topo; };
+    const Kind kinds[10] = {
+        { 0, 0, 1, 1, 0, 0, 0xF, 0, 0, 3 },
+        { 0, 0, 1, 1, 0, 0, 0xF, 0, 0, 3 },
+        { 0, 1, 1, 1, 0, 0, 0xF, 0, 0, 3 },
+        { 0, 1, 1, 1, 0, 0, 0xF, 0, 0, 3 },
+        { 0, 1, 1, 0, 1, 0, 0xF, -1, -1, 3 },
+        { 0, 0, 0, 0, 0, 0, 0xF, 0, 0, 3 },
+        { 0, 1, 0, 0, 0, 0, 0xF, 0, 0, 3 },
+        { 0, 1, 1, 0, 0, 0, 0xF, 0, 0, 1 },
+        { 0, 0, 1, 0, 0, 1, 0, 0, 0, 3 },
+        { 0, 0, 0, 0, 0, 2, 0xF, 0, 0, 3 },
+    };
+    const At meshAt[] = { {0, 0, 106, 0}, {1, 0, 106, 12}, {2, 0, 106, 24} };
+    for (int i = 0; i < 10; ++i) {
+        const Kind& k = kinds[i];
+        if (!pipe_ex(d, g.shCustom[0], g.shCustom[1], k.topo, (uint32_t)k.cull, 0, k.depthT, k.depthW,
+                     k.blend, g.samples, k.bias, k.bc, k.bs, k.stencil, k.mask, 36, meshAt, 3, 1,
+                     g.layoutMesh, g.passC, &g.pipeCustom[i])) {
+            custom_down(d);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+inline int custom_use(int on) {
+    Gpu& g = gpu();
+    if (on && !g.pipeCustom[0]) return 0;
+    g.customOn = on ? 1 : 0;
+    return 1;
+}
+
+inline int custom_ready() { return gpu().pipeCustom[0] != 0; }
+// [nexa:vkshader-end]
 
 inline int scene_boot(Dev& d) {
     Gpu& g = gpu();
@@ -780,7 +872,15 @@ inline void mesh_draw_buf(uint64_t buf, uint64_t off, int nvert, const void* dra
     int slot = draw_slot(draw);
     if (slot < 0 || slot >= (int)g.meshSets.size()) return;
     uint64_t set = g.meshSets[(size_t)slot];
+// [nexa:vkshader-begin]
+    // The custom pipeline stands in for the built-in one of the same kind, so
+    // depth, blending and topology stay exactly as the shape asked for.
+    const uint64_t pipe = (g.customOn && g.pipeCustom[kind]) ? g.pipeCustom[kind] : g.pipeMesh[kind];
+    d.CmdBindPipeline(d.cmd, 0, pipe);
+// [nexa:vkshader-end]
+// [nexa:novkshader-begin]
     d.CmdBindPipeline(d.cmd, 0, g.pipeMesh[kind]);
+// [nexa:novkshader-end]
     d.CmdBindDescriptorSets(d.cmd, 0, g.layoutMesh, 0, 1, &set, 0, nullptr);
     d.CmdBindVertexBuffers(d.cmd, 0, 1, &buf, &off);
     d.CmdDraw(d.cmd, (uint32_t)nvert, 1, 0, 0);

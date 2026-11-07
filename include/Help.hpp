@@ -649,7 +649,7 @@ no array of pixels to read back.
             gfx3d.use_shader(id)      0 is the one gfx3d ships
             gfx3d.shader_set(id, name, v)   one number into a uniform
             gfx3d.shader_error()      why the last shader would not build
-                                      needs gfx3d.renderer("opengl 3.3")
+                                      GLSL on "opengl 3.3", SPIR-V on vulkan
   renderer  gfx3d.renderer(name)      ask, before open; "opengl", "opengl 1.1",
                                       "opengl 3.3", "vulkan" or "vulkan 1.4"
             gfx3d.backend()           what the window actually opened with

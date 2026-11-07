@@ -998,6 +998,15 @@ inline void draw(const float* xyzrgb, int nvert, int lines, int twoSided, const 
     detail::draw(xyzrgb, nvert, lines, twoSided, mvp);
 }
 inline void set_overlay(const void* bgra, int w, int h) { detail::set_overlay(bgra, w, h); }
+// [nexa:vkshader-begin]
+// gfx3d.shader. The words are SPIR-V already, so these only build the
+// pipelines and choose which of them a mesh is drawn with.
+inline int custom_up(const unsigned int* vw, size_t vbytes, const unsigned int* fw, size_t fbytes) {
+    return detail::custom_up(vw, vbytes, fw, fbytes);
+}
+inline int custom_use(int on) { return detail::custom_use(on); }
+inline int custom_ready() { return detail::custom_ready(); }
+// [nexa:vkshader-end]
 inline void present(const void* bgra, int bw, int bh) { detail::present(bgra, bw, bh); }
 inline void set_vsync(int on) { detail::set_vsync(on); }
 inline int scene_ok() { return detail::scene_ok(); }

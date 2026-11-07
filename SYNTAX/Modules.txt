@@ -1395,20 +1395,39 @@ ARGUMENT TYPES
   gfx3d.use_shader(id)           - draw with it; 0 goes back to the built-in
   gfx3d.shader_set(id, name, v)  - write one number into a named uniform; 1/0
   gfx3d.shader_error()           - why the last gfx3d.shader answered 0
-                                   OpenGL 3.3 only, because that is the renderer
-                                   with a shader compiler in it -- the graphics
-                                   driver's, so nothing is installed and nothing
-                                   is compiled at build time. Ask for it first:
-                                     gfx3d.renderer("opengl 3.3");
+                                   Both renderers, each taking its own kind of
+                                   file, and gfx3d.shader tells them apart by
+                                   looking (SPIR-V begins 0x07230203):
+                                     OpenGL 3.3 -- hand it the .vert and .frag.
+                                       The graphics driver compiles them, so
+                                       nothing is installed and nothing is
+                                       compiled at build time.
+                                     Vulkan -- hand it SPIR-V, compiled before
+                                       the program runs:
+                                         glslangValidator -V a.vert -o a.vert.spv
+                                       Nothing compiles GLSL at runtime there.
+                                   Name the one you built for, before open:
+                                     gfx3d.renderer("opengl 3.3");   or
+                                     gfx3d.renderer("vulkan 1.4");
                                      gfx3d.open("demo", 800, 600);
-                                   Vulkan takes a compiled .spv instead and the
-                                   legacy profile has no shader to replace, so on
-                                   either gfx3d.shader answers 0 and
-                                   gfx3d.shader_error() says which. NexaC also
-                                   warns at build time -- on the console and in a
-                                   popup -- when a program calls gfx3d.shader
-                                   without asking for the renderer, because
-                                   Windows opens Vulkan by preference.
+                                   Given the other kind, gfx3d.shader answers 0
+                                   and gfx3d.shader_error() says which was wanted.
+                                   NexaC warns at build time -- console and popup
+                                   -- when a program names no renderer, since
+                                   Windows opens Vulkan by preference and the two
+                                   want different files.
+                                   The legacy profile has no shader to replace and
+                                   answers 0; so does a browser build.
+                                   On Vulkan a custom shader is built into the same
+                                   ten pipelines the built-in one has, so depth,
+                                   blending and topology stay as each shape asked.
+                                   It has to match what it replaces: set 0 as
+                                   std/gfx3d binds it, and a vertex of position,
+                                   colour and uv. A module that does not is a
+                                   pipeline the driver refuses, which is a 0.
+                                   gfx3d.shader_set is the OpenGL renderer's; a
+                                   Vulkan shader takes its values from the scene's
+                                   own uniforms rather than by name.
                                    Your shader is handed what the built-in one is
                                    handed, and that is the whole contract:
                                      attribute vec3 aPos;   per vertex

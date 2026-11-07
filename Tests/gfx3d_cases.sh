@@ -926,6 +926,25 @@ else
         echo "ok shader: the emission carries the browser-to-330-core translation"
     fi
 fi
+
+# Vulkan takes SPIR-V, so the emission has to carry the other half too: the
+# magic-number sniff that tells a .spv from GLSL, and the calls that build the
+# pipelines. Guarded for Windows, where the Vulkan renderer lives.
+if ! "$NEXAC" "$WORK/xl.nxa" --source "$WORK/vk.cpp" > "$WORK/vk.log" 2>&1; then
+    echo "FAIL shader: NexaC could not transpile the vulkan case"
+    fails=$((fails + 1))
+else
+    miss=""
+    for frag in '0x07230203' 'custom_up' 'custom_use' '__nexa_g3_is_spirv'; do
+        grep -q "$frag" "$WORK/vk.cpp" || miss="$miss [$frag]"
+    done
+    if [ -n "$miss" ]; then
+        echo "FAIL shader: the Vulkan half is missing:$miss"
+        fails=$((fails + 1))
+    else
+        echo "ok shader: the emission carries the SPIR-V path for Vulkan"
+    fi
+fi
 printf '#include <std/io>
 #include <std/gfx3d>
 fn main(): int {

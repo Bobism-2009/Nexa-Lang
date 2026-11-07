@@ -3039,6 +3039,43 @@ static void __nexa_g3_batch_submit(void) {
             const size_t nl = vk.find('\n', p);
             if (nl != std::string::npos) vk.erase(0, nl + 1);
         }
+        // The custom-shader half of the renderer, bracketed in the headers,
+        // comes out for a program that loads none -- the same surgery the
+        // audio block gets, and for the same reason: what is not used is not
+        // shipped. The brackets stay in the headers, so the embed and the
+        // headers remain the same text and vk14_embed_cases still compares
+        // them whole.
+        {
+            const std::string b = shader ? "// [nexa:novkshader-begin]" : "// [nexa:vkshader-begin]";
+            const std::string e = shader ? "// [nexa:novkshader-end]" : "// [nexa:vkshader-end]";
+            for (;;) {
+                const size_t from = vk.find(b);
+                if (from == std::string::npos) break;
+                const size_t to = vk.find(e, from);
+                if (to == std::string::npos) break;
+                size_t end = vk.find('\n', to);
+                end = (end == std::string::npos) ? vk.size() : end + 1;
+                vk.erase(from, end - from);
+                // A region that sat between blank lines would leave two behind,
+                // and the point of this is that what is left is the text that
+                // was there before the feature existed -- to the byte.
+                if (from > 0 && from < vk.size() && vk[from - 1] == '\n' && vk[from] == '\n') {
+                    vk.erase(from, 1);
+                }
+            }
+            // And the brackets around the half that stayed: they are a note to
+            // whoever edits the header, not something to ship in the program.
+            const char* keptMarks[2] = { "// [nexa:vkshader-", "// [nexa:novkshader-" };
+            for (int m = 0; m < 2; ++m) {
+                for (;;) {
+                    const size_t at2 = vk.find(keptMarks[m]);
+                    if (at2 == std::string::npos) break;
+                    size_t stop = vk.find('\n', at2);
+                    stop = (stop == std::string::npos) ? vk.size() : stop + 1;
+                    vk.erase(at2, stop - at2);
+                }
+            }
+        }
         s.replace(at, mark.size(), vk);
     }
     return s;
@@ -3809,6 +3846,24 @@ static std::string __nexa_g3_glsl_330(const std::string& src, int isVertex) {
     return head + stripped;
 }
 
+// SPIR-V begins with 0x07230203, so what a file holds is a question the file
+// answers -- better than trusting an extension, and it is what tells a .spv
+// handed to OpenGL apart from GLSL handed to Vulkan.
+static int __nexa_g3_is_spirv(const std::string& b) {
+    if (b.size() < 4 || (b.size() % 4) != 0) return 0;
+    const unsigned char* u = (const unsigned char*)b.data();
+    const unsigned w = (unsigned)u[0] | ((unsigned)u[1] << 8) | ((unsigned)u[2] << 16) | ((unsigned)u[3] << 24);
+    return w == 0x07230203u;
+}
+
+// Copied rather than cast: a std::string's bytes need not be aligned for
+// uint32_t, and the driver is handed words.
+static std::vector<unsigned int> __nexa_g3_spirv_words(const std::string& b) {
+    std::vector<unsigned int> w(b.size() / 4);
+    if (!w.empty()) std::memcpy(w.data(), b.data(), w.size() * 4);
+    return w;
+}
+
 static std::string __nexa_g3_shader_info(__nexa_GLuint obj, int isProgram) {
     char log[1024];
     __nexa_GLsizei len = 0;
@@ -3847,11 +3902,46 @@ static int __nexa_gfx3d_shader(const std::string& vertPath, const std::string& f
         __nexa_g3_shader_log = "no window open yet; call gfx3d.open first";
         return 0;
     }
+#if defined(_WIN32)
+    // Vulkan is the other renderer with a shader to replace. It takes SPIR-V,
+    // so nothing is compiled here: the words go to the driver as they arrive.
+    if (__nexa_g3.vulkan) {
+        const std::string vraw = __nexa_g3_slurp(vertPath);
+        if (vraw.empty()) { __nexa_g3_shader_log = "cannot read " + vertPath; return 0; }
+        const std::string fraw = __nexa_g3_slurp(fragPath);
+        if (fraw.empty()) { __nexa_g3_shader_log = "cannot read " + fragPath; return 0; }
+        if (!__nexa_g3_is_spirv(vraw) || !__nexa_g3_is_spirv(fraw)) {
+            __nexa_g3_shader_log =
+                "this window is running Vulkan, which takes compiled SPIR-V rather than GLSL. "
+                "Compile each stage first -- glslangValidator -V shader.vert -o shader.vert.spv -- "
+                "and hand gfx3d.shader the .spv files. GLSL as written is compiled by the driver "
+                "on the OpenGL 3.3 renderer instead: gfx3d.renderer(\"opengl 3.3\") before gfx3d.open";
+            return 0;
+        }
+        if (__nexa_g3_shader_n >= NEXA_G3_SHADERS) {
+            __nexa_g3_shader_log = "no room for another shader";
+            return 0;
+        }
+        const std::vector<unsigned int> vw = __nexa_g3_spirv_words(vraw);
+        const std::vector<unsigned int> fw = __nexa_g3_spirv_words(fraw);
+        if (!nexa_vk14::custom_up(vw.data(), vw.size() * 4, fw.data(), fw.size() * 4)) {
+            __nexa_g3_shader_log =
+                "the Vulkan driver would not build a pipeline from those modules. A custom shader "
+                "has to match the one it replaces: set 0 as std/gfx3d binds it, and a vertex of "
+                "position, colour and uv";
+            return 0;
+        }
+        // One slot, so the handle means the same thing on both renderers. The
+        // pipelines themselves live in the scene, which owns and frees them.
+        __nexa_g3_shaders[__nexa_g3_shader_n].prog = 0;
+        __nexa_g3_shader_n++;
+        return __nexa_g3_shader_n;
+    }
+#endif
     if (!__nexa_g3.core33) {
-        __nexa_g3_shader_log = std::string("this window is running ") +
-            (__nexa_g3.vulkan ? "Vulkan, which needs a compiled .spv shader"
-                              : "legacy OpenGL, which has no shader to replace") +
-            "; ask for it with gfx3d.renderer(\"opengl 3.3\") before gfx3d.open";
+        __nexa_g3_shader_log =
+            "this window is running legacy OpenGL, which has no shader to replace; ask for one "
+            "with gfx3d.renderer(\"opengl 3.3\") before gfx3d.open";
         return 0;
     }
     if (__nexa_g3_shader_n >= NEXA_G3_SHADERS) {
@@ -3879,6 +3969,12 @@ static int __nexa_gfx3d_shader(const std::string& vertPath, const std::string& f
     const std::string fraw = __nexa_g3_slurp(fragPath);
     if (fraw.empty()) {
         __nexa_g3_shader_log = "cannot read " + fragPath;
+        return 0;
+    }
+    if (__nexa_g3_is_spirv(vraw) || __nexa_g3_is_spirv(fraw)) {
+        __nexa_g3_shader_log =
+            "that is compiled SPIR-V, which Vulkan takes; this window is running OpenGL 3.3, whose "
+            "driver compiles GLSL. Hand it the .vert and .frag themselves";
         return 0;
     }
     __nexa_GLuint vs = __nexa_g3_compile_logged(NEXA_GL_VERTEX_SHADER,
@@ -3930,7 +4026,15 @@ static void __nexa_g3_shader_bind(const __nexa_G3Shader& e) {
 }
 
 static int __nexa_gfx3d_use_shader(int id) {
-    if (!__nexa_g3.ready || !__nexa_g3.core33) return 0;
+    if (!__nexa_g3.ready) return 0;
+#if defined(_WIN32)
+    if (__nexa_g3.vulkan) {
+        if (id == 0) return nexa_vk14::custom_use(0);
+        if (id < 1 || id > __nexa_g3_shader_n) return 0;
+        return nexa_vk14::custom_use(1);
+    }
+#endif
+    if (!__nexa_g3.core33) return 0;
     if (id == 0) {
         if (!__nexa_g3_shader_builtin.prog) return 1;   // never left it
         __nexa_g3_shader_bind(__nexa_g3_shader_builtin);
@@ -3947,7 +4051,20 @@ static int __nexa_gfx3d_use_shader(int id) {
 // being drawn with: the program is bound for the write and the drawing one put
 // back, so the order a program sets things in does not matter.
 static int __nexa_gfx3d_shader_set(int id, const std::string& name, double v) {
-    if (!__nexa_g3.ready || !__nexa_g3.core33) return 0;
+    if (!__nexa_g3.ready) return 0;
+#if defined(_WIN32)
+    if (__nexa_g3.vulkan) {
+        // A Vulkan shader reads the scene's own uniform block and push
+        // constants; there is no named value to write into from here. Said
+        // plainly rather than answered with a quiet 1.
+        (void)id; (void)name; (void)v;
+        __nexa_g3_shader_log =
+            "gfx3d.shader_set is the OpenGL renderer's: a Vulkan shader takes its values from the "
+            "scene's own uniforms, not by name";
+        return 0;
+    }
+#endif
+    if (!__nexa_g3.core33) return 0;
     if (id < 1 || id > __nexa_g3_shader_n) return 0;
     const __nexa_G3Shader& e = __nexa_g3_shaders[id - 1];
     const __nexa_GLint at = __nexa_g33.GetUniformLocation(e.prog, name.c_str());
