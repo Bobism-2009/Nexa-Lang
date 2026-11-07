@@ -5298,6 +5298,13 @@ private:
         // gfx3d.use is state, like gfx3d.light: every solid shape after it
         // wears that texture, until gfx3d.use(0).
         else if (method == "texture" || method == "use") argc = 1;
+        // Custom shaders. gfx3d.shader takes the two GLSL files, use_shader is
+        // state like gfx3d.use, shader_set writes one number, shader_error says
+        // why the last gfx3d.shader answered 0.
+        else if (method == "shader") argc = 2;
+        else if (method == "use_shader") argc = 1;
+        else if (method == "shader_set") argc = 3;
+        else if (method == "shader_error") argc = 0;
         else if (method == "sound" || method == "sample") argc = 1;
         else if (method == "play" || method == "loop") { argc = 1; argcMax = 2; }
         else if (method == "stop" || method == "volume"
@@ -5332,6 +5339,7 @@ private:
                 " released, typed, wheel, wheel_x, mouse, mouse_x, mouse_y,"
                 " pads, pad, pad_pressed, pad_axis, rumble,"
                 " model, draw, model_tris, texture, use,"
+                " shader, use_shader, shader_set, shader_error,"
                 " sound, play, loop, stop, volume,"
                 " audio, sample, audio_queued, audio_flush)");
         }
@@ -5398,6 +5406,9 @@ private:
             else if (method == "draw") sig = "gfx3d.draw(id, x, y, z, scale, r, g, b)";
             else if (method == "texture") sig = "gfx3d.texture(path)";
             else if (method == "use") sig = "gfx3d.use(texture)";
+            else if (method == "shader") sig = "gfx3d.shader(vertex_path, fragment_path)";
+            else if (method == "use_shader") sig = "gfx3d.use_shader(shader)";
+            else if (method == "shader_set") sig = "gfx3d.shader_set(shader, name, value)";
             else if (method == "sound") sig = "gfx3d.sound(path)";
             else if (method == "play") sig = "gfx3d.play(snd) or gfx3d.play(snd, volume)";
             else if (method == "loop") sig = "gfx3d.loop(snd) or gfx3d.loop(snd, volume)";

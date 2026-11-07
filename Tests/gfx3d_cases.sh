@@ -897,6 +897,87 @@ NXA
 fi
 # --- report -----------------------------------------------------------------
 
+echo "-- shader: gfx3d.shader, and what a program without one carries"
+printf '#include <std/io>
+#include <std/gfx3d>
+fn main(): int {
+    gfx3d.renderer("opengl 3.3");
+    gfx3d.open("t", 8, 8);
+    let s: int = gfx3d.shader("a.vert", "a.frag");
+    gfx3d.use_shader(s);
+    gfx3d.shader_set(s, "uTime", 1.0);
+    io.println(gfx3d.shader_error());
+    return 0;
+}
+' > "$WORK/sh.nxa"
+printf '#include <std/gfx3d>
+fn main(): int {
+    gfx3d.open("t", 8, 8);
+    gfx3d.poll();
+    return 0;
+}
+' > "$WORK/nosh.nxa"
+
+if ! "$NEXAC" "$WORK/sh.nxa" --source "$WORK/sh.cpp" > "$WORK/sh.log" 2>&1; then
+    echo "FAIL shader: NexaC could not transpile a custom-shader program"
+    sed 's/^/  /' "$WORK/sh.log" | tail -4
+    fails=$((fails + 1))
+elif ! grep -q '__nexa_gfx3d_shader' "$WORK/sh.cpp"; then
+    echo "FAIL shader: no shader code in a program that asks for one"
+    fails=$((fails + 1))
+elif ! grep -q 'GetShaderInfoLog' "$WORK/sh.cpp"; then
+    echo "FAIL shader: no info log, so a shader that will not build cannot say why"
+    fails=$((fails + 1))
+else
+    echo "ok shader: the table, the reader and the driver's info logs are there"
+fi
+
+# Sliced: a 3D program that never asks for a custom shader must carry none of
+# it -- not the table, not the file reader, and not the two extra GL symbols.
+if ! "$NEXAC" "$WORK/nosh.nxa" --source "$WORK/nosh.cpp" > "$WORK/nosh.log" 2>&1; then
+    echo "FAIL shader: NexaC could not transpile a plain gfx3d program"
+    fails=$((fails + 1))
+else
+    left=""
+    for sym in __nexa_gfx3d_shader NEXA_G3_SHADERS NEXA_SH_CreateShader GetShaderInfoLog GetProgramInfoLog; do
+        if grep -q "$sym" "$WORK/nosh.cpp"; then left="$left $sym"; fi
+    done
+    if [ -n "$left" ]; then
+        echo "FAIL shader: a program with no custom shader still carries:$left"
+        fails=$((fails + 1))
+    else
+        echo "ok shader: a program without one carries none of it"
+    fi
+fi
+
+# The build-time warning. gfx3d.shader needs the OpenGL 3.3 renderer, and a
+# program that never asks for it would be told no at runtime on any machine
+# that opened Vulkan -- which on Windows is most of them. Said at build time,
+# where the program can still be changed.
+if "$NEXAC" "$WORK/nosh2.nxa" --source "$WORK/x.cpp" > /dev/null 2>&1; then : ; fi
+printf '#include <std/gfx3d>
+fn main(): int {
+    gfx3d.open("t", 8, 8);
+    let s: int = gfx3d.shader("a.vert", "a.frag");
+    gfx3d.use_shader(s);
+    return 0;
+}
+' > "$WORK/warn.nxa"
+warned=$("$NEXAC" "$WORK/warn.nxa" --source "$WORK/warn.cpp" < /dev/null 2>&1 | grep -c 'opengl 3.3')
+if [ "$warned" -gt 0 ]; then
+    echo "ok shader: a custom shader with no renderer asked for is warned about"
+else
+    echo "FAIL shader: no warning for a custom shader without the 3.3 renderer"
+    fails=$((fails + 1))
+fi
+quiet=$("$NEXAC" "$WORK/sh.nxa" --source "$WORK/sh2.cpp" < /dev/null 2>&1 | grep -ci 'warning')
+if [ "$quiet" = "0" ]; then
+    echo "ok shader: and silent when the program does ask for it"
+else
+    echo "FAIL shader: warned even though the program asks for the 3.3 renderer"
+    fails=$((fails + 1))
+fi
+
 if [ $fails -eq 0 ]; then
     if [ $skips -gt 0 ]; then
         echo "gfx3d ok ($skips layer(s) skipped: see above)"

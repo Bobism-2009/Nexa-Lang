@@ -645,6 +645,11 @@ no array of pixels to read back.
             gfx3d.pad_pressed(i, button)   gfx3d.pad_axis(i, axis)
                                       gamepads: no window needed, focused or not
             gfx3d.rumble(i, strength[, high])   shake one (not on macOS)
+  shader    gfx3d.shader(vert, frag)  your own GLSL; a handle, or 0
+            gfx3d.use_shader(id)      0 is the one gfx3d ships
+            gfx3d.shader_set(id, name, v)   one number into a uniform
+            gfx3d.shader_error()      why the last shader would not build
+                                      needs gfx3d.renderer("opengl 3.3")
   renderer  gfx3d.renderer(name)      ask, before open; "opengl", "opengl 1.1",
                                       "opengl 3.3", "vulkan" or "vulkan 1.4"
             gfx3d.backend()           what the window actually opened with

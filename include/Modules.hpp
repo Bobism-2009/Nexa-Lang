@@ -211,6 +211,13 @@ public:
         // gfx3d.rumble, sliced apart from reading it for the same reason
         // gfx.rumble is: shaking a pad and reading one are separate costs.
         bool gfx3dPadRumble = false;
+        // gfx3d.shader / use_shader / shader_set / shader_error: a custom GLSL
+        // program, compiled by the graphics driver at runtime.
+        bool gfx3dShader = false;
+        // Whether the program calls gfx3d.renderer at all. Not a slicing flag:
+        // it is how the build can tell that a custom shader was asked for
+        // without the one renderer that can compile it.
+        bool gfx3dRendererAsked = false;
         bool json = false;
         bool result = false;
     };
@@ -2180,9 +2187,12 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
             // reads the pads, gfx.poll takes the snapshot and a second one taken
             // by gfx3d.poll in the same frame would leave pad_pressed with
             // nothing between the two samples to report.
-            out += gfx3dRuntimeCpp(usage.gfx3dPad);
+            out += gfx3dRuntimeCpp(usage.gfx3dPad, usage.gfx3dShader);
             // After the runtime, not before: the model block draws through
             // __nexa_g3_vert_n and the vertex batch, which are defined up there.
+            // Before the model block and after the runtime: it swaps the
+            // globals the drawing code reads its locations out of.
+            if (usage.gfx3dShader) out += gfx3dShaderCpp();
             if (usage.gfx3dModel) out += gfx3dModelCpp();
             // gfx3d.texture decodes with std/gfx's decoder. Both chunks are
             // guarded, so if gfx.image already brought them they are empty here.

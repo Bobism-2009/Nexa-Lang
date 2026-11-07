@@ -64,11 +64,11 @@
 namespace nexa {
 
 // Defined below; the runtime is assembled from these three pieces.
-inline std::string gfx3dPlatformCpp();
+inline std::string gfx3dPlatformCpp(bool shader);
 inline std::string gfx3dApiCpp(bool pad);
 inline std::string gfx3dModelCpp();
 
-inline std::string gfx3dRuntimeCpp(bool pad) {
+inline std::string gfx3dRuntimeCpp(bool pad, bool shader) {
     return R"NEXA_GFX3D(
 // ---------------------------------------------------------------------------
 // std/gfx3d runtime
@@ -228,7 +228,15 @@ void glLinkProgram(__nexa_GLuint);
 void glGetProgramiv(__nexa_GLuint, __nexa_GLenum, __nexa_GLint*);
 void glUseProgram(__nexa_GLuint);
 __nexa_GLint glGetUniformLocation(__nexa_GLuint, const __nexa_GLchar*);
-__nexa_GLint glGetAttribLocation(__nexa_GLuint, const __nexa_GLchar*);
+)NEXA_GFX3D"
+    // Only gfx3d.shader asks the driver why a shader would not build; the
+    // built-in ones are known to compile, so these two are emitted only for a
+    // program that asks -- which keeps a program drawing with the shader
+    // gfx3d ships generated exactly as it was, to the byte.
+    + (shader ? std::string(R"NEXA_GFX3D(void glGetShaderInfoLog(__nexa_GLuint, __nexa_GLsizei, __nexa_GLsizei*, __nexa_GLchar*);
+void glGetProgramInfoLog(__nexa_GLuint, __nexa_GLsizei, __nexa_GLsizei*, __nexa_GLchar*);
+)NEXA_GFX3D") : std::string())
+    + R"NEXA_GFX3D(__nexa_GLint glGetAttribLocation(__nexa_GLuint, const __nexa_GLchar*);
 void glUniformMatrix4fv(__nexa_GLint, __nexa_GLsizei, __nexa_GLubyte, const __nexa_GLfloat*);
 void glGenBuffers(__nexa_GLsizei, __nexa_GLuint*);
 void glBindBuffer(__nexa_GLenum, __nexa_GLuint);
@@ -606,7 +614,7 @@ static double __nexa_g3_now_ms(void) {
     return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;
 #endif
 }
-)NEXA_GFX3D" + gfx3dPlatformCpp() + gfx3dApiCpp(pad);
+)NEXA_GFX3D" + gfx3dPlatformCpp(shader) + gfx3dApiCpp(pad);
 }
 
 
@@ -617,7 +625,7 @@ static double __nexa_g3_now_ms(void) {
 // is filling in those four and nothing else.
 #include "nexa_vk14_embed.inc"
 
-inline std::string gfx3dPlatformCpp() {
+inline std::string gfx3dPlatformCpp(bool shader) {
     std::string s = R"NEXA_GFX3D(
 // --- symbol loading ---------------------------------------------------------
 
@@ -1236,6 +1244,7 @@ static int __nexa_g3_build_program(void) {
     glGenBuffers(1, &__nexa_g3_vbo);
     return __nexa_g3_vbo != 0;
 }
+
 
 // A browser pushes input rather than answering questions about it, so these
 // five listeners are the whole of the wasm half: they write the same table
@@ -2435,7 +2444,15 @@ struct __nexa_GL33 {
     void (NEXA_GLAPI *GetProgramiv)(__nexa_GLuint, __nexa_GLenum, __nexa_GLint*);
     void (NEXA_GLAPI *UseProgram)(__nexa_GLuint);
     __nexa_GLint (NEXA_GLAPI *GetUniformLocation)(__nexa_GLuint, const __nexa_GLchar*);
-    __nexa_GLint (NEXA_GLAPI *GetAttribLocation)(__nexa_GLuint, const __nexa_GLchar*);
+)NEXA_GFX3D";
+    // Asked for only by gfx3d.shader, which wants the driver's own words when
+    // a custom shader will not build. Emitted with the two loader entries
+    // below it, so a program drawing with the built-in shader has the struct
+    // it always had.
+    if (shader) s += R"NEXA_GFX3D(    void (NEXA_GLAPI *GetShaderInfoLog)(__nexa_GLuint, __nexa_GLsizei, __nexa_GLsizei*, __nexa_GLchar*);
+    void (NEXA_GLAPI *GetProgramInfoLog)(__nexa_GLuint, __nexa_GLsizei, __nexa_GLsizei*, __nexa_GLchar*);
+)NEXA_GFX3D";
+    s += R"NEXA_GFX3D(    __nexa_GLint (NEXA_GLAPI *GetAttribLocation)(__nexa_GLuint, const __nexa_GLchar*);
     void (NEXA_GLAPI *UniformMatrix4fv)(__nexa_GLint, __nexa_GLsizei, __nexa_GLubyte, const __nexa_GLfloat*);
     void (NEXA_GLAPI *Uniform1i)(__nexa_GLint, __nexa_GLint);
     void (NEXA_GLAPI *Uniform1f)(__nexa_GLint, __nexa_GLfloat);
@@ -2584,7 +2601,11 @@ static int __nexa_g3_try_core33(void) {
     NEXA_G33(GetProgramiv, "glGetProgramiv")
     NEXA_G33(UseProgram, "glUseProgram")
     NEXA_G33(GetUniformLocation, "glGetUniformLocation")
-    NEXA_G33(GetAttribLocation, "glGetAttribLocation")
+)NEXA_GFX3D";
+    if (shader) s += R"NEXA_GFX3D(    NEXA_G33(GetShaderInfoLog, "glGetShaderInfoLog")
+    NEXA_G33(GetProgramInfoLog, "glGetProgramInfoLog")
+)NEXA_GFX3D";
+    s += R"NEXA_GFX3D(    NEXA_G33(GetAttribLocation, "glGetAttribLocation")
     NEXA_G33(UniformMatrix4fv, "glUniformMatrix4fv")
     NEXA_G33(Uniform1i, "glUniform1i")
     NEXA_G33(Uniform1f, "glUniform1f")
@@ -3650,6 +3671,266 @@ static std::string __nexa_gfx3d_backend(void) {
     return out;
 }
 
+
+// std/gfx3d custom shaders, emitted only for a program that asks for one.
+// Its own block for the reason the .obj reader is: it brings a file reader,
+// a program table and the driver's info logs, and a program drawing with
+// the shader gfx3d ships needs none of that.
+//
+// Comes after the runtime, because it swaps the very globals the drawing
+// code reads its attribute and uniform locations out of.
+inline std::string gfx3dShaderCpp() {
+    return R"NEXA_GFX3D(
+// gfx3d.shader. A custom program is the built-in one with the author's own
+// GLSL in it, so it has the same job to do and is given the same things to do
+// it with: aPos, aCol and aUV per vertex, and uMVP, uTex and uTexOn as
+// uniforms. Whatever of those it declares, it gets; what it leaves out costs
+// it nothing.
+//
+// The draw path reads the locations out of the globals above rather than
+// asking GL each frame, so swapping a program is swapping those -- which is
+// why a user program needs no change anywhere in the drawing code.
+// The OpenGL 3.3 path is spelled twice in this runtime: Windows loads the entry
+// points into __nexa_g33 and keeps the current program's locations in
+// __nexa_g33_*, while Linux and macOS call gl* directly and keep theirs in
+// __nexa_g3_*. Rather than write everything below twice, the difference is
+// named once, here.
+#ifdef _WIN32
+#define NEXA_SH_CreateShader       __nexa_g33.CreateShader
+#define NEXA_SH_ShaderSource       __nexa_g33.ShaderSource
+#define NEXA_SH_CompileShader      __nexa_g33.CompileShader
+#define NEXA_SH_GetShaderiv        __nexa_g33.GetShaderiv
+#define NEXA_SH_DeleteShader       __nexa_g33.DeleteShader
+#define NEXA_SH_CreateProgram      __nexa_g33.CreateProgram
+#define NEXA_SH_AttachShader       __nexa_g33.AttachShader
+#define NEXA_SH_LinkProgram        __nexa_g33.LinkProgram
+#define NEXA_SH_GetProgramiv       __nexa_g33.GetProgramiv
+#define NEXA_SH_UseProgram         __nexa_g33.UseProgram
+#define NEXA_SH_GetUniformLocation __nexa_g33.GetUniformLocation
+#define NEXA_SH_GetAttribLocation  __nexa_g33.GetAttribLocation
+#define NEXA_SH_Uniform1f          __nexa_g33.Uniform1f
+#define NEXA_SH_Uniform1i          __nexa_g33.Uniform1i
+#define NEXA_SH_PROG               __nexa_g33_prog
+#define NEXA_SH_UMVP               __nexa_g33_u_mvp
+#define NEXA_SH_APOS               __nexa_g33_a_pos
+#define NEXA_SH_ACOL               __nexa_g33_a_col
+#define NEXA_SH_AUV                __nexa_g33_a_uv
+#define NEXA_SH_UTEXON             __nexa_g33_u_texon
+#else
+#define NEXA_SH_CreateShader       glCreateShader
+#define NEXA_SH_ShaderSource       glShaderSource
+#define NEXA_SH_CompileShader      glCompileShader
+#define NEXA_SH_GetShaderiv        glGetShaderiv
+#define NEXA_SH_DeleteShader       glDeleteShader
+#define NEXA_SH_CreateProgram      glCreateProgram
+#define NEXA_SH_AttachShader       glAttachShader
+#define NEXA_SH_LinkProgram        glLinkProgram
+#define NEXA_SH_GetProgramiv       glGetProgramiv
+#define NEXA_SH_UseProgram         glUseProgram
+#define NEXA_SH_GetUniformLocation glGetUniformLocation
+#define NEXA_SH_GetAttribLocation  glGetAttribLocation
+#define NEXA_SH_Uniform1f          glUniform1f
+#define NEXA_SH_Uniform1i          glUniform1i
+#define NEXA_SH_PROG               __nexa_g3_prog
+#define NEXA_SH_UMVP               __nexa_g3_u_mvp
+#define NEXA_SH_APOS               __nexa_g3_a_pos
+#define NEXA_SH_ACOL               __nexa_g3_a_col
+#define NEXA_SH_AUV                __nexa_g3_a_uv
+#define NEXA_SH_UTEXON             __nexa_g3_u_texon
+#endif
+
+#define NEXA_G3_SHADERS 8
+
+struct __nexa_G3Shader {
+    __nexa_GLuint prog;
+    __nexa_GLint u_mvp, a_pos, a_col, a_uv, u_tex, u_texon;
+};
+static __nexa_G3Shader __nexa_g3_shaders[NEXA_G3_SHADERS];
+static int __nexa_g3_shader_n = 0;
+static __nexa_G3Shader __nexa_g3_shader_builtin;
+static int __nexa_g3_shader_active = 0;   // 0 is the built-in
+static std::string __nexa_g3_shader_log;  // what the driver last said
+
+// The three calls behind gfx3d.shader / use_shader / shader_set, and the
+// reader that answers why one of them said no.
+//
+// Written twice, because the OpenGL 3.3 path is: Windows loads the entry points
+// into __nexa_g33 and keeps its locations in __nexa_g33_*, while Linux and macOS
+// call gl* directly and keep theirs in __nexa_g3_*. Both halves do the same
+// thing -- compile, link, cache the locations, and swap the globals the drawing
+// code reads -- and both offer the author the same six names. Windows has a
+// seventh, uCut, which a custom shader may declare or ignore: left out, its
+// location is -1 and writing to it is a no-op.
+static std::string __nexa_g3_slurp(const std::string& path) {
+    std::FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return std::string();
+    std::string out;
+    char buf[4096];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) out.append(buf, n);
+    std::fclose(f);
+    return out;
+}
+
+static std::string __nexa_g3_shader_info(__nexa_GLuint obj, int isProgram) {
+    char log[1024];
+    __nexa_GLsizei len = 0;
+    log[0] = 0;
+#ifdef _WIN32
+    if (isProgram) __nexa_g33.GetProgramInfoLog(obj, (__nexa_GLsizei)sizeof(log) - 1, &len, log);
+    else           __nexa_g33.GetShaderInfoLog(obj, (__nexa_GLsizei)sizeof(log) - 1, &len, log);
+#else
+    if (isProgram) glGetProgramInfoLog(obj, (__nexa_GLsizei)sizeof(log) - 1, &len, log);
+    else           glGetShaderInfoLog(obj, (__nexa_GLsizei)sizeof(log) - 1, &len, log);
+#endif
+    if (len < 0) len = 0;
+    if (len > (__nexa_GLsizei)sizeof(log) - 1) len = (__nexa_GLsizei)sizeof(log) - 1;
+    log[len] = 0;
+    return std::string(log);
+}
+
+// Compiles one stage and keeps the driver's complaint if it will not build.
+static __nexa_GLuint __nexa_g3_compile_logged(__nexa_GLenum kind, const std::string& src,
+                                              const char* what) {
+    __nexa_GLuint sh = NEXA_SH_CreateShader(kind);
+    if (!sh) {
+        __nexa_g3_shader_log = std::string(what) + ": the driver would not make a shader object";
+        return 0;
+    }
+    const char* p = src.c_str();
+    NEXA_SH_ShaderSource(sh, 1, &p, nullptr);
+    NEXA_SH_CompileShader(sh);
+    __nexa_GLint ok = 0;
+    NEXA_SH_GetShaderiv(sh, NEXA_GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        __nexa_g3_shader_log = std::string(what) + ": " + __nexa_g3_shader_info(sh, 0);
+        NEXA_SH_DeleteShader(sh);
+        return 0;
+    }
+    return sh;
+}
+
+static int __nexa_gfx3d_shader(const std::string& vertPath, const std::string& fragPath) {
+    __nexa_g3_shader_log.clear();
+    if (!__nexa_g3.ready) {
+        __nexa_g3_shader_log = "no window open yet; call gfx3d.open first";
+        return 0;
+    }
+    if (!__nexa_g3.core33) {
+        // Nothing to swap: the legacy profile draws without a shader at all,
+        // and Vulkan takes SPIR-V rather than this.
+        __nexa_g3_shader_log = std::string("this window is running ") +
+            (__nexa_g3.vulkan ? "Vulkan, which needs a compiled .spv shader"
+                              : "legacy OpenGL, which has no shader to replace") +
+            "; ask for it with gfx3d.renderer(\"opengl 3.3\") before gfx3d.open";
+        return 0;
+    }
+    if (__nexa_g3_shader_n >= NEXA_G3_SHADERS) {
+        __nexa_g3_shader_log = "no room for another shader";
+        return 0;
+    }
+    // Remember the built-in before there is any chance of it being swapped
+    // out, so gfx3d.use_shader(0) can put it back. Until the first custom
+    // shader exists the bound program is the built-in, which is what makes
+    // this the right moment and keeps the drawing code free of any mention
+    // of the shader table.
+    if (!__nexa_g3_shader_builtin.prog) {
+        __nexa_g3_shader_builtin.prog = NEXA_SH_PROG;
+        __nexa_g3_shader_builtin.u_mvp = NEXA_SH_UMVP;
+        __nexa_g3_shader_builtin.a_pos = NEXA_SH_APOS;
+        __nexa_g3_shader_builtin.a_col = NEXA_SH_ACOL;
+        __nexa_g3_shader_builtin.a_uv = NEXA_SH_AUV;
+        __nexa_g3_shader_builtin.u_texon = NEXA_SH_UTEXON;
+    }
+    const std::string vsrc = __nexa_g3_slurp(vertPath);
+    if (vsrc.empty()) {
+        __nexa_g3_shader_log = "cannot read " + vertPath;
+        return 0;
+    }
+    const std::string fsrc = __nexa_g3_slurp(fragPath);
+    if (fsrc.empty()) {
+        __nexa_g3_shader_log = "cannot read " + fragPath;
+        return 0;
+    }
+    __nexa_GLuint vs = __nexa_g3_compile_logged(NEXA_GL_VERTEX_SHADER, vsrc, "vertex shader");
+    if (!vs) return 0;
+    __nexa_GLuint fs = __nexa_g3_compile_logged(NEXA_GL_FRAGMENT_SHADER, fsrc, "fragment shader");
+    if (!fs) { NEXA_SH_DeleteShader(vs); return 0; }
+    __nexa_GLuint prog = NEXA_SH_CreateProgram();
+    if (!prog) {
+        __nexa_g3_shader_log = "the driver would not make a program";
+        NEXA_SH_DeleteShader(vs); NEXA_SH_DeleteShader(fs);
+        return 0;
+    }
+    NEXA_SH_AttachShader(prog, vs);
+    NEXA_SH_AttachShader(prog, fs);
+    NEXA_SH_LinkProgram(prog);
+    __nexa_GLint ok = 0;
+    NEXA_SH_GetProgramiv(prog, NEXA_GL_LINK_STATUS, &ok);
+    NEXA_SH_DeleteShader(vs);
+    NEXA_SH_DeleteShader(fs);
+    if (!ok) {
+        __nexa_g3_shader_log = std::string("link: ") + __nexa_g3_shader_info(prog, 1);
+        return 0;
+    }
+    __nexa_G3Shader& e = __nexa_g3_shaders[__nexa_g3_shader_n];
+    e.prog = prog;
+    // Absent names come back as -1, which the drawing code already treats as
+    // "this program does not want that one".
+    e.u_mvp = NEXA_SH_GetUniformLocation(prog, "uMVP");
+    e.a_pos = NEXA_SH_GetAttribLocation(prog, "aPos");
+    e.a_col = NEXA_SH_GetAttribLocation(prog, "aCol");
+    e.a_uv = NEXA_SH_GetAttribLocation(prog, "aUV");
+    e.u_tex = NEXA_SH_GetUniformLocation(prog, "uTex");
+    e.u_texon = NEXA_SH_GetUniformLocation(prog, "uTexOn");
+    __nexa_g3_shader_n++;
+    return __nexa_g3_shader_n;  // 1-based, so 0 stays "the built-in"
+}
+
+static void __nexa_g3_shader_bind(const __nexa_G3Shader& e) {
+    NEXA_SH_PROG = e.prog;
+    NEXA_SH_UMVP = e.u_mvp;
+    NEXA_SH_APOS = e.a_pos;
+    NEXA_SH_ACOL = e.a_col;
+    NEXA_SH_AUV = e.a_uv;
+    NEXA_SH_UTEXON = e.u_texon;
+    NEXA_SH_UseProgram(e.prog);
+    if (e.u_tex >= 0) NEXA_SH_Uniform1i(e.u_tex, 0);
+}
+
+static int __nexa_gfx3d_use_shader(int id) {
+    if (!__nexa_g3.ready || !__nexa_g3.core33) return 0;
+    if (id == 0) {
+        __nexa_g3_shader_bind(__nexa_g3_shader_builtin);
+        __nexa_g3_shader_active = 0;
+        return 1;
+    }
+    if (id < 1 || id > __nexa_g3_shader_n) return 0;
+    __nexa_g3_shader_bind(__nexa_g3_shaders[id - 1]);
+    __nexa_g3_shader_active = id;
+    return 1;
+}
+
+// One number into a named uniform of one shader, whether or not it is the one
+// being drawn with: the program is bound for the write and the drawing one put
+// back, so the order a program sets things in does not matter.
+static int __nexa_gfx3d_shader_set(int id, const std::string& name, double v) {
+    if (!__nexa_g3.ready || !__nexa_g3.core33) return 0;
+    if (id < 1 || id > __nexa_g3_shader_n) return 0;
+    const __nexa_G3Shader& e = __nexa_g3_shaders[id - 1];
+    const __nexa_GLint at = NEXA_SH_GetUniformLocation(e.prog, name.c_str());
+    if (at < 0) return 0;
+    NEXA_SH_UseProgram(e.prog);
+    NEXA_SH_Uniform1f(at, (__nexa_GLfloat)v);
+    if (__nexa_g3_shader_active != id) {
+        NEXA_SH_UseProgram(NEXA_SH_PROG);
+    }
+    return 1;
+}
+
+static std::string __nexa_gfx3d_shader_error(void) { return __nexa_g3_shader_log; }
+)NEXA_GFX3D";
+}
 
 // std/gfx3d model loading: Wavefront .obj, parsed here rather than linked.
 //

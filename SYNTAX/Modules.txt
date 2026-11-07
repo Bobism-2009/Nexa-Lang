@@ -1389,6 +1389,46 @@ ARGUMENT TYPES
                                    where gfx and gfx3d differ: gfx.mouse_x is a
                                    framebuffer pixel because gfx scales its buffer up,
                                    and gfx3d has no buffer and no scale to divide by
+  CUSTOM SHADERS
+  gfx3d ships its own shaders; these put yours in their place.
+  gfx3d.shader(vert, frag)       - compile a GLSL pair; a handle, or 0
+  gfx3d.use_shader(id)           - draw with it; 0 goes back to the built-in
+  gfx3d.shader_set(id, name, v)  - write one number into a named uniform; 1/0
+  gfx3d.shader_error()           - why the last gfx3d.shader answered 0
+                                   OpenGL 3.3 only, because that is the renderer
+                                   with a shader compiler in it -- the graphics
+                                   driver's, so nothing is installed and nothing
+                                   is compiled at build time. Ask for it first:
+                                     gfx3d.renderer("opengl 3.3");
+                                     gfx3d.open("demo", 800, 600);
+                                   Vulkan takes a compiled .spv instead and the
+                                   legacy profile has no shader to replace, so on
+                                   either gfx3d.shader answers 0 and
+                                   gfx3d.shader_error() says which. NexaC also
+                                   warns at build time -- on the console and in a
+                                   popup -- when a program calls gfx3d.shader
+                                   without asking for the renderer, because
+                                   Windows opens Vulkan by preference.
+                                   Your shader is handed what the built-in one is
+                                   handed, and that is the whole contract:
+                                     attribute vec3 aPos;   per vertex
+                                     attribute vec3 aCol;
+                                     attribute vec2 aUV;
+                                     uniform mat4 uMVP;     camera * model
+                                     uniform sampler2D uTex;
+                                     uniform float uTexOn;  1 when a texture is bound
+                                   Declare what you use; leaving one out costs
+                                   nothing. Writing to gl_Position in the vertex
+                                   shader and gl_FragColor in the fragment one is
+                                   what the rest of gfx3d expects of you.
+                                   Up to 8 at once. A compile or link failure is
+                                   the driver's own message, through
+                                   gfx3d.shader_error(), not a crash.
+                                   gfx3d.shader_set writes a float; the shader is
+                                   bound for the write and the one being drawn
+                                   with put back, so the order does not matter.
+                                   A program that calls none of these carries no
+                                   shader table, no file reader and no info logs.
   gfx3d.pads()                   - how many gamepads are connected, 0 to 4
   gfx3d.pad(i, button)           - 1 if that button of gamepad i is down
   gfx3d.pad_pressed(i, button)   - 1 if it went down since the last gfx3d.poll()

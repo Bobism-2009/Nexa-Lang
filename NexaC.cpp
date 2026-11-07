@@ -922,6 +922,17 @@ static bool nexaAskYesNo(const char* title, const char* text) {
 #endif
 }
 
+// Is someone watching? A modal box is only worth showing to a person; in a
+// build script or a test run it would take the focus and wait for a click that
+// is never coming.
+static bool nexaStdinIsTerminal() {
+#ifdef _WIN32
+    return _isatty(_fileno(stdin)) != 0;
+#else
+    return isatty(STDIN_FILENO) != 0;
+#endif
+}
+
 static void nexaAlert(const char* title, const char* text) {
 #ifdef _WIN32
     using MsgBoxFn = int (WINAPI*)(HWND, LPCSTR, LPCSTR, UINT);
@@ -2511,6 +2522,42 @@ int main(int argc, char* argv[]) {
         // io.to_int parses with strtol, so neither needs them. RTTI is never emitted by the
         // transpiler, so it is dropped unless inline_cpp is present.
         const nexa::Modules::CppUsage& usage = transpiler.cppUsage();
+        // gfx3d.shader hands GLSL to the graphics driver, and only the OpenGL
+        // 3.3 renderer has one: Vulkan takes a compiled .spv instead, and the
+        // legacy profile has no shader to replace. A program asking for a
+        // custom shader without asking for that renderer gets 0 from
+        // gfx3d.shader on any machine that opened Vulkan -- which, since
+        // Windows tries Vulkan first, is most of them.
+        //
+        // Said at build time, where the program can still be changed, and in a
+        // popup as well as on the console for the reason the WASM toolchain
+        // prompt is one: a line in a build log is easy to walk past.
+        if (modules.hasGfx3d() && usage.gfx3dShader && !usage.gfx3dRendererAsked) {
+            const std::string msg =
+                "This program calls gfx3d.shader, which compiles GLSL through the "
+                "graphics driver. Only the OpenGL 3.3 renderer does that:\n\n"
+                "  Vulkan takes a compiled .spv instead\n"
+                "  legacy OpenGL has no shader to replace\n\n"
+                "Ask for it before gfx3d.open:\n\n"
+                "  gfx3d.renderer(\"opengl 3.3\");\n\n"
+                "Without it gfx3d.shader returns 0 wherever Vulkan opens, and "
+                "gfx3d.shader_error() says so.";
+            std::cout << "[Nexa] Warning: gfx3d.shader needs the OpenGL 3.3 renderer,"
+                         " which this program never asks for.\n";
+            std::cout << "[Nexa] Add gfx3d.renderer(\"opengl 3.3\") before gfx3d.open.\n";
+            std::cout.flush();
+            // The popup only where a person is watching. nexaAlert's Windows
+            // half is a modal MessageBox with MB_SETFOREGROUND, which in a
+            // build script or a test run would take the focus and then wait
+            // for a click that is never coming -- and the suites transpile
+            // shader programs by the dozen. The console lines above are always
+            // printed, so nothing is lost when the box is skipped.
+            if (nexaStdinIsTerminal()) {
+                nexaAlert("NexaC - custom shader needs OpenGL 3.3", msg.c_str());
+            } else {
+                std::cerr << "[Nexa] " << msg << "\n";
+            }
+        }
         const bool noExceptions = !usage.exceptions && !modules.hasInlineCpp();
         const bool noRtti = !modules.hasInlineCpp();
 

@@ -3080,7 +3080,8 @@ private:
             case AstNode::Type::Gfx3dCall:
                 // backend() is the only one that answers with text; the rest
                 // are 1/0 or a size, and the draws are statements.
-                if (e.value == "backend" || e.value == "typed") return "string";
+                if (e.value == "backend" || e.value == "typed" ||
+                    e.value == "shader_error") return "string";
                 // An axis reads -1.0 .. 1.0: the one gfx3d call not whole.
                 if (e.value == "pad_axis") return "float";
                 return "int";  // ambient reads back a level; the rest are 1/0 or a size
@@ -4592,6 +4593,9 @@ private:
             {"draw",        "gfx3d.draw(id, x, y, z, scale, r, g, b)",                "nnnnnnnn"},
             {"texture",     "gfx3d.texture(path)",                                    "t"},
             {"use",         "gfx3d.use(texture)",                                     "n"},
+            {"shader",      "gfx3d.shader(vertex_path, fragment_path)",               "tt"},
+            {"use_shader",  "gfx3d.use_shader(shader)",                               "n"},
+            {"shader_set",  "gfx3d.shader_set(shader, name, value)",                  "ntn"},
             // Sound, spelled as std/gfx spells it because it is the same call.
             {"audio",       "gfx3d.audio([rate])",                                    "n"},
             {"sample",      "gfx3d.sample(s)",                                        "n"},
@@ -6036,7 +6040,9 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         if (e.type == AstNode::Type::TermCall) return termCallIsString(e.value);
         // gfx3d.backend() is the one call in the module that answers with
         // text, so it is the one that concatenates instead of being counted.
-        if (e.type == AstNode::Type::Gfx3dCall) return e.value == "backend" || e.value == "typed";
+        if (e.type == AstNode::Type::Gfx3dCall) {
+            return e.value == "backend" || e.value == "typed" || e.value == "shader_error";
+        }
         if (e.type == AstNode::Type::UiCall) {
             return e.value == "textbox" || ((e.value == "theme" || e.value == "style") && e.children.empty());
         }
@@ -9780,6 +9786,13 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             // The shared gamepad reader, and on Windows the XInput DLL it
             // loads: a program that draws in 3D and reads no pad has neither.
             cppUsage.gfx3dPad = true;
+        } else if (fn == "renderer") {
+            cppUsage.gfx3dRendererAsked = true;
+        } else if (fn == "shader" || fn == "use_shader" || fn == "shader_set" ||
+                   fn == "shader_error") {
+            // The shader table, the file reader and the driver's info logs: a
+            // program drawing with the built-in shader carries none of them.
+            cppUsage.gfx3dShader = true;
         } else if (fn == "rumble") {
             cppUsage.gfx3dPadRumble = true;
         } else if (fn == "sound" || fn == "play" || fn == "loop" ||

@@ -1,0 +1,57 @@
+// Drawing with your own GLSL instead of the one gfx3d ships.
+//
+//   build: NexaC Examples/shader_demo.nxa -o shader_demo && ./shader_demo
+//   quit:  escape, or close the window
+//
+// The shaders are Examples/shaders/wave.vert and .frag, compiled by the
+// graphics driver when this runs -- nothing is compiled at build time and
+// nothing extra is installed.
+//
+// gfx3d.renderer("opengl 3.3") comes first and is not optional: that is the
+// renderer with a shader compiler behind it. Vulkan takes a compiled .spv and
+// the legacy profile has no shader to replace, so on either gfx3d.shader
+// answers 0 -- which is why this checks, prints the reason, and carries on with
+// the built-in shader rather than drawing nothing.
+#include <std/io>
+#include <std/gfx3d>
+#include <std/time>
+
+fn main() {
+    gfx3d.renderer("opengl 3.3");
+    gfx3d.open("Nexa custom shader", 640, 480);
+
+    let sh: int = gfx3d.shader("Examples/shaders/wave.vert",
+                               "Examples/shaders/wave.frag");
+    if (sh == 0) {
+        io.println("custom shader unavailable: ", gfx3d.shader_error());
+        io.println("falling back to the built-in shader");
+    } else {
+        io.println("custom shader ready; backend is ", gfx3d.backend());
+        gfx3d.use_shader(sh);
+    }
+
+    let start: float = time.now_ms();
+    while (!gfx3d.closed()) {
+        gfx3d.poll();
+        if (gfx3d.pressed("escape")) {
+            gfx3d.close();
+        }
+        gfx3d.clear(14, 14, 22);
+        gfx3d.camera(3.5, 2.5, 3.5, 0.0, 0.0, 0.0);
+
+        // The one number the shader is driven by. Set every frame, so the wave
+        // moves; a shader that is not the active one can still be written to.
+        let t: float = (time.now_ms() - start) / 1000.0;
+        if (sh != 0) {
+            gfx3d.shader_set(sh, "uTime", t);
+        }
+
+        gfx3d.grid(6.0, 0.5, 40, 40, 60);
+        gfx3d.cube(0.0, 0.5, 0.0, 1.0, 200, 90, 70);
+        gfx3d.cube(1.6, 0.5, 0.0, 0.6, 90, 180, 120);
+        gfx3d.cube(-1.6, 0.5, 0.0, 0.6, 110, 130, 220);
+
+        gfx3d.present();
+    }
+    return;
+}
