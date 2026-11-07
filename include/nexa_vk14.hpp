@@ -55,6 +55,15 @@ struct Dev {
     uint64_t layout = 0;
     uint64_t layoutOv = 0;
     uint64_t pipeTri = 0, pipeTwo = 0, pipeLine = 0, pipeOv = 0;
+// [nexa:vkshader-begin]
+    // gfx3d.shader: the author's own SPIR-V, built into the same three
+    // pipelines the built-in shader has -- triangles, two-sided triangles and
+    // lines -- and bound in their place while customOn. Dropped from the
+    // emission for a program that loads no shader.
+    uint64_t pipeCustomTri = 0, pipeCustomTwo = 0, pipeCustomLine = 0;
+    uint64_t shCustom[2] = {};
+    int customOn = 0;
+// [nexa:vkshader-end]
     uint64_t shVs = 0, shFs = 0, shOvVs = 0, shOvFs = 0;
     uint64_t pool = 0;
     uint64_t vbuf = 0, vmem = 0;
@@ -456,6 +465,20 @@ inline int rebuild_swapchain(Dev& d, int wantW, int wantH) {
     if (!make_pipe(d, d.shVs, d.shFs, 3, 0, 1, 0, d.pass, 24, 0, d.layout, &d.pipeTwo)) return 0;
     if (!make_pipe(d, d.shVs, d.shFs, 1, 0, 1, 0, d.pass, 24, 0, d.layout, &d.pipeLine)) return 0;
     if (!make_pipe(d, d.shOvVs, d.shOvFs, 3, 0, 0, 1, d.passOv, 16, 1, d.layoutOv, &d.pipeOv)) return 0;
+// [nexa:vkshader-begin]
+    // A custom shader's pipelines belong to the render pass as much as the
+    // built-in ones do, so a resize rebuilds them alongside.
+    if (d.shCustom[0] && d.shCustom[1]) {
+        if (d.pipeCustomTri) { d.DestroyPipeline(d.device, d.pipeCustomTri, nullptr); d.pipeCustomTri = 0; }
+        if (d.pipeCustomTwo) { d.DestroyPipeline(d.device, d.pipeCustomTwo, nullptr); d.pipeCustomTwo = 0; }
+        if (d.pipeCustomLine) { d.DestroyPipeline(d.device, d.pipeCustomLine, nullptr); d.pipeCustomLine = 0; }
+        if (!make_pipe(d, d.shCustom[0], d.shCustom[1], 3, 2, 1, 0, d.pass, 24, 0, d.layout, &d.pipeCustomTri) ||
+            !make_pipe(d, d.shCustom[0], d.shCustom[1], 3, 0, 1, 0, d.pass, 24, 0, d.layout, &d.pipeCustomTwo) ||
+            !make_pipe(d, d.shCustom[0], d.shCustom[1], 1, 0, 1, 0, d.pass, 24, 0, d.layout, &d.pipeCustomLine)) {
+            return 0;
+        }
+    }
+// [nexa:vkshader-end]
 
     d.fbs.resize(ic);
     d.ovFbs.resize(ic);
@@ -568,6 +591,9 @@ inline int& keep_epoch() {
     return n;
 }
 
+// [nexa:vkshader-begin]
+inline void custom_down(Dev& d);   // defined with the rest of gfx3d.shader, below
+// [nexa:vkshader-end]
 inline void shutdown() {
     keep_epoch()++;
     Dev& d = dev();
@@ -594,6 +620,9 @@ inline void shutdown() {
     if (d.vmem && d.FreeMemory) d.FreeMemory(d.device, d.vmem, nullptr);
     if (d.quad && d.DestroyBuffer) d.DestroyBuffer(d.device, d.quad, nullptr);
     if (d.quadMem && d.FreeMemory) d.FreeMemory(d.device, d.quadMem, nullptr);
+// [nexa:vkshader-begin]
+    custom_down(d);
+// [nexa:vkshader-end]
     if (d.pipeTri && d.DestroyPipeline) d.DestroyPipeline(d.device, d.pipeTri, nullptr);
     if (d.pipeTwo && d.DestroyPipeline) d.DestroyPipeline(d.device, d.pipeTwo, nullptr);
     if (d.pipeLine && d.DestroyPipeline) d.DestroyPipeline(d.device, d.pipeLine, nullptr);
@@ -899,6 +928,52 @@ inline int begin(float r, float g, float b, int w, int h) {
     return 1;
 }
 
+// [nexa:vkshader-begin]
+// --- gfx3d.shader on Vulkan -------------------------------------------------
+//
+// Vulkan takes SPIR-V, so nothing is compiled here: the words become two
+// shader modules and then the same three pipelines the built-in shader has.
+// What a custom shader has to agree with is what it replaces -- the vertex is
+// position and colour, six floats, and the transform arrives as this
+// renderer's push constant.
+inline void custom_down(Dev& d) {
+    if (d.pipeCustomTri && d.DestroyPipeline) d.DestroyPipeline(d.device, d.pipeCustomTri, nullptr);
+    if (d.pipeCustomTwo && d.DestroyPipeline) d.DestroyPipeline(d.device, d.pipeCustomTwo, nullptr);
+    if (d.pipeCustomLine && d.DestroyPipeline) d.DestroyPipeline(d.device, d.pipeCustomLine, nullptr);
+    d.pipeCustomTri = d.pipeCustomTwo = d.pipeCustomLine = 0;
+    for (int i = 0; i < 2; ++i) {
+        if (d.shCustom[i] && d.DestroyShaderModule) d.DestroyShaderModule(d.device, d.shCustom[i], nullptr);
+        d.shCustom[i] = 0;
+    }
+    d.customOn = 0;
+}
+
+inline int custom_up(const unsigned int* vw, size_t vbytes, const unsigned int* fw, size_t fbytes) {
+    Dev& d = dev();
+    if (!d.device || !d.pass) return 0;
+    // The frame in flight may still be reading what is about to go.
+    if (d.DeviceWaitIdle) d.DeviceWaitIdle(d.device);
+    custom_down(d);
+    if (!shader_mod(d, vw, vbytes / 4, &d.shCustom[0])) { custom_down(d); return 0; }
+    if (!shader_mod(d, fw, fbytes / 4, &d.shCustom[1])) { custom_down(d); return 0; }
+    if (!make_pipe(d, d.shCustom[0], d.shCustom[1], 3, 2, 1, 0, d.pass, 24, 0, d.layout, &d.pipeCustomTri) ||
+        !make_pipe(d, d.shCustom[0], d.shCustom[1], 3, 0, 1, 0, d.pass, 24, 0, d.layout, &d.pipeCustomTwo) ||
+        !make_pipe(d, d.shCustom[0], d.shCustom[1], 1, 0, 1, 0, d.pass, 24, 0, d.layout, &d.pipeCustomLine)) {
+        custom_down(d);
+        return 0;
+    }
+    return 1;
+}
+
+inline int custom_use(int on) {
+    Dev& d = dev();
+    if (on && !d.pipeCustomTri) return 0;
+    d.customOn = on ? 1 : 0;
+    return 1;
+}
+
+inline int custom_ready() { return dev().pipeCustomTri != 0; }
+// [nexa:vkshader-end]
 inline void draw(const float* xyzrgb, int nvert, int lines, int twoSided, const float* mvp) {
     Dev& d = dev();
     if (!d.framing || !xyzrgb || nvert <= 0 || !mvp) return;
@@ -913,7 +988,14 @@ inline void draw(const float* xyzrgb, int nvert, int lines, int twoSided, const 
         clip[c * 4 + 2] = 0.5f * z + 0.5f * w;
         clip[c * 4 + 3] = w;
     }
+// [nexa:vkshader-begin]
+    uint64_t pipe = d.customOn
+        ? (lines ? d.pipeCustomLine : (twoSided ? d.pipeCustomTwo : d.pipeCustomTri))
+        : (lines ? d.pipeLine : (twoSided ? d.pipeTwo : d.pipeTri));
+// [nexa:vkshader-end]
+// [nexa:novkshader-begin]
     uint64_t pipe = lines ? d.pipeLine : (twoSided ? d.pipeTwo : d.pipeTri);
+// [nexa:novkshader-end]
     d.CmdBindPipeline(d.cmd, 0, pipe);
     d.CmdPushConstants(d.cmd, d.layout, 1, 0, 64, clip);
     uint64_t off = d.vused;

@@ -1418,13 +1418,20 @@ ARGUMENT TYPES
                                    want different files.
                                    The legacy profile has no shader to replace and
                                    answers 0; so does a browser build.
-                                   On Vulkan a custom shader is built into the same
-                                   ten pipelines the built-in one has, so depth,
-                                   blending and topology stay as each shape asked.
-                                   It has to match what it replaces: set 0 as
-                                   std/gfx3d binds it, and a vertex of position,
-                                   colour and uv. A module that does not is a
-                                   pipeline the driver refuses, which is a 0.
+                                   On Vulkan a custom shader is built into the
+                                   same three pipelines the built-in one has --
+                                   triangles, two-sided triangles and lines -- so
+                                   which one a shape uses is still the shape's
+                                   choice. It has to match what it replaces, and
+                                   that is a smaller contract than the OpenGL one:
+                                     a vertex of position then colour, six floats,
+                                     and the transform as this renderer's push
+                                     constant. No descriptor set, no uTex.
+                                   A module that disagrees is a pipeline the driver
+                                   refuses, which is a 0 -- though a pair that
+                                   merely reads what the other half never wrote
+                                   compiles happily and draws nonsense, as any
+                                   shader would.
                                    gfx3d.shader_set is the OpenGL renderer's; a
                                    Vulkan shader takes its values from the scene's
                                    own uniforms rather than by name.

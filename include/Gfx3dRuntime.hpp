@@ -3056,12 +3056,6 @@ static void __nexa_g3_batch_submit(void) {
                 size_t end = vk.find('\n', to);
                 end = (end == std::string::npos) ? vk.size() : end + 1;
                 vk.erase(from, end - from);
-                // A region that sat between blank lines would leave two behind,
-                // and the point of this is that what is left is the text that
-                // was there before the feature existed -- to the byte.
-                if (from > 0 && from < vk.size() && vk[from - 1] == '\n' && vk[from] == '\n') {
-                    vk.erase(from, 1);
-                }
             }
             // And the brackets around the half that stayed: they are a note to
             // whoever edits the header, not something to ship in the program.
