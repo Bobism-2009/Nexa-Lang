@@ -1421,6 +1421,20 @@ ARGUMENT TYPES
                                    nothing. Writing to gl_Position in the vertex
                                    shader and gl_FragColor in the fragment one is
                                    what the rest of gfx3d expects of you.
+                                   Either dialect is accepted. The browser one
+                                   above -- attribute / varying / precision /
+                                   texture2D / gl_FragColor -- is translated to
+                                   what a 3.3 core context compiles: #version 330
+                                   core first, attribute to in, varying to out in
+                                   the vertex shader and in in the fragment one,
+                                   precision lines dropped, texture2D to texture,
+                                   and gl_FragColor to a declared output. A shader
+                                   that names its own #version is compiled as
+                                   written, with only the comments above the
+                                   directive moved below it, since #version has to
+                                   be the first thing the compiler sees. So one
+                                   shader file works whether it was written for
+                                   the browser or for the desktop.
                                    Up to 8 at once. A compile or link failure is
                                    the driver's own message, through
                                    gfx3d.shader_error(), not a crash.

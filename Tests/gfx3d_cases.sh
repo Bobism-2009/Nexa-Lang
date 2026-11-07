@@ -898,6 +898,34 @@ fi
 # --- report -----------------------------------------------------------------
 
 echo "-- shader: gfx3d.shader, and what a program without one carries"
+# The emitted translator, which is what lets one shader file serve both the
+# browser dialect the reference describes and the 3.3 core context that
+# actually compiles it. Checked in the emission: a driver lenient enough to
+# accept "attribute" in a core context (NVIDIA is) would hide a missing
+# translation on the machine that happens to run the suite.
+printf '#include <std/gfx3d>
+fn main(): int {
+    gfx3d.renderer("opengl 3.3");
+    gfx3d.open("t", 8, 8);
+    let s: int = gfx3d.shader("a.vert", "a.frag");
+    return 0;
+}
+' > "$WORK/xl.nxa"
+if ! "$NEXAC" "$WORK/xl.nxa" --source "$WORK/xl.cpp" > "$WORK/xl.log" 2>&1; then
+    echo "FAIL shader: NexaC could not transpile the translator case"
+    fails=$((fails + 1))
+else
+    miss=""
+    for frag in '#version 330 core' 'attribute' 'varying' 'texture2D' 'gl_FragColor' 'nexa_FragColor' 'precision '; do
+        grep -q "$frag" "$WORK/xl.cpp" || miss="$miss [$frag]"
+    done
+    if [ -n "$miss" ]; then
+        echo "FAIL shader: the GLSL translator is missing:$miss"
+        fails=$((fails + 1))
+    else
+        echo "ok shader: the emission carries the browser-to-330-core translation"
+    fi
+fi
 printf '#include <std/io>
 #include <std/gfx3d>
 fn main(): int {

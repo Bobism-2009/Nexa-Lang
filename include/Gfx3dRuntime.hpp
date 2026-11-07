@@ -3673,72 +3673,21 @@ static std::string __nexa_gfx3d_backend(void) {
 
 
 // std/gfx3d custom shaders, emitted only for a program that asks for one.
-// Its own block for the reason the .obj reader is: it brings a file reader,
-// a program table and the driver's info logs, and a program drawing with
-// the shader gfx3d ships needs none of that.
+// Its own block for the reason the .obj reader is: it brings a file reader, a
+// program table, a small GLSL translator and the driver's info logs, and a
+// program drawing with the shader gfx3d ships needs none of that.
 //
-// Comes after the runtime, because it swaps the very globals the drawing
-// code reads its attribute and uniform locations out of.
+// Comes after the runtime, because it swaps the very globals the drawing code
+// reads its attribute and uniform locations out of.
+//
+// Everything here is the OpenGL 3.3 core path -- __nexa_g33 and its locations
+// -- because that is the only context with a shader this can replace. That
+// path is one piece of code on every native platform, not Windows's alone; a
+// browser build has no core context at all, so there the four calls are
+// present and answer "no".
 inline std::string gfx3dShaderCpp() {
     return R"NEXA_GFX3D(
-// gfx3d.shader. A custom program is the built-in one with the author's own
-// GLSL in it, so it has the same job to do and is given the same things to do
-// it with: aPos, aCol and aUV per vertex, and uMVP, uTex and uTexOn as
-// uniforms. Whatever of those it declares, it gets; what it leaves out costs
-// it nothing.
-//
-// The draw path reads the locations out of the globals above rather than
-// asking GL each frame, so swapping a program is swapping those -- which is
-// why a user program needs no change anywhere in the drawing code.
-// The OpenGL 3.3 path is spelled twice in this runtime: Windows loads the entry
-// points into __nexa_g33 and keeps the current program's locations in
-// __nexa_g33_*, while Linux and macOS call gl* directly and keep theirs in
-// __nexa_g3_*. Rather than write everything below twice, the difference is
-// named once, here.
-#ifdef _WIN32
-#define NEXA_SH_CreateShader       __nexa_g33.CreateShader
-#define NEXA_SH_ShaderSource       __nexa_g33.ShaderSource
-#define NEXA_SH_CompileShader      __nexa_g33.CompileShader
-#define NEXA_SH_GetShaderiv        __nexa_g33.GetShaderiv
-#define NEXA_SH_DeleteShader       __nexa_g33.DeleteShader
-#define NEXA_SH_CreateProgram      __nexa_g33.CreateProgram
-#define NEXA_SH_AttachShader       __nexa_g33.AttachShader
-#define NEXA_SH_LinkProgram        __nexa_g33.LinkProgram
-#define NEXA_SH_GetProgramiv       __nexa_g33.GetProgramiv
-#define NEXA_SH_UseProgram         __nexa_g33.UseProgram
-#define NEXA_SH_GetUniformLocation __nexa_g33.GetUniformLocation
-#define NEXA_SH_GetAttribLocation  __nexa_g33.GetAttribLocation
-#define NEXA_SH_Uniform1f          __nexa_g33.Uniform1f
-#define NEXA_SH_Uniform1i          __nexa_g33.Uniform1i
-#define NEXA_SH_PROG               __nexa_g33_prog
-#define NEXA_SH_UMVP               __nexa_g33_u_mvp
-#define NEXA_SH_APOS               __nexa_g33_a_pos
-#define NEXA_SH_ACOL               __nexa_g33_a_col
-#define NEXA_SH_AUV                __nexa_g33_a_uv
-#define NEXA_SH_UTEXON             __nexa_g33_u_texon
-#else
-#define NEXA_SH_CreateShader       glCreateShader
-#define NEXA_SH_ShaderSource       glShaderSource
-#define NEXA_SH_CompileShader      glCompileShader
-#define NEXA_SH_GetShaderiv        glGetShaderiv
-#define NEXA_SH_DeleteShader       glDeleteShader
-#define NEXA_SH_CreateProgram      glCreateProgram
-#define NEXA_SH_AttachShader       glAttachShader
-#define NEXA_SH_LinkProgram        glLinkProgram
-#define NEXA_SH_GetProgramiv       glGetProgramiv
-#define NEXA_SH_UseProgram         glUseProgram
-#define NEXA_SH_GetUniformLocation glGetUniformLocation
-#define NEXA_SH_GetAttribLocation  glGetAttribLocation
-#define NEXA_SH_Uniform1f          glUniform1f
-#define NEXA_SH_Uniform1i          glUniform1i
-#define NEXA_SH_PROG               __nexa_g3_prog
-#define NEXA_SH_UMVP               __nexa_g3_u_mvp
-#define NEXA_SH_APOS               __nexa_g3_a_pos
-#define NEXA_SH_ACOL               __nexa_g3_a_col
-#define NEXA_SH_AUV                __nexa_g3_a_uv
-#define NEXA_SH_UTEXON             __nexa_g3_u_texon
-#endif
-
+#if !defined(NEXA_WASM)
 #define NEXA_G3_SHADERS 8
 
 struct __nexa_G3Shader {
@@ -3751,16 +3700,6 @@ static __nexa_G3Shader __nexa_g3_shader_builtin;
 static int __nexa_g3_shader_active = 0;   // 0 is the built-in
 static std::string __nexa_g3_shader_log;  // what the driver last said
 
-// The three calls behind gfx3d.shader / use_shader / shader_set, and the
-// reader that answers why one of them said no.
-//
-// Written twice, because the OpenGL 3.3 path is: Windows loads the entry points
-// into __nexa_g33 and keeps its locations in __nexa_g33_*, while Linux and macOS
-// call gl* directly and keep theirs in __nexa_g3_*. Both halves do the same
-// thing -- compile, link, cache the locations, and swap the globals the drawing
-// code reads -- and both offer the author the same six names. Windows has a
-// seventh, uCut, which a custom shader may declare or ignore: left out, its
-// location is -1 and writing to it is a no-op.
 static std::string __nexa_g3_slurp(const std::string& path) {
     std::FILE* f = std::fopen(path.c_str(), "rb");
     if (!f) return std::string();
@@ -3772,39 +3711,131 @@ static std::string __nexa_g3_slurp(const std::string& path) {
     return out;
 }
 
+// --- the dialect ------------------------------------------------------------
+//
+// gfx3d's own shaders are written twice: once in the browser profile
+// (attribute / varying / precision / texture2D / gl_FragColor) for the ES and
+// legacy paths, and once as #version 330 core (in / out) for this one. The
+// reference describes the first, and so does every shader anyone has written
+// against gfx3d, but a 3.3 core context will not compile a word of it.
+//
+// So a shader is taken in either dialect. One that already names a #version is
+// compiled as written -- only its leading comments are moved below the
+// directive, because #version has to be the first thing the compiler sees, and
+// comments at the top of a file are the normal way to write one. Anything else
+// is translated.
+
+static int __nexa_g3_ident_char(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_';
+}
+
+// Whole words only: "attribute" must not match inside "attributes", and
+// "texture2D" must not match inside a name someone chose.
+static void __nexa_g3_sub_word(std::string& s, const std::string& from, const std::string& to) {
+    size_t at = 0;
+    while ((at = s.find(from, at)) != std::string::npos) {
+        const int beforeOk = (at == 0) || !__nexa_g3_ident_char(s[at - 1]);
+        const size_t end = at + from.size();
+        const int afterOk = (end >= s.size()) || !__nexa_g3_ident_char(s[end]);
+        if (beforeOk && afterOk) {
+            s.replace(at, from.size(), to);
+            at += to.size();
+        } else {
+            at = end;
+        }
+    }
+}
+
+// The first line that is neither blank nor a comment, so a #version below a
+// comment header is still found. Block comments are followed to their end.
+static size_t __nexa_g3_first_code(const std::string& s) {
+    size_t i = 0;
+    while (i < s.size()) {
+        while (i < s.size() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n')) i++;
+        if (i + 1 < s.size() && s[i] == '/' && s[i + 1] == '/') {
+            while (i < s.size() && s[i] != '\n') i++;
+            continue;
+        }
+        if (i + 1 < s.size() && s[i] == '/' && s[i + 1] == '*') {
+            const size_t end = s.find("*/", i + 2);
+            if (end == std::string::npos) return s.size();
+            i = end + 2;
+            continue;
+        }
+        return i;
+    }
+    return s.size();
+}
+
+static std::string __nexa_g3_glsl_330(const std::string& src, int isVertex) {
+    const size_t code = __nexa_g3_first_code(src);
+    if (src.compare(code, 8, "#version") == 0) {
+        // Written for this context already. The directive goes first and the
+        // header comments follow it, so nothing the author wrote is lost.
+        const size_t eol = src.find('\n', code);
+        const std::string directive = src.substr(code, (eol == std::string::npos ? src.size() : eol) - code);
+        std::string rest = src.substr(0, code);
+        if (eol != std::string::npos) rest += src.substr(eol + 1);
+        return directive + "\n" + rest;
+    }
+    std::string out = src;
+    __nexa_g3_sub_word(out, "attribute", "in");
+    __nexa_g3_sub_word(out, "varying", isVertex ? "out" : "in");
+    __nexa_g3_sub_word(out, "texture2D", "texture");
+    // gl_FragColor is gone from core; one declared output takes its place. The
+    // name may not begin with __, which is reserved.
+    const int hadFrag = out.find("gl_FragColor") != std::string::npos;
+    __nexa_g3_sub_word(out, "gl_FragColor", "nexa_FragColor");
+    // "precision mediump float;" and friends are an ES idea. A desktop driver
+    // warns about every one of them, so they are dropped rather than passed on.
+    std::string stripped;
+    size_t at = 0;
+    while (at <= out.size()) {
+        size_t eol = out.find('\n', at);
+        if (eol == std::string::npos) eol = out.size();
+        std::string line = out.substr(at, eol - at);
+        size_t ws = line.find_first_not_of(" \t");
+        const int isPrecision = ws != std::string::npos && line.compare(ws, 10, "precision ") == 0;
+        if (!isPrecision) {
+            stripped += line;
+            if (eol < out.size()) stripped += "\n";
+        }
+        if (eol >= out.size()) break;
+        at = eol + 1;
+    }
+    std::string head = "#version 330 core\n";
+    if (!isVertex && hadFrag) head += "out vec4 nexa_FragColor;\n";
+    return head + stripped;
+}
+
 static std::string __nexa_g3_shader_info(__nexa_GLuint obj, int isProgram) {
     char log[1024];
     __nexa_GLsizei len = 0;
     log[0] = 0;
-#ifdef _WIN32
     if (isProgram) __nexa_g33.GetProgramInfoLog(obj, (__nexa_GLsizei)sizeof(log) - 1, &len, log);
     else           __nexa_g33.GetShaderInfoLog(obj, (__nexa_GLsizei)sizeof(log) - 1, &len, log);
-#else
-    if (isProgram) glGetProgramInfoLog(obj, (__nexa_GLsizei)sizeof(log) - 1, &len, log);
-    else           glGetShaderInfoLog(obj, (__nexa_GLsizei)sizeof(log) - 1, &len, log);
-#endif
     if (len < 0) len = 0;
     if (len > (__nexa_GLsizei)sizeof(log) - 1) len = (__nexa_GLsizei)sizeof(log) - 1;
     log[len] = 0;
     return std::string(log);
 }
 
-// Compiles one stage and keeps the driver's complaint if it will not build.
 static __nexa_GLuint __nexa_g3_compile_logged(__nexa_GLenum kind, const std::string& src,
                                               const char* what) {
-    __nexa_GLuint sh = NEXA_SH_CreateShader(kind);
+    __nexa_GLuint sh = __nexa_g33.CreateShader(kind);
     if (!sh) {
         __nexa_g3_shader_log = std::string(what) + ": the driver would not make a shader object";
         return 0;
     }
     const char* p = src.c_str();
-    NEXA_SH_ShaderSource(sh, 1, &p, nullptr);
-    NEXA_SH_CompileShader(sh);
+    __nexa_g33.ShaderSource(sh, 1, &p, nullptr);
+    __nexa_g33.CompileShader(sh);
     __nexa_GLint ok = 0;
-    NEXA_SH_GetShaderiv(sh, NEXA_GL_COMPILE_STATUS, &ok);
+    __nexa_g33.GetShaderiv(sh, NEXA_GL_COMPILE_STATUS, &ok);
     if (!ok) {
         __nexa_g3_shader_log = std::string(what) + ": " + __nexa_g3_shader_info(sh, 0);
-        NEXA_SH_DeleteShader(sh);
+        __nexa_g33.DeleteShader(sh);
         return 0;
     }
     return sh;
@@ -3817,8 +3848,6 @@ static int __nexa_gfx3d_shader(const std::string& vertPath, const std::string& f
         return 0;
     }
     if (!__nexa_g3.core33) {
-        // Nothing to swap: the legacy profile draws without a shader at all,
-        // and Vulkan takes SPIR-V rather than this.
         __nexa_g3_shader_log = std::string("this window is running ") +
             (__nexa_g3.vulkan ? "Vulkan, which needs a compiled .spv shader"
                               : "legacy OpenGL, which has no shader to replace") +
@@ -3832,43 +3861,45 @@ static int __nexa_gfx3d_shader(const std::string& vertPath, const std::string& f
     // Remember the built-in before there is any chance of it being swapped
     // out, so gfx3d.use_shader(0) can put it back. Until the first custom
     // shader exists the bound program is the built-in, which is what makes
-    // this the right moment and keeps the drawing code free of any mention
-    // of the shader table.
+    // this the right moment and keeps the drawing code free of any mention of
+    // the shader table.
     if (!__nexa_g3_shader_builtin.prog) {
-        __nexa_g3_shader_builtin.prog = NEXA_SH_PROG;
-        __nexa_g3_shader_builtin.u_mvp = NEXA_SH_UMVP;
-        __nexa_g3_shader_builtin.a_pos = NEXA_SH_APOS;
-        __nexa_g3_shader_builtin.a_col = NEXA_SH_ACOL;
-        __nexa_g3_shader_builtin.a_uv = NEXA_SH_AUV;
-        __nexa_g3_shader_builtin.u_texon = NEXA_SH_UTEXON;
+        __nexa_g3_shader_builtin.prog = __nexa_g33_prog;
+        __nexa_g3_shader_builtin.u_mvp = __nexa_g33_u_mvp;
+        __nexa_g3_shader_builtin.a_pos = __nexa_g33_a_pos;
+        __nexa_g3_shader_builtin.a_col = __nexa_g33_a_col;
+        __nexa_g3_shader_builtin.a_uv = __nexa_g33_a_uv;
+        __nexa_g3_shader_builtin.u_texon = __nexa_g33_u_texon;
     }
-    const std::string vsrc = __nexa_g3_slurp(vertPath);
-    if (vsrc.empty()) {
+    const std::string vraw = __nexa_g3_slurp(vertPath);
+    if (vraw.empty()) {
         __nexa_g3_shader_log = "cannot read " + vertPath;
         return 0;
     }
-    const std::string fsrc = __nexa_g3_slurp(fragPath);
-    if (fsrc.empty()) {
+    const std::string fraw = __nexa_g3_slurp(fragPath);
+    if (fraw.empty()) {
         __nexa_g3_shader_log = "cannot read " + fragPath;
         return 0;
     }
-    __nexa_GLuint vs = __nexa_g3_compile_logged(NEXA_GL_VERTEX_SHADER, vsrc, "vertex shader");
+    __nexa_GLuint vs = __nexa_g3_compile_logged(NEXA_GL_VERTEX_SHADER,
+                                                __nexa_g3_glsl_330(vraw, 1), "vertex shader");
     if (!vs) return 0;
-    __nexa_GLuint fs = __nexa_g3_compile_logged(NEXA_GL_FRAGMENT_SHADER, fsrc, "fragment shader");
-    if (!fs) { NEXA_SH_DeleteShader(vs); return 0; }
-    __nexa_GLuint prog = NEXA_SH_CreateProgram();
+    __nexa_GLuint fs = __nexa_g3_compile_logged(NEXA_GL_FRAGMENT_SHADER,
+                                                __nexa_g3_glsl_330(fraw, 0), "fragment shader");
+    if (!fs) { __nexa_g33.DeleteShader(vs); return 0; }
+    __nexa_GLuint prog = __nexa_g33.CreateProgram();
     if (!prog) {
         __nexa_g3_shader_log = "the driver would not make a program";
-        NEXA_SH_DeleteShader(vs); NEXA_SH_DeleteShader(fs);
+        __nexa_g33.DeleteShader(vs); __nexa_g33.DeleteShader(fs);
         return 0;
     }
-    NEXA_SH_AttachShader(prog, vs);
-    NEXA_SH_AttachShader(prog, fs);
-    NEXA_SH_LinkProgram(prog);
+    __nexa_g33.AttachShader(prog, vs);
+    __nexa_g33.AttachShader(prog, fs);
+    __nexa_g33.LinkProgram(prog);
     __nexa_GLint ok = 0;
-    NEXA_SH_GetProgramiv(prog, NEXA_GL_LINK_STATUS, &ok);
-    NEXA_SH_DeleteShader(vs);
-    NEXA_SH_DeleteShader(fs);
+    __nexa_g33.GetProgramiv(prog, NEXA_GL_LINK_STATUS, &ok);
+    __nexa_g33.DeleteShader(vs);
+    __nexa_g33.DeleteShader(fs);
     if (!ok) {
         __nexa_g3_shader_log = std::string("link: ") + __nexa_g3_shader_info(prog, 1);
         return 0;
@@ -3877,30 +3908,31 @@ static int __nexa_gfx3d_shader(const std::string& vertPath, const std::string& f
     e.prog = prog;
     // Absent names come back as -1, which the drawing code already treats as
     // "this program does not want that one".
-    e.u_mvp = NEXA_SH_GetUniformLocation(prog, "uMVP");
-    e.a_pos = NEXA_SH_GetAttribLocation(prog, "aPos");
-    e.a_col = NEXA_SH_GetAttribLocation(prog, "aCol");
-    e.a_uv = NEXA_SH_GetAttribLocation(prog, "aUV");
-    e.u_tex = NEXA_SH_GetUniformLocation(prog, "uTex");
-    e.u_texon = NEXA_SH_GetUniformLocation(prog, "uTexOn");
+    e.u_mvp = __nexa_g33.GetUniformLocation(prog, "uMVP");
+    e.a_pos = __nexa_g33.GetAttribLocation(prog, "aPos");
+    e.a_col = __nexa_g33.GetAttribLocation(prog, "aCol");
+    e.a_uv = __nexa_g33.GetAttribLocation(prog, "aUV");
+    e.u_tex = __nexa_g33.GetUniformLocation(prog, "uTex");
+    e.u_texon = __nexa_g33.GetUniformLocation(prog, "uTexOn");
     __nexa_g3_shader_n++;
     return __nexa_g3_shader_n;  // 1-based, so 0 stays "the built-in"
 }
 
 static void __nexa_g3_shader_bind(const __nexa_G3Shader& e) {
-    NEXA_SH_PROG = e.prog;
-    NEXA_SH_UMVP = e.u_mvp;
-    NEXA_SH_APOS = e.a_pos;
-    NEXA_SH_ACOL = e.a_col;
-    NEXA_SH_AUV = e.a_uv;
-    NEXA_SH_UTEXON = e.u_texon;
-    NEXA_SH_UseProgram(e.prog);
-    if (e.u_tex >= 0) NEXA_SH_Uniform1i(e.u_tex, 0);
+    __nexa_g33_prog = e.prog;
+    __nexa_g33_u_mvp = e.u_mvp;
+    __nexa_g33_a_pos = e.a_pos;
+    __nexa_g33_a_col = e.a_col;
+    __nexa_g33_a_uv = e.a_uv;
+    __nexa_g33_u_texon = e.u_texon;
+    __nexa_g33.UseProgram(e.prog);
+    if (e.u_tex >= 0) __nexa_g33.Uniform1i(e.u_tex, 0);
 }
 
 static int __nexa_gfx3d_use_shader(int id) {
     if (!__nexa_g3.ready || !__nexa_g3.core33) return 0;
     if (id == 0) {
+        if (!__nexa_g3_shader_builtin.prog) return 1;   // never left it
         __nexa_g3_shader_bind(__nexa_g3_shader_builtin);
         __nexa_g3_shader_active = 0;
         return 1;
@@ -3918,17 +3950,25 @@ static int __nexa_gfx3d_shader_set(int id, const std::string& name, double v) {
     if (!__nexa_g3.ready || !__nexa_g3.core33) return 0;
     if (id < 1 || id > __nexa_g3_shader_n) return 0;
     const __nexa_G3Shader& e = __nexa_g3_shaders[id - 1];
-    const __nexa_GLint at = NEXA_SH_GetUniformLocation(e.prog, name.c_str());
+    const __nexa_GLint at = __nexa_g33.GetUniformLocation(e.prog, name.c_str());
     if (at < 0) return 0;
-    NEXA_SH_UseProgram(e.prog);
-    NEXA_SH_Uniform1f(at, (__nexa_GLfloat)v);
-    if (__nexa_g3_shader_active != id) {
-        NEXA_SH_UseProgram(NEXA_SH_PROG);
-    }
+    __nexa_g33.UseProgram(e.prog);
+    __nexa_g33.Uniform1f(at, (__nexa_GLfloat)v);
+    if (__nexa_g3_shader_active != id) __nexa_g33.UseProgram(__nexa_g33_prog);
     return 1;
 }
 
 static std::string __nexa_gfx3d_shader_error(void) { return __nexa_g3_shader_log; }
+#else
+// A browser build draws through the ES path, which has no core context and so
+// no shader of this kind to replace. The calls exist and say so.
+static std::string __nexa_g3_shader_log =
+    "a browser build has no OpenGL 3.3 context, so there is no custom shader to compile";
+static int __nexa_gfx3d_shader(const std::string&, const std::string&) { return 0; }
+static int __nexa_gfx3d_use_shader(int) { return 0; }
+static int __nexa_gfx3d_shader_set(int, const std::string&, double) { return 0; }
+static std::string __nexa_gfx3d_shader_error(void) { return __nexa_g3_shader_log; }
+#endif
 )NEXA_GFX3D";
 }
 

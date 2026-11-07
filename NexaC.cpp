@@ -293,6 +293,13 @@ static bool nexaHasPython();
 // On Windows native: find clang, g++, or gcc (MinGW/MSYS2). Returns compiler name or empty.
 static std::string findWindowsCxxNative() {
 #ifdef _WIN32
+    // NEXA_CXX names the compiler outright, as it already did on Unix. Without
+    // it the search below always prefers clang, so a machine with both could
+    // not be made to build the way a machine with only MinGW does -- which is
+    // the configuration the GNU linker flags are for.
+    if (const char* env = std::getenv("NEXA_CXX")) {
+        if (*env) return env;
+    }
     nexaRefreshWindowsCompilerPath();
     const char* candidates[] = {"clang++", "clang", "g++", "gcc"};
     for (const char* cxx : candidates) {
@@ -1698,6 +1705,22 @@ static std::string nexaCompileOnly(const std::string& cmd) {
 
 // Build the shell command for clang/g++/gcc. Linker flags are selected per object format:
 // PE/COFF on Windows, Mach-O on macOS, and ELF on Linux.
+// g++, gcc, c++ and anything living under a mingw directory drive GNU ld.
+// clang++ can be either -- on Windows it usually targets MSVC and links with
+// lld-link -- so it is not named here and gets the MSVC spelling, which is
+// what it has always been given.
+static bool nexaIsGnuDriver(const std::string& cxx) {
+    std::string low = cxx;
+    for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    for (char& c : low) if (c == '\\') c = '/';
+    if (low.find("mingw") != std::string::npos) return true;
+    size_t slash = low.find_last_of('/');
+    std::string base = slash == std::string::npos ? low : low.substr(slash + 1);
+    if (base.size() > 4 && base.compare(base.size() - 4, 4, ".exe") == 0) base.resize(base.size() - 4);
+    return base == "g++" || base == "gcc" || base == "c++" ||
+           base.rfind("g++-", 0) == 0 || base.rfind("gcc-", 0) == 0;
+}
+
 static std::string nexaBuildCompileCmd(
     const std::string& cxx,
     const std::string& targetFlags,
@@ -1787,8 +1810,20 @@ static std::string nexaBuildCompileCmd(
             cmd += "\"";
         }
     } else {
-        // Quoted for cmd.exe: unquoted /SUBSYSTEM is parsed as multiple invalid paths (error 123).
-        cmd += noConsole ? " -Xlinker \"/SUBSYSTEM:WINDOWS\"" : " -Xlinker \"/SUBSYSTEM:CONSOLE\"";
+        // Which spelling of the subsystem flag depends on the linker, not the
+        // platform. /SUBSYSTEM:CONSOLE is link.exe's, understood by lld-link
+        // behind a Clang targeting MSVC. GNU ld -- which is what a MinGW g++ or
+        // gcc drives -- has never heard of it and takes the token for an input
+        // file: "cannot find /SUBSYSTEM:CONSOLE: No such file or directory",
+        // before a line of the program is looked at. It wants --subsystem.
+        //
+        // Quoted in the MSVC form for cmd.exe, which otherwise splits an
+        // unquoted /SUBSYSTEM into invalid paths (error 123).
+        if (nexaIsGnuDriver(cxx)) {
+            cmd += noConsole ? " -Wl,--subsystem,windows" : " -Wl,--subsystem,console";
+        } else {
+            cmd += noConsole ? " -Xlinker \"/SUBSYSTEM:WINDOWS\"" : " -Xlinker \"/SUBSYSTEM:CONSOLE\"";
+        }
         // Fully static executables: avoid libgcc/libstdc++ (or mixed libc++) DLLs on machines
         // without the compiler's bin directory on PATH.
         cmd += " -static -static-libgcc -static-libstdc++";
