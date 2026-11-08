@@ -33,6 +33,13 @@ struct Gpu {
     uint64_t pipeMesh[10] = {};
     uint64_t pipeMat[2] = {};
     uint64_t pipeSky = 0, pipePart = 0, pipeShadow = 0, pipeBlit = 0, pipeTex[2] = {};
+// [nexa:vkshader-begin]
+    // gfx3d.shader on the textured path. Textured geometry is drawn by
+    // draw_tex, which is a pipeline of its own -- so without these a custom
+    // shader would be skipped for anything carrying a texture while shading
+    // everything else, which is not a rule anybody could guess.
+    uint64_t pipeCustomTex[2] = {};
+// [nexa:vkshader-end]
     uint64_t passC = 0, passL = 0, passSh = 0, passSwapL = 0;
     uint64_t fbC = 0, fbL = 0, fbSh = 0;
     std::vector<uint64_t> fbSwapL;
@@ -443,10 +450,41 @@ inline int ensure_shadow(Dev& d) {
     return 1;
 }
 
+// [nexa:vkshader-begin]
+// gfx3d.shader on the textured path. The modules are the same two the
+// untextured pipelines were built from; only the vertex layout and the layout
+// object differ, so a shader written to the documented contract -- position and
+// colour, and the push-constant block -- is valid on both. It cannot read the
+// texture: declaring a sampler would make it invalid on the untextured
+// pipelines, which have no descriptor set.
+inline void custom_tex_down(Dev& d) {
+    Gpu& g = gpu();
+    for (int i = 0; i < 2; ++i) {
+        if (g.pipeCustomTex[i] && d.DestroyPipeline) d.DestroyPipeline(d.device, g.pipeCustomTex[i], nullptr);
+        g.pipeCustomTex[i] = 0;
+    }
+}
+
+inline int custom_tex_pipes(Dev& d) {
+    Gpu& g = gpu();
+    custom_tex_down(d);
+    if (!d.shCustom[0] || !d.shCustom[1] || !g.layoutTex) return 1;
+    const At texAt[] = { {0, 0, 106, 0}, {1, 0, 106, 12}, {2, 0, 103, 24} };
+    if (!pipe_ex(d, d.shCustom[0], d.shCustom[1], 3, 2, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0xF, 32, texAt, 3, 1, g.layoutTex, d.pass, &g.pipeCustomTex[0]) ||
+        !pipe_ex(d, d.shCustom[0], d.shCustom[1], 3, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0xF, 32, texAt, 3, 1, g.layoutTex, d.pass, &g.pipeCustomTex[1])) {
+        custom_tex_down(d);
+        return 0;
+    }
+    return 1;
+}
+// [nexa:vkshader-end]
 inline void destroy_pipes_swap(Dev& d) {
     Gpu& g = gpu();
     if (g.pipeBlit && d.DestroyPipeline) { d.DestroyPipeline(d.device, g.pipeBlit, nullptr); g.pipeBlit = 0; }
     for (int i = 0; i < 2; ++i) if (g.pipeTex[i] && d.DestroyPipeline) { d.DestroyPipeline(d.device, g.pipeTex[i], nullptr); g.pipeTex[i] = 0; }
+// [nexa:vkshader-begin]
+    custom_tex_down(d);
+// [nexa:vkshader-end]
     for (uint64_t fb : g.fbSwapL) if (fb && d.DestroyFramebuffer) d.DestroyFramebuffer(d.device, fb, nullptr);
     g.fbSwapL.clear();
     if (g.passSwapL && d.DestroyRenderPass) { d.DestroyRenderPass(d.device, g.passSwapL, nullptr); g.passSwapL = 0; }
@@ -479,6 +517,9 @@ inline void scene_swapchain(Dev& d) {
     if (!pipe_ex(d, g.sh[9], g.sh[10], 3, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0xF, 16, blitAt, 2, 1, g.layoutBlit, d.pass, &g.pipeBlit)) fail("blit pipe");
     pipe_ex(d, g.sh[11], g.sh[12], 3, 2, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0xF, 32, texAt, 3, 1, g.layoutTex, d.pass, &g.pipeTex[0]);
     pipe_ex(d, g.sh[11], g.sh[12], 3, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0xF, 32, texAt, 3, 1, g.layoutTex, d.pass, &g.pipeTex[1]);
+// [nexa:vkshader-begin]
+    custom_tex_pipes(d);
+// [nexa:vkshader-end]
 }
 
 inline void scene_down(Dev& d) {
@@ -540,7 +581,18 @@ inline int scene_boot(Dev& d) {
     if (!layout_of(d, skyB, 6, 0x11, 0, 80, 0, 0, 0, 0, &g.slSky, &g.layoutSky)) { fail("sky layout"); scene_down(d); return 0; }
     if (!layout_of(d, partB, 2, 0, 0, 0, 0, 0, 0, 0, &g.slPart, &g.layoutPart)) { fail("part layout"); scene_down(d); return 0; }
     if (!layout_of(d, oneB, 1, 0, 0, 0, 0, 0, 0, 0, &g.slBlit, &g.layoutBlit)) { fail("blit layout"); scene_down(d); return 0; }
+// [nexa:vkshader-begin]
+    // One wide range rather than two narrow ones: a custom shader declares the
+    // same mat4-plus-sixteen-floats block it declares on the untextured path,
+    // and a block has to fit inside a range that names its stage. The built-in
+    // textured shader still reads uMVP at 0 and its cutout flag at 64, which
+    // this range covers as well -- so both fit, and every push into it names
+    // both stages.
+    if (!layout_of(d, oneB, 1, 1 | 16, 0, 128, 0, 0, 0, 0, &g.slTex, &g.layoutTex)) { fail("tex layout"); scene_down(d); return 0; }
+// [nexa:vkshader-end]
+// [nexa:novkshader-begin]
     if (!layout_of(d, oneB, 1, 1, 0, 64, 1, 0x10, 64, 4, &g.slTex, &g.layoutTex)) { fail("tex layout"); scene_down(d); return 0; }
+// [nexa:novkshader-end]
     struct Range { uint32_t stage, offset, size; } pc{ 1, 0, 64 };
     struct PL2 { uint32_t sType; const void* pNext; uint32_t flags; uint32_t setCount; const void* sets; uint32_t pcCount; const Range* pc; } pl2{};
     pl2.sType = 30; pl2.pcCount = 1; pl2.pc = &pc;
@@ -939,10 +991,23 @@ inline void draw_tex(const float* xyz, int nvert, const unsigned char* rgba, int
     uint64_t off = vert_upload(d, xyz, (uint64_t)nvert * 32ull);
     if (off == ~0ull) return;
     float cut = cutout ? 1.0f : 0.0f;
+// [nexa:vkshader-begin]
+    // The custom pipeline stands in for the built-in one of the same kind, and
+    // what goes up after the transform is whichever block that shader reads:
+    // the author's sixteen floats, or the cutout flag.
+    const int useCustom = d.customOn && g.pipeCustomTex[pipe];
+    d.CmdBindPipeline(d.cmd, 0, useCustom ? g.pipeCustomTex[pipe] : g.pipeTex[pipe]);
+    d.CmdBindDescriptorSets(d.cmd, 0, g.layoutTex, 0, 1, &set, 0, nullptr);
+    d.CmdPushConstants(d.cmd, g.layoutTex, 1 | 16, 0, 64, mvp);
+    if (useCustom) d.CmdPushConstants(d.cmd, g.layoutTex, 1 | 16, 64, 64, d.userPC);
+    else d.CmdPushConstants(d.cmd, g.layoutTex, 1 | 16, 64, 4, &cut);
+// [nexa:vkshader-end]
+// [nexa:novkshader-begin]
     d.CmdBindPipeline(d.cmd, 0, g.pipeTex[pipe]);
     d.CmdBindDescriptorSets(d.cmd, 0, g.layoutTex, 0, 1, &set, 0, nullptr);
     d.CmdPushConstants(d.cmd, g.layoutTex, 1, 0, 64, mvp);
     d.CmdPushConstants(d.cmd, g.layoutTex, 0x10, 64, 4, &cut);
+// [nexa:novkshader-end]
     d.CmdBindVertexBuffers(d.cmd, 0, 1, &d.vbuf, &off);
     d.CmdDraw(d.cmd, (uint32_t)nvert, 1, 0, 0);
 }

@@ -1472,6 +1472,61 @@ fn main() {
         ;;
 esac
 
+echo "-- shader: a Vulkan shader reaches textured geometry too"
+# gfx3d draws textured geometry through a pipeline of its own -- draw_tex and
+# g.pipeTex, not the d.pipeTri the untextured shapes use. A custom shader built
+# into only one of them is skipped for anything carrying a texture while shading
+# everything else, which is a rule nobody could guess and which the OpenGL
+# renderer does not have. Found by drawing one textured cube beside one plain
+# one: the plain one took the shader's colour and the textured one did not.
+printf '%s' '#include <std/gfx3d>
+fn main() {
+    gfx3d.renderer("vulkan 1.4");
+    gfx3d.open("t", 320, 240);
+    let s: int = gfx3d.shader("shaders/a.vert", "shaders/a.frag");
+    let t: int = gfx3d.texture("t.png");
+    gfx3d.use_shader(s);
+    gfx3d.use(t);
+    gfx3d.cube(0.0, 0.0, 0.0, 1.0, 200, 80, 80);
+    return 0;
+}
+' > "$WORK/sp/tex.nxa"
+if ! "$NEXAC" "$WORK/sp/tex.nxa" --source "$WORK/sp/tex.cpp" < /dev/null > /dev/null 2>&1; then
+    echo "FAIL shader: NexaC could not transpile a textured custom-shader program"
+    fails=$((fails + 1))
+else
+    miss=""
+    grep -q 'pipeCustomTex' "$WORK/sp/tex.cpp" || miss="$miss pipelines"
+    grep -q 'custom_tex_pipes' "$WORK/sp/tex.cpp" || miss="$miss builder"
+    # The textured layout has to admit the shader's push block, which is 128
+    # bytes across both stages rather than the built-in 64 and 4.
+    grep -q 'layout_of(d, oneB, 1, 1 | 16, 0, 128' "$WORK/sp/tex.cpp" || miss="$miss wide-push-range"
+    grep -q 'useCustom ? g.pipeCustomTex' "$WORK/sp/tex.cpp" || miss="$miss the-bind"
+    if [ -n "$miss" ]; then
+        echo "FAIL shader: textured geometry would skip a custom shader, missing:$miss"
+        fails=$((fails + 1))
+    else
+        echo "ok shader: the textured pipelines are built from the custom shader too"
+    fi
+fi
+# Sliced: a 3D program with textures and no custom shader keeps the narrow
+# layout it had, and carries none of this.
+if ! grep -q 'layout_of(d, oneB, 1, 1, 0, 64, 1, 0x10, 64, 4' "$WORK/sp/plain.cpp"; then
+    echo "FAIL shader: a program with no shader lost the narrow textured layout"
+    fails=$((fails + 1))
+else
+    left=""
+    for sym in pipeCustomTex custom_tex_pipes useCustom; do
+        grep -q "$sym" "$WORK/sp/plain.cpp" && left="$left $sym"
+    done
+    if [ -n "$left" ]; then
+        echo "FAIL shader: a program with no shader still carries:$left"
+        fails=$((fails + 1))
+    else
+        echo "ok shader: and a program without one keeps the textured path it had"
+    fi
+fi
+
 if [ $fails -eq 0 ]; then
     if [ $skips -gt 0 ]; then
         echo "gfx3d ok ($skips layer(s) skipped: see above)"

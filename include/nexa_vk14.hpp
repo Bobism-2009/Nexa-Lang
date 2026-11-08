@@ -481,6 +481,8 @@ inline int rebuild_swapchain(Dev& d, int wantW, int wantH) {
             !make_pipe(d, d.shCustom[0], d.shCustom[1], 1, 0, 1, 0, d.pass, 24, 0, d.layout, &d.pipeCustomLine)) {
             return 0;
         }
+        // scene_swapchain rebuilds the textured pair on its own, since those
+        // pipelines belong to the swapchain it owns.
     }
 // [nexa:vkshader-end]
 
@@ -950,6 +952,7 @@ inline int begin(float r, float g, float b, int w, int h) {
 // position and colour, six floats, and the transform arrives as this
 // renderer's push constant.
 inline void custom_down(Dev& d) {
+    custom_tex_down(d);
     if (d.pipeCustomTri && d.DestroyPipeline) d.DestroyPipeline(d.device, d.pipeCustomTri, nullptr);
     if (d.pipeCustomTwo && d.DestroyPipeline) d.DestroyPipeline(d.device, d.pipeCustomTwo, nullptr);
     if (d.pipeCustomLine && d.DestroyPipeline) d.DestroyPipeline(d.device, d.pipeCustomLine, nullptr);
@@ -972,6 +975,13 @@ inline int custom_up(const unsigned int* vw, size_t vbytes, const unsigned int* 
     if (!make_pipe(d, d.shCustom[0], d.shCustom[1], 3, 2, 1, 0, d.pass, 24, 0, d.layout, &d.pipeCustomTri) ||
         !make_pipe(d, d.shCustom[0], d.shCustom[1], 3, 0, 1, 0, d.pass, 24, 0, d.layout, &d.pipeCustomTwo) ||
         !make_pipe(d, d.shCustom[0], d.shCustom[1], 1, 0, 1, 0, d.pass, 24, 0, d.layout, &d.pipeCustomLine)) {
+        custom_down(d);
+        return 0;
+    }
+    // Textured geometry is drawn by another pipeline again, so the same two
+    // modules are built into that as well. All of it or none: a shader that
+    // takes on half a scene is worse than one that is refused.
+    if (!custom_tex_pipes(d)) {
         custom_down(d);
         return 0;
     }

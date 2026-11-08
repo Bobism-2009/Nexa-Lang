@@ -1463,10 +1463,21 @@ ARGUMENT TYPES
                                    The legacy profile has no shader to replace and
                                    answers 0; so does a browser build.
                                    On Vulkan a custom shader is built into the
-                                   same three pipelines the built-in one has --
-                                   triangles, two-sided triangles and lines -- so
-                                   which one a shape uses is still the shape's
-                                   choice. It has to match what it replaces, and
+                                   same five pipelines the built-in one has --
+                                   triangles, two-sided triangles, lines, and the
+                                   two the textured path draws with -- so which
+                                   one a shape uses is still the shape's choice,
+                                   and a textured shape is shaded by your shader
+                                   rather than quietly skipping it.
+                                   It cannot read the texture, though: sampling
+                                   would mean declaring a sampler, and that makes
+                                   the same shader invalid on the untextured
+                                   pipelines, which have no descriptor set. So a
+                                   textured shape drawn through a custom Vulkan
+                                   shader comes out however that shader paints
+                                   it, with the image unread. The OpenGL renderer
+                                   hands a shader uTex and uTexOn and can sample;
+                                   this is the one place the two differ. It has to match what it replaces, and
                                    that is a smaller contract than the OpenGL one:
                                      layout(location = 0) in vec3 aPos;
                                      layout(location = 1) in vec3 aCol;
