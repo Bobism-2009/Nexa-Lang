@@ -1210,6 +1210,167 @@ else
     fi
 fi
 
+echo "-- shader: which renderer the program actually asked for"
+# Reported from another machine: a program that asks for OpenGL 3.3 was being
+# offered a Vulkan shader compiler. That driver compiles GLSL itself, at run
+# time, so there is nothing to compile and nothing to install -- and the files
+# being right there on disk is what made it ask.
+mkdir -p "$WORK/sp/shaders"
+printf 'void main(){}
+' > "$WORK/sp/shaders/r.vert"
+printf 'void main(){}
+' > "$WORK/sp/shaders/r.frag"
+sp_prog() {
+    printf '%s' '#include <std/gfx3d>
+fn main() {
+' > "$2"
+    printf '%s
+' "$1" >> "$2"
+    printf '%s' '    gfx3d.open("t", 320, 240);
+    let s: int = gfx3d.shader("shaders/r.vert", "shaders/r.frag");
+    gfx3d.use_shader(s);
+    return 0;
+}
+' >> "$2"
+}
+sp_asks() {
+    sp_prog "$1" "$WORK/sp/q.nxa"
+    PATH="$WORK/sp/empty:/usr/bin:/bin" VULKAN_SDK=""         "$NEXAC" "$WORK/sp/q.nxa" --source "$WORK/sp/q.cpp" < /dev/null 2>&1 | grep -ci 'SPIR-V'
+}
+if [ "$(sp_asks '    gfx3d.renderer("opengl 3.3");')" = "0" ]; then
+    echo "ok shader: an OpenGL 3.3 program is not offered a SPIR-V compiler"
+else
+    echo "FAIL shader: an OpenGL program was asked to install a Vulkan compiler"
+    fails=$((fails + 1))
+fi
+if [ "$(sp_asks '    gfx3d.renderer("OpenGL 3.3");')" = "0" ]; then
+    echo "ok shader: and the name is read without regard to case"
+else
+    echo "FAIL shader: OpenGL spelled with capitals was taken for Vulkan"
+    fails=$((fails + 1))
+fi
+if [ "$(sp_asks '    gfx3d.renderer("opengl");')" = "0" ]; then
+    echo "ok shader: the legacy profile is left alone too"
+else
+    echo "FAIL shader: a legacy-OpenGL program was asked about SPIR-V"
+    fails=$((fails + 1))
+fi
+if [ "$(sp_asks '    gfx3d.renderer("vulkan 1.4");')" != "0" ]; then
+    echo "ok shader: a Vulkan program is still asked"
+else
+    echo "FAIL shader: a Vulkan program was not offered a compiler it needs"
+    fails=$((fails + 1))
+fi
+# Named both, so it may well end up on Vulkan: asked. Taken one call at a time
+# rather than whichever came last.
+both='    gfx3d.renderer("vulkan 1.4");
+    gfx3d.renderer("opengl 3.3");'
+if [ "$(sp_asks "$both")" != "0" ]; then
+    echo "ok shader: a program naming both renderers is asked"
+else
+    echo "FAIL shader: naming OpenGL last hid an earlier Vulkan"
+    fails=$((fails + 1))
+fi
+# A name built at run time could say anything.
+if [ "$(sp_asks '    let r: string = "vul" + "kan 1.4";
+    gfx3d.renderer(r);')" != "0" ]; then
+    echo "ok shader: a renderer named at run time is asked about"
+else
+    echo "FAIL shader: a runtime renderer name was assumed to be OpenGL"
+    fails=$((fails + 1))
+fi
+
+echo "-- shader: finding a SPIR-V compiler that is not on PATH"
+# Also reported: the Vulkan SDK installs glslangValidator and does not put it on
+# PATH for a shell that is already open, so every build offered the install
+# again. NexaC looks where the SDK puts things rather than only asking PATH.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*)
+        if [ -z "$CXX" ]; then
+            echo "skip shader: no C++ compiler to build a stand-in glslangValidator"
+            skips=$((skips + 1))
+        else
+            mkdir -p "$WORK/sp/sdk/Bin"
+            printf '%s' '#include <cstdio>
+#include <cstring>
+int main(int argc, char** argv) {
+    const char* out = 0;
+    for (int i = 1; i < argc; ++i) {
+        if (!std::strcmp(argv[i], "-o") && i + 1 < argc) out = argv[++i];
+    }
+    if (!out) return 1;
+    FILE* o = std::fopen(out, "wb");
+    if (!o) return 1;
+    const unsigned char spv[8] = { 0x03, 0x02, 0x23, 0x07, 0x00, 0x00, 0x01, 0x00 };
+    std::fwrite(spv, 1, sizeof spv, o);
+    std::fclose(o);
+    return 0;
+}
+' > "$WORK/sp/stub.cpp"
+            if ! $CXX -std=c++17 -O0 -D_CRT_SECURE_NO_WARNINGS                     -o "$WORK/sp/sdk/Bin/glslangValidator.exe" "$WORK/sp/stub.cpp" > /dev/null 2>&1; then
+                echo "skip shader: the stand-in glslangValidator would not build"
+                skips=$((skips + 1))
+            else
+                rm -f "$WORK/sp/shaders/r.vert.spv" "$WORK/sp/shaders/r.frag.spv"
+                sp_prog '    gfx3d.renderer("vulkan 1.4");' "$WORK/sp/sdk.nxa"
+                SDKW=$(cd "$WORK/sp/sdk" && pwd -W 2>/dev/null || echo "$WORK/sp/sdk")
+                sdkout=$(PATH="$WORK/sp/empty:/usr/bin:/bin" VULKAN_SDK="$SDKW"                     "$NEXAC" "$WORK/sp/sdk.nxa" --source "$WORK/sp/sdk.cpp" < /dev/null 2>&1)
+                if [ -f "$WORK/sp/shaders/r.vert.spv" ]; then
+                    echo "ok shader: a compiler in the SDK is used though PATH has none"
+                else
+                    echo "FAIL shader: a compiler off PATH was not found, so nothing compiled"
+                    echo "$sdkout" | sed 's/^/    /'
+                    fails=$((fails + 1))
+                fi
+                if ! printf '%s' "$sdkout" | grep -qi 'No SPIR-V compiler found'; then
+                    echo "ok shader: and the install is not offered when one is already there"
+                else
+                    echo "FAIL shader: offered to install a compiler that is already installed"
+                    fails=$((fails + 1))
+                fi
+            fi
+        fi
+        ;;
+    *)
+        echo "skip shader: the SDK search is Windows-only"
+        skips=$((skips + 1))
+        ;;
+esac
+# And the error a program sees should name what went wrong, not send somebody who
+# just chose Vulkan back to the renderer they chose it over.
+if grep -q 'no compiled shader for Vulkan' "$WORK/sp/q.cpp" &&
+   ! grep -q 'GLSL as written is compiled by the driver' "$WORK/sp/q.cpp"; then
+    echo "ok shader: the Vulkan shader error names the missing .spv"
+else
+    echo "FAIL shader: the Vulkan error still answers with the other renderer"
+    fails=$((fails + 1))
+fi
+
+# A build that nobody is watching must never stop on a dialog. The gate is the
+# console, not the device type: on Windows _isatty says yes to NUL, so a build
+# run with < /dev/null -- which is how every case here says there is nobody
+# present -- used to put up a modal and wait forever. There is no assertion that
+# can catch a hang, so this case is a stopwatch: a transpile that cannot find a
+# compiler should take about as long as one that is not looking for it.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*)
+        sp_prog '    gfx3d.renderer("vulkan 1.4");' "$WORK/sp/hang.nxa"
+        hstart=$(date +%s)
+        PATH="$WORK/sp/empty:/usr/bin:/bin" VULKAN_SDK=""             "$NEXAC" "$WORK/sp/hang.nxa" --source "$WORK/sp/hang.cpp" < /dev/null > /dev/null 2>&1
+        hend=$(date +%s)
+        if [ -f "$WORK/sp/hang.cpp" ] && [ $((hend - hstart)) -lt 30 ]; then
+            echo "ok shader: a build with no console carries on instead of asking"
+        else
+            echo "FAIL shader: the build stalled or wrote nothing -- a modal with no one to click it"
+            fails=$((fails + 1))
+        fi
+        ;;
+    *)
+        echo "skip shader: the console gate is Windows-only"
+        skips=$((skips + 1))
+        ;;
+esac
+
 if [ $fails -eq 0 ]; then
     if [ $skips -gt 0 ]; then
         echo "gfx3d ok ($skips layer(s) skipped: see above)"

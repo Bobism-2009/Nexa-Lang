@@ -3926,10 +3926,12 @@ static int __nexa_gfx3d_shader(const std::string& vertPath, const std::string& f
         if (fraw.empty()) { __nexa_g3_shader_log = "cannot read " + fp; return 0; }
         if (!__nexa_g3_is_spirv(vraw) || !__nexa_g3_is_spirv(fraw)) {
             __nexa_g3_shader_log =
-                "this window is running Vulkan, which takes compiled SPIR-V rather than GLSL. "
-                "Compile each stage first -- glslangValidator -V shader.vert -o shader.vert.spv -- "
-                "and hand gfx3d.shader the .spv files. GLSL as written is compiled by the driver "
-                "on the OpenGL 3.3 renderer instead: gfx3d.renderer(\"opengl 3.3\") before gfx3d.open";
+                "no compiled shader for Vulkan: this is GLSL, and no .spv was found beside it. "
+                "NexaC builds those as part of the build, so this usually means it had no SPIR-V "
+                "compiler when the program was built -- install the Vulkan SDK (or glslang-tools) "
+                "and build again, or compile them yourself with "
+                "glslangValidator -V shader.vert -o shader.vert.spv. The shaders also have to be "
+                "written for Vulkan: see Examples/shaders/wave_vk.vert";
             return 0;
         }
         if (__nexa_g3_shader_n >= NEXA_G3_SHADERS) {
@@ -3941,8 +3943,9 @@ static int __nexa_gfx3d_shader(const std::string& vertPath, const std::string& f
         if (!nexa_vk14::custom_up(vw.data(), vw.size() * 4, fw.data(), fw.size() * 4)) {
             __nexa_g3_shader_log =
                 "the Vulkan driver would not build a pipeline from those modules. A custom shader "
-                "has to match the one it replaces: set 0 as std/gfx3d binds it, and a vertex of "
-                "position, colour and uv";
+                "has to match the one it replaces: a vertex of position then colour at locations 0 "
+                "and 1, and the push-constant block -- no descriptor set, no uv. "
+                "Examples/shaders/wave_vk.vert is a working pair";
             return 0;
         }
         // One slot, so the handle means the same thing on both renderers. The

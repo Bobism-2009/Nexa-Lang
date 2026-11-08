@@ -223,6 +223,15 @@ public:
         // it is how the build can tell that a custom shader was asked for
         // without the one renderer that can compile it.
         bool gfx3dRendererAsked = false;
+        // Whether this program can end up on Vulkan, which is the only
+        // renderer that wants a .spv. True when any gfx3d.renderer names
+        // Vulkan, and true as well when one is handed a name built at run time,
+        // since there is no telling what that will say. A program whose every
+        // gfx3d.renderer names OpenGL leaves it false -- and so does a program
+        // with no gfx3d.renderer at all, which is why the build has to consult
+        // gfx3dRendererAsked too: unasked, the machine picks, and on Windows it
+        // picks Vulkan.
+        bool gfx3dMayUseVulkan = false;
         bool json = false;
         bool result = false;
     };

@@ -1414,7 +1414,18 @@ ARGUMENT TYPES
                                        popup -- the first time a build needs it
                                        (winget KhronosGroup.VulkanSDK on
                                        Windows, apt glslang-tools, brew
-                                       glslang). Say no and the build carries
+                                       glslang). Only a program that can end up
+                                       on Vulkan is asked: one that names it,
+                                       one that builds the name at run time, or
+                                       one that names no renderer at all. A
+                                       program that asks for OpenGL is never
+                                       asked, since that driver compiles its own
+                                       GLSL. Nor is it asked twice for a
+                                       compiler already installed: the SDK does
+                                       not put glslangValidator on PATH for a
+                                       shell that was already open, so NexaC
+                                       looks where the SDK puts it as well as on
+                                       PATH. Say no and the build carries
                                        on: the OpenGL renderer needs none of
                                        it, and you can compile them yourself
                                        whenever you like --

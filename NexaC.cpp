@@ -487,6 +487,29 @@ static void nexaScanForExe(const std::filesystem::path& root, const char* exe, i
     }
 }
 
+// Like nexaScanForExe, but it says where. Needed where "is it on PATH" is not
+// a question that can be asked: `where` is itself a program, and a build run
+// with a stripped PATH cannot find it. Returns the directory holding the exe,
+// or empty, and prepends it to this process's PATH so a bare name runs.
+static std::string nexaFindExeUnder(const std::filesystem::path& root, const char* exe, int depth) {
+    std::error_code ec;
+    if (depth < 0 || !std::filesystem::exists(root, ec) || !std::filesystem::is_directory(root, ec)) {
+        return "";
+    }
+    if (std::filesystem::exists(root / exe, ec)) {
+        std::string dir = root.string();
+        nexaPrependProcessPath(dir);
+        return dir;
+    }
+    if (depth == 0) return "";
+    for (std::filesystem::directory_iterator it(root, ec), end; it != end && !ec; it.increment(ec)) {
+        if (!it->is_directory(ec)) continue;
+        std::string hit = nexaFindExeUnder(it->path(), exe, depth - 1);
+        if (!hit.empty()) return hit;
+    }
+    return "";
+}
+
 // Pick up winget/LLVM/MinGW locations that `where` misses (legacy C:\mingw64 vs WinGet Packages).
 // Cheap on the common path: WinGet Links + known dirs. Recurse Packages only if still missing.
 static void nexaRefreshWindowsCompilerPath() {
@@ -943,7 +966,15 @@ static bool nexaAskYesNo(const char* title, const char* text) {
 // is never coming.
 static bool nexaStdinIsTerminal() {
 #ifdef _WIN32
-    return _isatty(_fileno(stdin)) != 0;
+    // Not _isatty. On Windows that answers "is this a character device", and
+    // NUL is one: a build run with < NUL or < /dev/null -- which is how a
+    // script says there is nobody here -- comes back as a terminal. Asking the
+    // console directly is the question that was meant. A handle that is a file,
+    // a pipe, NUL, or missing altogether all answer no.
+    const HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+    if (h == NULL || h == INVALID_HANDLE_VALUE) return false;
+    DWORD mode = 0;
+    return GetConsoleMode(h, &mode) != 0;
 #else
     return isatty(STDIN_FILENO) != 0;
 #endif
@@ -1755,13 +1786,35 @@ static std::string nexaFindSpirvCompiler() {
         if (nexaCmdExists(n)) return n;
     }
 #ifdef _WIN32
-    // The SDK sets VULKAN_SDK but does not always put its Bin on PATH for a
-    // shell that was already open.
-    if (const char* sdk = std::getenv("VULKAN_SDK")) {
-        if (sdk[0]) {
+    // Not on PATH is the normal case rather than the exception: the installer
+    // sets VULKAN_SDK and extends PATH for shells opened afterwards, so the
+    // shell that just ran it -- and a build running in that shell -- sees
+    // neither. Look where it actually puts things.
+    {
+        std::vector<std::pair<std::filesystem::path, int>> roots;
+        if (const char* sdk = std::getenv("VULKAN_SDK")) {
+            if (sdk[0]) {
+                roots.emplace_back(std::filesystem::path(sdk) / "Bin", 0);
+                roots.emplace_back(std::filesystem::path(sdk), 2);
+            }
+        }
+        if (const char* sd = std::getenv("SystemDrive")) {
+            if (sd[0]) roots.emplace_back(std::filesystem::path(std::string(sd) + "/VulkanSDK"), 2);
+        }
+        if (const char* pf = std::getenv("ProgramFiles")) {
+            if (pf[0]) roots.emplace_back(std::filesystem::path(pf) / "VulkanSDK", 2);
+        }
+        if (const char* la = std::getenv("LOCALAPPDATA")) {
+            if (la[0]) roots.emplace_back(std::filesystem::path(la) / "Microsoft" / "WinGet" / "Packages", 4);
+        }
+        for (const auto& r : roots) {
             for (const char* n : names) {
-                std::string p = std::string(sdk) + "\\Bin\\" + n + ".exe";
-                if (nexaPathExists(p)) return "\"" + p + "\"";
+                // The bare name once the folder is on this process's PATH:
+                // cmd resolves it when it runs the command, and a bare name
+                // needs no quoting for a folder with a space in it.
+                if (!nexaFindExeUnder(r.first, (std::string(n) + ".exe").c_str(), r.second).empty()) {
+                    return n;
+                }
             }
         }
     }
@@ -1800,17 +1853,27 @@ static std::string nexaEnsureSpirvCompiler() {
         return "";
     }
 #ifdef _WIN32
-    if (!nexaEnsureHostTool("glslangValidator", "KhronosGroup.VulkanSDK", nullptr)) {
-        std::cerr << "[Nexa] The Vulkan SDK did not install, or its Bin is not on PATH yet.\n";
-        return "";
+    // The return value is not the question here. The SDK installs
+    // glslangValidator without putting it on PATH for a process that is
+    // already running, so asking "is it on PATH now" answers no to an install
+    // that worked -- which is how a build comes to offer the same install over
+    // and over. Go and look for it instead.
+    (void)nexaEnsureHostTool("glslangValidator", "KhronosGroup.VulkanSDK", nullptr);
+    have = nexaFindSpirvCompiler();
+    if (have.empty()) {
+        std::cerr << "[Nexa] The Vulkan SDK did not install, or glslangValidator is not where\n";
+        std::cerr << "[Nexa] NexaC looked. Open a new terminal and try again, or put the\n";
+        std::cerr << "[Nexa] compiler's folder on PATH yourself.\n";
     }
+    return have;
 #else
-    if (!nexaEnsureHostTool("glslangValidator", nullptr, "glslang-tools")) {
+    (void)nexaEnsureHostTool("glslangValidator", nullptr, "glslang-tools");
+    have = nexaFindSpirvCompiler();
+    if (have.empty()) {
         std::cerr << "[Nexa] Install glslang-tools (apt) or glslang (brew) for SPIR-V.\n";
-        return "";
     }
+    return have;
 #endif
-    return nexaFindSpirvCompiler();
 }
 
 // One stage. The .spv lands beside its source, which is where the runtime
@@ -2674,7 +2737,13 @@ int main(int argc, char* argv[]) {
         // because nothing compiles GLSL at runtime there. The OpenGL renderer
         // needs none of this -- its driver does the compiling -- so a failure
         // here is a warning and not the end of the build.
-        if (modules.hasGfx3d() && !usage.gfx3dShaderFiles.empty()) {
+        // A program that asked for OpenGL has nothing to compile here, and
+        // nothing to install: that driver compiles GLSL itself, at run time.
+        // Only a program that can land on Vulkan needs SPIR-V -- one that names
+        // it, one that builds the name at run time, or one that names no
+        // renderer at all and so gets whichever the machine prefers.
+        const bool mayBeVulkan = usage.gfx3dMayUseVulkan || !usage.gfx3dRendererAsked;
+        if (modules.hasGfx3d() && !usage.gfx3dShaderFiles.empty() && mayBeVulkan) {
             // Which pairs there is anything to do about. A path that is
             // already a .spv is compiled; one that is not on disk is somebody
             // else's problem -- a file written later, or a path that is simply
@@ -2722,7 +2791,7 @@ int main(int argc, char* argv[]) {
                 "This program calls gfx3d.shader without naming a renderer, and the two take "
                 "different files:\n\n"
                 "  OpenGL 3.3 compiles the .vert and .frag as they are\n"
-                "  Vulkan takes SPIR-V: glslangValidator -V a.vert -o a.vert.spv\n\n"
+                "  Vulkan takes SPIR-V, which NexaC compiles here at build time\n\n"
                 "Windows opens Vulkan by preference, so name the one you built for:\n\n"
                 "  gfx3d.renderer(\"opengl 3.3\");   before gfx3d.open\n\n"
                 "Given the other kind, gfx3d.shader returns 0 and gfx3d.shader_error() says "
