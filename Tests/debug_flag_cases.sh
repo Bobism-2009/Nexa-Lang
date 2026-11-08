@@ -45,8 +45,21 @@ fn main() {
 }
 NXA
 
+# ELF inspection is optional twice over: the tool has to exist, and the binary
+# has to be ELF. objdump is installed on Windows along with the rest of a MinGW
+# or LLVM toolchain, so "is objdump here" is not the question -- a PE binary has
+# no .debug_info to find and reporting that as a failure hides the real ones.
+is_elf() {
+    [ -f "$1" ] || return 1
+    # 7f454c46 is ELF's magic. Compared as hex so this file stays text:
+    # writing the bytes themselves turned it into a binary blob to git.
+    [ "$(od -An -tx1 -N4 "$1" 2>/dev/null | tr -d ' 
+')" = "7f454c46" ]
+}
+
 # ELF inspection is optional: pick whichever tool exists.
 elf_has_debug_info() {
+    is_elf "$1" || return 2
     if command -v readelf >/dev/null 2>&1; then
         readelf -S "$1" 2>/dev/null | grep -q '\.debug_info'
     elif command -v objdump >/dev/null 2>&1; then
@@ -57,6 +70,7 @@ elf_has_debug_info() {
 }
 
 elf_has_symbol() {
+    is_elf "$1" || return 2
     if command -v readelf >/dev/null 2>&1; then
         readelf -sW "$1" 2>/dev/null | grep -q "$2"
     elif command -v objdump >/dev/null 2>&1; then
@@ -67,6 +81,7 @@ elf_has_symbol() {
 }
 
 elf_has_section() {
+    is_elf "$1" || return 2
     if command -v readelf >/dev/null 2>&1; then
         readelf -SW "$1" 2>/dev/null | grep -q " $2 "
     elif command -v objdump >/dev/null 2>&1; then
@@ -88,7 +103,11 @@ else
     elf_has_debug_info "$WORK/dbg"
     case $? in
         0) pass "debug binary carries .debug_info" ;;
-        2) echo "skip .debug_info check (no readelf/objdump)" ;;
+        2) if is_elf "$WORK/dbg" || is_elf "$WORK/dbg.exe"; then
+               echo "skip .debug_info check (no readelf/objdump)"
+           else
+               echo "skip .debug_info check (not an ELF binary)"
+           fi ;;
         *) fail "debug binary" "no .debug_info section: --debug did not reach the compiler, or stripping still ran" ;;
     esac
 
@@ -97,7 +116,11 @@ else
     elf_has_symbol "$WORK/dbg" "compute_total"
     case $? in
         0) pass "debug binary keeps the Nexa function name" ;;
-        2) echo "skip symbol check (no readelf/objdump)" ;;
+        2) if is_elf "$WORK/dbg" || is_elf "$WORK/dbg.exe"; then
+               echo "skip symbol check (no readelf/objdump)"
+           else
+               echo "skip symbol check (not an ELF binary)"
+           fi ;;
         *) fail "debug binary" "compute_total is absent: --debug did not imply --preserve-names, or the symbol table was stripped" ;;
     esac
 
@@ -107,16 +130,21 @@ else
     elf_has_section "$WORK/dbg" ".note.gnu.build-id"
     case $? in
         0) pass "debug binary carries a build-id" ;;
-        2) echo "skip build-id check (no readelf/objdump)" ;;
+        2) if is_elf "$WORK/dbg" || is_elf "$WORK/dbg.exe"; then
+               echo "skip build-id check (no readelf/objdump)"
+           else
+               echo "skip build-id check (not an ELF binary)"
+           fi ;;
         *) fail "debug binary" "no .note.gnu.build-id: --debug must ask for one, not merely stop removing it" ;;
     esac
 
     # The binary's line info names this file; deleting it would leave a debugger
     # with line numbers and nothing to show.
-    if [ -f "$WORK/dbg.debug.cpp" ]; then
+    # Named after the binary, which on Windows is dbg.exe rather than dbg.
+    if [ -f "$WORK/dbg.debug.cpp" ] || [ -f "$WORK/dbg.exe.debug.cpp" ]; then
         pass "debug build keeps the generated C++"
     else
-        fail "debug build" "generated C++ was deleted (expected $WORK/dbg.debug.cpp)"
+        fail "debug build" "generated C++ was deleted (expected $WORK/dbg[.exe].debug.cpp)"
     fi
 
     got=$("$WORK/dbg" 2>&1)
@@ -134,7 +162,11 @@ else
     elf_has_debug_info "$WORK/rel"
     case $? in
         0) fail "release build" "default build carries .debug_info; it must stay stripped" ;;
-        2) echo "skip release .debug_info check (no readelf/objdump)" ;;
+        2) if is_elf "$WORK/dbg" || is_elf "$WORK/dbg.exe"; then
+               echo "skip release .debug_info check (no readelf/objdump)"
+           else
+               echo "skip release .debug_info check (not an ELF binary)"
+           fi ;;
         *) pass "default build stays stripped" ;;
     esac
 
@@ -154,7 +186,11 @@ else
     elf_has_debug_info "$WORK/galias"
     case $? in
         0) pass "-g is an alias for --debug" ;;
-        2) echo "skip -g alias check (no readelf/objdump)" ;;
+        2) if is_elf "$WORK/dbg" || is_elf "$WORK/dbg.exe"; then
+               echo "skip -g alias check (no readelf/objdump)"
+           else
+               echo "skip -g alias check (not an ELF binary)"
+           fi ;;
         *) fail "-g alias" "-g produced a binary without .debug_info" ;;
     esac
 fi
@@ -217,10 +253,11 @@ NXA
 out=$("$NEXAC" "$WORK/twofile.nxa" --debug -o "$WORK/two" 2>&1)
 if [ $? -ne 0 ]; then
     fail "#line build" "NexaC exited non-zero" "$out"
-elif [ ! -f "$WORK/two.debug.cpp" ]; then
+elif [ ! -f "$WORK/two.debug.cpp" ] && [ ! -f "$WORK/two.exe.debug.cpp" ]; then
     fail "#line build" "no generated C++ to inspect"
 else
     GEN="$WORK/two.debug.cpp"
+    [ -f "$GEN" ] || GEN="$WORK/two.exe.debug.cpp"
 
     if grep -q '^#line [0-9][0-9]* ".*twofile\.nxa"$' "$GEN"; then
         pass "generated C++ carries #line directives for the entry .nxa"
@@ -262,17 +299,21 @@ else
     fi
 
     # End to end: the linked binary's line table, not just the text we emitted.
-    if command -v readelf >/dev/null 2>&1; then
-        if readelf --debug-dump=decodedline "$WORK/two" 2>/dev/null | grep -q 'twofile\.nxa'; then
-            pass "DWARF line table names the .nxa source"
-        else
-            fail "#line" "the binary's line table never mentions twofile.nxa"
-        fi
-    else
+    # DWARF only, so an ELF binary only -- the Windows build of the same program
+    # carries its line table in a PDB, which this cannot read.
+    TWOBIN="$WORK/two"
+    [ -f "$TWOBIN" ] || TWOBIN="$WORK/two.exe"
+    if ! command -v readelf >/dev/null 2>&1; then
         echo "skip DWARF line table check (no readelf)"
+    elif ! is_elf "$TWOBIN"; then
+        echo "skip DWARF line table check (not an ELF binary)"
+    elif readelf --debug-dump=decodedline "$TWOBIN" 2>/dev/null | grep -q 'twofile\.nxa'; then
+        pass "DWARF line table names the .nxa source"
+    else
+        fail "#line" "the binary's line table never mentions twofile.nxa"
     fi
 
-    got=$("$WORK/two" 2>&1)
+    got=$("$TWOBIN" 2>&1)
     if [ "$got" = "triple=15" ]; then
         pass "a #line-annotated debug binary still runs correctly"
     else

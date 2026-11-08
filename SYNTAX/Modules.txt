@@ -1420,7 +1420,9 @@ ARGUMENT TYPES
                                        one that names no renderer at all. A
                                        program that asks for OpenGL is never
                                        asked, since that driver compiles its own
-                                       GLSL. Nor is it asked twice for a
+                                       GLSL, and neither is a --wasm build or a
+                                       --target cross-build, which have no
+                                       Vulkan to reach. Nor is it asked twice for a
                                        compiler already installed: the SDK does
                                        not put glslangValidator on PATH for a
                                        shell that was already open, so NexaC
@@ -1430,11 +1432,18 @@ ARGUMENT TYPES
                                        it, and you can compile them yourself
                                        whenever you like --
                                          glslangValidator -V a.vert -o a.vert.spv
-                                       -- or hand gfx3d.shader the .spv itself.
-                                       A build whose input is redirected is
-                                       never asked: it prints what is missing
-                                       and carries on, so a script, a CI step
-                                       or a test run never stops on a dialog.
+                                       -- or hand gfx3d.shader the .spv itself,
+                                       for one stage or for both: each is
+                                       looked at on its own, so a compiled
+                                       vertex beside a written-out fragment is
+                                       a pair NexaC finishes rather than skips.
+                                       Asked only where somebody can answer,
+                                       which means a console: a build with its
+                                       input redirected, or none at all, prints
+                                       what is missing and carries on instead,
+                                       so a script, a CI step, a test run or an
+                                       editor's build never stops on a dialog
+                                       nobody can see.
                                    Name the one you built for, before open:
                                      gfx3d.renderer("opengl 3.3");   or
                                      gfx3d.renderer("vulkan 1.4");

@@ -1083,8 +1083,8 @@ else
     echo "$spout" | sed 's/^/    /'
     fails=$((fails + 1))
 fi
-if printf '%s' "$spout" | grep -q 'Compiled 1 shader pair'; then
-    echo "ok shader: and said so, once for the pair rather than once a stage"
+if printf '%s' "$spout" | grep -q 'Compiled 2 shader'; then
+    echo "ok shader: and said so, counting the stages it compiled"
 else
     echo "FAIL shader: the build compiled shaders without reporting it"
     fails=$((fails + 1))
@@ -1367,6 +1367,82 @@ case "$(uname -s 2>/dev/null)" in
         ;;
     *)
         echo "skip shader: the console gate is Windows-only"
+        skips=$((skips + 1))
+        ;;
+esac
+
+echo "-- shader: no SPIR-V where there is no Vulkan"
+# nexa_vk14 is behind _WIN32 from top to bottom, so a browser build and a
+# cross-build cannot reach Vulkan. Asking those for a SPIR-V compiler is the
+# same mistake as asking an OpenGL program for one.
+sp_prog '' "$WORK/sp/nor.nxa"
+for flag in "--wasm" "--target arm64-linux"; do
+    asked=$(PATH="$WORK/sp/empty:/usr/bin:/bin" VULKAN_SDK=""         "$NEXAC" "$WORK/sp/nor.nxa" $flag --source "$WORK/sp/nor.cpp" < /dev/null 2>&1 | grep -ci 'SPIR-V')
+    if [ "$asked" = "0" ]; then
+        echo "ok shader: a $flag build is not asked about SPIR-V"
+    else
+        echo "FAIL shader: a $flag build was asked for a compiler it cannot use"
+        fails=$((fails + 1))
+    fi
+done
+# ... while the native build of the very same program is asked.
+nasked=$(PATH="$WORK/sp/empty:/usr/bin:/bin" VULKAN_SDK=""     "$NEXAC" "$WORK/sp/nor.nxa" --source "$WORK/sp/nor2.cpp" < /dev/null 2>&1 | grep -ci 'SPIR-V')
+if [ "$nasked" != "0" ]; then
+    echo "ok shader: and the native build of the same program still is"
+else
+    echo "FAIL shader: nothing is asked about SPIR-V any more, anywhere"
+    fails=$((fails + 1))
+fi
+
+echo "-- shader: a stage at a time, and either compiler front end"
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*)
+        if [ -z "$CXX" ] || [ ! -x "$WORK/sp/sdk/Bin/glslangValidator.exe" ]; then
+            echo "skip shader: no stand-in compiler was built"
+            skips=$((skips + 1))
+        else
+            # glslc takes -fshader-stage= where glslangValidator takes -S; the
+            # stand-in accepts either name, so what is checked is that NexaC
+            # picks the flags by the tool it found.
+            mkdir -p "$WORK/sp/sdkc/Bin"
+            cp "$WORK/sp/sdk/Bin/glslangValidator.exe" "$WORK/sp/sdkc/Bin/glslc.exe"
+            rm -f "$WORK/sp/shaders/r.vert.spv" "$WORK/sp/shaders/r.frag.spv"
+            SDKC=$(cd "$WORK/sp/sdkc" && pwd -W 2>/dev/null || echo "$WORK/sp/sdkc")
+            sp_prog '    gfx3d.renderer("vulkan 1.4");' "$WORK/sp/gc.nxa"
+            PATH="$WORK/sp/empty:/usr/bin:/bin" VULKAN_SDK="$SDKC"                 "$NEXAC" "$WORK/sp/gc.nxa" --source "$WORK/sp/gc.cpp" < /dev/null > /dev/null 2>&1
+            if [ -f "$WORK/sp/shaders/r.vert.spv" ] && [ -f "$WORK/sp/shaders/r.frag.spv" ]; then
+                echo "ok shader: glslc is driven with the flags glslc takes"
+            else
+                echo "FAIL shader: glslc was called the way glslangValidator is called"
+                fails=$((fails + 1))
+            fi
+            # One half already compiled, the other not: the other still needs
+            # doing, and a pair is not an all-or-nothing unit.
+            cp "$WORK/sp/shaders/r.vert.spv" "$WORK/sp/shaders/m.vert.spv"
+            printf 'void main(){}
+' > "$WORK/sp/shaders/m.frag"
+            rm -f "$WORK/sp/shaders/m.frag.spv"
+            printf '%s' '#include <std/gfx3d>
+fn main() {
+    gfx3d.renderer("vulkan 1.4");
+    gfx3d.open("t", 320, 240);
+    let s: int = gfx3d.shader("shaders/m.vert.spv", "shaders/m.frag");
+    gfx3d.use_shader(s);
+    return 0;
+}
+' > "$WORK/sp/mix.nxa"
+            SDKW2=$(cd "$WORK/sp/sdk" && pwd -W 2>/dev/null || echo "$WORK/sp/sdk")
+            PATH="$WORK/sp/empty:/usr/bin:/bin" VULKAN_SDK="$SDKW2"                 "$NEXAC" "$WORK/sp/mix.nxa" --source "$WORK/sp/mix.cpp" < /dev/null > /dev/null 2>&1
+            if [ -f "$WORK/sp/shaders/m.frag.spv" ]; then
+                echo "ok shader: a compiled vertex beside a written-out fragment is finished"
+            else
+                echo "FAIL shader: a pair with one .spv in it had neither half compiled"
+                fails=$((fails + 1))
+            fi
+        fi
+        ;;
+    *)
+        echo "skip shader: the SDK search is Windows-only"
         skips=$((skips + 1))
         ;;
 esac

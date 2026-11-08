@@ -2742,35 +2742,53 @@ int main(int argc, char* argv[]) {
         // Only a program that can land on Vulkan needs SPIR-V -- one that names
         // it, one that builds the name at run time, or one that names no
         // renderer at all and so gets whichever the machine prefers.
-        const bool mayBeVulkan = usage.gfx3dMayUseVulkan || !usage.gfx3dRendererAsked;
+        // Vulkan is the Windows renderer: nexa_vk14 is behind _WIN32 from top to
+        // bottom, so a wasm build or a cross-build for Linux cannot reach it, and
+        // a .spv would be dead weight even if one could be made.
+        const bool vulkanOnTarget = cppTarget == nexa::CppTarget::Windows;
+        const bool mayBeVulkan = vulkanOnTarget &&
+                                 (usage.gfx3dMayUseVulkan || !usage.gfx3dRendererAsked);
         if (modules.hasGfx3d() && !usage.gfx3dShaderFiles.empty() && mayBeVulkan) {
-            // Which pairs there is anything to do about. A path that is
-            // already a .spv is compiled; one that is not on disk is somebody
-            // else's problem -- a file written later, or a path that is simply
-            // wrong -- and either way it is no reason to go asking for a
+            // One stage at a time, not one pair at a time: a program may well
+            // hand over a .spv for one half and GLSL for the other, and the
+            // half that needs compiling still needs compiling. A path that is
+            // already a .spv has nothing to do; one that is not on disk is
+            // somebody else's business -- a file written later, or a path that
+            // is simply wrong -- and neither is a reason to go asking for a
             // compiler to be installed.
-            std::vector<std::pair<std::string, std::string>> todo;
+            struct Stage { std::string path; int isVertex; };
+            std::vector<Stage> todo;
             for (const auto& pair : usage.gfx3dShaderFiles) {
-                const std::string v = nexaResolveShaderPath(inputPath, pair.first);
-                const std::string f = nexaResolveShaderPath(inputPath, pair.second);
-                if (nexaHasExt(v, ".spv") || nexaHasExt(f, ".spv")) continue;
-                if (!nexaPathExists(v) || !nexaPathExists(f)) continue;
-                todo.emplace_back(v, f);
+                const std::string both[2] = {
+                    nexaResolveShaderPath(inputPath, pair.first),
+                    nexaResolveShaderPath(inputPath, pair.second),
+                };
+                for (int i = 0; i < 2; ++i) {
+                    if (nexaHasExt(both[i], ".spv")) continue;
+                    if (!nexaPathExists(both[i])) continue;
+                    // A program may load the same pair twice; compiling it
+                    // twice would be work for nothing and a count that reads
+                    // oddly.
+                    bool seen = false;
+                    for (const Stage& st : todo) {
+                        if (st.path == both[i]) { seen = true; break; }
+                    }
+                    if (!seen) todo.push_back(Stage{ both[i], i == 0 ? 1 : 0 });
+                }
             }
             if (!todo.empty()) {
                 const std::string spirv = nexaEnsureSpirvCompiler();
                 if (!spirv.empty()) {
                     int made = 0, failed = 0;
-                    for (const auto& pair : todo) {
-                        if (nexaCompileOneSpirv(spirv, pair.first, 1) &&
-                            nexaCompileOneSpirv(spirv, pair.second, 0)) made++;
+                    for (const Stage& st : todo) {
+                        if (nexaCompileOneSpirv(spirv, st.path, st.isVertex)) made++;
                         else failed++;
                     }
                     if (made > 0) {
-                        std::cout << "[Nexa] Compiled " << made << " shader pair(s) to .spv for Vulkan.\n";
+                        std::cout << "[Nexa] Compiled " << made << " shader(s) to .spv for Vulkan.\n";
                     }
                     if (failed > 0) {
-                        std::cout << "[Nexa] Warning: " << failed << " shader pair(s) would not compile to"
+                        std::cout << "[Nexa] Warning: " << failed << " shader(s) would not compile to"
                                      " SPIR-V; they will still work on the OpenGL 3.3 renderer.\n";
                     }
                     std::cout.flush();
@@ -2786,7 +2804,10 @@ int main(int argc, char* argv[]) {
         // Said at build time, where it can still be changed, and in a popup as
         // well as on the console for the reason the WASM toolchain prompt is
         // one: a line in a build log is easy to walk past.
-        if (modules.hasGfx3d() && usage.gfx3dShader && !usage.gfx3dRendererAsked) {
+        // Only where both renderers exist. A wasm build draws with WebGL and a
+        // Linux one with OpenGL, and neither has a choice to get wrong.
+        if (modules.hasGfx3d() && usage.gfx3dShader && !usage.gfx3dRendererAsked &&
+            vulkanOnTarget) {
             const std::string msg =
                 "This program calls gfx3d.shader without naming a renderer, and the two take "
                 "different files:\n\n"
