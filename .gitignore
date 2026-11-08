@@ -5,6 +5,8 @@
 *.so
 *.dll
 *.dylib
+# SPIR-V that NexaC compiles beside a shader it was handed as GLSL.
+*.spv
 
 # *.cpp above is for the C++ NexaC generates. These are hand-written test
 # sources that happen to be C++, so they are not build output.

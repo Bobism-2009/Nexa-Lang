@@ -1437,6 +1437,12 @@ ARGUMENT TYPES
                                        looked at on its own, so a compiled
                                        vertex beside a written-out fragment is
                                        a pair NexaC finishes rather than skips.
+                                       A shader that will not compile is a
+                                       warning and not the end of the build,
+                                       and what the compiler said about it --
+                                       file, line and all -- is printed as it
+                                       came, since the only person who can fix
+                                       it needs to read it.
                                        Asked only where somebody can answer,
                                        which means a console: a build with its
                                        input redirected, or none at all, prints

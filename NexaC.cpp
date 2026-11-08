@@ -1876,11 +1876,16 @@ static std::string nexaEnsureSpirvCompiler() {
 #endif
 }
 
-// One stage. The .spv lands beside its source, which is where the runtime
-// looks for it, so a program that ships its shaders ships these too.
+// One stage. The .spv lands beside its source, which is where the runtime looks
+// for it, so a program that ships its shaders ships these too.
+//
+// A shader that will not compile is the ordinary case of a typo, and the only
+// person who can fix it needs what the compiler said. So its output is kept and
+// printed on failure -- quiet on success, where there is nothing to read.
 static bool nexaCompileOneSpirv(const std::string& tool, const std::string& src, int isVertex) {
     if (src.empty() || !nexaPathExists(src)) return false;
     const std::string out = src + ".spv";
+    const std::string log = out + ".log";
     std::string cmd = tool;
     if (tool.find("glslc") != std::string::npos) {
         cmd += isVertex ? " -fshader-stage=vert" : " -fshader-stage=frag";
@@ -1889,12 +1894,25 @@ static bool nexaCompileOneSpirv(const std::string& tool, const std::string& src,
         cmd += isVertex ? " -S vert" : " -S frag";
         cmd += " -V \"" + src + "\" -o \"" + out + "\"";
     }
-#ifdef _WIN32
-    cmd += " >nul 2>&1";
-#else
-    cmd += " >/dev/null 2>&1";
-#endif
-    return std::system(cmd.c_str()) == 0 && nexaPathExists(out);
+    cmd += " > \"" + log + "\" 2>&1";
+    const bool ok = std::system(cmd.c_str()) == 0 && nexaPathExists(out);
+    if (!ok) {
+        // glslangValidator names the file on its first line whether it failed or
+        // not, so the whole thing goes out; it is short, and all of it matters.
+        if (FILE* f = std::fopen(log.c_str(), "rb")) {
+            std::cerr << "[Nexa] " << src << ":\n";
+            char buf[512];
+            size_t n;
+            while ((n = std::fread(buf, 1, sizeof buf - 1, f)) > 0) {
+                buf[n] = 0;
+                std::cerr << buf;
+            }
+            std::cerr << "\n";
+            std::fclose(f);
+        }
+    }
+    std::remove(log.c_str());
+    return ok;
 }
 
 static std::string nexaBuildCompileCmd(

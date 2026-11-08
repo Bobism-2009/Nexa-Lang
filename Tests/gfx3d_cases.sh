@@ -1031,9 +1031,24 @@ echo "-- shader: NexaC compiling GLSL to SPIR-V as part of the build"
 # is being tested is NexaC's end -- that it looks for a compiler, runs it once
 # per stage, and writes the .spv where the runtime will look -- not whether
 # Khronos can compile GLSL.
+# Minimal shaders that a real glslangValidator accepts -- it rejects anything
+# without a #version, and on a machine with the SDK installed these are what it
+# is handed rather than the stand-in.
+sp_glsl() {
+    if [ "$2" = "vert" ]; then
+        printf '%s' '#version 450
+void main() { gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }
+' > "$1"
+    else
+        printf '%s' '#version 450
+layout(location = 0) out vec4 oCol;
+void main() { oCol = vec4(1.0); }
+' > "$1"
+    fi
+}
 mkdir -p "$WORK/sp/shaders" "$WORK/sp/bin"
-printf 'void main(){}\n' > "$WORK/sp/shaders/a.vert"
-printf 'void main(){}\n' > "$WORK/sp/shaders/a.frag"
+sp_glsl "$WORK/sp/shaders/a.vert" vert
+sp_glsl "$WORK/sp/shaders/a.frag" frag
 # SPIR-V's magic word, little-endian, which is what the runtime sniffs for.
 printf '\003\002\043\007\000\000\001\000' > "$WORK/sp/magic.bin"
 case "$(uname -s 2>/dev/null)" in
@@ -1104,8 +1119,17 @@ fi
 # also stands guard over something that is not an assertion: with input
 # redirected there must be no dialog to click, or the suite hangs here rather
 # than failing.
+#
+# "Without a compiler" cannot be staged on a machine that has one. NexaC looks
+# where the SDK installs -- C:\VulkanSDK and the like -- and the environment
+# cannot be made to forget that: SystemDrive is not a variable Windows lets a
+# child override. So ask first, and say so rather than failing for the wrong
+# reason. The case still carries its weight wherever no SDK is installed.
 nosp=$(PATH="$WORK/sp/empty:/usr/bin:/bin" VULKAN_SDK="" "$NEXAC" "$WORK/sp/p.nxa" --source "$WORK/sp/p3.cpp" < /dev/null 2>&1)
-if printf '%s' "$nosp" | grep -q 'glslangValidator'; then
+if ! printf '%s' "$nosp" | grep -qi 'No SPIR-V compiler found'; then
+    echo "skip shader: a SPIR-V compiler is installed, so 'none found' cannot be staged"
+    skips=$((skips + 1))
+elif printf '%s' "$nosp" | grep -q 'glslangValidator'; then
     echo "ok shader: with no compiler to be found, the build says what to install"
 else
     echo "FAIL shader: a missing SPIR-V compiler is passed over in silence"
@@ -1124,7 +1148,7 @@ fi
 printf '%s' '#include <std/gfx3d>
 fn main() { gfx3d.open("t", 320, 240); gfx3d.close(); return 0; }
 ' > "$WORK/sp/plain.nxa"
-quietsp=$(PATH="$WORK/sp/empty:/usr/bin:/bin" "$NEXAC" "$WORK/sp/plain.nxa" --source "$WORK/sp/plain.cpp" < /dev/null 2>&1 | grep -ci 'SPIR-V')
+quietsp=$(PATH="$WORK/sp/empty:/usr/bin:/bin" "$NEXAC" "$WORK/sp/plain.nxa" --source "$WORK/sp/plain.cpp" < /dev/null 2>&1 | grep -ciE 'SPIR-V|Compiled [0-9]+ shader')
 if [ "$quietsp" = "0" ]; then
     echo "ok shader: a 3D program with no shader is never asked about SPIR-V"
 else
@@ -1142,7 +1166,7 @@ fn main() {
     return 0;
 }
 ' > "$WORK/sp/absent.nxa"
-absent=$(PATH="$WORK/sp/bin:$PATH" "$NEXAC" "$WORK/sp/absent.nxa" --source "$WORK/sp/absent.cpp" < /dev/null 2>&1 | grep -ci 'SPIR-V')
+absent=$(PATH="$WORK/sp/bin:$PATH" "$NEXAC" "$WORK/sp/absent.nxa" --source "$WORK/sp/absent.cpp" < /dev/null 2>&1 | grep -ciE 'SPIR-V|Compiled [0-9]+ shader')
 if [ "$absent" = "0" ]; then
     echo "ok shader: shader files that are not there are not asked about"
 else
@@ -1216,10 +1240,8 @@ echo "-- shader: which renderer the program actually asked for"
 # time, so there is nothing to compile and nothing to install -- and the files
 # being right there on disk is what made it ask.
 mkdir -p "$WORK/sp/shaders"
-printf 'void main(){}
-' > "$WORK/sp/shaders/r.vert"
-printf 'void main(){}
-' > "$WORK/sp/shaders/r.frag"
+sp_glsl "$WORK/sp/shaders/r.vert" vert
+sp_glsl "$WORK/sp/shaders/r.frag" frag
 sp_prog() {
     printf '%s' '#include <std/gfx3d>
 fn main() {
@@ -1233,9 +1255,13 @@ fn main() {
 }
 ' >> "$2"
 }
+# The question is "was this treated as possibly-Vulkan", which is not the same
+# as "did it mention SPIR-V". Where a compiler is installed such a program is
+# simply compiled, quietly; where none is, it is asked about. Either answer
+# counts, and a program that can only be OpenGL gives neither.
 sp_asks() {
     sp_prog "$1" "$WORK/sp/q.nxa"
-    PATH="$WORK/sp/empty:/usr/bin:/bin" VULKAN_SDK=""         "$NEXAC" "$WORK/sp/q.nxa" --source "$WORK/sp/q.cpp" < /dev/null 2>&1 | grep -ci 'SPIR-V'
+    PATH="$WORK/sp/empty:/usr/bin:/bin" VULKAN_SDK=""         "$NEXAC" "$WORK/sp/q.nxa" --source "$WORK/sp/q.cpp" < /dev/null 2>&1 | grep -ciE 'SPIR-V|Compiled [0-9]+ shader'
 }
 if [ "$(sp_asks '    gfx3d.renderer("opengl 3.3");')" = "0" ]; then
     echo "ok shader: an OpenGL 3.3 program is not offered a SPIR-V compiler"
@@ -1377,7 +1403,7 @@ echo "-- shader: no SPIR-V where there is no Vulkan"
 # same mistake as asking an OpenGL program for one.
 sp_prog '' "$WORK/sp/nor.nxa"
 for flag in "--wasm" "--target arm64-linux"; do
-    asked=$(PATH="$WORK/sp/empty:/usr/bin:/bin" VULKAN_SDK=""         "$NEXAC" "$WORK/sp/nor.nxa" $flag --source "$WORK/sp/nor.cpp" < /dev/null 2>&1 | grep -ci 'SPIR-V')
+    asked=$(PATH="$WORK/sp/empty:/usr/bin:/bin" VULKAN_SDK=""         "$NEXAC" "$WORK/sp/nor.nxa" $flag --source "$WORK/sp/nor.cpp" < /dev/null 2>&1 | grep -ciE 'SPIR-V|Compiled [0-9]+ shader')
     if [ "$asked" = "0" ]; then
         echo "ok shader: a $flag build is not asked about SPIR-V"
     else
@@ -1386,7 +1412,7 @@ for flag in "--wasm" "--target arm64-linux"; do
     fi
 done
 # ... while the native build of the very same program is asked.
-nasked=$(PATH="$WORK/sp/empty:/usr/bin:/bin" VULKAN_SDK=""     "$NEXAC" "$WORK/sp/nor.nxa" --source "$WORK/sp/nor2.cpp" < /dev/null 2>&1 | grep -ci 'SPIR-V')
+nasked=$(PATH="$WORK/sp/empty:/usr/bin:/bin" VULKAN_SDK=""     "$NEXAC" "$WORK/sp/nor.nxa" --source "$WORK/sp/nor2.cpp" < /dev/null 2>&1 | grep -ciE 'SPIR-V|Compiled [0-9]+ shader')
 if [ "$nasked" != "0" ]; then
     echo "ok shader: and the native build of the same program still is"
 else
@@ -1419,8 +1445,7 @@ case "$(uname -s 2>/dev/null)" in
             # One half already compiled, the other not: the other still needs
             # doing, and a pair is not an all-or-nothing unit.
             cp "$WORK/sp/shaders/r.vert.spv" "$WORK/sp/shaders/m.vert.spv"
-            printf 'void main(){}
-' > "$WORK/sp/shaders/m.frag"
+            sp_glsl "$WORK/sp/shaders/m.frag" frag
             rm -f "$WORK/sp/shaders/m.frag.spv"
             printf '%s' '#include <std/gfx3d>
 fn main() {
