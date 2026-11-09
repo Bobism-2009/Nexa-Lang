@@ -3,18 +3,15 @@
 //   build: NexaC Examples/shader_demo.nxa -o shader_demo && ./shader_demo
 //   quit:  escape, or close the window
 //
-// The shaders are Examples/shaders/wave.vert and .frag, compiled by the
-// graphics driver when this runs -- nothing is compiled at build time and
-// nothing extra is installed.
+// The shaders are Examples/shaders/wave.vert and .frag, written the one way the
+// reference describes. Change the renderer line below to "vulkan 1.4" and the
+// same two files run there: NexaC translates them and compiles the SPIR-V as
+// part of the build, so there is nothing to rewrite and no second copy to keep.
 //
-// gfx3d.renderer("opengl 3.3") comes first and is not optional: that is the
-// renderer with a shader compiler behind it. Vulkan takes a compiled .spv and
-// the legacy profile has no shader to replace, so on either gfx3d.shader
-// answers 0 -- which is why this checks, prints the reason, and carries on with
-// the built-in shader rather than drawing nothing.
-//
-// shader_demo_vk.nxa is the same thing on Vulkan, where the shaders are
-// compiled to .spv at build time instead.
+// The legacy profile has no shader to replace and a browser build has none
+// either, so on those gfx3d.shader answers 0 -- which is why this checks,
+// prints the reason, and carries on with the built-in shader rather than
+// drawing nothing.
 #include <std/io>
 #include <std/gfx3d>
 #include <std/time>

@@ -3865,6 +3865,15 @@ static std::vector<unsigned int> __nexa_g3_spirv_words(const std::string& b) {
     return w;
 }
 
+// The name NexaC gives the textured twin: the same path with .tex before the
+// .spv, so one lives beside the other and neither needs a second lookup rule.
+static std::string __nexa_g3_tex_twin(const std::string& spv) {
+    if (spv.size() > 4 && spv.compare(spv.size() - 4, 4, ".spv") == 0) {
+        return spv.substr(0, spv.size() - 4) + ".tex.spv";
+    }
+    return spv + ".tex.spv";
+}
+
 static std::string __nexa_g3_shader_info(__nexa_GLuint obj, int isProgram) {
     char log[1024];
     __nexa_GLsizei len = 0;
@@ -3930,8 +3939,9 @@ static int __nexa_gfx3d_shader(const std::string& vertPath, const std::string& f
                 "NexaC builds those as part of the build, so this usually means it had no SPIR-V "
                 "compiler when the program was built -- install the Vulkan SDK (or glslang-tools) "
                 "and build again, or compile them yourself with "
-                "glslangValidator -V shader.vert -o shader.vert.spv. The shaders also have to be "
-                "written for Vulkan: see Examples/shaders/wave_vk.vert";
+                "glslangValidator -V shader.vert -o shader.vert.spv -- though a shader written "
+                "the way the reference describes needs no hand-compiling: NexaC translates it "
+                "and does that itself. See Examples/shaders/wave.vert";
             return 0;
         }
         if (__nexa_g3_shader_n >= NEXA_G3_SHADERS) {
@@ -3940,12 +3950,26 @@ static int __nexa_gfx3d_shader(const std::string& vertPath, const std::string& f
         }
         const std::vector<unsigned int> vw = __nexa_g3_spirv_words(vraw);
         const std::vector<unsigned int> fw = __nexa_g3_spirv_words(fraw);
-        if (!nexa_vk14::custom_up(vw.data(), vw.size() * 4, fw.data(), fw.size() * 4)) {
+        // The textured pipelines need their own pair: a sampler and a uv the
+        // untextured ones have no way to supply. NexaC writes those as .tex.spv
+        // beside the others when it translated the shader; a shader handed over
+        // as Vulkan GLSL has no twin, and then the one pair serves both -- it
+        // simply cannot read a texture.
+        const std::string traw[2] = {
+            __nexa_g3_slurp(__nexa_g3_tex_twin(vp)),
+            __nexa_g3_slurp(__nexa_g3_tex_twin(fp)),
+        };
+        const bool haveTex = __nexa_g3_is_spirv(traw[0]) && __nexa_g3_is_spirv(traw[1]);
+        const std::vector<unsigned int> tvw = __nexa_g3_spirv_words(haveTex ? traw[0] : vraw);
+        const std::vector<unsigned int> tfw = __nexa_g3_spirv_words(haveTex ? traw[1] : fraw);
+        if (!nexa_vk14::custom_up(vw.data(), vw.size() * 4, fw.data(), fw.size() * 4,
+                                  tvw.data(), tvw.size() * 4, tfw.data(), tfw.size() * 4,
+                                  haveTex ? 1 : 0)) {
             __nexa_g3_shader_log =
                 "the Vulkan driver would not build a pipeline from those modules. A custom shader "
                 "has to match the one it replaces: a vertex of position then colour at locations 0 "
-                "and 1, and the push-constant block -- no descriptor set, no uv. "
-                "Examples/shaders/wave_vk.vert is a working pair";
+                "and 1, and the push-constant block. Write it in the dialect the reference "
+                "describes and NexaC translates it for you; see Examples/shaders/wave.vert";
             return 0;
         }
         // One slot, so the handle means the same thing on both renderers. The
@@ -4082,8 +4106,9 @@ static int __nexa_gfx3d_shader_set(int id, const std::string& name, double v) {
             if (name == __nexa_g3_vk_names[i]) { slot = i; break; }
         }
         if (slot < 0) {
-            if (__nexa_g3_vk_slots >= 16) {
-                __nexa_g3_shader_log = "a Vulkan shader has sixteen value slots and all are taken";
+            if (__nexa_g3_vk_slots >= 15) {
+                // The sixteenth is uTexOn, which the renderer writes.
+                __nexa_g3_shader_log = "a Vulkan shader has fifteen value slots and all are taken";
                 return 0;
             }
             slot = __nexa_g3_vk_slots++;

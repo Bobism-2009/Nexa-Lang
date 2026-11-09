@@ -1764,6 +1764,263 @@ static bool nexaIsGnuDriver(const std::string& cxx) {
 // A shader path in a program is written relative to the program, the way an
 // #include is. Tried as given first, so a path relative to the working
 // directory still works.
+// A whole file as bytes. Empty for one that is missing or unreadable, which the
+// callers here treat the same way: nothing to translate.
+static std::string nexaReadWholeFile(const std::string& path) {
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return std::string();
+    std::string out;
+    char buf[8192];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) out.append(buf, n);
+    std::fclose(f);
+    return out;
+}
+
+// --- gfx3d.shader: the one dialect, translated for Vulkan ------------------
+//
+// A shader written the way the reference describes it -- aPos/aCol/aUV,
+// uMVP/uTex/uTexOn, gl_FragColor -- is what the OpenGL driver compiles. Vulkan
+// wants the same program spelled differently: a version, explicit locations,
+// uniforms inside a push-constant block, a declared fragment output. That is a
+// rewrite of declarations only, so this does nothing to the body: every
+// reference is carried by a #define instead, which is both shorter and safer
+// than rewriting code.
+//
+// Four variants come out, not one, because the two pipeline families a custom
+// shader is built into differ in what they can offer it:
+//   plain  -- the untextured pipelines: no descriptor set, and a vertex of
+//             position and colour only. So no sampler is declared, aUV is a
+//             macro for vec2(0.0), uTexOn is 0.0, and a texture fetch becomes
+//             vec4(1.0) -- which is what makes an undeclared uTex vanish,
+//             since a macro argument that is never emitted is never looked up.
+//   tex    -- the textured pipelines: sampler at set 0, aUV a real attribute.
+// A shader declaring its own #version and layouts is Vulkan GLSL already and
+// is passed through untouched.
+struct NexaShaderXlate {
+    std::string vert[2];                  // 0 = plain, 1 = textured
+    std::string frag[2];
+    std::vector<std::string> uniforms;    // user uniforms, in the order declared
+    bool verbatim = false;                // already Vulkan GLSL
+    std::string error;
+};
+
+// Where the body starts: past the leading comments and blank lines, so a file
+// that opens with an explanation is not mistaken for one with no #version.
+static size_t nexaGlslFirstCode(const std::string& s) {
+    size_t i = 0;
+    while (i < s.size()) {
+        while (i < s.size() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n')) ++i;
+        if (i + 1 < s.size() && s[i] == '/' && s[i + 1] == '/') {
+            const size_t eol = s.find('\n', i);
+            if (eol == std::string::npos) return s.size();
+            i = eol + 1;
+            continue;
+        }
+        if (i + 1 < s.size() && s[i] == '/' && s[i + 1] == '*') {
+            const size_t end = s.find("*/", i);
+            if (end == std::string::npos) return s.size();
+            i = end + 2;
+            continue;
+        }
+        break;
+    }
+    return i;
+}
+
+// One declaration: "<keyword> <type> <name>;" with any spacing. Returns false
+// for anything else, including a line that merely mentions the keyword.
+static bool nexaGlslDecl(const std::string& line, const char* keyword,
+                         std::string* type, std::string* name) {
+    size_t i = line.find_first_not_of(" \t");
+    if (i == std::string::npos) return false;
+    const size_t klen = std::strlen(keyword);
+    if (line.compare(i, klen, keyword) != 0) return false;
+    i += klen;
+    if (i >= line.size() || (line[i] != ' ' && line[i] != '\t')) return false;
+    std::string tok[2];
+    for (int k = 0; k < 2; ++k) {
+        i = line.find_first_not_of(" \t", i);
+        if (i == std::string::npos) return false;
+        const size_t j = line.find_first_of(" \t;", i);
+        if (j == std::string::npos) return false;
+        tok[k] = line.substr(i, j - i);
+        i = j;
+    }
+    i = line.find_first_not_of(" \t", i);
+    if (i == std::string::npos || line[i] != ';') return false;
+    *type = tok[0];
+    *name = tok[1];
+    return true;
+}
+
+static bool nexaGlslIsPrecision(const std::string& line) {
+    const size_t i = line.find_first_not_of(" \t");
+    return i != std::string::npos && line.compare(i, 10, "precision ") == 0;
+}
+
+// The three a shader is handed per vertex, at the locations the pipelines
+// declare. Anything else is a shader asking for something gfx3d does not send.
+static int nexaGlslAttrLoc(const std::string& name) {
+    if (name == "aPos") return 0;
+    if (name == "aCol") return 1;
+    if (name == "aUV") return 2;
+    return -1;
+}
+
+static NexaShaderXlate nexaTranslateShaderForVulkan(const std::string& vsrc,
+                                                    const std::string& fsrc) {
+    NexaShaderXlate out;
+    const size_t vc = nexaGlslFirstCode(vsrc);
+    const size_t fc = nexaGlslFirstCode(fsrc);
+    const bool vVk = vsrc.compare(vc, 8, "#version") == 0;
+    const bool fVk = fsrc.compare(fc, 8, "#version") == 0;
+    if (vVk && fVk) {
+        out.verbatim = true;
+        out.vert[0] = out.vert[1] = vsrc;
+        out.frag[0] = out.frag[1] = fsrc;
+        return out;
+    }
+    if (vVk != fVk) {
+        out.error = "one half names its own #version and the other does not. Either both are "
+                    "written for Vulkan, or neither is and NexaC translates the pair";
+        return out;
+    }
+
+    struct Var { std::string type, name; };
+    std::vector<Var> attrs, varys;
+    std::vector<Var> unis;
+    std::string vbody, fbody;
+    bool sawFragColor = false;
+
+    // The vertex half names the attributes and sets the order of the varyings;
+    // the fragment half may only read what that one wrote.
+    for (int pass = 0; pass < 2; ++pass) {
+        const std::string& src = pass == 0 ? vsrc : fsrc;
+        std::string& body = pass == 0 ? vbody : fbody;
+        size_t at = 0;
+        while (at <= src.size()) {
+            size_t eol = src.find('\n', at);
+            if (eol == std::string::npos) eol = src.size();
+            std::string line = src.substr(at, eol - at);
+            while (!line.empty() && line.back() == '\r') line.pop_back();
+            std::string ty, nm;
+            bool consumed = false;
+            if (nexaGlslIsPrecision(line)) {
+                consumed = true;
+            } else if (pass == 0 && (nexaGlslDecl(line, "attribute", &ty, &nm) ||
+                                     nexaGlslDecl(line, "in", &ty, &nm))) {
+                if (nexaGlslAttrLoc(nm) < 0) {
+                    out.error = "a vertex shader is handed aPos, aCol and aUV and nothing else; "
+                                "this one asks for " + nm;
+                    return out;
+                }
+                attrs.push_back(Var{ ty, nm });
+                consumed = true;
+            } else if (nexaGlslDecl(line, "varying", &ty, &nm) ||
+                       (pass == 0 && nexaGlslDecl(line, "out", &ty, &nm)) ||
+                       (pass == 1 && nexaGlslDecl(line, "in", &ty, &nm))) {
+                bool known = false;
+                for (const Var& v : varys) if (v.name == nm) { known = true; break; }
+                if (!known) {
+                    if (pass == 1) {
+                        out.error = "the fragment shader reads " + nm + ", which the vertex shader does not write";
+                        return out;
+                    }
+                    varys.push_back(Var{ ty, nm });
+                }
+                consumed = true;
+            } else if (nexaGlslDecl(line, "uniform", &ty, &nm)) {
+                bool known = false;
+                for (const Var& u : unis) if (u.name == nm) { known = true; break; }
+                if (!known) unis.push_back(Var{ ty, nm });
+                consumed = true;
+            }
+            if (!consumed) {
+                body += line;
+                body += '\n';
+            }
+            if (eol >= src.size()) break;
+            at = eol + 1;
+        }
+    }
+    if (fsrc.find("gl_FragColor") != std::string::npos) sawFragColor = true;
+
+    // Slots for the author's own uniforms. uMVP, uTex and uTexOn are the
+    // renderer's and are wired to what it sends; the rest get one float each of
+    // the sixteen the renderer pushes, the last of which is spoken for.
+    for (const Var& u : unis) {
+        if (u.name == "uMVP" || u.name == "uTex" || u.name == "uTexOn") continue;
+        if (u.type != "float") {
+            out.error = "gfx3d.shader_set writes one number, so a custom uniform has to be a "
+                        "float; " + u.name + " is a " + u.type;
+            return out;
+        }
+        if (out.uniforms.size() >= 15) {
+            out.error = "a shader may declare fifteen uniforms of its own; " + u.name + " is one too many";
+            return out;
+        }
+        out.uniforms.push_back(u.name);
+    }
+
+    for (int tex = 0; tex < 2; ++tex) {
+        std::string head = "#version 450\n";
+        head += "layout(push_constant) uniform NexaPC { mat4 uMVP_; vec4 uUser[4]; } nexa;\n";
+        head += "#define uMVP nexa.uMVP_\n";
+        for (size_t i = 0; i < out.uniforms.size(); ++i) {
+            static const char* comp = "xyzw";
+            char buf[128];
+            std::snprintf(buf, sizeof buf, "#define %s nexa.uUser[%u].%c\n",
+                          out.uniforms[i].c_str(), (unsigned)(i / 4), comp[i % 4]);
+            head += buf;
+        }
+        // uTexOn is the renderer saying whether a texture is bound. On the
+        // untextured pipelines the answer cannot be yes, so it is a constant and
+        // the branch it guards folds away.
+        head += tex ? "#define uTexOn nexa.uUser[3].w\n" : "#define uTexOn 0.0\n";
+        if (tex) {
+            head += "#define texture2D(s, c) texture(s, c)\n";
+        } else {
+            head += "#define texture2D(s, c) vec4(1.0)\n";
+            head += "#define texture(s, c) vec4(1.0)\n";
+        }
+
+        std::string vhead = head, fhead = head;
+        // Only the fragment stage samples, so only it declares the sampler: a
+        // vertex module that declares one demands a binding it never reads.
+        if (tex) fhead += "layout(set = 0, binding = 0) uniform sampler2D uTex;\n";
+        for (const Var& v : attrs) {
+            const int loc = nexaGlslAttrLoc(v.name);
+            char buf[160];
+            if (loc == 2 && !tex) {
+                // No uv attribute on the untextured pipelines, so references to
+                // it resolve to nothing rather than to a missing input.
+                std::snprintf(buf, sizeof buf, "#define %s %s(0.0)\n", v.name.c_str(), v.type.c_str());
+            } else {
+                std::snprintf(buf, sizeof buf, "layout(location = %d) in %s %s;\n",
+                              loc, v.type.c_str(), v.name.c_str());
+            }
+            vhead += buf;
+        }
+        for (size_t i = 0; i < varys.size(); ++i) {
+            char buf[160];
+            std::snprintf(buf, sizeof buf, "layout(location = %u) out %s %s;\n",
+                          (unsigned)i, varys[i].type.c_str(), varys[i].name.c_str());
+            vhead += buf;
+            std::snprintf(buf, sizeof buf, "layout(location = %u) in %s %s;\n",
+                          (unsigned)i, varys[i].type.c_str(), varys[i].name.c_str());
+            fhead += buf;
+        }
+        if (sawFragColor) {
+            fhead += "layout(location = 0) out vec4 nexa_FragColor;\n";
+            fhead += "#define gl_FragColor nexa_FragColor\n";
+        }
+        out.vert[tex] = vhead + vbody;
+        out.frag[tex] = fhead + fbody;
+    }
+    return out;
+}
+
 static std::string nexaResolveShaderPath(const std::string& nxaPath, const std::string& rel) {
     if (rel.empty() || nexaPathExists(rel)) return rel;
     std::error_code ec;
@@ -1822,9 +2079,6 @@ static std::string nexaFindSpirvCompiler() {
     return "";
 }
 
-// Asked for only when a program actually names shader files, and only once.
-// The Vulkan SDK is what carries glslangValidator on Windows; apt and brew
-// have it on its own.
 static std::string nexaEnsureSpirvCompiler() {
     std::string have = nexaFindSpirvCompiler();
     if (!have.empty()) return have;
@@ -1882,6 +2136,29 @@ static std::string nexaEnsureSpirvCompiler() {
 // A shader that will not compile is the ordinary case of a typo, and the only
 // person who can fix it needs what the compiler said. So its output is kept and
 // printed on failure -- quiet on success, where there is nothing to read.
+// std::rename will not replace an existing file everywhere, so the old one goes
+// first. Both are ours and both sit beside the shader.
+static bool nexaRenameOver(const std::string& from, const std::string& to) {
+    if (from == to) return nexaPathExists(to);
+    std::remove(to.c_str());
+    if (std::rename(from.c_str(), to.c_str()) == 0) return true;
+    // Across devices rename fails; copy instead.
+    FILE* a = std::fopen(from.c_str(), "rb");
+    if (!a) return false;
+    FILE* b = std::fopen(to.c_str(), "wb");
+    if (!b) { std::fclose(a); return false; }
+    char buf[8192];
+    size_t n;
+    bool ok = true;
+    while ((n = std::fread(buf, 1, sizeof buf, a)) > 0) {
+        if (std::fwrite(buf, 1, n, b) != n) { ok = false; break; }
+    }
+    std::fclose(a);
+    std::fclose(b);
+    std::remove(from.c_str());
+    return ok;
+}
+
 static bool nexaCompileOneSpirv(const std::string& tool, const std::string& src, int isVertex) {
     if (src.empty() || !nexaPathExists(src)) return false;
     const std::string out = src + ".spv";
@@ -1914,6 +2191,29 @@ static bool nexaCompileOneSpirv(const std::string& tool, const std::string& src,
     std::remove(log.c_str());
     return ok;
 }
+
+// Asked for only when a program actually names shader files, and only once.
+// The Vulkan SDK is what carries glslangValidator on Windows; apt and brew
+// have it on its own.
+// A stage whose source is in hand rather than on disk: the translated text has
+// to reach the compiler as a file, so it is written beside the .spv it becomes
+// and taken away again. Named for the output so two shaders cannot collide.
+static bool nexaCompileSpirvText(const std::string& tool, const std::string& glsl,
+                                 const std::string& out, int isVertex) {
+    const std::string tmp = out + (isVertex ? ".vert" : ".frag");
+    {
+        FILE* f = std::fopen(tmp.c_str(), "wb");
+        if (!f) return false;
+        const size_t n = glsl.size();
+        const bool ok = n == 0 || std::fwrite(glsl.data(), 1, n, f) == n;
+        std::fclose(f);
+        if (!ok) { std::remove(tmp.c_str()); return false; }
+    }
+    const bool ok = nexaCompileOneSpirv(tool, tmp, isVertex) && nexaRenameOver(tmp + ".spv", out);
+    std::remove(tmp.c_str());
+    return ok;
+}
+
 
 static std::string nexaBuildCompileCmd(
     const std::string& cxx,
@@ -2767,46 +3067,68 @@ int main(int argc, char* argv[]) {
         const bool mayBeVulkan = vulkanOnTarget &&
                                  (usage.gfx3dMayUseVulkan || !usage.gfx3dRendererAsked);
         if (modules.hasGfx3d() && !usage.gfx3dShaderFiles.empty() && mayBeVulkan) {
-            // One stage at a time, not one pair at a time: a program may well
-            // hand over a .spv for one half and GLSL for the other, and the
-            // half that needs compiling still needs compiling. A path that is
-            // already a .spv has nothing to do; one that is not on disk is
-            // somebody else's business -- a file written later, or a path that
-            // is simply wrong -- and neither is a reason to go asking for a
-            // compiler to be installed.
+            // Per pair, because the two halves are translated together: the
+            // vertex shader sets the order of the varyings and the fragment
+            // shader may only read what it wrote. A path already naming a .spv
+            // is left alone, and so is one that is not on disk -- a file written
+            // later, or simply a wrong path, and neither is a reason to go
+            // asking for a compiler to be installed.
+            struct Pair { std::string v, f; };
             struct Stage { std::string path; int isVertex; };
-            std::vector<Stage> todo;
+            std::vector<Pair> todo;
+            std::vector<Stage> loose;
             for (const auto& pair : usage.gfx3dShaderFiles) {
-                const std::string both[2] = {
-                    nexaResolveShaderPath(inputPath, pair.first),
-                    nexaResolveShaderPath(inputPath, pair.second),
-                };
-                for (int i = 0; i < 2; ++i) {
-                    if (nexaHasExt(both[i], ".spv")) continue;
-                    if (!nexaPathExists(both[i])) continue;
-                    // A program may load the same pair twice; compiling it
-                    // twice would be work for nothing and a count that reads
-                    // oddly.
-                    bool seen = false;
-                    for (const Stage& st : todo) {
-                        if (st.path == both[i]) { seen = true; break; }
-                    }
-                    if (!seen) todo.push_back(Stage{ both[i], i == 0 ? 1 : 0 });
+                const std::string v = nexaResolveShaderPath(inputPath, pair.first);
+                const std::string f = nexaResolveShaderPath(inputPath, pair.second);
+                if (!nexaPathExists(v) || !nexaPathExists(f)) continue;
+                if (nexaHasExt(v, ".spv") || nexaHasExt(f, ".spv")) {
+                    // Half compiled already: translating needs both halves, so
+                    // the other one is compiled as written instead.
+                    loose.push_back(Stage{ v, 1 });
+                    loose.push_back(Stage{ f, 0 });
+                    continue;
                 }
+                bool seen = false;
+                for (const Pair& t : todo) if (t.v == v && t.f == f) { seen = true; break; }
+                if (!seen) todo.push_back(Pair{ v, f });
             }
-            if (!todo.empty()) {
+            if (!todo.empty() || !loose.empty()) {
                 const std::string spirv = nexaEnsureSpirvCompiler();
                 if (!spirv.empty()) {
                     int made = 0, failed = 0;
-                    for (const Stage& st : todo) {
+                    for (const Pair& t : todo) {
+                        const std::string vsrc = nexaReadWholeFile(t.v);
+                        const std::string fsrc = nexaReadWholeFile(t.f);
+                        if (vsrc.empty() || fsrc.empty()) { failed++; continue; }
+                        NexaShaderXlate x = nexaTranslateShaderForVulkan(vsrc, fsrc);
+                        if (!x.error.empty()) {
+                            std::cerr << "[Nexa] " << t.v << ": " << x.error << "\n";
+                            failed++;
+                            continue;
+                        }
+                        // Four files for a translated pair, two for one already
+                        // written as Vulkan GLSL: the untextured pipelines and
+                        // the textured ones cannot share a module, since one has
+                        // a sampler and a uv the other has no way to supply.
+                        bool ok = nexaCompileSpirvText(spirv, x.vert[0], t.v + ".spv", 1) &&
+                                  nexaCompileSpirvText(spirv, x.frag[0], t.f + ".spv", 0);
+                        if (ok && !x.verbatim) {
+                            ok = nexaCompileSpirvText(spirv, x.vert[1], t.v + ".tex.spv", 1) &&
+                                 nexaCompileSpirvText(spirv, x.frag[1], t.f + ".tex.spv", 0);
+                        }
+                        if (ok) made++;
+                        else failed++;
+                    }
+                    for (const Stage& st : loose) {
+                        if (nexaHasExt(st.path, ".spv")) continue;
                         if (nexaCompileOneSpirv(spirv, st.path, st.isVertex)) made++;
                         else failed++;
                     }
                     if (made > 0) {
-                        std::cout << "[Nexa] Compiled " << made << " shader(s) to .spv for Vulkan.\n";
+                        std::cout << "[Nexa] Compiled " << made << " shader pair(s) to .spv for Vulkan.\n";
                     }
                     if (failed > 0) {
-                        std::cout << "[Nexa] Warning: " << failed << " shader(s) would not compile to"
+                        std::cout << "[Nexa] Warning: " << failed << " shader pair(s) would not compile to"
                                      " SPIR-V; they will still work on the OpenGL 3.3 renderer.\n";
                     }
                     std::cout.flush();

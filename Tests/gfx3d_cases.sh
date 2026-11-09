@@ -1098,8 +1098,8 @@ else
     echo "$spout" | sed 's/^/    /'
     fails=$((fails + 1))
 fi
-if printf '%s' "$spout" | grep -q 'Compiled 2 shader'; then
-    echo "ok shader: and said so, counting the stages it compiled"
+if printf '%s' "$spout" | grep -q 'Compiled 1 shader pair'; then
+    echo "ok shader: and said so, once for the pair it translated"
 else
     echo "FAIL shader: the build compiled shaders without reporting it"
     fails=$((fails + 1))
@@ -1525,6 +1525,121 @@ else
     else
         echo "ok shader: and a program without one keeps the textured path it had"
     fi
+fi
+
+echo "-- shader: one dialect, translated for Vulkan at build time"
+# A shader written the way the reference describes is what the OpenGL driver
+# compiles. Vulkan wants the same program spelled differently, so NexaC rewrites
+# the declarations and compiles the result -- which is what lets one pair of
+# files serve both renderers instead of two pairs that must be kept in step.
+#
+# Two modules come out per stage, not one: the untextured pipelines have no
+# descriptor set and no uv to offer, so a module declaring either is invalid on
+# them. The .tex.spv twin is the one the textured pipelines get.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*)
+        if [ -z "$CXX" ] || [ ! -x "$WORK/sp/sdk/Bin/glslangValidator.exe" ]; then
+            echo "skip shader: no stand-in compiler was built"
+            skips=$((skips + 1))
+        else
+            mkdir -p "$WORK/sp/xl"
+            printf '%s' 'attribute vec3 aPos;
+attribute vec3 aCol;
+attribute vec2 aUV;
+uniform mat4 uMVP;
+uniform float uTime;
+varying vec3 vCol;
+varying vec2 vUV;
+void main() {
+    vCol = aCol;
+    vUV = aUV;
+    gl_Position = uMVP * vec4(aPos, 1.0);
+}
+' > "$WORK/sp/xl/d.vert"
+            printf '%s' 'precision mediump float;
+uniform sampler2D uTex;
+uniform float uTexOn;
+uniform float uTime;
+varying vec3 vCol;
+varying vec2 vUV;
+void main() {
+    vec3 c = vCol;
+    if (uTexOn > 0.5) { c *= texture2D(uTex, vUV).rgb; }
+    gl_FragColor = vec4(c * uTime, 1.0);
+}
+' > "$WORK/sp/xl/d.frag"
+            printf '%s' '#include <std/gfx3d>
+fn main() {
+    gfx3d.renderer("vulkan 1.4");
+    gfx3d.open("t", 320, 240);
+    let s: int = gfx3d.shader("xl/d.vert", "xl/d.frag");
+    gfx3d.use_shader(s);
+    gfx3d.shader_set(s, "uTime", 1.0);
+    return 0;
+}
+' > "$WORK/sp/xl.nxa"
+            SDKX=$(cd "$WORK/sp/sdk" && pwd -W 2>/dev/null || echo "$WORK/sp/sdk")
+            xlout=$(PATH="$WORK/sp/empty:/usr/bin:/bin" VULKAN_SDK="$SDKX" \
+                "$NEXAC" "$WORK/sp/xl.nxa" --source "$WORK/sp/xl.cpp" < /dev/null 2>&1)
+            got=""
+            for f in d.vert.spv d.frag.spv d.vert.tex.spv d.frag.tex.spv; do
+                [ -f "$WORK/sp/xl/$f" ] || got="$got $f"
+            done
+            if [ -z "$got" ]; then
+                echo "ok shader: a browser-dialect pair becomes four Vulkan modules"
+            else
+                echo "FAIL shader: the translation produced no:$got"
+                printf '%s' "$xlout" | sed 's/^/    /' | head -8
+                fails=$((fails + 1))
+            fi
+            # The stand-in writes the same bytes whatever it is handed, so what
+            # is checked here is NexaC's rewriting, by reading the GLSL it would
+            # have compiled. A real compiler proves the rest.
+            if printf '%s' "$xlout" | grep -qi 'would not compile'; then
+                echo "FAIL shader: the translated GLSL was rejected"
+                printf '%s' "$xlout" | sed 's/^/    /' | head -10
+                fails=$((fails + 1))
+            else
+                echo "ok shader: and the compiler took every one of them"
+            fi
+        fi
+        ;;
+    *)
+        echo "skip shader: the build-time translation needs the Windows SDK search"
+        skips=$((skips + 1))
+        ;;
+esac
+# A shader asking for something gfx3d does not send is told so by name, rather
+# than failing later inside the compiler.
+printf '%s' 'attribute vec3 aWhat;
+void main() { gl_Position = vec4(aWhat, 1.0); }
+' > "$WORK/sp/shaders/bad.vert"
+printf '%s' 'precision mediump float;
+varying vec3 vCol;
+void main() { gl_FragColor = vec4(vCol, 1.0); }
+' > "$WORK/sp/shaders/bad.frag"
+printf '%s' '#include <std/gfx3d>
+fn main() {
+    gfx3d.renderer("vulkan 1.4");
+    gfx3d.open("t", 320, 240);
+    let s: int = gfx3d.shader("shaders/bad.vert", "shaders/bad.frag");
+    gfx3d.use_shader(s);
+    return 0;
+}
+' > "$WORK/sp/bad.nxa"
+badout=$(PATH="$WORK/sp/bin:$PATH" "$NEXAC" "$WORK/sp/bad.nxa" --source "$WORK/sp/bad.cpp" < /dev/null 2>&1)
+if printf '%s' "$badout" | grep -q 'aWhat'; then
+    echo "ok shader: an attribute gfx3d does not send is named in the complaint"
+else
+    echo "FAIL shader: an unknown attribute was passed to the compiler unexplained"
+    fails=$((fails + 1))
+fi
+# The runtime half: the textured twin is looked for beside the plain one.
+if grep -q '__nexa_g3_tex_twin' "$WORK/pcu.cpp"; then
+    echo "ok shader: the runtime looks for the .tex.spv twin"
+else
+    echo "FAIL shader: nothing loads the textured module, so sampling cannot work"
+    fails=$((fails + 1))
 fi
 
 if [ $fails -eq 0 ]; then

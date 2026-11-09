@@ -1405,11 +1405,18 @@ ARGUMENT TYPES
                                      Vulkan -- takes SPIR-V, because nothing
                                        compiles GLSL at runtime there. NexaC
                                        does that compiling as part of the
-                                       build: name the files in gfx3d.shader
-                                       as plain strings and it writes
-                                       a.vert.spv beside a.vert, which is where
-                                       the program then looks. It wants
-                                       glslangValidator or glslc for that, and
+                                       build, and from the same dialect the
+                                       OpenGL renderer takes: name the files in
+                                       gfx3d.shader as plain strings and it
+                                       translates them, writing a.vert.spv
+                                       beside a.vert where the program looks.
+                                       A shader that declares its own #version
+                                       and layouts is Vulkan GLSL already and is
+                                       passed through untranslated -- and that is
+                                       the one kind that cannot sample a texture,
+                                       having no textured twin to bind.
+                                       It wants glslangValidator or glslc for
+                                       that, and
                                        offers to install one -- console and
                                        popup -- the first time a build needs it
                                        (winget KhronosGroup.VulkanSDK on
@@ -1454,12 +1461,12 @@ ARGUMENT TYPES
                                      gfx3d.renderer("opengl 3.3");   or
                                      gfx3d.renderer("vulkan 1.4");
                                      gfx3d.open("demo", 800, 600);
-                                   Given the other kind, gfx3d.shader answers 0
-                                   and gfx3d.shader_error() says which was wanted.
                                    NexaC warns at build time -- console and popup
                                    -- when a program names no renderer, since
-                                   Windows opens Vulkan by preference and the two
-                                   want different files.
+                                   Windows opens Vulkan by preference and only a
+                                   program that named one knows what it will get.
+                                   One pair of files either way, though: write the
+                                   dialect below and both renderers take it.
                                    The legacy profile has no shader to replace and
                                    answers 0; so does a browser build.
                                    On Vulkan a custom shader is built into the
@@ -1469,44 +1476,34 @@ ARGUMENT TYPES
                                    one a shape uses is still the shape's choice,
                                    and a textured shape is shaded by your shader
                                    rather than quietly skipping it.
-                                   It cannot read the texture, though: sampling
-                                   would mean declaring a sampler, and that makes
-                                   the same shader invalid on the untextured
-                                   pipelines, which have no descriptor set. So a
-                                   textured shape drawn through a custom Vulkan
-                                   shader comes out however that shader paints
-                                   it, with the image unread. The OpenGL renderer
-                                   hands a shader uTex and uTexOn and can sample;
-                                   this is the one place the two differ. It has to match what it replaces, and
-                                   that is a smaller contract than the OpenGL one:
-                                     layout(location = 0) in vec3 aPos;
-                                     layout(location = 1) in vec3 aCol;
-                                     the push constant below, and nothing else --
-                                     no uv, no descriptor set, no uTex.
-                                   Examples/shaders/wave_vk.vert and .frag are a
-                                   written-out pair, and Examples/shader_demo_vk.nxa
-                                   loads them.
-                                   A module that disagrees is a pipeline the driver
-                                   refuses, which is a 0 -- though a pair that
-                                   merely reads what the other half never wrote
-                                   compiles happily and draws nonsense, as any
-                                   shader would.
-                                   gfx3d.shader_set works on both, by different
-                                   means. On OpenGL the name is a uniform's, looked
-                                   up in the compiled program. Vulkan has no name
-                                   to look up, so this renderer pushes sixteen
-                                   floats after the transform and a name takes the
-                                   next free one the first time it is set:
-                                     layout(push_constant) uniform Nexa {
-                                         mat4 uMVP;
-                                         vec4 uUser[4];
-                                     } nexa;
-                                   One value is nexa.uUser[0].x; a second is
-                                   .y, then .z, .w, then uUser[1].x, in the order
-                                   the program first wrote them. Set them in a
-                                   fixed order -- near the top of main, or once
-                                   before the loop -- and the slots stay put.
-                                   Seventeen names is a 0 and a shader_error.
+                                   It samples a texture there as it does on OpenGL,
+                                   which takes two modules rather than one: the
+                                   untextured pipelines have no descriptor set and
+                                   no uv to give a shader, so a module declaring
+                                   either would be invalid on them. NexaC compiles
+                                   both out of the one source -- a.vert.spv and
+                                   a.vert.tex.spv -- and the renderer binds
+                                   whichever the shape needs, with uTexOn saying
+                                   which happened. Nothing to do with this but
+                                   write the one file.
+                                   A pair the driver refuses is a 0 -- though a
+                                   pair that merely reads what the other half never
+                                   wrote compiles happily and draws nonsense, as
+                                   any shader would.
+                                   gfx3d.shader_set names a uniform of your own and
+                                   works the same on both, by different means. On
+                                   OpenGL the name is looked up in the compiled
+                                   program. Vulkan has no name to look up, so each
+                                   float uniform you declare is given one of the
+                                   sixteen the renderer pushes after the transform
+                                   -- decided when NexaC translates the shader, in
+                                   the order you declared them, so the name means
+                                   the same thing on either renderer and the order
+                                   you set them in does not matter.
+                                   Fifteen of your own is the limit; the sixteenth
+                                   is uTexOn. A sixteenth name is a 0 and a
+                                   shader_error, and so is a uniform that is not a
+                                   float, since shader_set writes one number.
                                    Your shader is handed what the built-in one is
                                    handed, and that is the whole contract:
                                      attribute vec3 aPos;   per vertex

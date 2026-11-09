@@ -64,6 +64,10 @@ struct Dev {
     // emission for a program that loads no shader.
     uint64_t pipeCustomTri = 0, pipeCustomTwo = 0, pipeCustomLine = 0;
     uint64_t shCustom[2] = {};
+    // The textured pipelines are built from their own pair: a sampler and a uv
+    // the untextured ones cannot supply. Equal to shCustom when the shader came
+    // in as Vulkan GLSL and has no translated twin.
+    uint64_t shCustomTex[2] = {};
     int customOn = 0;
     // What gfx3d.shader_set writes. A Vulkan shader has no uniform to look up
     // by name, so these go up as push constants after the transform and the
@@ -1549,10 +1553,10 @@ inline void custom_tex_down(Dev& d) {
 inline int custom_tex_pipes(Dev& d) {
     Gpu& g = gpu();
     custom_tex_down(d);
-    if (!d.shCustom[0] || !d.shCustom[1] || !g.layoutTex) return 1;
+    if (!d.shCustomTex[0] || !d.shCustomTex[1] || !g.layoutTex) return 1;
     const At texAt[] = { {0, 0, 106, 0}, {1, 0, 106, 12}, {2, 0, 103, 24} };
-    if (!pipe_ex(d, d.shCustom[0], d.shCustom[1], 3, 2, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0xF, 32, texAt, 3, 1, g.layoutTex, d.pass, &g.pipeCustomTex[0]) ||
-        !pipe_ex(d, d.shCustom[0], d.shCustom[1], 3, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0xF, 32, texAt, 3, 1, g.layoutTex, d.pass, &g.pipeCustomTex[1])) {
+    if (!pipe_ex(d, d.shCustomTex[0], d.shCustomTex[1], 3, 2, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0xF, 32, texAt, 3, 1, g.layoutTex, d.pass, &g.pipeCustomTex[0]) ||
+        !pipe_ex(d, d.shCustomTex[0], d.shCustomTex[1], 3, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0xF, 32, texAt, 3, 1, g.layoutTex, d.pass, &g.pipeCustomTex[1])) {
         custom_tex_down(d);
         return 0;
     }
@@ -2080,7 +2084,14 @@ inline void draw_tex(const float* xyz, int nvert, const unsigned char* rgba, int
     d.CmdBindPipeline(d.cmd, 0, useCustom ? g.pipeCustomTex[pipe] : g.pipeTex[pipe]);
     d.CmdBindDescriptorSets(d.cmd, 0, g.layoutTex, 0, 1, &set, 0, nullptr);
     d.CmdPushConstants(d.cmd, g.layoutTex, 1 | 16, 0, 64, mvp);
-    if (useCustom) d.CmdPushConstants(d.cmd, g.layoutTex, 1 | 16, 64, 64, d.userPC);
+    if (useCustom) {
+        // The sixteenth float is uTexOn -- the renderer telling the shader a
+        // texture is bound. The other fifteen are the author's.
+        float block[16];
+        std::memcpy(block, d.userPC, sizeof block);
+        block[15] = 1.0f;
+        d.CmdPushConstants(d.cmd, g.layoutTex, 1 | 16, 64, 64, block);
+    }
     else d.CmdPushConstants(d.cmd, g.layoutTex, 1 | 16, 64, 4, &cut);
 // [nexa:vkshader-end]
 // [nexa:novkshader-begin]
@@ -2509,11 +2520,18 @@ inline void custom_down(Dev& d) {
     for (int i = 0; i < 2; ++i) {
         if (d.shCustom[i] && d.DestroyShaderModule) d.DestroyShaderModule(d.device, d.shCustom[i], nullptr);
         d.shCustom[i] = 0;
+        // Only when it is a module of its own; otherwise it was shCustom.
+        if (d.shCustomTex[i] && d.shCustomTex[i] != d.shCustom[i] && d.DestroyShaderModule) {
+            d.DestroyShaderModule(d.device, d.shCustomTex[i], nullptr);
+        }
+        d.shCustomTex[i] = 0;
     }
     d.customOn = 0;
 }
 
-inline int custom_up(const unsigned int* vw, size_t vbytes, const unsigned int* fw, size_t fbytes) {
+inline int custom_up(const unsigned int* vw, size_t vbytes, const unsigned int* fw, size_t fbytes,
+                     const unsigned int* tvw, size_t tvbytes, const unsigned int* tfw, size_t tfbytes,
+                     int haveTex) {
     Dev& d = dev();
     if (!d.device || !d.pass) return 0;
     // The frame in flight may still be reading what is about to go.
@@ -2521,6 +2539,13 @@ inline int custom_up(const unsigned int* vw, size_t vbytes, const unsigned int* 
     custom_down(d);
     if (!shader_mod(d, vw, vbytes / 4, &d.shCustom[0])) { custom_down(d); return 0; }
     if (!shader_mod(d, fw, fbytes / 4, &d.shCustom[1])) { custom_down(d); return 0; }
+    if (haveTex) {
+        if (!shader_mod(d, tvw, tvbytes / 4, &d.shCustomTex[0])) { custom_down(d); return 0; }
+        if (!shader_mod(d, tfw, tfbytes / 4, &d.shCustomTex[1])) { custom_down(d); return 0; }
+    } else {
+        d.shCustomTex[0] = d.shCustom[0];
+        d.shCustomTex[1] = d.shCustom[1];
+    }
     if (!make_pipe(d, d.shCustom[0], d.shCustom[1], 3, 2, 1, 0, d.pass, 24, 0, d.layout, &d.pipeCustomTri) ||
         !make_pipe(d, d.shCustom[0], d.shCustom[1], 3, 0, 1, 0, d.pass, 24, 0, d.layout, &d.pipeCustomTwo) ||
         !make_pipe(d, d.shCustom[0], d.shCustom[1], 1, 0, 1, 0, d.pass, 24, 0, d.layout, &d.pipeCustomLine)) {
@@ -2671,8 +2696,10 @@ inline void set_overlay(const void* bgra, int w, int h) { detail::set_overlay(bg
 // [nexa:vkshader-begin]
 // gfx3d.shader. The words are SPIR-V already, so these only build the
 // pipelines and choose which of them a mesh is drawn with.
-inline int custom_up(const unsigned int* vw, size_t vbytes, const unsigned int* fw, size_t fbytes) {
-    return detail::custom_up(vw, vbytes, fw, fbytes);
+inline int custom_up(const unsigned int* vw, size_t vbytes, const unsigned int* fw, size_t fbytes,
+                     const unsigned int* tvw, size_t tvbytes, const unsigned int* tfw, size_t tfbytes,
+                     int haveTex) {
+    return detail::custom_up(vw, vbytes, fw, fbytes, tvw, tvbytes, tfw, tfbytes, haveTex);
 }
 inline int custom_use(int on) { return detail::custom_use(on); }
 inline int custom_ready() { return detail::custom_ready(); }
