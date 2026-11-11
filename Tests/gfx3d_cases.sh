@@ -997,10 +997,9 @@ else
     fi
 fi
 
-# The build-time warning. gfx3d.shader needs the OpenGL 3.3 renderer, and a
-# program that never asks for it would be told no at runtime on any machine
-# that opened Vulkan -- which on Windows is most of them. Said at build time,
-# where the program can still be changed.
+# The build-time warning. The default window is legacy OpenGL, which has no
+# shader to replace, so a program that never asks for a renderer is told so
+# at build time. That warning is not an offer to install the Vulkan SDK.
 if "$NEXAC" "$WORK/nosh2.nxa" --source "$WORK/x.cpp" > /dev/null 2>&1; then : ; fi
 printf '#include <std/gfx3d>
 fn main(): int {
@@ -1297,12 +1296,13 @@ else
     echo "FAIL shader: naming OpenGL last hid an earlier Vulkan"
     fails=$((fails + 1))
 fi
-# A name built at run time could say anything.
+# A name built at run time is not a reason to install the SDK. The default
+# window is OpenGL, and the program can still name Vulkan as a literal.
 if [ "$(sp_asks '    let r: string = "vul" + "kan 1.4";
-    gfx3d.renderer(r);')" != "0" ]; then
-    echo "ok shader: a renderer named at run time is asked about"
+    gfx3d.renderer(r);')" = "0" ]; then
+    echo "ok shader: a renderer named at run time is not offered the SDK"
 else
-    echo "FAIL shader: a runtime renderer name was assumed to be OpenGL"
+    echo "FAIL shader: a runtime renderer name was treated as Vulkan"
     fails=$((fails + 1))
 fi
 
@@ -1411,12 +1411,13 @@ for flag in "--wasm" "--target arm64-linux"; do
         fails=$((fails + 1))
     fi
 done
-# ... while the native build of the very same program is asked.
+# The same program on Windows names no renderer, so the default is OpenGL and
+# the SDK is not offered. A program that names Vulkan is covered above.
 nasked=$(PATH="$WORK/sp/empty:/usr/bin:/bin" VULKAN_SDK=""     "$NEXAC" "$WORK/sp/nor.nxa" --source "$WORK/sp/nor2.cpp" < /dev/null 2>&1 | grep -ciE 'SPIR-V|Compiled [0-9]+ shader')
-if [ "$nasked" != "0" ]; then
-    echo "ok shader: and the native build of the same program still is"
+if [ "$nasked" = "0" ]; then
+    echo "ok shader: a program that names no renderer is not offered a SPIR-V compiler"
 else
-    echo "FAIL shader: nothing is asked about SPIR-V any more, anywhere"
+    echo "FAIL shader: no renderer was treated as Vulkan"
     fails=$((fails + 1))
 fi
 

@@ -587,7 +587,7 @@ or an Emscripten canvas; no extra library to install on any of them.
             gfx.typed()    gfx.wheel()        gfx.wheel_x()
             gfx.mouse(button)  gfx.mouse_x()  gfx.mouse_y()
             gfx.pads()  gfx.pad(i, button)  gfx.pad_pressed(i, button)
-            gfx.pad_axis(i, axis)                 gamepads; no window needed
+            gfx.pad_axis(i, axis)                 gamepads; no window needed. macOS: 0
             gfx.rumble(i, strength[, high])       shake one (not on macOS)
             gfx.drop()     gfx.opendialog([filter]) / gfx.openfile(...)
 
@@ -644,7 +644,7 @@ no array of pixels to read back.
                                       the names std/gfx uses, read while focused
             gfx3d.pads()         gfx3d.pad(i, button)
             gfx3d.pad_pressed(i, button)   gfx3d.pad_axis(i, axis)
-                                      gamepads: no window needed, focused or not
+                                      gamepads: no window needed, focused or not. macOS: 0
             gfx3d.rumble(i, strength[, high])   shake one (not on macOS)
   shader    gfx3d.shader(vert, frag)  your own GLSL; a handle, or 0
             gfx3d.use_shader(id)      0 is the one gfx3d ships

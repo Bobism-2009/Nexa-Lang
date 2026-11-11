@@ -1423,13 +1423,15 @@ ARGUMENT TYPES
                                        popup -- the first time a build needs it
                                        (winget KhronosGroup.VulkanSDK on
                                        Windows, apt glslang-tools, brew
-                                       glslang). Only a program that can end up
-                                       on Vulkan is asked: one that names it,
-                                       one that builds the name at run time, or
-                                       one that names no renderer at all. A
-                                       program that asks for OpenGL is never
-                                       asked, since that driver compiles its own
-                                       GLSL, and neither is a --wasm build or a
+                                       glslang). Only a program that names
+                                       Vulkan in the source is asked. The
+                                       default window is legacy OpenGL, so a
+                                       program that names no renderer is not
+                                       asked, and neither is one that builds
+                                       the renderer name at run time. A program
+                                       that asks for OpenGL is never asked,
+                                       since that driver compiles its own GLSL,
+                                       and neither is a --wasm build or a
                                        --target cross-build, which have no
                                        Vulkan to reach. Nor is it asked twice for a
                                        compiler already installed: the SDK does
@@ -1464,9 +1466,10 @@ ARGUMENT TYPES
                                      gfx3d.renderer("vulkan 1.4");
                                      gfx3d.open("demo", 800, 600);
                                    NexaC warns at build time -- console and popup
-                                   -- when a program names no renderer, since
-                                   Windows opens Vulkan by preference and only a
-                                   program that named one knows what it will get.
+                                   -- when a program names no renderer, because
+                                   the default window is legacy OpenGL and a
+                                   custom shader has nothing to replace there.
+                                   Naming Vulkan is what asks for SPIR-V.
                                    One pair of files either way, though: write the
                                    dialect below and both renderers take it.
                                    The legacy profile has no shader to replace and

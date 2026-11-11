@@ -9796,20 +9796,19 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             cppUsage.gfx3dPad = true;
         } else if (fn == "renderer") {
             cppUsage.gfx3dRendererAsked = true;
-            // Spelled out? Then the build can tell whether SPIR-V could ever
-            // be wanted. Taken one call at a time rather than last-wins: a
-            // program that names Vulkan anywhere, or hands over a name built at
-            // run time, may well end up there.
-            bool namesGl = false;
+            // SPIR-V is only for a name written as Vulkan in the source.
+            // The default window is legacy OpenGL, and a name built at run
+            // time is not a reason to install the Vulkan SDK. Taken one call
+            // at a time rather than last-wins: naming Vulkan anywhere is enough.
             if (!n.children.empty() &&
                 n.children[0].type == AstNode::Type::ExprStringLiteral) {
                 std::string want = n.children[0].value;
                 for (char& c : want) {
                     if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
                 }
-                namesGl = want.compare(0, 6, "opengl") == 0;
+                if (want.compare(0, 6, "vulkan") == 0)
+                    cppUsage.gfx3dMayUseVulkan = true;
             }
-            if (!namesGl) cppUsage.gfx3dMayUseVulkan = true;
         } else if (fn == "shader" || fn == "use_shader" || fn == "shader_set" ||
                    fn == "shader_error") {
             // Both paths written out? Then NexaC can compile them for Vulkan.

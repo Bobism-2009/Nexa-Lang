@@ -16,7 +16,8 @@
 #              to_float, io.eprintln, time.unix / format, a thread.mutex, a defer, float32 and
 #              bits, std/math, all of std/random, the std/file extras and std/term colour -- is under 64KB, and prints
 #              exactly what the same program built without the slimming
-#              (NEXA_NO_SLIM=1) prints.
+#              (NEXA_NO_SLIM=1) prints. It does not include std/gfx3d, so the
+#              generated C++ carries no Vulkan runtime.
 #
 #   literal    Windows and Linux: the std::to_string rewrite leaves a string that
 #              happens to spell it alone.
@@ -137,6 +138,15 @@ if [ "$SLIM" = 1 ]; then
         a=$("$WORK/every$EXE" </dev/null | tr -d "$CR")
         b=$("$WORK/stock$EXE" </dev/null | tr -d "$CR")
         if [ "$a" = "$b" ] && [ -n "$a" ]; then ok "size_same_output"; else bad size_same_output "slim printed [$a], stock printed [$b]"; fi
+        if "$NEXAC" "$WORK/every.nxa" --source "$WORK/every.cpp" >"$WORK/every.src.log" 2>&1; then
+            if grep -q 'nexa_vk14' "$WORK/every.cpp" || grep -q 'vulkan-1.dll' "$WORK/every.cpp"; then
+                bad vulkan "a program without std/gfx3d carries the Vulkan runtime"
+            else
+                ok "no vulkan without std/gfx3d"
+            fi
+        else
+            bad vulkan "could not emit source: $(tail -3 "$WORK/every.src.log")"
+        fi
     else
         bad size "build failed: $(tail -3 "$WORK/b1.log" "$WORK/b2.log" 2>/dev/null)"
     fi

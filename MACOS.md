@@ -72,3 +72,9 @@ back. `invalidateShadow` goes with the toggle, so the old shape's drop shadow
 is not left drawn around a window that no longer has that shape.
 `gfx.audio` / `gfx.sample` compile but return 0 on
 macOS (PCM output is implemented on Windows and wasm).
+
+`gfx.pads`, `gfx.pad`, `gfx.pad_pressed` and `gfx.pad_axis` compile and report
+no pads: `gfx.pads()` is 0. `gfx3d.pads` and the rest of that family are the
+same reader, so they are 0 on macOS as well. `gfx.rumble` and `gfx3d.rumble`
+return 0. Windows reads XInput, Linux the kernel joystick devices, and the
+browser the Gamepad API.
