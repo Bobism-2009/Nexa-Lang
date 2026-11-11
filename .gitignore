@@ -5,6 +5,8 @@
 *.so
 *.dll
 *.dylib
+# Packaged VS Code extension. Built with vsce; not source.
+*.vsix
 # SPIR-V that NexaC compiles beside a shader it was handed as GLSL.
 *.spv
 
