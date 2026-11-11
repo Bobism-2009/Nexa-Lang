@@ -255,8 +255,8 @@ need no include at all. NexaC --help core.)HELP" },
             os.spawn_wait(...)         the same, waiting; returns the exit code
             os.spawn_at(cwd, ...)      the same, in a working directory
             os.wait(pid)  os.kill(pid)  os.exit(code)
-            os.inject(process, dll)        find process + load DLL beside this exe (Windows); 1/0
-            os.inject_dll(pid, path)     load a DLL by pid; relative dll name ok; 1/0
+            os.inject(process, dll)        find process + load DLL beside this exe (Windows); 1 after it loads, else 0
+            os.inject_dll(pid, path)     load a DLL by pid; relative dll name ok; 1 after it loads, else 0
             os.alloc_console()           attach a debug console (Windows); 1/0
   env       os.getenv(name)  os.setenv(name, v)  os.unsetenv(name)
             os.environ() / os.env()    []string of KEY=value
@@ -774,7 +774,9 @@ back what the user did. Keep the values yourself and pass them back in.
 
 Build the other side with NexaC lib.nxa --dll (or --shared). Library builds
 preserve names, so dll.call finds the symbol you wrote. A `fn __init__()` in a
-library runs when the library loads.
+library runs when the library loads. On Windows that call is a thread started
+from DllMain, so the load returns first and __init__ may load a library or
+start a thread.
 
 A #include copy of a global is not shared with a library -- pass values in
 through dll.call. For linking an archive into the executable instead, see

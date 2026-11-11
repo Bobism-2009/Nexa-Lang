@@ -1467,13 +1467,21 @@ public:
                     }
                 }
                 std::string initName = fnNameInitOnly("__init__");
+                // Call __init__ off the loader lock. A direct call from DllMain
+                // deadlocks if it loads a library, takes a lock, or waits on a
+                // thread (that thread cannot start until DllMain returns).
                 out << "#ifdef _WIN32\n";
                 out << "#include <windows.h>\n";
+                out << "static DWORD WINAPI __nexa_dll_init_thread(LPVOID) {\n";
+                out << "    " << initName << "();\n";
+                out << "    return 0;\n";
+                out << "}\n";
                 out << "BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {\n";
-                out << "    (void)hinstDLL;\n";
                 out << "    (void)lpvReserved;\n";
                 out << "    if (fdwReason == DLL_PROCESS_ATTACH) {\n";
-                out << "        " << initName << "();\n";
+                out << "        DisableThreadLibraryCalls(hinstDLL);\n";
+                out << "        HANDLE __nexa_init_th = CreateThread(NULL, 0, __nexa_dll_init_thread, NULL, 0, NULL);\n";
+                out << "        if (__nexa_init_th) CloseHandle(__nexa_init_th);\n";
                 out << "    }\n";
                 out << "    return TRUE;\n";
                 out << "}\n";

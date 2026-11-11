@@ -73,6 +73,35 @@ else
     ok "os.inject emits one-call wrapper"
 fi
 
+# A still-running LoadLibrary leaves exit code STILL_ACTIVE (259). That must
+# not count as a loaded module, and the path buffer must stay until the thread exits.
+if ! grep -q 'waited == WAIT_OBJECT_0' "$WORK/use.cpp" 2>/dev/null; then
+    bad "inject wait" "path is freed without waiting for LoadLibrary to finish"
+elif grep -q 'return mod ? 1 : 0' "$WORK/use.cpp" 2>/dev/null; then
+    bad "inject wait" "STILL_ACTIVE still counts as success"
+else
+    ok "inject frees the path only after LoadLibrary returns"
+fi
+
+cat > "$WORK/dllinit.nxa" <<'EOF'
+fn __init__() {
+}
+EOF
+if ! "$NEXAC" "$WORK/dllinit.nxa" --dll --source "$WORK/dllinit.cpp" > "$WORK/dllinit.log" 2>&1; then
+    bad "dll init transpile" "$(cat "$WORK/dllinit.log")"
+elif ! grep -q __nexa_dll_init_thread "$WORK/dllinit.cpp" 2>/dev/null; then
+    bad "dll init" "DllMain calls __init__ on the loader lock"
+elif ! awk '
+    /BOOL WINAPI DllMain/ { inside = 1 }
+    inside && /__init__\(\)/ { hit = 1 }
+    inside && /return TRUE/ { inside = 0 }
+    END { exit hit ? 1 : 0 }
+' "$WORK/dllinit.cpp"; then
+    bad "dll init" "DllMain still calls __init__ directly"
+else
+    ok "DllMain starts __init__ on its own thread"
+fi
+
 if [ "$WINDOWS" = 1 ]; then
     cat > "$WORK/console.nxa" <<'EOF'
 #include <std/io>
@@ -93,6 +122,66 @@ EOF
             ok "alloc_console enables io.println"
         else
             bad "console run" "expected 'console ok', got '$out'"
+        fi
+    fi
+
+    # Joining a thread from DllMain never returns: the new thread cannot run
+    # until the loader lock is released. __init__ has to run after DllMain.
+    cat > "$WORK/initlib.nxa" <<'EOF'
+#include <std/thread>
+#include <std/file>
+fn mark() {
+    file.write("init_ok.txt", "1");
+}
+fn __init__() {
+    let t = thread.spawn(mark);
+    thread.join(t);
+}
+EOF
+    cat > "$WORK/inithost.nxa" <<'EOF'
+#include <std/dll>
+#include <std/file>
+#include <std/time>
+fn main() {
+    let h = dll.load("initlib.dll");
+    if (h < 0) { return 2; }
+    let i = 0;
+    while (i < 50) {
+        if (file.read("init_ok.txt") == "1") { return 0; }
+        time.sleep(20);
+        i = i + 1;
+    }
+    return 3;
+}
+EOF
+    if ! "$NEXAC" "$WORK/initlib.nxa" --dll -o "$WORK/initlib.dll" > "$WORK/initlib.log" 2>&1; then
+        bad "dll init build" "$(cat "$WORK/initlib.log")"
+    elif ! "$NEXAC" "$WORK/inithost.nxa" -o "$WORK/inithost$EXE" > "$WORK/inithost.log" 2>&1; then
+        bad "dll init host" "$(cat "$WORK/inithost.log")"
+    else
+        rm -f "$WORK/init_ok.txt"
+        ( cd "$WORK" && "./inithost$EXE" > host.out 2>&1 ) &
+        hp=$!
+        n=0
+        while [ "$n" -lt 25 ]; do
+            if ! kill -0 "$hp" 2>/dev/null; then
+                break
+            fi
+            sleep 0.2
+            n=$((n + 1))
+        done
+        if kill -0 "$hp" 2>/dev/null; then
+            kill "$hp" 2>/dev/null
+            wait "$hp" 2>/dev/null
+            bad "dll init run" "host hung; __init__ still on the loader lock"
+        else
+            wait "$hp"
+            ec=$?
+            if [ "$ec" -eq 0 ] && [ "$(cat "$WORK/init_ok.txt" 2>/dev/null)" = "1" ]; then
+                ok "fn __init__ runs off the loader lock"
+            else
+                bad "dll init run" "exit $ec, file '$(cat "$WORK/init_ok.txt" 2>/dev/null)' $(cat "$WORK/host.out" 2>/dev/null)"
+            fi
         fi
     fi
 fi

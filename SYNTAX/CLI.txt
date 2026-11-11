@@ -119,7 +119,9 @@ OPTIONS
             clang does.
             Targets live at github.com/Bobism-2009/Nexa-Targets.
   --no-console    Build Windows GUI .exe with no console window
-  fn __init__() in a DLL/SO/dylib is auto-executed when the library is loaded
+  fn __init__() in a DLL/SO/dylib runs when the library is loaded. On Windows
+            it runs on a thread started from DllMain, so the load returns first
+            and __init__ may load a library or start a thread.
   --run, -r       Compile to temp file and run
   --help, -h      Show help. With no topic, a one-screen index: usage, the
                   options in brief, and every topic there is.
