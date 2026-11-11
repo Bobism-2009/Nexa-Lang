@@ -165,8 +165,9 @@ TARGETS
                      em++ and --wasm. (Useful when you are serving the page
                      anyway and want the .wasm cached on its own.)
   --target <name>    build for a platform installed with nexapkg, e.g.
-                     arm64-linux (nexapkg target install arm64-linux). The
-                     four above need no --target. Its runtime is compiled
+                     arm64-linux (nexapkg target install arm64-linux).
+                     Windows, Linux, macOS and --wasm need no --target, and
+                     --target refuses those names. Its runtime is compiled
                      from source on the first build and cached after that.
 
 BUILD
@@ -606,7 +607,7 @@ the readers answer 0. The drawing calls hand nothing back and are statements
 only, so `let R = gfx.rect(...);` is an error naming the call.)HELP" },
 
 { "std/gfx3d", "gfx3d 3d three opengl vulkan gl cube mesh model obj wavefront camera render sound audio wav play gamepad pad controller joystick xinput", Group::Module,
-  "3D window: camera, triangles and cubes, on OpenGL",
+  "3D window: camera, triangles and cubes; OpenGL, or Vulkan 1.4 on Windows",
   R"HELP(std/gfx3d - a 3D window
   #include <std/gfx3d>
   Full reference: SYNTAX/Modules.txt (std/gfx3d)
@@ -702,10 +703,10 @@ files. A program that includes both modules gets one mixer between them, not
 two: one master volume, one set of sixteen voices, one open device. It is not
 positioned by the camera; the mixer sums to mono, so a voice has nowhere to be.
 
-Windows, macOS, Linux and the browser. The first three are OpenGL 1.1 with
-three different windows under it; --wasm is a second renderer, because WebGL
-has no fixed-function pipeline -- same picture, shaders underneath. Nothing
-to install for any of them.
+Windows, macOS, Linux and the browser. OpenGL 1.1 is the renderer on macOS
+and Linux, and the default on Windows; Windows can open Vulkan 1.4 instead.
+--wasm is a second renderer, because WebGL has no fixed-function pipeline --
+same picture, shaders underneath. Nothing to install for any of them.
 
 Colours are 0..255. The draws hand nothing back and are statements only, so
 `let C = gfx3d.cube(...);` is an error naming the call -- as in std/gfx.)HELP" },
@@ -1016,7 +1017,7 @@ inline void printIndex(const char* version) {
         "  -p           keep your fn names   -g, --debug   steps through .nxa\n"
         "  --small      optimize for size    --source <f>  emit C++ only\n"
         "  --dll  --shared  --static-lib  --link <file>    libraries\n"
-        "  --win  --wasm  --no-console                     other targets\n";
+        "  --win  --wasm  --target <name>  --no-console    other targets\n";
 
     printGroup("Language", "", Group::Language);
     printGroup("Modules", "#include <std/NAME>", Group::Module);

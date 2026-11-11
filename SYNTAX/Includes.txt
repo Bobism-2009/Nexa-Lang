@@ -6,6 +6,8 @@ MODULE INCLUDES (angle brackets)
   #include <std/os>
   #include <std/file>
   #include <std/random>
+  #include <std/math>     - math.abs/min/max/sqrt/sin/cos and the rest; every one returns float
+  #include <std/crypto>   - crypto.sha256/hmac_sha256, hex and base64, crypto.xor
   #include <std/dll>
   #include <std/time>
   #include <std/thread>
@@ -16,6 +18,10 @@ MODULE INCLUDES (angle brackets)
                             (http.* is a protocol; tcp.* and udp.* are the wire under it)
                             Replaces std/http and std/tcp, which are retired
   #include <std/json>     - Nested JSON parse/stringify (type Json)
+  #include <std/term>     - Terminal colour, cursor and keys:
+                            term.color/bg/bold, term.clear/move/home,
+                            term.progress/spinner, term.raw/getkey/key_available,
+                            term.width/height
   #include <std/gfx>      - Pixel window: gfx.open/plot/text/mouse/drop/opendialog/present
                             shapes: gfx.fill/rect/line (optional thickness), circle,
                             ellipse, tri, poly and their fill_ forms
@@ -24,8 +30,13 @@ MODULE INCLUDES (angle brackets)
                             and input: gfx.key/pressed/released, gfx.wheel/wheel_x, gfx.typed
   #include <std/gfx3d>    - 3D window: gfx3d.open/poll/clear/present/closed
                             camera: gfx3d.camera/perspective
-                            shapes: gfx3d.tri, gfx3d.cube
-                            renderer: gfx3d.renderer/backend (OpenGL, or Vulkan 1.4 on Windows)
+                            shapes: gfx3d.tri/cube/box/sphere/capsule/cylinder/cone
+                            models and textures: gfx3d.model/draw, gfx3d.texture/use
+                            shaders: gfx3d.shader/use_shader/shader_set
+                            pads: gfx3d.pads/pad/pad_axis/rumble
+                            renderer: gfx3d.renderer/backend
+                            OpenGL 1.1 by default on Windows, macOS and Linux.
+                            Windows can open Vulkan 1.4 instead. --wasm is WebGL.
   #include <std/ui>       - Widgets, themes and styles on the gfx window (includes std/gfx):
                             ui.open/background/theme/style/accent, ui.text/heading/caption,
                             ui.panel, ui.button/checkbox/toggle/radio/slider/progress,

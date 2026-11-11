@@ -214,12 +214,18 @@ Use an installed package with an angle-bracket include:
 
 | File | Purpose |
 |------|---------|
-| `nexapkg.json` | Manifest: `name`, `entry`, `output`, optional `dll` / `dllOutput`, `dependencies` |
+| `nexapkg.json` | Manifest: `name`, `entry`, `output`, optional `dll` / `dllOutput`, `x11`, `targets`, `dependencies` |
 | `nexapkg.lock` | Resolved git commit per dependency — commit it for reproducible builds |
 
 A `user/repo@tag` dependency is reproducible by tag; the lockfile additionally records the exact
 commit, so a fresh `nexapkg install` restores the same revision. Local (`file:`) dependencies are
 re-copied on every install so edits propagate during development.
+
+`targets` names extra platforms `NexaC build` should produce as well as this machine's
+(`"windows"`, `"wasm"`, or a name from `nexapkg target list`). `x11` is Linux-only and
+says how a `std/gfx` or `std/ui` executable gets Xlib: `"embed"` (the default, a static
+X11, about 1.1MB, no `libX11.so` needed) or `"system"` (about 23KB, and `libX11.so` must
+be there at run time). Full field reference: [`SYNTAX/Modules.txt`](SYNTAX/Modules.txt) (PACKAGES).
 
 ---
 
@@ -242,5 +248,5 @@ re-copied on every install so edits propagate during development.
 
 1. **Entry & types:** [`SYNTAX/Core.txt`](SYNTAX/Core.txt) — functions, `let`, structs, enums, `fn main()`, `fn main(args: []string)`, core string methods (`s.upper()`, `s.split(",")`, `s.contains(...)`, …).
 2. **Control flow:** [`SYNTAX/ControlFlow.txt`](SYNTAX/ControlFlow.txt).
-3. **Standard modules:** [`SYNTAX/Modules.txt`](SYNTAX/Modules.txt) — `#include <std/io>`, `std/os`, `std/file`, `std/math`, `std/random`, `std/time`, `std/thread`, `std/gfx` (window, fullscreen, PCM audio), `std/gfx3d` (3D window on OpenGL), etc.
+3. **Standard modules:** [`SYNTAX/Modules.txt`](SYNTAX/Modules.txt) — `#include <std/io>`, `std/os`, `std/file`, `std/math`, `std/random`, `std/time`, `std/thread`, `std/term` (colour, cursor, keys), `std/gfx` (window, fullscreen, PCM audio), `std/gfx3d` (3D window: OpenGL 1.1 by default, Vulkan 1.4 on Windows, WebGL in the browser), etc.
 4. **Includes & packages:** [`SYNTAX/Includes.txt`](SYNTAX/Includes.txt), **nexapkg** for third-party deps.
