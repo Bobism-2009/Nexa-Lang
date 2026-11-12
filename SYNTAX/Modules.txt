@@ -680,9 +680,27 @@ ARGUMENT TYPES
                                    the right and bottom to whatever is next to it --
                                    so fill_poly of a rectangle is fill of it, and
                                    two polygons sharing an edge leave no seam.
-                                   All of these are clipped to the framebuffer and
-                                   do nothing (0 for poly / fill_poly) when the
-                                   window is closed or was never opened.
+  gfx.smooth(xs, ys, r, g, b[, close])
+                                 - the points of a line, with the corners cut
+                                   round. Two passes: each corner is replaced
+                                   by a short curve, and a run that was already
+                                   straight stays on that line. The two ends of
+                                   an open line stay where they were. close 0,
+                                   the default, leaves it open. close 1 joins
+                                   the last point back to the first and rounds
+                                   that corner too, so a square comes out with
+                                   four rounded corners. xs and ys are []int of
+                                   equal length. An open line needs 2 points and
+                                   a closed one needs 3; only the first 4096
+                                   are used. Returns 1 if it drew, 0 if the
+                                   window is closed, the lists differ, or there
+                                   are too few points. At gfx.alpha below 255 a
+                                   pixel two segments share is blended twice,
+                                   the same as a thick line's join.
+                                   Every shape above is clipped to the framebuffer
+                                   and does nothing (0 for poly, fill_poly and
+                                   smooth) when the window is closed or was
+                                   never opened.
   gfx.alpha()                    - the current global draw alpha, 0..255
   gfx.alpha(a)                   - set it (clamped to 0..255) and return what was set.
                                    255 is opaque and is the default; gfx.open() puts it
@@ -1165,10 +1183,10 @@ ARGUMENT TYPES
   PNG, JPEG (including progressive), BMP, and GIF.
   With no window open -- before the first gfx.open(), after gfx.close(), or when
   gfx.open() failed -- no gfx call is an error. Drawing (clear, plot, fill, rect,
-  round_rect, fill_round_rect, line, circle, fill_circle, ellipse, fill_ellipse,
+  round_rect, fill_round_rect, line, smooth, circle, fill_circle, ellipse, fill_ellipse,
   arc, pie, tri, fill_tri, poly, fill_poly, text, blit, blit_rot, present, poll)
   does nothing; width, height, scale, resize, fullscreen, borderless, ontop,
-  transparent, blit, blit_rot, icon, cursor, text, poly, fill_poly, save, wheel, wheel_x,
+  transparent, blit, blit_rot, icon, cursor, text, poly, fill_poly, smooth, save, wheel, wheel_x,
   mouse_x, mouse_y, mouse, key, pressed and released return 0; get returns -1;
   typed returns ""; title and drop return what they last held. The calls with no
   window in them still work: text_width, text_height, text_size, alpha, image,
@@ -1178,7 +1196,7 @@ ARGUMENT TYPES
   fill, rect, round_rect, fill_round_rect, line, circle, fill_circle, ellipse,
   fill_ellipse, arc, pie, tri, fill_tri, present, poll, close and maxfps.
   Writing let R = gfx.rect(...); is an error naming the call, not a value.
-  Note text, poly, fill_poly, blit and blit_rot are NOT in that list -- they
+  Note text, poly, fill_poly, smooth, blit and blit_rot are NOT in that list -- they
   return the 0 described above -- and neither is poll's neighbour closed.
   Note that the two pieces of draw state differ on purpose: gfx.open() puts the
   alpha back to 255, so setting it before opening a window buys nothing, while

@@ -293,6 +293,10 @@ run_groups() {
         '    gfx.line(0, 0, 1, 1, 1, 2, 3);' "$@"
     group "line_thick$suffix" '^static void __nexa_gfx_line_thick' \
         '    gfx.line(0, 0, 1, 1, 1, 2, 3, 4);' "$@"
+    group "smooth$suffix" 'static int __nexa_gfx_smooth' \
+        '    let xs: []int = [0, 4, 8];
+    let ys: []int = [0, 8, 0];
+    let n: int = gfx.smooth(xs, ys, 1, 2, 3);' "$@"
     group "text$suffix" '^static const unsigned char __nexa_gfx_font5x7' \
         '    gfx.text(0, 0, "a", 1, 2, 3);' "$@"
     group "mouse$suffix" '^static int __nexa_gfx_mouse_x' \
@@ -969,6 +973,9 @@ else
     link_case "fill_poly" '    let xs: []int = [0, 4, 0];
     let ys: []int = [0, 0, 4];
     let n: int = gfx.fill_poly(xs, ys, 1, 2, 3);'
+    link_case "smooth" '    let xs: []int = [0, 4, 8];
+    let ys: []int = [0, 8, 0];
+    let n: int = gfx.smooth(xs, ys, 1, 2, 3, 1);'
     link_case "text" '    let w: int = gfx.text(0, 0, "a", 1, 2, 3);'
     link_case "text_size_get" '    let n: int = gfx.text_size();'
     link_case "text_size_set" '    gfx.text_size(2);'

@@ -159,6 +159,42 @@ fn main() {
     "__nexa_gfx_fill_poly(" \
     "__nexa_gfx_poly("
 
+expect_emit "dispatch: smooth rounds a line and can close it" \
+'#include <std/gfx>
+#include <std/io>
+fn main() {
+    let xs: []int = [1, 9, 5];
+    let ys: []int = [1, 2, 9];
+    let drew: int = gfx.smooth(xs, ys, 1, 2, 3);
+    if (gfx.smooth(xs, ys, 1, 2, 3, 1) == 1) {
+        io.println(drew);
+    }
+}
+' \
+    "__nexa_gfx_smooth(" \
+    ", 0)" \
+    ", 1)"
+
+expect_reject "reject: gfx.smooth short one colour" \
+'#include <std/gfx>
+fn main() {
+    let xs: []int = [0, 4, 8];
+    let ys: []int = [0, 8, 0];
+    gfx.smooth(xs, ys, 1, 2);
+}
+' \
+    "gfx.smooth(xs, ys, r, g, b[, close])"
+
+expect_reject "reject: gfx.smooth on a string slice" \
+'#include <std/gfx>
+fn main() {
+    let xs: []string = ["a", "b", "c"];
+    let ys: []int = [1, 2, 3];
+    gfx.smooth(xs, ys, 1, 2, 3);
+}
+' \
+    "expects []int point lists"
+
 expect_reject "reject: gfx.rect short one colour" \
 '#include <std/gfx>
 fn main() {
@@ -629,6 +665,41 @@ int main() {
                                WHITE, WHITE, WHITE);
     std::printf("extremes=done\n");
 
+    // A bent line loses its corner and keeps its ends. (2,18)-(10,10)-(18,18)
+    // cuts down to a curve through (10,12); the corner pixel itself is gone.
+    // A straight run stays on its row, and a closed square loses its corner
+    // while the middle of a side stays.
+    fb_open(21, 21);
+    {
+        std::vector<int> xs = {2, 10, 18};
+        std::vector<int> ys = {18, 10, 18};
+        std::printf("smooth_drew=%d\n", __nexa_gfx_smooth(xs, ys, WHITE, WHITE, WHITE, 0));
+        std::printf("smooth_end=%d\n", __nexa_gfx_get(2, 18));
+        std::printf("smooth_corner=%d\n", __nexa_gfx_get(10, 10));
+        std::printf("smooth_curve=%d\n", __nexa_gfx_get(10, 12));
+    }
+    __nexa_gfx_clear(0, 0, 0);
+    {
+        std::vector<int> xs = {2, 10, 18};
+        std::vector<int> ys = {10, 10, 10};
+        __nexa_gfx_smooth(xs, ys, WHITE, WHITE, WHITE, 0);
+        std::printf("smooth_straight=%d\n", __nexa_gfx_get(10, 10));
+    }
+    __nexa_gfx_clear(0, 0, 0);
+    {
+        std::vector<int> xs = {4, 16, 16, 4};
+        std::vector<int> ys = {4, 4, 16, 16};
+        __nexa_gfx_smooth(xs, ys, WHITE, WHITE, WHITE, 1);
+        std::printf("smooth_closed_corner=%d\n", __nexa_gfx_get(4, 4));
+        std::printf("smooth_closed_side=%d\n", __nexa_gfx_get(10, 4));
+    }
+    {
+        std::vector<int> xs = {0, 4, 2};
+        std::vector<int> two = {0, 0};
+        std::printf("smooth_mismatch=%d\n", __nexa_gfx_smooth(xs, two, WHITE, WHITE, WHITE, 0));
+        std::printf("smooth_short=%d\n", __nexa_gfx_smooth(two, two, WHITE, WHITE, WHITE, 1));
+    }
+
     // --- with no framebuffer at all (window closed or never opened) ---------
     fb_close();
     __nexa_gfx_rect(0, 0, 4, 4, WHITE, WHITE, WHITE);
@@ -648,6 +719,7 @@ int main() {
         std::vector<int> ys = {0, 0, 4};
         std::printf("closed_poly=%d\n", __nexa_gfx_poly(xs, ys, WHITE, WHITE, WHITE));
         std::printf("closed_fill_poly=%d\n", __nexa_gfx_fill_poly(xs, ys, WHITE, WHITE, WHITE));
+        std::printf("closed_smooth=%d\n", __nexa_gfx_smooth(xs, ys, WHITE, WHITE, WHITE, 0));
     }
     std::printf("closed=no-op\n");
     return 0;
@@ -922,8 +994,18 @@ colour_clamped=16711808
 alpha_default=255
 alpha255_matches_default=yes
 extremes=done
+smooth_drew=1
+smooth_end=16777215
+smooth_corner=0
+smooth_curve=16777215
+smooth_straight=16777215
+smooth_closed_corner=0
+smooth_closed_side=16777215
+smooth_mismatch=0
+smooth_short=0
 closed_poly=0
 closed_fill_poly=0
+closed_smooth=0
 closed=no-op
 WANT
     if [ $rc -ne 0 ]; then

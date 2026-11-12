@@ -5124,6 +5124,7 @@ private:
         else if (method == "round_rect" || method == "fill_round_rect") argc = 8;
         else if (method == "tri" || method == "fill_tri") argc = 9;
         else if (method == "poly" || method == "fill_poly") argc = 5;
+        else if (method == "smooth") { argc = 5; argcMax = 6; }
         else if (method == "text") { argc = 6; argcMax = 7; }
         else if (method == "text_size") { argc = 0; argcMax = 1; }
         else if (method == "text_width" || method == "text_height") { argc = 1; argcMax = 2; }
@@ -5144,7 +5145,7 @@ private:
         else {
             throw std::runtime_error("Unknown gfx method 'gfx." + method +
                 "' at line " + std::to_string(methodTok.line) +
-                " (use open, close, resize, width, height, scale, title, icon, cursor, poll, closed, clear, plot, fill, rect, round_rect, fill_round_rect, line, circle, fill_circle, ellipse, fill_ellipse, arc, pie, tri, fill_tri, poly, fill_poly, text, text_size, text_width, text_height, get, present, image, decode, image_w, image_h, upload, blit, blit_rot, alpha, save, key, pressed, released, wheel, wheel_x, typed, mouse_x, mouse_y, mouse, pads, pad, pad_pressed, pad_axis, rumble, audio, sample, audio_queued, audio_flush, sound, play, loop, stop, volume, fullscreen, borderless, ontop, transparent, maxfps)");
+                " (use open, close, resize, width, height, scale, title, icon, cursor, poll, closed, clear, plot, fill, rect, round_rect, fill_round_rect, line, smooth, circle, fill_circle, ellipse, fill_ellipse, arc, pie, tri, fill_tri, poly, fill_poly, text, text_size, text_width, text_height, get, present, image, decode, image_w, image_h, upload, blit, blit_rot, alpha, save, key, pressed, released, wheel, wheel_x, typed, mouse_x, mouse_y, mouse, pads, pad, pad_pressed, pad_axis, rumble, audio, sample, audio_queued, audio_flush, sound, play, loop, stop, volume, fullscreen, borderless, ontop, transparent, maxfps)");
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after gfx." + method + " at line " + std::to_string(peek().line));
@@ -5177,14 +5178,18 @@ private:
             if (m == "fill_tri") return std::string("gfx.fill_tri(x1, y1, x2, y2, x3, y3, r, g, b)");
             if (m == "poly") return std::string("gfx.poly(xs, ys, r, g, b)");
             if (m == "fill_poly") return std::string("gfx.fill_poly(xs, ys, r, g, b)");
+            if (m == "smooth") return std::string("gfx.smooth(xs, ys, r, g, b[, close])");
             return std::string();
         };
         if (argcMax >= 0) {
-            if (method == "line") {
-                if (got < argc || got > argcMax) {
-                    throw std::runtime_error("gfx.line(x1, y1, x2, y2, r, g, b[, t]) at line " + std::to_string(line));
+                if (method == "line") {
+                    if (got < argc || got > argcMax) {
+                        throw std::runtime_error("gfx.line(x1, y1, x2, y2, r, g, b[, t]) at line " + std::to_string(line));
+                    }
                 }
-            }
+                if (method == "smooth" && (got < argc || got > argcMax)) {
+                    throw std::runtime_error("gfx.smooth(xs, ys, r, g, b[, close]) at line " + std::to_string(line));
+                }
             if (method == "blit" && got != 3 && got != 5 && got != 7 && got != 9) {
                 throw std::runtime_error("gfx.blit(x, y, src[, w, h]) or gfx.blit(x, y, src, sx, sy, sw, sh[, dw, dh]) at line " + std::to_string(line));
             }

@@ -570,6 +570,7 @@ or an Emscripten canvas; no extra library to install on any of them.
             gfx.arc(...)       gfx.pie(...)
             gfx.tri(...)       gfx.fill_tri(...)
             gfx.poly(xs,ys,r,g,b)   gfx.fill_poly(...)
+            gfx.smooth(xs, ys, r, g, b[, close])
             gfx.alpha([a])     global draw alpha, 0..255
   text      gfx.text(x,y,s,r,g,b[,scale])      5x7 ASCII, 32..126
             gfx.text_size([n])  gfx.text_width(s)  gfx.text_height(s)

@@ -3161,7 +3161,8 @@ private:
                     || e.value == "audio_queued" || e.value == "audio_flush"
                     || e.value == "fullscreen" || e.value == "borderless"
                     || e.value == "ontop" || e.value == "transparent"
-                    || e.value == "poly" || e.value == "fill_poly") return "int";
+                    || e.value == "poly" || e.value == "fill_poly"
+                    || e.value == "smooth") return "int";
                 // What is left is the void set the parser refuses in value
                 // position: the drawing calls plus poll, present, close and
                 // maxfps. Anything value-returning must be named above, or
@@ -4503,7 +4504,7 @@ private:
     // works. That makes []string the user's problem to hear about here, by line,
     // rather than as a page of C++ template errors about generated code.
     void semCheckGfxPoly(const AstNode& e) const {
-        if (e.value != "poly" && e.value != "fill_poly") return;
+        if (e.value != "poly" && e.value != "fill_poly" && e.value != "smooth") return;
         if (e.children.size() < 2) return;
         for (int i = 0; i < 2; i++) {
             std::string t = inferExprNexaType(e.children[(size_t)i]);
@@ -4683,6 +4684,7 @@ private:
             // The point lists go through a template; semCheckGfxPoly has them.
             {"poly",            "gfx.poly(xs, ys, r, g, b)",                       "..nnn"},
             {"fill_poly",       "gfx.fill_poly(xs, ys, r, g, b)",                  "..nnn"},
+            {"smooth",          "gfx.smooth(xs, ys, r, g, b[, close])",            "..nnnn"},
             {"text",            "gfx.text(x, y, s, r, g, b[, scale])",             "nntnnnn"},
             {"text_size",       "gfx.text_size([n])",                              "n"},
             {"text_width",      "gfx.text_width(s[, scale])",                      "tn"},
@@ -9141,6 +9143,10 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (fn == "poly" || fn == "fill_poly") {
                     return "__nexa_gfx_" + fn + "(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + a(4) + ")";
                 }
+                if (fn == "smooth") {
+                    std::string cl = e.children.size() >= 6 ? a(5) : "0";
+                    return "__nexa_gfx_smooth(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + a(4) + ", " + cl + ")";
+                }
                 if (fn == "text") {
                     std::string sc = e.children.size() >= 7 ? a(6) : "__nexa_gfx_text_scale()";
                     return "__nexa_gfx_text(" + a(0) + ", " + a(1) + ", " + a(2) + ", " + a(3) + ", " + a(4) + ", " + a(5) + ", " + sc + ")";
@@ -10030,6 +10036,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             cppUsage.gfxRoundRect = true;
         } else if (fn == "fill_round_rect") {
             cppUsage.gfxFillRoundRect = true;
+        } else if (fn == "smooth") {
+            cppUsage.gfxSmooth = true;
         } else if (fn == "line") {
             // An eighth argument is the thickness, which is a different rasterizer.
             if (n.children.size() >= 8) cppUsage.gfxLineThick = true;

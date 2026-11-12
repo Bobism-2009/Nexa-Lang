@@ -170,6 +170,7 @@ public:
         bool gfxFillRoundRect = false;
         bool gfxLine = false;
         bool gfxLineThick = false;
+        bool gfxSmooth = false;        // gfx.smooth -- corners cut off a polyline
         bool gfxText = false;
         bool gfxMouse = false;
         bool gfxKeys = false;
@@ -2177,6 +2178,7 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
             need.fillRoundRect = usage.gfxFillRoundRect;
             need.line = usage.gfxLine;
             need.lineThick = usage.gfxLineThick;
+            need.smooth = usage.gfxSmooth;
             need.text = usage.gfxText;
             need.mouse = usage.gfxMouse;
             need.keys = usage.gfxKeys;
@@ -2260,6 +2262,7 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
                 (usage.gfxPlot || usage.gfxShapesFill || usage.gfxShapesOutline ||
                  usage.gfxArc || usage.gfxPie || usage.gfxRoundRect ||
                  usage.gfxFillRoundRect || usage.gfxLine || usage.gfxLineThick ||
+                 usage.gfxSmooth ||
                  usage.gfxText || usage.gfxBlit || usage.gfxBlitRot);
             out += gfxDraws ? gfx3dOverlayCpp() : gfx3dOverlayStubsCpp();
         }

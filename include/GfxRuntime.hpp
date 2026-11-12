@@ -102,6 +102,7 @@ struct GfxNeed {
     bool fillRoundRect = false;  // gfx.fill_round_rect
     bool line = false;           // gfx.line, 7 arguments
     bool lineThick = false;      // gfx.line, 8 arguments
+    bool smooth = false;         // gfx.smooth -- a line with its corners cut round
     bool text = false;           // text, text_size, text_width, text_height
     bool mouse = false;          // mouse, mouse_x, mouse_y
     bool keys = false;           // key, pressed, released -- the live "is it down" read
@@ -657,7 +658,7 @@ static int __nexa_gfx_decode_rgba(const unsigned char* data, int n, int* ow, int
 inline std::string gfxRuntimeCpp(const GfxNeed& need) {
     // Internal dependency closure: each of these is "some helper we are about
     // to emit calls it", worked out once here instead of at every use.
-    const bool wantLine = need.line || need.lineThick || need.shapesOutline;
+    const bool wantLine = need.line || need.lineThick || need.shapesOutline || need.smooth;
     // Rounded rectangles are stacks of spans like every other filled shape;
     // arcs and pies go through the span writer that filters by angle, but they
     // still need the row range it is paired with.
@@ -674,13 +675,13 @@ inline std::string gfxRuntimeCpp(const GfxNeed& need) {
     const bool wantEllipseRuns = need.shapesOutline || need.arc;
     const bool wantPolyTake = need.shapesFill || need.shapesOutline;
     const bool wantU8 = need.shapesFill || need.shapesOutline || need.line ||
-                        need.lineThick || need.text || wantRound || wantSector;
+                        need.lineThick || need.smooth || need.text || wantRound || wantSector;
     const bool wantGet = need.get || need.save;
     // Both the image decoder and the WAV loader start by slurping a file.
     const bool wantReadFile = need.imageLoad;
     const bool wantDraw = need.plot || need.shapesFill || need.shapesOutline ||
-                          need.line || need.lineThick || need.text || wantRound ||
-                          wantSector;
+                          need.line || need.lineThick || need.smooth || need.text ||
+                          wantRound || wantSector;
     // std/ui blends every pixel it draws, anti-aliased, through this.
     const bool wantPutA = wantDraw || need.blit || need.blitRot || need.ui;
     // "Something reads input at all", which is what __nexa_gfx_has_focus hangs
@@ -3775,6 +3776,78 @@ static int __nexa_gfx_poly(const TX& xs, const TY& ys, int r, int g, int b) {
     std::vector<int> px, py;
     if (!__nexa_gfx_poly_take(xs, ys, px, py)) return 0;
     __nexa_gfx_poly_pts(px.data(), py.data(), (int)px.size(), r, g, b);
+    return 1;
+}
+)NEXA_GFX";  // [nexa:rasterizers-end]
+    if (need.smooth) out += /* [nexa:rasterizers-begin] */ R"NEXA_GFX(
+// (wa*a + (4-wa)*b) / 4, rounded. wa is 3 or 1, so this is the quarter and
+// three-quarter points of a segment, and it stays exact for a negative pixel.
+static int __nexa_gfx_smooth_mix(int a, int b, int wa) {
+    long long v = (long long)wa * a + (long long)(4 - wa) * b;
+    if (v >= 0) return (int)((v + 2) / 4);
+    return (int)-(((-v) + 2) / 4);
+}
+
+// One cut. Each corner is replaced by the two points a quarter of the way
+// along the edges that meet there, so the sharp join is gone and a run that
+// was already straight stays on that line. An open line keeps its two ends.
+static void __nexa_gfx_smooth_cut(const std::vector<int>& x, const std::vector<int>& y,
+                                  std::vector<int>& ox, std::vector<int>& oy, int closed) {
+    ox.clear();
+    oy.clear();
+    int n = (int)x.size();
+    if (!closed) {
+        ox.push_back(x[0]);
+        oy.push_back(y[0]);
+    }
+    int edges = closed ? n : n - 1;
+    for (int i = 0; i < edges; i++) {
+        int j = i + 1;
+        if (j == n) j = 0;
+        ox.push_back(__nexa_gfx_smooth_mix(x[i], x[j], 3));
+        oy.push_back(__nexa_gfx_smooth_mix(y[i], y[j], 3));
+        ox.push_back(__nexa_gfx_smooth_mix(x[i], x[j], 1));
+        oy.push_back(__nexa_gfx_smooth_mix(y[i], y[j], 1));
+    }
+    if (!closed) {
+        ox.push_back(x[n - 1]);
+        oy.push_back(y[n - 1]);
+    }
+}
+
+template <class TX, class TY>
+static int __nexa_gfx_smooth(const TX& xs, const TY& ys, int r, int g, int b, int close) {
+    if (!__nexa_g.fb) return 0;
+    if (xs.size() != ys.size()) return 0;
+    int needn = close ? 3 : 2;
+    if ((int)xs.size() < needn) return 0;
+    size_t n = xs.size();
+    if (n > 4096) n = 4096;
+    std::vector<int> ax, ay, bx, by;
+    ax.reserve(n);
+    ay.reserve(n);
+    for (size_t i = 0; i < n; i++) {
+        long long vx = (long long)xs[i];
+        long long vy = (long long)ys[i];
+        if (vx < -2147483647ll) vx = -2147483647ll;
+        if (vx > 2147483647ll) vx = 2147483647ll;
+        if (vy < -2147483647ll) vy = -2147483647ll;
+        if (vy > 2147483647ll) vy = 2147483647ll;
+        ax.push_back((int)vx);
+        ay.push_back((int)vy);
+    }
+    // Twice. The first cut takes the corner off; the second rounds the
+    // little flat the first one left.
+    for (int pass = 0; pass < 2; pass++) {
+        __nexa_gfx_smooth_cut(ax, ay, bx, by, close ? 1 : 0);
+        ax.swap(bx);
+        ay.swap(by);
+    }
+    int m = (int)ax.size();
+    for (int i = 0; i < m - 1; i++) {
+        __nexa_gfx_line(ax[i], ay[i], ax[i + 1], ay[i + 1], r, g, b);
+    }
+    if (close && m > 1) __nexa_gfx_line(ax[m - 1], ay[m - 1], ax[0], ay[0], r, g, b);
     return 1;
 }
 )NEXA_GFX";  // [nexa:rasterizers-end]

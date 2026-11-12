@@ -148,7 +148,9 @@ accept gfx_ok_tri         "$GFX" '    gfx.tri(0, 0, 4, 0, 0, 4, 1, 2, 3);
 accept gfx_ok_poly        "$GFX" '    let xs: []int = [0, 4, 0];
     let ys: []int = [0, 0, 4];
     gfx.poly(xs, ys, 1, 2, 3);
-    gfx.fill_poly(xs, ys, 1, 2, 3);'
+    gfx.fill_poly(xs, ys, 1, 2, 3);
+    gfx.smooth(xs, ys, 1, 2, 3);
+    gfx.smooth(xs, ys, 1, 2, 3, 1);'
 accept gfx_ok_text        "$GFX" '    gfx.text(1, 2, "hi", 4, 5, 6);
     gfx.text(1, 2, "hi", 4, 5, 6, 2);'
 accept gfx_ok_text_size   "$GFX" '    let g = gfx.text_size();
