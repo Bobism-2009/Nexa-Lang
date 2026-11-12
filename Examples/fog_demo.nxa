@@ -1,0 +1,79 @@
+// std/gfx3d fog: a row of shapes that fades into the sky.
+//
+//   build: NexaC Examples/fog_demo.nxa -o fog_demo
+//   drive: arrows orbit, W/S raise and lower, wheel zooms, F turns the fog
+//          off and on, escape quits
+//
+// The colour of the fog is the colour of the clear, so a shape far enough
+// away is the sky and nothing else. The near pair is still its own colour.
+// F is there so the same frame can be seen both ways.
+//
+// start and end are how far in front of the camera, not the straight line
+// to the eye. The first pair sits just inside the start, and the last pair
+// is past the end.
+#include <std/gfx3d>
+#include <std/io>
+#include <std/math>
+
+fn main() {
+    if (gfx3d.open("Nexa fog", 900, 620) != 1) {
+        io.println("no 3D window: this platform has no backend yet");
+        return;
+    }
+    gfx3d.perspective(55.0, 0.1, 80.0);
+    gfx3d.maxfps(60);
+    gfx3d.light(-0.35, 0.9, 0.25);
+    gfx3d.ambient(70);
+
+    // Same three numbers as gfx3d.clear below. A mismatch leaves a line
+    // where the fade finishes and the sky starts.
+    gfx3d.fog(176, 196, 214, 8.0, 36.0);
+    let fogOn = 1;
+    io.println("arrows orbit, W/S height, wheel zoom, F fog, escape quits");
+
+    let angle = 0.0;
+    let height = 3.2;
+    let dist = 14.0;
+    let lookz = -10.0;
+
+    while (gfx3d.closed() != 1) {
+        gfx3d.poll();
+        if (gfx3d.key("left"))  { angle = angle - 0.02; }
+        if (gfx3d.key("right")) { angle = angle + 0.02; }
+        if (gfx3d.key("w"))     { height = height + 0.08; }
+        if (gfx3d.key("s"))     { height = height - 0.08; }
+        dist = dist - gfx3d.wheel() * 0.6;
+        if (dist < 4.0) { dist = 4.0; }
+        if (dist > 40.0) { dist = 40.0; }
+        if (gfx3d.pressed("f")) {
+            if (fogOn == 1) {
+                gfx3d.fog();
+                fogOn = 0;
+            } else {
+                gfx3d.fog(176, 196, 214, 8.0, 36.0);
+                fogOn = 1;
+            }
+        }
+        if (gfx3d.pressed("escape")) { gfx3d.close(); }
+
+        gfx3d.camera(math.sin(angle) * dist, height, lookz + math.cos(angle) * dist,
+                     0.0, 1.2, lookz);
+
+        gfx3d.clear(176, 196, 214);
+
+        gfx3d.grid(48.0, 2.0, 140, 160, 180);
+
+        // Ten pairs, four units apart, walking away from the camera.
+        let i = 0;
+        while (i < 10) {
+            let z = 2.0 - i * 4.0;
+            gfx3d.sphere(-2.2, 1.0, z, 0.9, 210, 120, 70);
+            gfx3d.sphere(2.2, 1.0, z, 0.9, 70, 130, 190);
+            i = i + 1;
+        }
+
+        gfx3d.present();
+    }
+
+    gfx3d.close();
+}
