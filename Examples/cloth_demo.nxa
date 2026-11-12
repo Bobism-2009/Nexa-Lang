@@ -7,11 +7,74 @@
 // physics.cloth is a grid. face 0 lies flat and drops onto the sphere.
 // face 1 stands up; the left column is pinned, and physics.wind blows it.
 // The points do not push the bodies they land on. Draw the grid with
-// gfx3d.tri from physics.cx/cy/cz.
+// gfx3d.tri from physics.cx/cy/cz. The outline of each cloth is gfx.smooth,
+// so the corners of the sheet and the flag round instead of staying sharp.
+#include <std/gfx>
 #include <std/gfx3d>
 #include <std/physics>
 #include <std/io>
 #include <std/math>
+
+// Where a world point lands on the window. The same look-at and perspective
+// gfx3d.camera / gfx3d.perspective use, so the line sits on the cloth. axis
+// 0 is x, 1 is y. y grows down, the way gfx does.
+fn cloth_screen(px: float, py: float, pz: float, axis: int,
+                ex: float, ey: float, ez: float,
+                tx: float, ty: float, tz: float,
+                w: int, h: int): int {
+    let fx = tx - ex;
+    let fy = ty - ey;
+    let fz = tz - ez;
+    let fl = math.sqrt(fx * fx + fy * fy + fz * fz);
+    if (fl < 0.000001) { fl = 1.0; }
+    fx = fx / fl;
+    fy = fy / fl;
+    fz = fz / fl;
+
+    let ux = 0.0;
+    let uy = 1.0;
+    let uz = 0.0;
+    if (math.abs(fx) < 0.00001 && math.abs(fz) < 0.00001) {
+        ux = 0.0;
+        uy = 0.0;
+        if (fy > 0.0) { uz = 1.0; } else { uz = -1.0; }
+    }
+
+    let sx = fy * uz - fz * uy;
+    let sy = fz * ux - fx * uz;
+    let sz = fx * uy - fy * ux;
+    let sl = math.sqrt(sx * sx + sy * sy + sz * sz);
+    if (sl < 0.000001) { sl = 1.0; }
+    sx = sx / sl;
+    sy = sy / sl;
+    sz = sz / sl;
+
+    let vx = sy * fz - sz * fy;
+    let vy = sz * fx - sx * fz;
+    let vz = sx * fy - sy * fx;
+
+    let dx = px - ex;
+    let dy = py - ey;
+    let dz = pz - ez;
+    let camx = sx * dx + sy * dy + sz * dz;
+    let camy = vx * dx + vy * dy + vz * dz;
+    let camz = -(fx * dx + fy * dy + fz * dz);
+    let clip = -camz;
+    if (clip < 0.05) { clip = 0.05; }
+
+    let aspect = 1.0;
+    if (h > 0) { aspect = w * 1.0 / h; }
+    let f = 1.0 / math.tan(55.0 * 0.5 * 3.14159265 / 180.0);
+    let ndc = 0.0;
+    if (axis == 0) { ndc = (f / aspect) * camx / clip; }
+    else { ndc = f * camy / clip; }
+
+    let pix = 0.0;
+    if (axis == 0) { pix = (ndc * 0.5 + 0.5) * w; }
+    else { pix = (1.0 - (ndc * 0.5 + 0.5)) * h; }
+    if (pix < 0.0) { return 0; }
+    return pix + 0.5;
+}
 
 fn main() {
     if (gfx3d.open("Nexa cloth", 900, 620) != 1) {
@@ -116,6 +179,70 @@ fn main() {
             }
             r = r + 1;
         }
+
+        // The hem of each cloth, with the corners rounded. One layer pixel is
+        // one window pixel, and gfx3d.clear already wiped last frame's line.
+        let w = gfx.width();
+        let h = gfx.height();
+        let lx = 1.2;
+        let ly = 1.2;
+        let lz = 0.0;
+        let xs: []int;
+        let ys: []int;
+        let c = 0;
+        while (c < 13) {
+            xs.push(cloth_screen(physics.cx(sheet, c, 0), physics.cy(sheet, c, 0), physics.cz(sheet, c, 0), 0, ex, ey, ez, lx, ly, lz, w, h));
+            ys.push(cloth_screen(physics.cx(sheet, c, 0), physics.cy(sheet, c, 0), physics.cz(sheet, c, 0), 1, ex, ey, ez, lx, ly, lz, w, h));
+            c = c + 1;
+        }
+        r = 1;
+        while (r < 13) {
+            xs.push(cloth_screen(physics.cx(sheet, 12, r), physics.cy(sheet, 12, r), physics.cz(sheet, 12, r), 0, ex, ey, ez, lx, ly, lz, w, h));
+            ys.push(cloth_screen(physics.cx(sheet, 12, r), physics.cy(sheet, 12, r), physics.cz(sheet, 12, r), 1, ex, ey, ez, lx, ly, lz, w, h));
+            r = r + 1;
+        }
+        c = 11;
+        while (c >= 0) {
+            xs.push(cloth_screen(physics.cx(sheet, c, 12), physics.cy(sheet, c, 12), physics.cz(sheet, c, 12), 0, ex, ey, ez, lx, ly, lz, w, h));
+            ys.push(cloth_screen(physics.cx(sheet, c, 12), physics.cy(sheet, c, 12), physics.cz(sheet, c, 12), 1, ex, ey, ez, lx, ly, lz, w, h));
+            c = c - 1;
+        }
+        r = 11;
+        while (r >= 1) {
+            xs.push(cloth_screen(physics.cx(sheet, 0, r), physics.cy(sheet, 0, r), physics.cz(sheet, 0, r), 0, ex, ey, ez, lx, ly, lz, w, h));
+            ys.push(cloth_screen(physics.cx(sheet, 0, r), physics.cy(sheet, 0, r), physics.cz(sheet, 0, r), 1, ex, ey, ez, lx, ly, lz, w, h));
+            r = r - 1;
+        }
+        gfx.smooth(xs, ys, 90, 62, 40, 1);
+
+        xs = [];
+        ys = [];
+        c = 0;
+        while (c < 13) {
+            xs.push(cloth_screen(physics.cx(flag, c, 0), physics.cy(flag, c, 0), physics.cz(flag, c, 0), 0, ex, ey, ez, lx, ly, lz, w, h));
+            ys.push(cloth_screen(physics.cx(flag, c, 0), physics.cy(flag, c, 0), physics.cz(flag, c, 0), 1, ex, ey, ez, lx, ly, lz, w, h));
+            c = c + 1;
+        }
+        r = 1;
+        while (r < 8) {
+            xs.push(cloth_screen(physics.cx(flag, 12, r), physics.cy(flag, 12, r), physics.cz(flag, 12, r), 0, ex, ey, ez, lx, ly, lz, w, h));
+            ys.push(cloth_screen(physics.cx(flag, 12, r), physics.cy(flag, 12, r), physics.cz(flag, 12, r), 1, ex, ey, ez, lx, ly, lz, w, h));
+            r = r + 1;
+        }
+        c = 11;
+        while (c >= 0) {
+            xs.push(cloth_screen(physics.cx(flag, c, 7), physics.cy(flag, c, 7), physics.cz(flag, c, 7), 0, ex, ey, ez, lx, ly, lz, w, h));
+            ys.push(cloth_screen(physics.cx(flag, c, 7), physics.cy(flag, c, 7), physics.cz(flag, c, 7), 1, ex, ey, ez, lx, ly, lz, w, h));
+            c = c - 1;
+        }
+        r = 6;
+        while (r >= 1) {
+            xs.push(cloth_screen(physics.cx(flag, 0, r), physics.cy(flag, 0, r), physics.cz(flag, 0, r), 0, ex, ey, ez, lx, ly, lz, w, h));
+            ys.push(cloth_screen(physics.cx(flag, 0, r), physics.cy(flag, 0, r), physics.cz(flag, 0, r), 1, ex, ey, ez, lx, ly, lz, w, h));
+            r = r - 1;
+        }
+        gfx.smooth(xs, ys, 255, 214, 170, 1);
+
         gfx3d.present();
     }
     gfx3d.close();
