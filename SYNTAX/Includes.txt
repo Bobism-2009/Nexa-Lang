@@ -49,8 +49,8 @@ MODULE INCLUDES (angle brackets)
                             physics.soft(id, amount) sets one body apart from
                             the rest, so a firm ball dents a cushion and keeps
                             its own shape.
-                            physics.cloth is a grid of points that drapes over
-                            spheres and boxes; physics.pin holds a point and
+                            physics.cloth is a grid of points that folds and
+                            drapes over spheres, boxes and capsules; physics.pin holds a point and
                             physics.cx/cy/cz read it. A program that never
                             calls a cloth point carries none of it.
                             Bodies translate and do not rotate. A program that

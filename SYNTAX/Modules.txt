@@ -1900,10 +1900,15 @@ ARGUMENT TYPES
                                    width along x and height along z. face 1
                                    stands up, width along x and height along y,
                                    which is a flag. cols and rows are clamped
-                                   to 2..17. physics.step moves it. It drapes
-                                   over spheres and boxes and does not push
-                                   them. A program that never calls a cloth
-                                   point carries none of this.
+                                   to 2..17. physics.step moves it. The
+                                   neighbour links hold it together and the
+                                   diagonals only nudge, so it folds instead of
+                                   staying a board. It drapes over spheres,
+                                   boxes and capsules, and an edge is pushed
+                                   out as well as a point, so the sheet does
+                                   not cut through the shape. It does not push
+                                   the bodies. A program that never calls a
+                                   cloth point carries none of this.
   physics.pin(id, col, row)      - hold that point where it is.
   physics.unpin(id, col, row)    - let that point move again.
   physics.wind(x, y, z)          - an extra acceleration, cloth only.

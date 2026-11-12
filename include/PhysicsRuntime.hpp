@@ -1672,7 +1672,8 @@ static int __nexa_phys_mesh(double model, double x, double y, double z, double s
 
 // A cloth is a grid of points. Emitted only when a program calls physics.cloth
 // (or pin, unpin, wind, cx, cy, cz). It steps with the world and drapes over
-// spheres and boxes. It does not push them back. Four cloths, 17 points a side.
+// spheres, boxes and capsules. Edges are pushed out too. It does not push
+// the bodies back. Four cloths, 17 points a side.
 inline std::string physicsClothCpp() {
     return R"CLOTH(
 static const int __nexa_phys_cloth_n = 17;
@@ -1703,51 +1704,151 @@ static void __nexa_phys_cloth_link(float* x, float* y, float* z, const unsigned 
     }
 }
 
-static void __nexa_phys_cloth_hit(float* x, float* y, float* z, float* px, float* py, float* pz, int i) {
-    const float thick = 0.03f;
-    float qx = x[i], qy = y[i], qz = z[i];
+// Push a sample out of spheres, capsules and boxes. thick is the gap the
+// drawn triangle needs, so an edge across a curve does not cut the shape.
+// A point already sitting on that skin still counts: the push that put it
+// there happened earlier in the step, and the slide has to be slowed then
+// too, or the sheet creeps off a ball.
+static int __nexa_phys_cloth_out(float* qx, float* qy, float* qz, float* nx, float* ny, float* nz) {
+    const float thick = 0.08f;
+    const float slack = 0.03f;
+    int touch = 0;
     int hi = __nexa_phys_hi;
     for (int b = 1; b <= hi; b++) {
         __nexa_phys_body& body = __nexa_phys_bodies[b];
-        if (body.kind == 1) {
-            float dx = qx - body.x, dy = qy - body.y, dz = qz - body.z;
+        if (body.kind == 1 || body.kind == 3) {
+            float cx = body.x, cy = body.y, cz = body.z;
+            if (body.kind == 3) {
+                float x1 = body.x + body.ax, y1 = body.y + body.ay, z1 = body.z + body.az;
+                float x2 = body.x + body.bx, y2 = body.y + body.by, z2 = body.z + body.bz;
+                float abx = x2 - x1, aby = y2 - y1, abz = z2 - z1;
+                float ab2 = abx * abx + aby * aby + abz * abz;
+                float t = 0.f;
+                if (ab2 > 1e-12f) {
+                    t = ((*qx - x1) * abx + (*qy - y1) * aby + (*qz - z1) * abz) / ab2;
+                    if (t < 0.f) t = 0.f;
+                    if (t > 1.f) t = 1.f;
+                }
+                cx = x1 + abx * t; cy = y1 + aby * t; cz = z1 + abz * t;
+            }
+            float dx = *qx - cx, dy = *qy - cy, dz = *qz - cz;
             float rad = body.r + thick;
             if (rad < thick) rad = thick;
             float d2 = dx * dx + dy * dy + dz * dz;
-            if (d2 >= rad * rad || d2 < 1e-10f) continue;
+            float reach = rad + slack;
+            if (d2 >= reach * reach) continue;
+            if (d2 < 1e-10f) {
+                *qy += rad;
+                *nx = 0.f; *ny = 1.f; *nz = 0.f;
+                touch = 1;
+                continue;
+            }
             float d = sqrtf(d2);
-            float s = (rad - d) / d;
-            qx += dx * s; qy += dy * s; qz += dz * s;
+            *nx = dx / d; *ny = dy / d; *nz = dz / d;
+            touch = 1;
+            if (d < rad) {
+                float s = rad - d;
+                *qx += *nx * s; *qy += *ny * s; *qz += *nz * s;
+            }
         } else if (body.kind == 2) {
             float hx = fabsf(body.w) * 0.5f + thick;
             float hy = fabsf(body.h) * 0.5f + thick;
             float hz = fabsf(body.d) * 0.5f + thick;
-            float dx = qx - body.x, dy = qy - body.y, dz = qz - body.z;
-            float ax = hx - fabsf(dx), ay = hy - fabsf(dy), az = hz - fabsf(dz);
-            if (ax <= 0.f || ay <= 0.f || az <= 0.f) continue;
-            if (ax <= ay && ax <= az) qx += (dx >= 0.f ? ax : -ax);
-            else if (ay <= az) qy += (dy >= 0.f ? ay : -ay);
-            else qz += (dz >= 0.f ? az : -az);
+            float cx = *qx, cy = *qy, cz = *qz;
+            float minx = body.x - hx, maxx = body.x + hx;
+            float miny = body.y - hy, maxy = body.y + hy;
+            float minz = body.z - hz, maxz = body.z + hz;
+            if (cx < minx) cx = minx; else if (cx > maxx) cx = maxx;
+            if (cy < miny) cy = miny; else if (cy > maxy) cy = maxy;
+            if (cz < minz) cz = minz; else if (cz > maxz) cz = maxz;
+            float dx = *qx - cx, dy = *qy - cy, dz = *qz - cz;
+            float d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 >= slack * slack) continue;
+            touch = 1;
+            if (d2 > 1e-10f) {
+                float d = sqrtf(d2);
+                *nx = dx / d; *ny = dy / d; *nz = dz / d;
+            } else {
+                float ax = hx - fabsf(*qx - body.x);
+                float ay = hy - fabsf(*qy - body.y);
+                float az = hz - fabsf(*qz - body.z);
+                if (ax <= ay && ax <= az) {
+                    float s = (*qx >= body.x) ? 1.f : -1.f;
+                    *nx = s; *ny = 0.f; *nz = 0.f;
+                    *qx += s * ax;
+                } else if (ay <= az) {
+                    float s = (*qy >= body.y) ? 1.f : -1.f;
+                    *nx = 0.f; *ny = s; *nz = 0.f;
+                    *qy += s * ay;
+                } else {
+                    float s = (*qz >= body.z) ? 1.f : -1.f;
+                    *nx = 0.f; *ny = 0.f; *nz = s;
+                    *qz += s * az;
+                }
+            }
         }
     }
-    float mx = qx - x[i], my = qy - y[i], mz = qz - z[i];
-    float m2 = mx * mx + my * my + mz * mz;
-    if (m2 > 1e-12f) {
-        float inv = 1.f / sqrtf(m2);
-        float nx = mx * inv, ny = my * inv, nz = mz * inv;
+    return touch;
+}
+
+static void __nexa_phys_cloth_hit(float* x, float* y, float* z, float* px, float* py, float* pz, int i, int friction) {
+    float qx = x[i], qy = y[i], qz = z[i];
+    float nx = 0.f, ny = 1.f, nz = 0.f;
+    if (__nexa_phys_cloth_out(&qx, &qy, &qz, &nx, &ny, &nz)) {
         float vx = qx - px[i], vy = qy - py[i], vz = qz - pz[i];
         float vn = vx * nx + vy * ny + vz * nz;
         float vnKeep = vn > 0.f ? vn : 0.f;
-        // A frictionless point slides straight off a curve. Keep a little of
-        // the slide so the sheet can still settle, and none of the speed into
-        // the surface.
-        const float keep = 0.35f;
+        // Slide is only shortened on the last pass. Doing it on every
+        // iteration glued the sheet down, which is why it looked stiff.
+        float keep = friction ? 0.4f : 1.f;
         float tx = (vx - vn * nx) * keep + nx * vnKeep;
         float ty = (vy - vn * ny) * keep + ny * vnKeep;
         float tz = (vz - vn * nz) * keep + nz * vnKeep;
         px[i] = qx - tx; py[i] = qy - ty; pz[i] = qz - tz;
     }
     x[i] = qx; y[i] = qy; z[i] = qz;
+}
+
+// A triangle clips a curve when its corners are outside and the edge between
+// them is not. Push that edge back out.
+static void __nexa_phys_cloth_edges(float* x, float* y, float* z, const unsigned char* pin, int cols, int rows) {
+    const int S = __nexa_phys_cloth_n;
+    for (int r = 0; r < rows; r++) {
+        for (int col = 0; col < cols - 1; col++) {
+            int i = col + r * S, j = i + 1;
+            if (pin[i] && pin[j]) continue;
+            float ox = (x[i] + x[j]) * 0.5f, oy = (y[i] + y[j]) * 0.5f, oz = (z[i] + z[j]) * 0.5f;
+            float mx = ox, my = oy, mz = oz;
+            float nx, ny, nz;
+            __nexa_phys_cloth_out(&mx, &my, &mz, &nx, &ny, &nz);
+            float dx = mx - ox, dy = my - oy, dz = mz - oz;
+            if (dx * dx + dy * dy + dz * dz < 1e-12f) continue;
+            if (pin[i]) { x[j] += dx * 2.f; y[j] += dy * 2.f; z[j] += dz * 2.f; }
+            else if (pin[j]) { x[i] += dx * 2.f; y[i] += dy * 2.f; z[i] += dz * 2.f; }
+            else {
+                x[i] += dx; y[i] += dy; z[i] += dz;
+                x[j] += dx; y[j] += dy; z[j] += dz;
+            }
+        }
+    }
+    for (int col = 0; col < cols; col++) {
+        for (int r = 0; r < rows - 1; r++) {
+            int i = col + r * S, j = i + S;
+            if (pin[i] && pin[j]) continue;
+            float ox = (x[i] + x[j]) * 0.5f, oy = (y[i] + y[j]) * 0.5f, oz = (z[i] + z[j]) * 0.5f;
+            float mx = ox, my = oy, mz = oz;
+            float nx, ny, nz;
+            __nexa_phys_cloth_out(&mx, &my, &mz, &nx, &ny, &nz);
+            float dx = mx - ox, dy = my - oy, dz = mz - oz;
+            if (dx * dx + dy * dy + dz * dz < 1e-12f) continue;
+            if (pin[i]) { x[j] += dx * 2.f; y[j] += dy * 2.f; z[j] += dz * 2.f; }
+            else if (pin[j]) { x[i] += dx * 2.f; y[i] += dy * 2.f; z[i] += dz * 2.f; }
+            else {
+                x[i] += dx; y[i] += dy; z[i] += dz;
+                x[j] += dx; y[j] += dy; z[j] += dz;
+            }
+        }
+    }
 }
 
 static void __nexa_phys_cloth_step(float dt) {
@@ -1768,50 +1869,61 @@ static void __nexa_phys_cloth_step(float dt) {
                 for (int col = 0; col < cols; col++) {
                     int i = col + r * S;
                     if (c.pin[i]) continue;
-                    float vx = (c.x[i] - c.px[i]) * 0.985f;
-                    float vy = (c.y[i] - c.py[i]) * 0.985f;
-                    float vz = (c.z[i] - c.pz[i]) * 0.985f;
+                    float vx = (c.x[i] - c.px[i]) * 0.993f;
+                    float vy = (c.y[i] - c.py[i]) * 0.993f;
+                    float vz = (c.z[i] - c.pz[i]) * 0.993f;
                     c.px[i] = c.x[i]; c.py[i] = c.y[i]; c.pz[i] = c.z[i];
                     c.x[i] += vx + ax; c.y[i] += vy + ay; c.z[i] += vz + az;
                 }
             }
             float shear = sqrtf(c.rx * c.rx + c.ry * c.ry);
-            for (int iter = 0; iter < 4; iter++) {
+            // Neighbours keep the cloth from tearing. Diagonals and the skip
+            // links only nudge it, so it can fold instead of staying a board.
+            for (int iter = 0; iter < 6; iter++) {
                 for (int r = 0; r < rows; r++) {
                     for (int col = 0; col < cols - 1; col++) {
                         int i = col + r * S;
-                        __nexa_phys_cloth_link(c.x, c.y, c.z, c.pin, i, i + 1, c.rx, 1.f);
+                        __nexa_phys_cloth_link(c.x, c.y, c.z, c.pin, i, i + 1, c.rx, 0.55f);
                     }
                 }
                 for (int col = 0; col < cols; col++) {
                     for (int r = 0; r < rows - 1; r++) {
                         int i = col + r * S;
-                        __nexa_phys_cloth_link(c.x, c.y, c.z, c.pin, i, i + S, c.ry, 1.f);
+                        __nexa_phys_cloth_link(c.x, c.y, c.z, c.pin, i, i + S, c.ry, 0.55f);
                     }
                 }
                 for (int r = 0; r < rows - 1; r++) {
                     for (int col = 0; col < cols - 1; col++) {
                         int i = col + r * S;
-                        __nexa_phys_cloth_link(c.x, c.y, c.z, c.pin, i, i + 1 + S, shear, 1.f);
-                        __nexa_phys_cloth_link(c.x, c.y, c.z, c.pin, i + 1, i + S, shear, 1.f);
+                        __nexa_phys_cloth_link(c.x, c.y, c.z, c.pin, i, i + 1 + S, shear, 0.1f);
+                        __nexa_phys_cloth_link(c.x, c.y, c.z, c.pin, i + 1, i + S, shear, 0.1f);
                     }
                 }
                 for (int r = 0; r < rows; r++) {
                     for (int col = 0; col < cols - 2; col++) {
                         int i = col + r * S;
-                        __nexa_phys_cloth_link(c.x, c.y, c.z, c.pin, i, i + 2, c.rx * 2.f, 0.25f);
+                        __nexa_phys_cloth_link(c.x, c.y, c.z, c.pin, i, i + 2, c.rx * 2.f, 0.04f);
                     }
                 }
                 for (int col = 0; col < cols; col++) {
                     for (int r = 0; r < rows - 2; r++) {
                         int i = col + r * S;
-                        __nexa_phys_cloth_link(c.x, c.y, c.z, c.pin, i, i + S * 2, c.ry * 2.f, 0.25f);
+                        __nexa_phys_cloth_link(c.x, c.y, c.z, c.pin, i, i + S * 2, c.ry * 2.f, 0.04f);
                     }
                 }
                 for (int r = 0; r < rows; r++) {
                     for (int col = 0; col < cols; col++) {
                         int i = col + r * S;
-                        if (!c.pin[i]) __nexa_phys_cloth_hit(c.x, c.y, c.z, c.px, c.py, c.pz, i);
+                        if (!c.pin[i]) __nexa_phys_cloth_hit(c.x, c.y, c.z, c.px, c.py, c.pz, i, 0);
+                    }
+                }
+            }
+            for (int pass = 0; pass < 2; pass++) {
+                __nexa_phys_cloth_edges(c.x, c.y, c.z, c.pin, cols, rows);
+                for (int r = 0; r < rows; r++) {
+                    for (int col = 0; col < cols; col++) {
+                        int i = col + r * S;
+                        if (!c.pin[i]) __nexa_phys_cloth_hit(c.x, c.y, c.z, c.px, c.py, c.pz, i, pass == 1);
                     }
                 }
             }

@@ -719,6 +719,19 @@ fn main() {
     if (edge < 0.04 || edge > 0.8) { io.println("fail edge"); io.println(edge); return 1; }
     let cy = physics.cy(drape, 2, 2);
     if (cy < 1.2 || cy > 2.05) { io.println("fail drape"); io.println(cy); return 1; }
+    let cx = physics.cx(drape, 2, 2);
+    let cz = physics.cz(drape, 2, 2);
+    let ddx = cx - 0.0;
+    let ddy = cy - 1.0;
+    let ddz = cz - 4.0;
+    if (ddx * ddx + ddy * ddy + ddz * ddz < 0.26) { io.println("fail inside"); return 1; }
+    let mx = (cx + physics.cx(drape, 3, 2)) * 0.5;
+    let my = (cy + physics.cy(drape, 3, 2)) * 0.5;
+    let mz = (cz + physics.cz(drape, 3, 2)) * 0.5;
+    ddx = mx - 0.0;
+    ddy = my - 1.0;
+    ddz = mz - 4.0;
+    if (ddx * ddx + ddy * ddy + ddz * ddz < 0.26) { io.println("fail edge clip"); return 1; }
     io.println("ok");
     return 0;
 }

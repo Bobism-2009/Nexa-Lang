@@ -30,12 +30,12 @@ fn main() {
     let pole = physics.capsule(3.3, 0.0, -1.2, 3.3, 2.7, -1.2, 0.08);
     physics.mass(pole, 0);
 
-    // 9 by 9 sheet, centred above the ball.
-    let sheet = physics.cloth(0.0, 2.4, 0.0, 2.6, 2.6, 9, 9, 0);
-    // Flag, 11 across and 7 tall. Column 0 is the hoist.
-    let flag = physics.cloth(4.3, 1.9, -1.2, 1.8, 1.15, 11, 7, 1);
+    // 13 by 13 sheet, centred above the ball. Enough points to fold.
+    let sheet = physics.cloth(0.0, 2.4, 0.0, 2.6, 2.6, 13, 13, 0);
+    // Flag, 13 across and 8 tall. Column 0 is the hoist.
+    let flag = physics.cloth(4.3, 1.9, -1.2, 1.8, 1.15, 13, 8, 1);
     let row = 0;
-    while (row < 7) {
+    while (row < 8) {
         physics.pin(flag, 0, row);
         row = row + 1;
     }
@@ -73,9 +73,9 @@ fn main() {
                       0.08, 90, 90, 96);
 
         let r = 0;
-        while (r < 8) {
+        while (r < 12) {
             let c = 0;
-            while (c < 8) {
+            while (c < 12) {
                 let x00 = physics.cx(sheet, c, r);
                 let y00 = physics.cy(sheet, c, r);
                 let z00 = physics.cz(sheet, c, r);
@@ -95,9 +95,9 @@ fn main() {
             r = r + 1;
         }
         r = 0;
-        while (r < 6) {
+        while (r < 7) {
             let c = 0;
-            while (c < 10) {
+            while (c < 12) {
                 let x00 = physics.cx(flag, c, r);
                 let y00 = physics.cy(flag, c, r);
                 let z00 = physics.cz(flag, c, r);
