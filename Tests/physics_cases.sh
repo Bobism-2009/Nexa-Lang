@@ -108,6 +108,20 @@ fn main() {
     let dy = physics.y(drop);
     if (dy < 0.22 || dy > 0.45) { io.println("fail tunnel"); io.println(dy); return 1; }
 
+    // Two spheres of the same mass. The one that was sitting takes the hit;
+    // the one that was moving does not plough on through.
+    physics.gravity(0, 0, 0);
+    let still = physics.sphere(0, 6, 0, 0.5);
+    let mover = physics.sphere(-2, 6, 0, 0.5);
+    physics.velocity(mover, 4, 0, 0);
+    i = 0;
+    while (i < 40) { physics.step(0.016); i = i + 1; }
+    let vs = physics.vx(still);
+    let vm = physics.vx(mover);
+    if (vs < 1.5) { io.println("fail share"); io.println(vs); return 1; }
+    if (vm > vs) { io.println("fail heavier"); io.println(vm); return 1; }
+    physics.gravity(0, -9.81, 0);
+
     // Eight spheres dropped through each other have to end up separated.
     let pile: []int;
     let k = 0;

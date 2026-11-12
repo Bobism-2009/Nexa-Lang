@@ -7,14 +7,14 @@
 // gfx3d.capsule draws: a radius around the segment between two points. Up to
 // 256 bodies. A program that never calls physics carries none of this.
 //
-// The step is sequential impulses on a fixed array. Restitution applies once,
-// and only when the hit is faster than 1 m/s, so a stack can rest. Friction
-// uses the real normal force, including the weight holding a body on a floor.
-// A sphere that would jump farther than half its radius in one step is swept
-// against static boxes, and the step is split into at most four. A pile keeps
-// getting pushed apart until the overlaps are gone; a body still inside
-// another is not put to sleep. Two spheres barely grip, so one slides off the
-// other. A box keeps its grip, which is what holds a body on the floor.
+// The step is sequential impulses on a fixed array. A hit changes velocity in
+// proportion to inverse mass, so two spheres of the same weight trade speed
+// instead of one shoving the other aside. Overlap is eased out by that same
+// impulse, capped, rather than by moving the bodies apart on the spot.
+// Restitution applies only when the hit is faster than 1 m/s. Two spheres
+// barely grip, so one slides off the other; a box keeps the grip that stops
+// a body on the floor. A fast sphere is swept against the floor and against
+// other spheres, and a step is split into at most four.
 
 #include <string>
 
@@ -541,21 +541,47 @@ static int __nexa_phys_sweep_aabb(float ox, float oy, float oz, float dx, float 
     *tout = tmin >= 0.f ? tmin : 0.f;
     return 1;
 }
+static int __nexa_phys_sphere_toi(float ax, float ay, float az, float bx, float by, float bz,
+    float adx, float ady, float adz, float bdx, float bdy, float bdz,
+    float ra, float rb, float* tout) {
+    float rx = ax - bx, ry = ay - by, rz = az - bz;
+    float vx = adx - bdx, vy = ady - bdy, vz = adz - bdz;
+    float rad = ra + rb;
+    float c = rx * rx + ry * ry + rz * rz - rad * rad;
+    if (c <= 0.f) return 0;
+    float a = vx * vx + vy * vy + vz * vz;
+    float b = 2.f * (rx * vx + ry * vy + rz * vz);
+    if (a < 1e-12f || b >= 0.f) return 0;
+    float disc = b * b - 4.f * a * c;
+    if (disc < 0.f) return 0;
+    float t = (-b - sqrtf(disc)) / (2.f * a);
+    if (t <= 0.f || t > 1.f) return 0;
+    *tout = t;
+    return 1;
+}
 static void __nexa_phys_integrate(float h) {
     int hi = __nexa_phys_hi;
+    float ox[257], oy[257], oz[257];
+    float mx[257], my[257], mz[257];
+    unsigned char dyn[257];
     for (int i = 1; i <= hi; i++) {
         __nexa_phys_body& b = __nexa_phys_bodies[i];
+        dyn[i] = 0;
+        ox[i] = b.x; oy[i] = b.y; oz[i] = b.z;
+        mx[i] = my[i] = mz[i] = 0.f;
         if (b.kind == 0 || b.inv == 0.f) continue;
         b.vx += __nexa_phys_gx * h;
         b.vy += __nexa_phys_gy * h;
         b.vz += __nexa_phys_gz * h;
-        float mx = b.vx * h, my = b.vy * h, mz = b.vz * h;
-        float ox = b.x, oy = b.y, oz = b.z;
-        float move = __nexa_phys_len(mx, my, mz);
-        // A short step cannot jump a contact. A long one is swept against
-        // static boxes so the centre stops just inside the surface.
+        mx[i] = b.vx * h; my[i] = b.vy * h; mz[i] = b.vz * h;
+        dyn[i] = 1;
+    }
+    for (int i = 1; i <= hi; i++) {
+        if (!dyn[i]) continue;
+        __nexa_phys_body& b = __nexa_phys_bodies[i];
+        float best = 1.f;
+        float move = __nexa_phys_len(mx[i], my[i], mz[i]);
         if (b.kind == 1 && move > b.r * 0.5f) {
-            float best = 1.f;
             for (int j = 1; j <= hi; j++) {
                 __nexa_phys_body& box = __nexa_phys_bodies[j];
                 if (box.kind != 2 || box.inv != 0.f) continue;
@@ -563,29 +589,36 @@ static void __nexa_phys_integrate(float h) {
                 float ey = fabsf(box.h) * 0.5f + b.r;
                 float ez = fabsf(box.d) * 0.5f + b.r;
                 float t;
-                if (!__nexa_phys_sweep_aabb(ox, oy, oz, mx, my, mz,
+                if (!__nexa_phys_sweep_aabb(ox[i], oy[i], oz[i], mx[i], my[i], mz[i],
                         box.x - ex, box.y - ey, box.z - ez,
                         box.x + ex, box.y + ey, box.z + ez, &t)) continue;
                 if (t > 0.f && t < best) best = t;
             }
-            if (best < 1.f) {
-                float adv = best * move + 0.0015f;
-                if (adv > move) adv = move;
-                float s = adv / move;
-                b.x = ox + mx * s; b.y = oy + my * s; b.z = oz + mz * s;
-                continue;
+        }
+        if (b.kind == 1 && move > 1e-6f) {
+            for (int j = 1; j <= hi; j++) {
+                if (j == i || __nexa_phys_bodies[j].kind != 1) continue;
+                float t;
+                if (!__nexa_phys_sphere_toi(ox[i], oy[i], oz[i], ox[j], oy[j], oz[j],
+                        mx[i], my[i], mz[i], mx[j], my[j], mz[j],
+                        b.r, __nexa_phys_bodies[j].r, &t)) continue;
+                if (t < best) best = t;
             }
         }
-        b.x = ox + mx; b.y = oy + my; b.z = oz + mz;
+        if (best < 1.f && move > 1e-8f) {
+            float adv = best * move + 0.002f;
+            if (adv > move) adv = move;
+            float s = adv / move;
+            b.x = ox[i] + mx[i] * s; b.y = oy[i] + my[i] * s; b.z = oz[i] + mz[i] * s;
+        } else {
+            b.x = ox[i] + mx[i]; b.y = oy[i] + my[i]; b.z = oz[i] + mz[i];
+        }
     }
 }
 static void __nexa_phys_solve(float h, unsigned char* touch) {
     int hi = __nexa_phys_hi;
-    unsigned char deep[257];
-    float worst = 0.f;
-    for (int iter = 0; iter < 24; iter++) {
-        worst = 0.f;
-        for (int n = 1; n <= hi; n++) deep[n] = 0;
+    if (h < 1e-6f) h = 1e-6f;
+    for (int iter = 0; iter < 8; iter++) {
         int fwd = (iter & 1) == 0;
         for (int i = fwd ? 1 : hi; fwd ? (i <= hi) : (i >= 1); i += fwd ? 1 : -1) {
             if (__nexa_phys_bodies[i].kind == 0) continue;
@@ -598,65 +631,59 @@ static void __nexa_phys_solve(float h, unsigned char* touch) {
                 if (!__nexa_phys_pair(i, j, &nx, &ny, &nz, &pen)) continue;
                 float inv = a.inv + b.inv;
                 if (inv <= 0.f) continue;
-                if (pen > worst) worst = pen;
-                const float slop = 0.002f;
+                float rvx = a.vx - b.vx, rvy = a.vy - b.vy, rvz = a.vz - b.vz;
+                float rel = rvx * nx + rvy * ny + rvz * nz;
+                // Wanted speed along the normal. Positive separates. Bounce
+                // replaces the bias on a hard hit; a slow overlap only creeps
+                // apart, shared by mass, so nobody is teleported aside.
+                const float slop = 0.005f;
+                float want = 0.f;
                 if (pen > slop) {
-                    // A deep overlap is removed in full, a hair of one only
-                    // partly, and neither move is allowed to throw a pile apart.
-                    float corr = (pen - slop) * (pen > 0.05f ? 1.f : 0.8f);
-                    if (corr > 0.04f) corr = 0.04f;
-                    float sa = corr * (a.inv / inv), sb = corr * (b.inv / inv);
-                    a.x += nx * sa; a.y += ny * sa; a.z += nz * sa;
-                    b.x -= nx * sb; b.y -= ny * sb; b.z -= nz * sb;
-                    if (pen > 0.008f) deep[i] = deep[j] = 1;
+                    want = 2.f * (pen - slop) / h;
+                    if (want > 2.f) want = 2.f;
                 }
-                if (iter < 6) {
-                    float rvx = a.vx - b.vx, rvy = a.vy - b.vy, rvz = a.vz - b.vz;
-                    float rel = rvx * nx + rvy * ny + rvz * nz;
-                    float jn = 0.f;
-                    if (rel < 0.f) {
-                        float e = 0.f;
-                        if (iter == 0 && -rel > 1.f) e = a.bounce > b.bounce ? a.bounce : b.bounce;
-                        jn = -(1.f + e) * rel / inv;
-                        a.vx += nx * jn * a.inv; a.vy += ny * jn * a.inv; a.vz += nz * jn * a.inv;
-                        b.vx -= nx * jn * b.inv; b.vy -= ny * jn * b.inv; b.vz -= nz * jn * b.inv;
-                        rvx = a.vx - b.vx; rvy = a.vy - b.vy; rvz = a.vz - b.vz;
-                        rel = rvx * nx + rvy * ny + rvz * nz;
+                if (iter == 0 && rel < -1.f) {
+                    float e = a.bounce > b.bounce ? a.bounce : b.bounce;
+                    float bounce = -e * rel;
+                    if (bounce > want) want = bounce;
+                }
+                float jn = 0.f;
+                if (rel < want) {
+                    jn = (want - rel) / inv;
+                    a.vx += nx * jn * a.inv; a.vy += ny * jn * a.inv; a.vz += nz * jn * a.inv;
+                    b.vx -= nx * jn * b.inv; b.vy -= ny * jn * b.inv; b.vz -= nz * jn * b.inv;
+                    rvx = a.vx - b.vx; rvy = a.vy - b.vy; rvz = a.vz - b.vz;
+                    rel = rvx * nx + rvy * ny + rvz * nz;
+                }
+                float tx = rvx - rel * nx, ty = rvy - rel * ny, tz = rvz - rel * nz;
+                float tl = __nexa_phys_len(tx, ty, tz);
+                if (tl > 1e-6f) {
+                    float limit = jn;
+                    if (iter == 0) {
+                        float gn = __nexa_phys_gx * nx + __nexa_phys_gy * ny + __nexa_phys_gz * nz;
+                        float into = 0.f;
+                        if (a.inv > 0.f && gn < 0.f) into += (-gn) * (1.f / a.inv) * h;
+                        if (b.inv > 0.f && gn > 0.f) into += gn * (1.f / b.inv) * h;
+                        if (into > limit) limit = into;
                     }
-                    float tx = rvx - rel * nx, ty = rvy - rel * ny, tz = rvz - rel * nz;
-                    float tl = __nexa_phys_len(tx, ty, tz);
-                    if (tl > 1e-6f) {
-                        float limit = jn;
-                        if (iter == 0) {
-                            float gn = __nexa_phys_gx * nx + __nexa_phys_gy * ny + __nexa_phys_gz * nz;
-                            float into = 0.f;
-                            if (a.inv > 0.f && gn < 0.f) into += (-gn) * (1.f / a.inv) * h;
-                            if (b.inv > 0.f && gn > 0.f) into += gn * (1.f / b.inv) * h;
-                            if (into > limit) limit = into;
-                        }
-                        // A sphere has no spin, so grip here would weld it to whatever
-                        // it touches. Boxes keep the floor from being ice.
-                        float mu = (a.kind == 2 || b.kind == 2) ? 0.6f : 0.02f;
-                        float maxf = mu * limit;
-                        float mag = tl / inv;
-                        if (mag > maxf) mag = maxf;
-                        if (mag > 0.f) {
-                            float itx = tx / tl, ity = ty / tl, itz = tz / tl;
-                            a.vx -= itx * mag * a.inv; a.vy -= ity * mag * a.inv; a.vz -= itz * mag * a.inv;
-                            b.vx += itx * mag * b.inv; b.vy += ity * mag * b.inv; b.vz += itz * mag * b.inv;
-                        }
+                    float mu = (a.kind == 2 || b.kind == 2) ? 0.6f : 0.02f;
+                    float maxf = mu * limit;
+                    float mag = tl / inv;
+                    if (mag > maxf) mag = maxf;
+                    if (mag > 0.f) {
+                        float itx = tx / tl, ity = ty / tl, itz = tz / tl;
+                        a.vx -= itx * mag * a.inv; a.vy -= ity * mag * a.inv; a.vz -= itz * mag * a.inv;
+                        b.vx += itx * mag * b.inv; b.vy += ity * mag * b.inv; b.vz += itz * mag * b.inv;
                     }
                 }
-                if (touch[i] != 2) touch[i] = 1;
-                if (touch[j] != 2) touch[j] = 1;
+                if (pen > 0.02f) { touch[i] = touch[j] = 2; }
+                else {
+                    if (touch[i] != 2) touch[i] = 1;
+                    if (touch[j] != 2) touch[j] = 1;
+                }
             }
         }
-        if (iter >= 5 && worst <= 0.008f) {
-            for (int n = 1; n <= hi; n++) deep[n] = 0;
-            break;
-        }
     }
-    for (int n = 1; n <= hi; n++) if (deep[n]) touch[n] = 2;
 }
 static int __nexa_phys_step(double dtin) {
     float dt = (float)dtin;
