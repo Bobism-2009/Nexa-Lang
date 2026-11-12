@@ -379,6 +379,22 @@ static float __nexa_phys_body_rad(const __nexa_phys_body& b) {
     if (rad < 0.f) rad = -rad;
     return rad;
 }
+// How fast a soft contact pushes back out, given how deep it is. A spring:
+// the deeper it is pressed the harder it comes back, and it is allowed to
+// reach the resting sag with speed still in it -- which is what makes a soft
+// body spring back past where it settles instead of oozing there. Measured on
+// a half-metre ball: it rebounds once, to within a tenth of round, and then
+// settles. Softer is a slower spring. Written once because the solver and the
+// pass that cleans up leftover speed both need the same answer, and it was two
+// copies of the same two constants before.
+static float __nexa_phys_soft_want(float pen, float sag, float soft) {
+    if (pen <= sag) return 0.f;
+    float w = 26.f - 14.f * soft;
+    float want = (pen - sag) * w;
+    if (want > 2.5f) want = 2.5f;
+    return want;
+}
+
 static float __nexa_phys_soft_rad(const __nexa_phys_body& a, const __nexa_phys_body& b) {
     float rad = __nexa_phys_body_rad(a);
     if (b.inv > 0.f) {
@@ -776,10 +792,7 @@ static void __nexa_phys_solve(float h, unsigned char* touch) {
                             pen = __need;
                         }
                     }
-                    if (pen > __sag) {
-                        want = (pen - __sag) * 1.6f;
-                        if (want > 0.5f) want = 0.5f;
-                    }
+                    want = __nexa_phys_soft_want(pen, __sag, __soft);
                     if (iter == 0 && rel < -1.f) {
                         float e = a.bounce > b.bounce ? a.bounce : b.bounce;
                         float bounce = -e * rel * (1.f - __soft);
@@ -850,11 +863,7 @@ static void __nexa_phys_solve(float h, unsigned char* touch) {
                 float vn = (d.vx * nx + d.vy * ny + d.vz * nz) * sign;
                 float __rad = __nexa_phys_soft_rad(a, b);
                 float __sag = __nexa_phys_squish * __rad * 0.16f;
-                float hold = 0.f;
-                if (pen > __sag) {
-                    hold = (pen - __sag) * 1.6f;
-                    if (hold > 0.5f) hold = 0.5f;
-                }
+                float hold = __nexa_phys_soft_want(pen, __sag, __nexa_phys_squish);
                 if (vn < hold) {
                     float dv = hold - vn;
                     d.vx += nx * sign * dv;
@@ -898,7 +907,14 @@ static void __nexa_phys_separate() {
                     else {
                         float __use = pen - __sag;
                         if (__use < 0.f) __use = 0.f;
-                        corr = __use * 0.012f;
+                        // Firmly only near the sag. A body that has settled is
+                        // then held by where it is rather than by a separation
+                        // speed it never gets to use, which is what left
+                        // physics.vy reading 0.12 m/s on a ball that had not
+                        // moved in a hundred seconds. A fresh impact is still
+                        // deep, and is left alone so the squash survives long
+                        // enough to be seen.
+                        corr = __use * ((__use < __sag * 0.5f) ? 0.15f : 0.012f);
                     }
                 }
 )PHYS";
@@ -1004,7 +1020,13 @@ static int __nexa_phys_step(double dtin) {
             if (rad < 0.05f) rad = 0.05f;
             float target = b.hit / rad;
             if (target > 0.72f) target = 0.72f;
-            float k = (target > b.sq) ? 0.85f : 0.7f;
+            // Rates a second, not a share per step. The old fixed 0.85 and 0.7
+            // meant the same drop squashed differently at 30 frames than at 60
+            // -- measured 0.32 against 0.23 at the same moment. These rates are
+            // the 60-frame numbers written so any step size agrees with them.
+            float rate = (target > b.sq) ? 110.f : 70.f;
+            float k = 1.f - expf(-rate * dt);
+            if (k > 1.f) k = 1.f;
             b.sq += (target - b.sq) * k;
             if (b.sq < 0.f) b.sq = 0.f;
             if (b.sq > 0.72f) b.sq = 0.72f;

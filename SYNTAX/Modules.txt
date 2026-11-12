@@ -1802,9 +1802,22 @@ ARGUMENT TYPES
                                    Distance along the direction, or -1.
   physics.squishy(amount)        - 0 is the rigid world. 1 is as soft as it
                                  gets. A landing body compresses by the hit,
-                                 then eases back to a small sag. 0 leaves the
-                                 solver as it is. A program that never calls
-                                 it carries none of this.
+                                 then springs back to a small sag -- about a
+                                 fifteenth of a second for a half-metre ball,
+                                 rising a little past where it comes to rest
+                                 before it settles. Softer is a slower spring.
+                                 0 leaves the solver as it is. A program that
+                                 never calls it carries none of this.
+                                 Where it comes to rest does not depend on how
+                                 often you step: the same drop settles at the
+                                 same squash within a few per cent whether the
+                                 step is a thirtieth of a second or a
+                                 two-hundred-and-fortieth. How deep the first
+                                 impact goes still does, because that is set by
+                                 how far the body travelled in the step that
+                                 reached the contact -- a long step lands
+                                 deeper. Step at a steady rate for a steady
+                                 look.
   physics.squash(id)             - the fraction of its radius pressed in
                                  right now, 0 to 1. It is the overlap still
                                  there after the step, shared by mass.

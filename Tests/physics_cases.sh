@@ -289,6 +289,74 @@ fn main() {
     return 0;
 }
 EOF
+cat > "$WORK/squishfps.nxa" <<'EOF'
+// The same drop, stepped at 30 frames and at 240, has to come to rest in the
+// same place. It did not: the squash it settled at ranged over 47% across that
+// span and the ball sat 6.6cm lower at 30 than at 240, because the tracking
+// moved by a fixed share of the gap per step and a resting body was held up by
+// a separation speed rather than by where it was.
+#include <std/io>
+#include <std/physics>
+fn rest_squash(dt: float, steps: int): float {
+    physics.squishy(0.9);
+    let floor = physics.box(0, -0.5, 0, 24, 1, 24);
+    physics.mass(floor, 0);
+    let ball = physics.sphere(0, 3, 0, 0.5);
+    let i = 0;
+    while (i < steps) { physics.step(dt); i = i + 1; }
+    let q = physics.squash(ball);
+    physics.remove(ball);
+    physics.remove(floor);
+    return q;
+}
+fn rest_y(dt: float, steps: int): float {
+    physics.squishy(0.9);
+    let floor = physics.box(0, -0.5, 0, 24, 1, 24);
+    physics.mass(floor, 0);
+    let ball = physics.sphere(0, 3, 0, 0.5);
+    let i = 0;
+    while (i < steps) { physics.step(dt); i = i + 1; }
+    let y = physics.y(ball);
+    physics.remove(ball);
+    physics.remove(floor);
+    return y;
+}
+fn main(): int {
+    let coarse = rest_squash(1.0 / 30.0, 90);
+    let fine = rest_squash(1.0 / 240.0, 720);
+    let spread = coarse - fine;
+    if (spread < 0.0) { spread = 0.0 - spread; }
+    if (spread > 0.02) {
+        io.println("fail squash spread");
+        io.println(coarse);
+        io.println(fine);
+        return 1;
+    }
+    let yc = rest_y(1.0 / 30.0, 90);
+    let yf = rest_y(1.0 / 240.0, 720);
+    let dy = yc - yf;
+    if (dy < 0.0) { dy = 0.0 - dy; }
+    if (dy > 0.01) {
+        io.println("fail rest height spread");
+        io.println(yc);
+        io.println(yf);
+        return 1;
+    }
+    io.println("ok");
+    return 0;
+}
+EOF
+if ! "$NEXAC" "$WORK/squishfps.nxa" -o "$WORK/squishfps$EXE" > "$WORK/squishfps.log" 2>&1; then
+    bad "squish fps build" "$(tail -20 "$WORK/squishfps.log")"
+else
+    out=$("$WORK/squishfps$EXE" 2>&1 | tr -d '\r')
+    if [ "$out" = "ok" ]; then
+        ok "a soft body rests in the same place at 30 frames and at 240"
+    else
+        bad "squish fps" "$out"
+    fi
+fi
+
 if ! "$NEXAC" "$WORK/squish.nxa" -o "$WORK/squish$EXE" > "$WORK/squish.log" 2>&1; then
     bad "squish build" "$(tail -20 "$WORK/squish.log")"
 else
