@@ -13,7 +13,8 @@
 // A sphere that would jump farther than half its radius in one step is swept
 // against static boxes, and the step is split into at most four. A pile keeps
 // getting pushed apart until the overlaps are gone; a body still inside
-// another is not put to sleep.
+// another is not put to sleep. Two spheres barely grip, so one slides off the
+// other. A box keeps its grip, which is what holds a body on the floor.
 
 #include <string>
 
@@ -633,7 +634,10 @@ static void __nexa_phys_solve(float h, unsigned char* touch) {
                             if (b.inv > 0.f && gn > 0.f) into += gn * (1.f / b.inv) * h;
                             if (into > limit) limit = into;
                         }
-                        float maxf = 0.6f * limit;
+                        // A sphere has no spin, so grip here would weld it to whatever
+                        // it touches. Boxes keep the floor from being ice.
+                        float mu = (a.kind == 2 || b.kind == 2) ? 0.6f : 0.02f;
+                        float maxf = mu * limit;
                         float mag = tl / inv;
                         if (mag > maxf) mag = maxf;
                         if (mag > 0.f) {

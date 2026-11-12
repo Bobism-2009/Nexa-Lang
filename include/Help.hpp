@@ -719,8 +719,9 @@ Colours are 0..255. The draws hand nothing back and are statements only, so
 
 Overlap and ray tests, plus bodies you can step. Nothing is linked. A program
 that never calls physics carries none of it; one that only tests hits carries
-no solver. Up to 256 bodies. They translate and do not rotate. A box is
-axis-aligned, with the full w, h, d gfx3d.box takes. Gravity starts at
+no solver. Up to 256 bodies. They translate and do not rotate, and a
+sphere slides off another sphere. A box is axis-aligned, with the full
+w, h, d gfx3d.box takes, and it keeps its grip. Gravity starts at
 (0, -9.81, 0). physics.mass(id, 0) is static. A ray returns the distance
 along its direction, or -1, and leaves the hit in hx/hy/hz and nx/ny/nz.
 

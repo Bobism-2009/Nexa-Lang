@@ -79,18 +79,15 @@ fn main() {
     let y = physics.y(ball);
     if (y < 0.98 || y > 1.04) { io.println("fail rest"); io.println(y); return 1; }
 
-    // Three spheres, one above another, rest a diameter apart.
-    let a = physics.sphere(2, 2.0, 0, 0.5);
-    let b = physics.sphere(2, 3.2, 0, 0.5);
-    let c = physics.sphere(2, 4.4, 0, 0.5);
+    // A sphere dropped onto the side of another slides off. It does not stay stuck.
+    let base = physics.sphere(2, 1, 0, 0.5);
+    let top = physics.sphere(2.35, 3.0, 0, 0.5);
     i = 0;
     while (i < 400) { physics.step(0.016); i = i + 1; }
-    let ya = physics.y(a);
-    let yb = physics.y(b);
-    let yc = physics.y(c);
-    if (ya < 0.98 || ya > 1.06) { io.println("fail stack a"); io.println(ya); return 1; }
-    if (yb < 1.90 || yb > 2.12) { io.println("fail stack b"); io.println(yb); return 1; }
-    if (yc < 2.80 || yc > 3.18) { io.println("fail stack c"); io.println(yc); return 1; }
+    let ybase = physics.y(base);
+    let ytop = physics.y(top);
+    if (ybase < 0.95 || ybase > 1.2) { io.println("fail slideoff base"); io.println(ybase); return 1; }
+    if (ytop > 1.35) { io.println("fail slideoff"); io.println(ytop); return 1; }
 
     // Horizontal speed on the floor dies under friction, and the ball stays put.
     let slide = physics.sphere(0, 1, 4, 0.5);
@@ -143,7 +140,7 @@ if ! "$NEXAC" "$WORK/use.nxa" -o "$WORK/use$EXE" > "$WORK/use.log" 2>&1; then
 else
     out=$("$WORK/use$EXE" 2>&1 | tr -d '\r')
     if [ "$out" = "ok" ]; then
-        ok "overlaps, rays, rest, stack, friction, and no tunnel"
+        ok "overlaps, rays, rest, slide-off, friction, and no tunnel"
     else
         bad "run" "got [$out]"
     fi
