@@ -11,7 +11,9 @@
 // and only when the hit is faster than 1 m/s, so a stack can rest. Friction
 // uses the real normal force, including the weight holding a body on a floor.
 // A sphere that would jump farther than half its radius in one step is swept
-// against static boxes, and the step is split into at most four.
+// against static boxes, and the step is split into at most four. A pile keeps
+// getting pushed apart until the overlaps are gone; a body still inside
+// another is not put to sleep.
 
 #include <string>
 
@@ -578,7 +580,11 @@ static void __nexa_phys_integrate(float h) {
 }
 static void __nexa_phys_solve(float h, unsigned char* touch) {
     int hi = __nexa_phys_hi;
-    for (int iter = 0; iter < 6; iter++) {
+    unsigned char deep[257];
+    float worst = 0.f;
+    for (int iter = 0; iter < 24; iter++) {
+        worst = 0.f;
+        for (int n = 1; n <= hi; n++) deep[n] = 0;
         int fwd = (iter & 1) == 0;
         for (int i = fwd ? 1 : hi; fwd ? (i <= hi) : (i >= 1); i += fwd ? 1 : -1) {
             if (__nexa_phys_bodies[i].kind == 0) continue;
@@ -591,49 +597,62 @@ static void __nexa_phys_solve(float h, unsigned char* touch) {
                 if (!__nexa_phys_pair(i, j, &nx, &ny, &nz, &pen)) continue;
                 float inv = a.inv + b.inv;
                 if (inv <= 0.f) continue;
+                if (pen > worst) worst = pen;
                 const float slop = 0.002f;
                 if (pen > slop) {
-                    float corr = (pen - slop) * 0.75f;
+                    // A deep overlap is removed in full, a hair of one only
+                    // partly, and neither move is allowed to throw a pile apart.
+                    float corr = (pen - slop) * (pen > 0.05f ? 1.f : 0.8f);
+                    if (corr > 0.04f) corr = 0.04f;
                     float sa = corr * (a.inv / inv), sb = corr * (b.inv / inv);
                     a.x += nx * sa; a.y += ny * sa; a.z += nz * sa;
                     b.x -= nx * sb; b.y -= ny * sb; b.z -= nz * sb;
+                    if (pen > 0.008f) deep[i] = deep[j] = 1;
                 }
-                float rvx = a.vx - b.vx, rvy = a.vy - b.vy, rvz = a.vz - b.vz;
-                float rel = rvx * nx + rvy * ny + rvz * nz;
-                float jn = 0.f;
-                if (rel < 0.f) {
-                    float e = 0.f;
-                    if (iter == 0 && -rel > 1.f) e = a.bounce > b.bounce ? a.bounce : b.bounce;
-                    jn = -(1.f + e) * rel / inv;
-                    a.vx += nx * jn * a.inv; a.vy += ny * jn * a.inv; a.vz += nz * jn * a.inv;
-                    b.vx -= nx * jn * b.inv; b.vy -= ny * jn * b.inv; b.vz -= nz * jn * b.inv;
-                    rvx = a.vx - b.vx; rvy = a.vy - b.vy; rvz = a.vz - b.vz;
-                    rel = rvx * nx + rvy * ny + rvz * nz;
-                }
-                float tx = rvx - rel * nx, ty = rvy - rel * ny, tz = rvz - rel * nz;
-                float tl = __nexa_phys_len(tx, ty, tz);
-                if (tl > 1e-6f) {
-                    float limit = jn;
-                    if (iter == 0) {
-                        float gn = __nexa_phys_gx * nx + __nexa_phys_gy * ny + __nexa_phys_gz * nz;
-                        float into = 0.f;
-                        if (a.inv > 0.f && gn < 0.f) into += (-gn) * (1.f / a.inv) * h;
-                        if (b.inv > 0.f && gn > 0.f) into += gn * (1.f / b.inv) * h;
-                        if (into > limit) limit = into;
+                if (iter < 6) {
+                    float rvx = a.vx - b.vx, rvy = a.vy - b.vy, rvz = a.vz - b.vz;
+                    float rel = rvx * nx + rvy * ny + rvz * nz;
+                    float jn = 0.f;
+                    if (rel < 0.f) {
+                        float e = 0.f;
+                        if (iter == 0 && -rel > 1.f) e = a.bounce > b.bounce ? a.bounce : b.bounce;
+                        jn = -(1.f + e) * rel / inv;
+                        a.vx += nx * jn * a.inv; a.vy += ny * jn * a.inv; a.vz += nz * jn * a.inv;
+                        b.vx -= nx * jn * b.inv; b.vy -= ny * jn * b.inv; b.vz -= nz * jn * b.inv;
+                        rvx = a.vx - b.vx; rvy = a.vy - b.vy; rvz = a.vz - b.vz;
+                        rel = rvx * nx + rvy * ny + rvz * nz;
                     }
-                    float maxf = 0.6f * limit;
-                    float mag = tl / inv;
-                    if (mag > maxf) mag = maxf;
-                    if (mag > 0.f) {
-                        float itx = tx / tl, ity = ty / tl, itz = tz / tl;
-                        a.vx -= itx * mag * a.inv; a.vy -= ity * mag * a.inv; a.vz -= itz * mag * a.inv;
-                        b.vx += itx * mag * b.inv; b.vy += ity * mag * b.inv; b.vz += itz * mag * b.inv;
+                    float tx = rvx - rel * nx, ty = rvy - rel * ny, tz = rvz - rel * nz;
+                    float tl = __nexa_phys_len(tx, ty, tz);
+                    if (tl > 1e-6f) {
+                        float limit = jn;
+                        if (iter == 0) {
+                            float gn = __nexa_phys_gx * nx + __nexa_phys_gy * ny + __nexa_phys_gz * nz;
+                            float into = 0.f;
+                            if (a.inv > 0.f && gn < 0.f) into += (-gn) * (1.f / a.inv) * h;
+                            if (b.inv > 0.f && gn > 0.f) into += gn * (1.f / b.inv) * h;
+                            if (into > limit) limit = into;
+                        }
+                        float maxf = 0.6f * limit;
+                        float mag = tl / inv;
+                        if (mag > maxf) mag = maxf;
+                        if (mag > 0.f) {
+                            float itx = tx / tl, ity = ty / tl, itz = tz / tl;
+                            a.vx -= itx * mag * a.inv; a.vy -= ity * mag * a.inv; a.vz -= itz * mag * a.inv;
+                            b.vx += itx * mag * b.inv; b.vy += ity * mag * b.inv; b.vz += itz * mag * b.inv;
+                        }
                     }
                 }
-                touch[i] = touch[j] = 1;
+                if (touch[i] != 2) touch[i] = 1;
+                if (touch[j] != 2) touch[j] = 1;
             }
         }
+        if (iter >= 5 && worst <= 0.008f) {
+            for (int n = 1; n <= hi; n++) deep[n] = 0;
+            break;
+        }
     }
+    for (int n = 1; n <= hi; n++) if (deep[n]) touch[n] = 2;
 }
 static int __nexa_phys_step(double dtin) {
     float dt = (float)dtin;
@@ -668,7 +687,7 @@ static int __nexa_phys_step(double dtin) {
     hi = __nexa_phys_hi;
     for (int i = 1; i <= hi; i++) {
         __nexa_phys_body& b = __nexa_phys_bodies[i];
-        if (b.kind == 0 || b.inv == 0.f || !touch[i]) continue;
+        if (b.kind == 0 || b.inv == 0.f || touch[i] != 1) continue;
         float sp = b.vx * b.vx + b.vy * b.vy + b.vz * b.vz;
         if (sp < 0.0009f) b.vx = b.vy = b.vz = 0.f;
     }

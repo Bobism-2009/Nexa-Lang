@@ -111,6 +111,29 @@ fn main() {
     let dy = physics.y(drop);
     if (dy < 0.22 || dy > 0.45) { io.println("fail tunnel"); io.println(dy); return 1; }
 
+    // Eight spheres dropped through each other have to end up separated.
+    let pile: []int;
+    let k = 0;
+    while (k < 8) {
+        pile.push(physics.sphere(-3, 1.2 + k * 0.25, 0, 0.5));
+        k = k + 1;
+    }
+    k = 0;
+    while (k < 300) { physics.step(0.016); k = k + 1; }
+    let p = 0;
+    while (p < 8) {
+        let q = p + 1;
+        while (q < 8) {
+            let dx = physics.x(pile[p]) - physics.x(pile[q]);
+            let dy2 = physics.y(pile[p]) - physics.y(pile[q]);
+            let dz = physics.z(pile[p]) - physics.z(pile[q]);
+            let d2 = dx * dx + dy2 * dy2 + dz * dz;
+            if (d2 < 0.90) { io.println("fail pile"); io.println(d2); return 1; }
+            q = q + 1;
+        }
+        p = p + 1;
+    }
+
     io.println("ok");
     return 0;
 }
