@@ -4271,15 +4271,19 @@ static void __nexa_gfx3d_ellipsoid(double x, double y, double z,
     if (g < 0) g = 0; if (g > 255) g = 255;
     if (b < 0) b = 0; if (b > 255) b = 255;
     if (rad < 0.0) rad = -rad;
-    float flat = 1.f - (float)squash * 0.62f;
-    if (flat < 0.34f) flat = 0.34f;
-    if (flat > 1.f) flat = 1.f;
+    float sq = (float)squash;
+    if (sq < 0.f) sq = 0.f;
+    if (sq > 0.72f) sq = 0.72f;
+    // squash is the fraction of the radius pressed in along the axis, so a
+    // body whose centre has already sunk by that much sits on the contact.
+    float flat = 1.f - sq;
+    if (flat < 0.28f) flat = 0.28f;
     float bulge = 1.f / sqrtf(flat);
     float along = (float)rad * flat;
     float across = (float)rad * bulge;
     float d0 = (float)nx, d1 = (float)ny, d2 = (float)nz;
     float L = sqrtf(d0 * d0 + d1 * d1 + d2 * d2);
-    if (L < 1e-4f || squash < 0.02 || flat > 0.98f) {
+    if (L < 1e-4f || sq < 0.02f || flat > 0.98f) {
         __nexa_gfx3d_sphere(x, y, z, rad, r, g, b);
         return;
     }

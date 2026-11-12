@@ -379,6 +379,15 @@ static float __nexa_phys_body_rad(const __nexa_phys_body& b) {
     if (rad < 0.f) rad = -rad;
     return rad;
 }
+static float __nexa_phys_soft_rad(const __nexa_phys_body& a, const __nexa_phys_body& b) {
+    float rad = __nexa_phys_body_rad(a);
+    if (b.inv > 0.f) {
+        float rb = __nexa_phys_body_rad(b);
+        if (a.inv <= 0.f || (rb > 0.05f && rb < rad)) rad = rb;
+    }
+    if (rad < 0.05f) rad = 0.05f;
+    return rad;
+}
 )PHYS";
         }
         out += R"PHYS(static int __nexa_phys_alive(int id) {
@@ -737,49 +746,45 @@ static void __nexa_phys_solve(float h, unsigned char* touch) {
             out += R"PHYS(                const float slop = 0.005f;
                 float want = 0.f;
                 float __soft = __nexa_phys_squish;
-                if (__soft > 0.f && rel < -1.5f && iter == 0) {
-                    float __rad = __nexa_phys_body_rad(a);
-                    if (b.inv > 0.f) {
-                        float __rb = __nexa_phys_body_rad(b);
-                        if (a.inv <= 0.f || (__rb > 0.f && __rb < __rad)) __rad = __rb;
+                if (__soft <= 0.f) {
+                    if (pen > slop) {
+                        want = 2.f * (pen - slop) / h;
+                        if (want > 2.f) want = 2.f;
                     }
-                    if (__rad < 0.05f) __rad = 0.05f;
-                    float __sink = (-rel) * __soft * 0.02f;
-                    float __cap = __soft * __rad * 0.62f;
-                    if (__sink > __cap) __sink = __cap;
-                    float __sa = __sink * (a.inv / inv), __sb = __sink * (b.inv / inv);
-                    a.x -= nx * __sa; a.y -= ny * __sa; a.z -= nz * __sa;
-                    b.x += nx * __sb; b.y += ny * __sb; b.z += nz * __sb;
-                    pen += __sink;
-                }
-                if (__soft > 0.f) {
-                    if (a.inv > 0.f && pen > a.hit) { a.hit = pen; a.snx = nx; a.sny = ny; a.snz = nz; }
-                    if (b.inv > 0.f && pen > b.hit) { b.hit = pen; b.snx = nx; b.sny = ny; b.snz = nz; }
-                }
-                if (pen > slop) {
-                    float __baum = 2.f * (1.f - 0.82f * __soft);
-                    want = __baum * (pen - slop) / h;
-                    float __capw = 2.f;
-                    if (want > __capw) want = __capw;
-                }
-                if (__soft > 0.f && pen > 0.01f) {
-                    float __rad = __nexa_phys_body_rad(a);
-                    if (b.inv > 0.f) {
-                        float __rb = __nexa_phys_body_rad(b);
-                        if (a.inv <= 0.f || (__rb > 0.05f && (a.inv <= 0.f || __rb < __rad))) __rad = __rb;
+                    if (iter == 0 && rel < -1.f) {
+                        float e = a.bounce > b.bounce ? a.bounce : b.bounce;
+                        float bounce = -e * rel;
+                        if (bounce > want) want = bounce;
                     }
-                    if (__rad < 0.05f) __rad = 0.05f;
-                    float __sag = __soft * __rad * 0.22f;
+                } else {
+                    // The overlap is the compression. A fast hit is pushed in
+                    // once, to the depth the spring will hold, and the closing
+                    // speed is absorbed. Later frames ease that overlap back
+                    // to a small sag. Nothing here launches the body back out.
+                    float __rad = __nexa_phys_soft_rad(a, b);
+                    float __sag = __soft * __rad * 0.16f;
+                    float __maxp = __soft * __rad * 0.45f;
+                    if (iter == 0 && rel < -1.2f && pen < __maxp) {
+                        float __need = (-rel) * __soft * 0.04f;
+                        if (__need > __maxp) __need = __maxp;
+                        if (pen < __need) {
+                            float __sink = __need - pen;
+                            float __sa = __sink * (a.inv / inv);
+                            float __sb = __sink * (b.inv / inv);
+                            a.x -= nx * __sa; a.y -= ny * __sa; a.z -= nz * __sa;
+                            b.x += nx * __sb; b.y += ny * __sb; b.z += nz * __sb;
+                            pen = __need;
+                        }
+                    }
                     if (pen > __sag) {
-                        float __push = (pen - __sag) * (8.f + 14.f * (1.f - __soft));
-                        if (__push > want) want = __push;
-                        if (want > 3.2f) want = 3.2f;
+                        want = (pen - __sag) * 1.6f;
+                        if (want > 0.5f) want = 0.5f;
                     }
-                }
-                if (iter == 0 && rel < -1.f && __soft < 0.35f) {
-                    float e = a.bounce > b.bounce ? a.bounce : b.bounce;
-                    float bounce = -e * rel;
-                    if (bounce > want) want = bounce;
+                    if (iter == 0 && rel < -1.f) {
+                        float e = a.bounce > b.bounce ? a.bounce : b.bounce;
+                        float bounce = -e * rel * (1.f - __soft);
+                        if (bounce > want) want = bounce;
+                    }
                 }
 )PHYS";
         }
@@ -825,7 +830,43 @@ static void __nexa_phys_solve(float h, unsigned char* touch) {
             }
         }
     }
-}
+)PHYS";
+        if (squish) {
+            // A soft pair shares the hit, so the lower body is left moving
+            // into the floor. Stop that leftover speed after the iterations,
+            // or the next step carries it through the static shape.
+            out += R"PHYS(    if (__nexa_phys_squish > 0.f) {
+        for (int i = 1; i <= hi; i++) {
+            if (__nexa_phys_bodies[i].kind == 0) continue;
+            for (int j = i + 1; j <= hi; j++) {
+                if (__nexa_phys_bodies[j].kind == 0) continue;
+                __nexa_phys_body& a = __nexa_phys_bodies[i];
+                __nexa_phys_body& b = __nexa_phys_bodies[j];
+                if ((a.inv == 0.f) == (b.inv == 0.f)) continue;
+                float nx, ny, nz, pen;
+                if (!__nexa_phys_pair(i, j, &nx, &ny, &nz, &pen) || pen <= 0.f) continue;
+                __nexa_phys_body& d = (a.inv > 0.f) ? a : b;
+                float sign = (a.inv > 0.f) ? 1.f : -1.f;
+                float vn = (d.vx * nx + d.vy * ny + d.vz * nz) * sign;
+                float __rad = __nexa_phys_soft_rad(a, b);
+                float __sag = __nexa_phys_squish * __rad * 0.16f;
+                float hold = 0.f;
+                if (pen > __sag) {
+                    hold = (pen - __sag) * 1.6f;
+                    if (hold > 0.5f) hold = 0.5f;
+                }
+                if (vn < hold) {
+                    float dv = hold - vn;
+                    d.vx += nx * sign * dv;
+                    d.vy += ny * sign * dv;
+                    d.vz += nz * sign * dv;
+                }
+            }
+        }
+    }
+)PHYS";
+        }
+        out += R"PHYS(}
 // Take the overlap back out. The impulse has already shared the speed, so
 // this only undoes the intersection, split the same way by mass.
 static void __nexa_phys_separate() {
@@ -850,21 +891,15 @@ static void __nexa_phys_separate() {
             out += R"PHYS(                float corr;
                 if (__nexa_phys_squish <= 0.f) corr = (pen - 0.001f) * 0.85f;
                 else {
-                    float __soft = __nexa_phys_squish;
-                    float __rad = __nexa_phys_body_rad(a);
-                    if (b.inv > 0.f) {
-                        float __rb = __nexa_phys_body_rad(b);
-                        if (a.inv <= 0.f || (__rb > 0.05f && __rb < __rad)) __rad = __rb;
+                    float __rad = __nexa_phys_soft_rad(a, b);
+                    float __sag = __nexa_phys_squish * __rad * 0.16f;
+                    float __maxp = __nexa_phys_squish * __rad * 0.45f;
+                    if (pen > __maxp) corr = (pen - __maxp) * 0.7f;
+                    else {
+                        float __use = pen - __sag;
+                        if (__use < 0.f) __use = 0.f;
+                        corr = __use * 0.012f;
                     }
-                    if (__rad < 0.05f) __rad = 0.05f;
-                    float __sag = __soft * __rad * 0.22f;
-                    float __keep = __sag;
-                    float __impact = pen * __soft * 0.5f;
-                    if (__impact > __keep) __keep = __impact;
-                    float __use = pen - __keep;
-                    if (__use < 0.f) __use = 0.f;
-                    float __factor = 0.85f * (1.f - __soft * 0.72f);
-                    corr = (__use > 0.001f) ? __use * __factor : 0.f;
                 }
 )PHYS";
         }
@@ -875,7 +910,34 @@ static void __nexa_phys_separate() {
         }
         if (!any) break;
     }
-}
+)PHYS";
+        if (squish) {
+            // The pair above can shove a body into a static shape while it
+            // eases two soft bodies apart. Put it back on the near side.
+            out += R"PHYS(    if (__nexa_phys_squish > 0.f) {
+        for (int i = 1; i <= hi; i++) {
+            if (__nexa_phys_bodies[i].kind == 0) continue;
+            for (int j = i + 1; j <= hi; j++) {
+                if (__nexa_phys_bodies[j].kind == 0) continue;
+                __nexa_phys_body& a = __nexa_phys_bodies[i];
+                __nexa_phys_body& b = __nexa_phys_bodies[j];
+                if ((a.inv == 0.f) == (b.inv == 0.f)) continue;
+                float inv = a.inv + b.inv;
+                if (inv <= 0.f) continue;
+                float nx, ny, nz, pen;
+                if (!__nexa_phys_pair(i, j, &nx, &ny, &nz, &pen)) continue;
+                float __maxp = __nexa_phys_squish * __nexa_phys_soft_rad(a, b) * 0.45f;
+                if (pen <= __maxp) continue;
+                float corr = pen - __maxp;
+                float sa = corr * (a.inv / inv), sb = corr * (b.inv / inv);
+                a.x += nx * sa; a.y += ny * sa; a.z += nz * sa;
+                b.x -= nx * sb; b.y -= ny * sb; b.z -= nz * sb;
+            }
+        }
+    }
+)PHYS";
+        }
+        out += R"PHYS(}
 static int __nexa_phys_step(double dtin) {
     float dt = (float)dtin;
     if (dt <= 0.f) return 0;
@@ -918,22 +980,40 @@ static int __nexa_phys_step(double dtin) {
         if (squish) {
             out += R"PHYS(
     if (__nexa_phys_squish > 0.f) {
+        for (int i = 1; i <= hi; i++) __nexa_phys_bodies[i].hit = 0.f;
+        for (int i = 1; i <= hi; i++) {
+            if (__nexa_phys_bodies[i].kind == 0) continue;
+            for (int j = i + 1; j <= hi; j++) {
+                if (__nexa_phys_bodies[j].kind == 0) continue;
+                __nexa_phys_body& a = __nexa_phys_bodies[i];
+                __nexa_phys_body& b = __nexa_phys_bodies[j];
+                float inv = a.inv + b.inv;
+                if (inv <= 0.f) continue;
+                float nx, ny, nz, pen;
+                if (!__nexa_phys_pair(i, j, &nx, &ny, &nz, &pen) || pen <= 0.001f) continue;
+                float pa = pen * (a.inv / inv);
+                float pb = pen * (b.inv / inv);
+                if (a.inv > 0.f && pa > a.hit) { a.hit = pa; a.snx = nx; a.sny = ny; a.snz = nz; }
+                if (b.inv > 0.f && pb > b.hit) { b.hit = pb; b.snx = -nx; b.sny = -ny; b.snz = -nz; }
+            }
+        }
         for (int i = 1; i <= hi; i++) {
             __nexa_phys_body& b = __nexa_phys_bodies[i];
-            if (b.kind == 0 || b.inv == 0.f) { b.hit = 0.f; continue; }
+            if (b.kind == 0 || b.inv == 0.f) continue;
             float rad = __nexa_phys_body_rad(b);
             if (rad < 0.05f) rad = 0.05f;
             float target = b.hit / rad;
-            if (target > 0.85f) target = 0.85f;
-            float k = (target > b.sq) ? 0.75f : 0.14f;
+            if (target > 0.72f) target = 0.72f;
+            float k = (target > b.sq) ? 0.85f : 0.7f;
             b.sq += (target - b.sq) * k;
             if (b.sq < 0.f) b.sq = 0.f;
+            if (b.sq > 0.72f) b.sq = 0.72f;
             b.hit = 0.f;
             float L2 = b.snx * b.snx + b.sny * b.sny + b.snz * b.snz;
             if (L2 < 1e-8f) { b.snx = 0.f; b.sny = 1.f; b.snz = 0.f; }
             else {
-                float inv = 1.f / sqrtf(L2);
-                b.snx *= inv; b.sny *= inv; b.snz *= inv;
+                float invn = 1.f / sqrtf(L2);
+                b.snx *= invn; b.sny *= invn; b.snz *= invn;
             }
         }
     }

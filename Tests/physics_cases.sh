@@ -263,9 +263,28 @@ fn main() {
         if (s > peak) { peak = s; }
         i = i + 1;
     }
-    if (peak < 0.12) { io.println("fail squash"); io.println(peak); return 1; }
+    if (peak < 0.18) { io.println("fail squash"); io.println(peak); return 1; }
     let y = physics.y(ball);
-    if (y < 0.45 || y > 2.4) { io.println("fail squish y"); io.println(y); return 1; }
+    if (y < 0.75 || y > 1.25) { io.println("fail squish y"); io.println(y); return 1; }
+    i = 0;
+    while (i < 180) { physics.step(0.016); i = i + 1; }
+    y = physics.y(ball);
+    let rest = physics.squash(ball);
+    if (y < 0.84 || y > 1.00) { io.println("fail rest y"); io.println(y); return 1; }
+    if (rest < 0.08 || rest > 0.32) { io.println("fail rest squash"); io.println(rest); return 1; }
+    let low = physics.sphere(-2, 1.0, 0, 0.5);
+    let high = physics.sphere(-2, 3.2, 0, 0.5);
+    i = 0;
+    while (i < 180) { physics.step(0.016); i = i + 1; }
+    let ly = physics.y(low);
+    let hy = physics.y(high);
+    let dx = physics.x(high) - physics.x(low);
+    let dy = hy - ly;
+    let dz = physics.z(high) - physics.z(low);
+    let d2 = dx * dx + dy * dy + dz * dz;
+    if (ly < 0.75 || ly > 1.08) { io.println("fail stack low"); io.println(ly); return 1; }
+    if (hy < ly + 0.7) { io.println("fail stack high"); io.println(hy); return 1; }
+    if (d2 < 0.64) { io.println("fail stack"); io.println(d2); return 1; }
     io.println("ok");
     return 0;
 }
@@ -275,7 +294,7 @@ if ! "$NEXAC" "$WORK/squish.nxa" -o "$WORK/squish$EXE" > "$WORK/squish.log" 2>&1
 else
     out=$("$WORK/squish$EXE" 2>&1 | tr -d '\r')
     if [ "$out" = "ok" ]; then
-        ok "squishy mode sinks on impact and springs back"
+        ok "squishy mode compresses on impact and eases back"
     else
         bad "squish run" "got [$out]"
     fi

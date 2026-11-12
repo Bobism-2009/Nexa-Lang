@@ -1,5 +1,6 @@
-// Squishy physics. Balls sink into the floor and into each other, then
-// spring back. gfx3d.ellipsoid draws how flat physics.squash says they are.
+// Squishy physics. A landing ball compresses by the real overlap, then
+// eases back. gfx3d.ellipsoid is drawn on the physics centre: squash is the
+// fraction of the radius still pressed in, so the flat face stays on the hit.
 //
 //   build: NexaC Examples/squish_demo.nxa -o squish_demo
 //   drive: arrows orbit, W/S raise and lower, wheel zooms, space stops the
