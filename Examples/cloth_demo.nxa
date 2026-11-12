@@ -93,8 +93,8 @@ fn main() {
                 let x11 = physics.cx(sheet, c + 1, r + 1);
                 let y11 = physics.cy(sheet, c + 1, r + 1);
                 let z11 = physics.cz(sheet, c + 1, r + 1);
-                gfx3d.tri(x00, y00, z00, x10, y10, z10, x11, y11, z11, 222, 206, 178);
-                gfx3d.tri(x00, y00, z00, x11, y11, z11, x01, y01, z01, 222, 206, 178);
+                gfx3d.tri(x00, y00, z00, x10, y10, z10, x11, y11, z11, 230, 214, 186);
+                gfx3d.tri(x00, y00, z00, x11, y11, z11, x01, y01, z01, 214, 196, 166);
                 c = c + 1;
             }
             r = r + 1;
@@ -115,8 +115,8 @@ fn main() {
                 let x11 = physics.cx(flag, c + 1, r + 1);
                 let y11 = physics.cy(flag, c + 1, r + 1);
                 let z11 = physics.cz(flag, c + 1, r + 1);
-                gfx3d.tri(x00, y00, z00, x10, y10, z10, x11, y11, z11, 176, 56, 64);
-                gfx3d.tri(x00, y00, z00, x11, y11, z11, x01, y01, z01, 176, 56, 64);
+                gfx3d.tri(x00, y00, z00, x10, y10, z10, x11, y11, z11, 190, 64, 72);
+                gfx3d.tri(x00, y00, z00, x11, y11, z11, x01, y01, z01, 160, 48, 58);
                 c = c + 1;
             }
             r = r + 1;
