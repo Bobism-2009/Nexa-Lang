@@ -23,7 +23,7 @@
 
 namespace nexa {
 
-inline std::string physicsRuntimeCpp(bool query, bool body, bool mesh = false) {
+inline std::string physicsRuntimeCpp(bool query, bool body, bool mesh = false, bool squish = false) {
     if (!query && !body) return "";
     std::string out;
     out += "#include <cmath>\n";
@@ -358,11 +358,30 @@ struct __nexa_phys_body {
         if (mesh) {
             out += "    int model;\n    float scl;\n";
         }
+        if (squish) {
+            out += "    float sq, snx, sny, snz, hit;\n";
+        }
         out += R"PHYS(};
 static __nexa_phys_body __nexa_phys_bodies[257];
 static int __nexa_phys_hi = 0;
 static float __nexa_phys_gx = 0.f, __nexa_phys_gy = -9.81f, __nexa_phys_gz = 0.f;
-static int __nexa_phys_alive(int id) {
+)PHYS";
+        if (squish) {
+            out += R"PHYS(static float __nexa_phys_squish = 0.f;
+static float __nexa_phys_body_rad(const __nexa_phys_body& b) {
+    float rad = b.r;
+    if (b.kind == 2) {
+        rad = fabsf(b.w);
+        if (fabsf(b.h) < rad) rad = fabsf(b.h);
+        if (fabsf(b.d) < rad) rad = fabsf(b.d);
+        rad *= 0.5f;
+    }
+    if (rad < 0.f) rad = -rad;
+    return rad;
+}
+)PHYS";
+        }
+        out += R"PHYS(static int __nexa_phys_alive(int id) {
     return id >= 1 && id <= 256 && __nexa_phys_bodies[id].kind != 0;
 }
 static void __nexa_phys_ends(const __nexa_phys_body& b, float* x1, float* y1, float* z1, float* x2, float* y2, float* z2) {
@@ -700,7 +719,9 @@ static void __nexa_phys_solve(float h, unsigned char* touch) {
                 // Wanted speed along the normal. Positive separates. Bounce
                 // replaces the bias on a hard hit; a slow overlap only creeps
                 // apart, shared by mass, so nobody is teleported aside.
-                const float slop = 0.005f;
+)PHYS";
+        if (!squish) {
+            out += R"PHYS(                const float slop = 0.005f;
                 float want = 0.f;
                 if (pen > slop) {
                     want = 2.f * (pen - slop) / h;
@@ -711,7 +732,58 @@ static void __nexa_phys_solve(float h, unsigned char* touch) {
                     float bounce = -e * rel;
                     if (bounce > want) want = bounce;
                 }
-                float jn = 0.f;
+)PHYS";
+        } else {
+            out += R"PHYS(                const float slop = 0.005f;
+                float want = 0.f;
+                float __soft = __nexa_phys_squish;
+                if (__soft > 0.f && rel < -1.5f && iter == 0) {
+                    float __rad = __nexa_phys_body_rad(a);
+                    if (b.inv > 0.f) {
+                        float __rb = __nexa_phys_body_rad(b);
+                        if (a.inv <= 0.f || (__rb > 0.f && __rb < __rad)) __rad = __rb;
+                    }
+                    if (__rad < 0.05f) __rad = 0.05f;
+                    float __sink = (-rel) * __soft * 0.02f;
+                    float __cap = __soft * __rad * 0.62f;
+                    if (__sink > __cap) __sink = __cap;
+                    float __sa = __sink * (a.inv / inv), __sb = __sink * (b.inv / inv);
+                    a.x -= nx * __sa; a.y -= ny * __sa; a.z -= nz * __sa;
+                    b.x += nx * __sb; b.y += ny * __sb; b.z += nz * __sb;
+                    pen += __sink;
+                }
+                if (__soft > 0.f) {
+                    if (a.inv > 0.f && pen > a.hit) { a.hit = pen; a.snx = nx; a.sny = ny; a.snz = nz; }
+                    if (b.inv > 0.f && pen > b.hit) { b.hit = pen; b.snx = nx; b.sny = ny; b.snz = nz; }
+                }
+                if (pen > slop) {
+                    float __baum = 2.f * (1.f - 0.82f * __soft);
+                    want = __baum * (pen - slop) / h;
+                    float __capw = 2.f;
+                    if (want > __capw) want = __capw;
+                }
+                if (__soft > 0.f && pen > 0.01f) {
+                    float __rad = __nexa_phys_body_rad(a);
+                    if (b.inv > 0.f) {
+                        float __rb = __nexa_phys_body_rad(b);
+                        if (a.inv <= 0.f || (__rb > 0.05f && (a.inv <= 0.f || __rb < __rad))) __rad = __rb;
+                    }
+                    if (__rad < 0.05f) __rad = 0.05f;
+                    float __sag = __soft * __rad * 0.22f;
+                    if (pen > __sag) {
+                        float __push = (pen - __sag) * (8.f + 14.f * (1.f - __soft));
+                        if (__push > want) want = __push;
+                        if (want > 3.2f) want = 3.2f;
+                    }
+                }
+                if (iter == 0 && rel < -1.f && __soft < 0.35f) {
+                    float e = a.bounce > b.bounce ? a.bounce : b.bounce;
+                    float bounce = -e * rel;
+                    if (bounce > want) want = bounce;
+                }
+)PHYS";
+        }
+        out += R"PHYS(                float jn = 0.f;
                 if (rel < want) {
                     jn = (want - rel) / inv;
                     a.vx += nx * jn * a.inv; a.vy += ny * jn * a.inv; a.vz += nz * jn * a.inv;
@@ -771,8 +843,32 @@ static void __nexa_phys_separate() {
                 float nx, ny, nz, pen;
                 if (!__nexa_phys_pair(i, j, &nx, &ny, &nz, &pen) || pen <= 0.001f) continue;
                 any = 1;
-                float corr = (pen - 0.001f) * 0.85f;
-                float sa = corr * (a.inv / inv), sb = corr * (b.inv / inv);
+)PHYS";
+        if (!squish) {
+            out += "                float corr = (pen - 0.001f) * 0.85f;\n";
+        } else {
+            out += R"PHYS(                float corr;
+                if (__nexa_phys_squish <= 0.f) corr = (pen - 0.001f) * 0.85f;
+                else {
+                    float __soft = __nexa_phys_squish;
+                    float __rad = __nexa_phys_body_rad(a);
+                    if (b.inv > 0.f) {
+                        float __rb = __nexa_phys_body_rad(b);
+                        if (a.inv <= 0.f || (__rb > 0.05f && __rb < __rad)) __rad = __rb;
+                    }
+                    if (__rad < 0.05f) __rad = 0.05f;
+                    float __sag = __soft * __rad * 0.22f;
+                    float __keep = __sag;
+                    float __impact = pen * __soft * 0.5f;
+                    if (__impact > __keep) __keep = __impact;
+                    float __use = pen - __keep;
+                    if (__use < 0.f) __use = 0.f;
+                    float __factor = 0.85f * (1.f - __soft * 0.72f);
+                    corr = (__use > 0.001f) ? __use * __factor : 0.f;
+                }
+)PHYS";
+        }
+        out += R"PHYS(                float sa = corr * (a.inv / inv), sb = corr * (b.inv / inv);
                 a.x += nx * sa; a.y += ny * sa; a.z += nz * sa;
                 b.x -= nx * sb; b.y -= ny * sb; b.z -= nz * sb;
             }
@@ -818,9 +914,55 @@ static int __nexa_phys_step(double dtin) {
         float sp = b.vx * b.vx + b.vy * b.vy + b.vz * b.vz;
         if (sp < 0.0009f) b.vx = b.vy = b.vz = 0.f;
     }
+)PHYS";
+        if (squish) {
+            out += R"PHYS(
+    if (__nexa_phys_squish > 0.f) {
+        for (int i = 1; i <= hi; i++) {
+            __nexa_phys_body& b = __nexa_phys_bodies[i];
+            if (b.kind == 0 || b.inv == 0.f) { b.hit = 0.f; continue; }
+            float rad = __nexa_phys_body_rad(b);
+            if (rad < 0.05f) rad = 0.05f;
+            float target = b.hit / rad;
+            if (target > 0.85f) target = 0.85f;
+            float k = (target > b.sq) ? 0.75f : 0.14f;
+            b.sq += (target - b.sq) * k;
+            if (b.sq < 0.f) b.sq = 0.f;
+            b.hit = 0.f;
+            float L2 = b.snx * b.snx + b.sny * b.sny + b.snz * b.snz;
+            if (L2 < 1e-8f) { b.snx = 0.f; b.sny = 1.f; b.snz = 0.f; }
+            else {
+                float inv = 1.f / sqrtf(L2);
+                b.snx *= inv; b.sny *= inv; b.snz *= inv;
+            }
+        }
+    }
     return 1;
 }
+static int __nexa_phys_squishy(double amount) {
+    float s = (float)amount;
+    if (s < 0.f) s = 0.f;
+    if (s > 1.f) s = 1.f;
+    __nexa_phys_squish = s;
+    return 1;
+}
+static double __nexa_phys_squash(int id) {
+    if (!__nexa_phys_alive(id)) return 0.0;
+    return (double)__nexa_phys_bodies[id].sq;
+}
+static double __nexa_phys_sn(int id, int w) {
+    if (!__nexa_phys_alive(id)) return w == 1 ? 1.0 : 0.0;
+    const __nexa_phys_body& b = __nexa_phys_bodies[id];
+    float L2 = b.snx * b.snx + b.sny * b.sny + b.snz * b.snz;
+    if (L2 < 1e-8f) return w == 1 ? 1.0 : 0.0;
+    if (w == 0) return (double)b.snx;
+    if (w == 1) return (double)b.sny;
+    return (double)b.snz;
+}
 )PHYS";
+        } else {
+            out += "    return 1;\n}\n";
+        }
     }
     return out;
 }

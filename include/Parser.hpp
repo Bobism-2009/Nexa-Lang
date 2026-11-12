@@ -4462,6 +4462,7 @@ private:
             {"hx", 0}, {"hy", 0}, {"hz", 0}, {"nx", 0}, {"ny", 0}, {"nz", 0},
             {"sphere", 4}, {"box", 6}, {"capsule", 7}, {"mesh", 5},
             {"ray_mesh", 11},
+            {"squishy", 1}, {"squash", 1}, {"snx", 1}, {"sny", 1}, {"snz", 1},
             {"mass", 2}, {"bounce", 2}, {"velocity", 4}, {"set", 4}, {"remove", 1},
             {"gravity", 3}, {"step", 1},
             {"x", 1}, {"y", 1}, {"z", 1}, {"vx", 1}, {"vy", 1}, {"vz", 1},
@@ -5382,6 +5383,7 @@ private:
         else if (method == "perspective") argc = 3;
         else if (method == "camera") argc = 6;
         else if (method == "cube" || method == "sphere") argc = 7;
+        else if (method == "ellipsoid") argc = 11;
         else if (method == "box") argc = 9;
         else if (method == "line3") argc = 9;
         else if (method == "grid") argc = 5;
@@ -5437,6 +5439,7 @@ private:
             else if (method == "cube") sig = "gfx3d.cube(x, y, z, size, r, g, b)";
             else if (method == "box") sig = "gfx3d.box(x, y, z, w, h, d, r, g, b)";
             else if (method == "sphere") sig = "gfx3d.sphere(x, y, z, radius, r, g, b)";
+            else if (method == "ellipsoid") sig = "gfx3d.ellipsoid(x, y, z, nx, ny, nz, radius, squash, r, g, b)";
             else if (method == "capsule") sig = "gfx3d.capsule(x1, y1, z1, x2, y2, z2, radius, r, g, b)";
             else if (method == "cylinder") sig = "gfx3d.cylinder(x1, y1, z1, x2, y2, z2, radius, r, g, b)";
             else if (method == "cone") sig = "gfx3d.cone(x1, y1, z1, x2, y2, z2, radius, r, g, b)";

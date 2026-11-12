@@ -1277,6 +1277,11 @@ ARGUMENT TYPES
                                    gfx3d.cube is this with one size for all three
   gfx3d.sphere(x, y, z, radius, r, g, b)
                                  - a sphere centred on x,y,z
+  gfx3d.ellipsoid(x, y, z, nx, ny, nz, radius, squash, r, g, b)
+                                 - that sphere flattened along (nx, ny, nz).
+                                   squash 0 is round. 1 is quite flat, and the
+                                   sides bulge so the volume stays. A program
+                                   that never calls it does not carry it.
   gfx3d.capsule(x1, y1, z1, x2, y2, z2, radius, r, g, b)
                                  - every point within radius of the LINE from the first
                                    point to the second: a cylinder with a hemisphere on
@@ -1791,6 +1796,16 @@ ARGUMENT TYPES
   physics.ray_mesh(ox, oy, oz, dx, dy, dz, model, x, y, z, scale)
                                  - the same surface, without making a body.
                                    Distance along the direction, or -1.
+  physics.squishy(amount)        - 0 is the rigid world. 1 is as soft as it
+                                 gets. A landing body sinks in and springs
+                                 back instead of pinging off. 0 leaves the
+                                 solver as it is. A program that never calls
+                                 it carries none of this.
+  physics.squash(id)             - how flat that body is right now, 0 to 1.
+                                 It eases back after the hit.
+  physics.snx(id) physics.sny(id) physics.snz(id)
+                                 - the direction it was flattened along.
+                                   Draw it with gfx3d.ellipsoid.
   physics.mass(id, m)            - 0 makes the body static. Default mass is 1.
   physics.bounce(id, e)          - 0 to 1. Default 0, so a landing body rests.
                                  A hit slower than 1 m/s does not bounce, so a

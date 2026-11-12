@@ -97,6 +97,9 @@ public:
         // Triangle colliders. Emitted after gfx3d's model block, and absent
         // from a program that never calls physics.mesh or physics.ray_mesh.
         bool physicsMesh = false;
+        // physics.squishy. The soft contact path and the squash it records.
+        // A program that never calls it keeps the rigid solver, byte for byte.
+        bool physicsSquish = false;
         bool crypto = false;
         bool cryptoHex = false;
         bool cryptoXor = false;
@@ -222,6 +225,9 @@ public:
         // gfx3d.shader / use_shader / shader_set / shader_error: a custom GLSL
         // program, compiled by the graphics driver at runtime.
         bool gfx3dShader = false;
+        // gfx3d.ellipsoid. A squashed sphere, outside the main renderer so a
+        // program that only draws round spheres does not carry it.
+        bool gfx3dEllipsoid = false;
         // The shader files a program names outright, as vertex/fragment pairs.
         // Vulkan takes SPIR-V and nothing compiles GLSL at runtime there, so
         // NexaC compiles these at build time when it can -- which it can only
@@ -2046,7 +2052,8 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
             out += "#include <algorithm>\n";
         }
         if (hasPhysics() && (usage.physicsQuery || usage.physicsBody)) {
-            out += physicsRuntimeCpp(usage.physicsQuery, usage.physicsBody, usage.physicsMesh && hasGfx3d());
+            out += physicsRuntimeCpp(usage.physicsQuery, usage.physicsBody,
+                usage.physicsMesh && hasGfx3d(), usage.physicsSquish);
         }
         if (hasPhysics() && usage.physicsMesh && !(hasGfx3d() && usage.gfx3d)) {
             out += physicsMeshStubCpp();
@@ -2223,6 +2230,7 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
             // by gfx3d.poll in the same frame would leave pad_pressed with
             // nothing between the two samples to report.
             out += gfx3dRuntimeCpp(usage.gfx3dPad, usage.gfx3dShader);
+            if (usage.gfx3dEllipsoid) out += gfx3dEllipsoidCpp();
             // After the runtime, not before: the model block draws through
             // __nexa_g3_vert_n and the vertex batch, which are defined up there.
             // Before the model block and after the runtime: it swaps the
@@ -2652,7 +2660,7 @@ static __nexa_mutex_t* __nexa_mutex_at(int id) {
         all.osTempDir = all.osArch = all.osCpuCount = all.osWhich = all.osCwd = all.osInfo = true;
         all.osExit = all.osHostname = all.osUsername = all.osHome = all.osSetenv = true;
         all.file = all.fileIo = all.fileWrite = all.fileRead = all.fileFs = all.random = all.math = all.time = all.timeSleep = all.timeChrono = all.timeWall = all.timeCalendar = all.timeFormat = all.thread = all.dll = true;
-        all.physicsQuery = all.physicsBody = all.physicsMesh = true;
+        all.physicsQuery = all.physicsBody = all.physicsMesh = all.physicsSquish = true;
         all.str = true;
         return getCppIncludes(all);
     }

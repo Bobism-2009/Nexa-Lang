@@ -67,6 +67,7 @@ namespace nexa {
 inline std::string gfx3dPlatformCpp(bool shader);
 inline std::string gfx3dApiCpp(bool pad);
 inline std::string gfx3dModelCpp();
+inline std::string gfx3dEllipsoidCpp();
 
 inline std::string gfx3dRuntimeCpp(bool pad, bool shader) {
     return R"NEXA_GFX3D(
@@ -4255,6 +4256,42 @@ static int __nexa_gfx3d_texture(const std::string& path) {
     return (int)__nexa_g3_texs.size() - 1;
 }
 )NEXA_GFX3D";
+}
+
+// A sphere flattened along an axis. squash 0 is the ordinary sphere. Emitted
+// only for gfx3d.ellipsoid, so a program that draws round spheres does not
+// carry it. The stretch goes through the same axis draw the capsule uses,
+// which keeps the shading normal perpendicular to the squashed surface.
+inline std::string gfx3dEllipsoidCpp() {
+    return R"EL(
+static void __nexa_gfx3d_ellipsoid(double x, double y, double z,
+    double nx, double ny, double nz, double rad, double squash, int r, int g, int b) {
+    if (!__nexa_g3.ready) return;
+    if (r < 0) r = 0; if (r > 255) r = 255;
+    if (g < 0) g = 0; if (g > 255) g = 255;
+    if (b < 0) b = 0; if (b > 255) b = 255;
+    if (rad < 0.0) rad = -rad;
+    float flat = 1.f - (float)squash * 0.62f;
+    if (flat < 0.34f) flat = 0.34f;
+    if (flat > 1.f) flat = 1.f;
+    float bulge = 1.f / sqrtf(flat);
+    float along = (float)rad * flat;
+    float across = (float)rad * bulge;
+    float d0 = (float)nx, d1 = (float)ny, d2 = (float)nz;
+    float L = sqrtf(d0 * d0 + d1 * d1 + d2 * d2);
+    if (L < 1e-4f || squash < 0.02 || flat > 0.98f) {
+        __nexa_gfx3d_sphere(x, y, z, rad, r, g, b);
+        return;
+    }
+    float d[3] = {d0 / L, d1 / L, d2 / L};
+    float u[3], v[3];
+    __nexa_g3_basis(d, u, v);
+    float o[3] = {(float)x, (float)y, (float)z};
+    if (__nexa_g3_mesh_draw_axis(__nexa_g3_sphere_mesh(), (float)r, (float)g, (float)b,
+                                 o, u, v, d, across, along)) return;
+    __nexa_gfx3d_sphere(x, y, z, rad, r, g, b);
+}
+)EL";
 }
 
 inline std::string gfx3dModelCpp() {

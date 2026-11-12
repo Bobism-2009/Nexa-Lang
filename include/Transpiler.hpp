@@ -417,7 +417,9 @@ public:
                         m == "gravity" || m == "step" || m == "x" || m == "y" || m == "z" ||
                         m == "vx" || m == "vy" || m == "vz" || m == "x1" || m == "y1" || m == "z1" ||
                         m == "x2" || m == "y2" || m == "z2";
-                    if (m == "mesh" || world) cppUsage.physicsBody = true;
+                    const bool squishy = m == "squishy" || m == "squash" || m == "snx" || m == "sny" || m == "snz";
+                    if (squishy) cppUsage.physicsSquish = true;
+                    if (m == "mesh" || squishy || world) cppUsage.physicsBody = true;
                     else cppUsage.physicsQuery = true;
                     if (m == "mesh" || m == "ray_mesh") {
                         cppUsage.physicsMesh = true;
@@ -3080,7 +3082,8 @@ private:
                     e.value == "x" || e.value == "y" || e.value == "z" ||
                     e.value == "vx" || e.value == "vy" || e.value == "vz" ||
                     e.value == "x1" || e.value == "y1" || e.value == "z1" ||
-                    e.value == "x2" || e.value == "y2" || e.value == "z2") return "float";
+                    e.value == "x2" || e.value == "y2" || e.value == "z2" ||
+                    e.value == "squash" || e.value == "snx" || e.value == "sny" || e.value == "snz") return "float";
                 return "int";
             case AstNode::Type::CryptoCall:
                 return "string";
@@ -4598,6 +4601,7 @@ private:
             {"tri",         "gfx3d.tri(x1, y1, z1, x2, y2, z2, x3, y3, z3, r, g, b)", "nnnnnnnnnnnn"},
             {"cube",        "gfx3d.cube(x, y, z, size, r, g, b)",                     "nnnnnnn"},
             {"sphere",      "gfx3d.sphere(x, y, z, radius, r, g, b)",                 "nnnnnnn"},
+            {"ellipsoid",   "gfx3d.ellipsoid(x, y, z, nx, ny, nz, radius, squash, r, g, b)", "nnnnnnnnnnn"},
             {"box",         "gfx3d.box(x, y, z, w, h, d, r, g, b)",                   "nnnnnnnnn"},
             {"line3",       "gfx3d.line3(x1, y1, z1, x2, y2, z2, r, g, b)",           "nnnnnnnnn"},
             {"grid",        "gfx3d.grid(size, step, r, g, b)",                        "nnnnn"},
@@ -4772,6 +4776,11 @@ private:
             {"capsule", "physics.capsule(x1, y1, z1, x2, y2, z2, radius)", "nnnnnnn"},
             {"mesh", "physics.mesh(model, x, y, z, scale)", "nnnnn"},
             {"ray_mesh", "physics.ray_mesh(ox, oy, oz, dx, dy, dz, model, x, y, z, scale)", "nnnnnnnnnnn"},
+            {"squishy", "physics.squishy(amount)", "n"},
+            {"squash", "physics.squash(id)", "n"},
+            {"snx", "physics.snx(id)", "n"},
+            {"sny", "physics.sny(id)", "n"},
+            {"snz", "physics.snz(id)", "n"},
             {"mass", "physics.mass(id, mass)", "nn"},
             {"bounce", "physics.bounce(id, restitution)", "nn"},
             {"velocity", "physics.velocity(id, vx, vy, vz)", "nnnn"},
@@ -6243,7 +6252,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             return m == "ray_sphere" || m == "ray_box" || m == "ray_capsule" || m == "ray_mesh" ||
                    m == "hx" || m == "hy" || m == "hz" || m == "nx" || m == "ny" || m == "nz" ||
                    m == "x" || m == "y" || m == "z" || m == "vx" || m == "vy" || m == "vz" ||
-                   m == "x1" || m == "y1" || m == "z1" || m == "x2" || m == "y2" || m == "z2";
+                   m == "x1" || m == "y1" || m == "z1" || m == "x2" || m == "y2" || m == "z2" ||
+                   m == "squash" || m == "snx" || m == "sny" || m == "snz";
         }
         if (e.type == AstNode::Type::RandomCall) return e.value == "float";
         if (e.type == AstNode::Type::GfxCall) return e.value == "pad_axis";
@@ -8636,6 +8646,11 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (fn == "capsule") return "__nexa_phys_capsule(" + num(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ", " + num(4) + ", " + num(5) + ", " + num(6) + ")";
                 if (fn == "mesh") return "__nexa_phys_mesh(" + num(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ", " + num(4) + ")";
                 if (fn == "ray_mesh") return "__nexa_phys_ray_mesh(" + num(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ", " + num(4) + ", " + num(5) + ", " + num(6) + ", " + num(7) + ", " + num(8) + ", " + num(9) + ", " + num(10) + ")";
+                if (fn == "squishy") return "__nexa_phys_squishy(" + num(0) + ")";
+                if (fn == "squash") return "__nexa_phys_squash(" + id(0) + ")";
+                if (fn == "snx") return "__nexa_phys_sn(" + id(0) + ", 0)";
+                if (fn == "sny") return "__nexa_phys_sn(" + id(0) + ", 1)";
+                if (fn == "snz") return "__nexa_phys_sn(" + id(0) + ", 2)";
                 if (fn == "mass") return "__nexa_phys_mass(" + id(0) + ", " + num(1) + ")";
                 if (fn == "bounce") return "__nexa_phys_bounce(" + id(0) + ", " + num(1) + ")";
                 if (fn == "velocity") return "__nexa_phys_velocity(" + id(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ")";
@@ -9916,7 +9931,9 @@ static std::string __nexa_show(const std::map<K, V>& m) {
     // -- Modules.hpp ors them with gfx's, because there is one mixer for both.
     static void noteGfx3dUsage(const AstNode& n, Modules::CppUsage& cppUsage) {
         const std::string& fn = n.value;
-        if (fn == "model" || fn == "draw" || fn == "model_tris") {
+        if (fn == "ellipsoid") {
+            cppUsage.gfx3dEllipsoid = true;
+        } else if (fn == "model" || fn == "draw" || fn == "model_tris") {
             cppUsage.gfx3dModel = true;
         } else if (fn == "texture" || fn == "use") {
             // The image decoder, and on Windows and macOS the system codecs

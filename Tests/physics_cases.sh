@@ -170,6 +170,8 @@ if ! "$NEXAC" "$WORK/use.nxa" --source "$WORK/use.cpp" > "$WORK/use.src.log" 2>&
     bad "body source" "$(cat "$WORK/use.src.log")"
 elif grep -q __nexa_phys_mesh "$WORK/use.cpp"; then
     bad "body slice" "a sphere world carries mesh colliders"
+elif grep -q __nexa_phys_squish "$WORK/use.cpp"; then
+    bad "body slice" "a rigid world carries squishy mode"
 else
     ok "a body world carries no mesh colliders"
 fi
@@ -236,6 +238,55 @@ else
     else
         bad "mesh run" "got [$out]"
     fi
+fi
+
+cat > "$WORK/squish.nxa" <<'EOF'
+#include <std/io>
+#include <std/physics>
+fn main() {
+    physics.squishy(0);
+    let ground = physics.box(0, 0, 0, 10, 1, 10);
+    physics.mass(ground, 0);
+    let rigid = physics.sphere(0, 5, 0, 0.5);
+    let i = 0;
+    while (i < 300) { physics.step(0.016); i = i + 1; }
+    let y0 = physics.y(rigid);
+    if (y0 < 0.98 || y0 > 1.04) { io.println("fail squish off"); io.println(y0); return 1; }
+
+    physics.squishy(0.9);
+    let ball = physics.sphere(3, 5, 0, 0.5);
+    let peak = 0.0;
+    i = 0;
+    while (i < 90) {
+        physics.step(0.016);
+        let s = physics.squash(ball);
+        if (s > peak) { peak = s; }
+        i = i + 1;
+    }
+    if (peak < 0.12) { io.println("fail squash"); io.println(peak); return 1; }
+    let y = physics.y(ball);
+    if (y < 0.45 || y > 2.4) { io.println("fail squish y"); io.println(y); return 1; }
+    io.println("ok");
+    return 0;
+}
+EOF
+if ! "$NEXAC" "$WORK/squish.nxa" -o "$WORK/squish$EXE" > "$WORK/squish.log" 2>&1; then
+    bad "squish build" "$(tail -20 "$WORK/squish.log")"
+else
+    out=$("$WORK/squish$EXE" 2>&1 | tr -d '\r')
+    if [ "$out" = "ok" ]; then
+        ok "squishy mode sinks on impact and springs back"
+    else
+        bad "squish run" "got [$out]"
+    fi
+fi
+
+if ! "$NEXAC" Examples/squish_demo.nxa --source "$WORK/squish_demo.cpp" > "$WORK/squish_demo.log" 2>&1; then
+    bad "squish demo" "$(tail -20 "$WORK/squish_demo.log")"
+elif ! grep -q __nexa_gfx3d_ellipsoid "$WORK/squish_demo.cpp"; then
+    bad "squish demo" "the demo does not draw a flattened sphere"
+else
+    ok "squish demo transpiles"
 fi
 
 if [ "$FAIL" -eq 0 ]; then

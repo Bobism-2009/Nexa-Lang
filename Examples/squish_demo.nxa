@@ -1,0 +1,110 @@
+// Squishy physics. Balls sink into the floor and into each other, then
+// spring back. gfx3d.ellipsoid draws how flat physics.squash says they are.
+//
+//   build: NexaC Examples/squish_demo.nxa -o squish_demo
+//   drive: arrows orbit, W/S raise and lower, wheel zooms, space stops the
+//          camera drifting, click or F drops a ball, C clears, escape quits
+#include <std/gfx3d>
+#include <std/physics>
+#include <std/io>
+#include <std/math>
+
+fn main() {
+    if (gfx3d.open("Nexa squish", 900, 620) != 1) {
+        io.println("no 3D window: this platform has no backend yet");
+        return;
+    }
+    gfx3d.perspective(55.0, 0.1, 200.0);
+    gfx3d.maxfps(60);
+    gfx3d.light(-0.35, 0.9, 0.3);
+    gfx3d.ambient(70);
+    physics.squishy(0.9);
+
+    let floor = physics.box(0.0, -0.5, 0.0, 24.0, 1.0, 24.0);
+    physics.mass(floor, 0);
+
+    let balls: []int;
+    let n = 0;
+    while (n < 7) {
+        let x = -3.6 + n * 1.2;
+        let id = physics.sphere(x, 5.0 + n * 0.45, 0.2, 0.5);
+        balls.push(id);
+        n = n + 1;
+    }
+
+    let angle = 0.6;
+    let height = 6.5;
+    let dist = 15.0;
+    let spinning = 1;
+    let wasDown = 0;
+
+    while (gfx3d.closed() != 1) {
+        gfx3d.poll();
+
+        if (gfx3d.key("left"))  { angle = angle - 0.02; spinning = 0; }
+        if (gfx3d.key("right")) { angle = angle + 0.02; spinning = 0; }
+        if (gfx3d.key("w"))     { height = height + 0.1; }
+        if (gfx3d.key("s"))     { height = height - 0.1; }
+        dist = dist - gfx3d.wheel() * 0.8;
+        if (dist < 6.0) { dist = 6.0; }
+        if (dist > 40.0) { dist = 40.0; }
+        if (gfx3d.pressed("space")) { spinning = 1 - spinning; }
+        if (gfx3d.pressed("escape")) { gfx3d.close(); }
+        if (spinning == 1) { angle = angle + 0.004; }
+
+        let ex = math.sin(angle) * dist;
+        let ey = height;
+        let ez = math.cos(angle) * dist;
+
+        physics.step(0.016);
+
+        let best = -1.0;
+        let hx = 0.0;
+        let hy = 0.0;
+        let hz = 0.0;
+        let dx = 0.0 - ex;
+        let dy = 1.0 - ey;
+        let dz = 0.0 - ez;
+        let t = physics.ray_box(ex, ey, ez, dx, dy, dz, 0.0, -0.5, 0.0, 24.0, 1.0, 24.0);
+        if (t >= 0.0) { best = t; hx = physics.hx(); hy = physics.hy(); hz = physics.hz(); }
+
+        let down = gfx3d.mouse("left");
+        let drop = 0;
+        if (down == 1 && wasDown == 0) { drop = 1; }
+        wasDown = down;
+        if (gfx3d.pressed("f")) { drop = 1; }
+        if (drop == 1 && best >= 0.0) {
+            if (len(balls) > 28) {
+                physics.remove(balls[0]);
+                balls.remove(0);
+            }
+            let id = physics.sphere(hx, hy + 3.0, hz, 0.5);
+            balls.push(id);
+        }
+        if (gfx3d.pressed("c")) {
+            for (id in balls) { physics.remove(id); }
+            balls.clear();
+        }
+
+        gfx3d.camera(ex, ey, ez, 0.0, 1.0, 0.0);
+        gfx3d.clear(18, 14, 22);
+        gfx3d.box(0.0, -0.5, 0.0, 24.0, 1.0, 24.0, 46, 40, 52);
+
+        for (i, len(balls)) {
+            let id = balls[i];
+            let r = 230;
+            let g = 120;
+            let b = 150;
+            if (i % 3 == 1) { r = 120; g = 190; b = 220; }
+            if (i % 3 == 2) { r = 240; g = 190; b = 90; }
+            gfx3d.ellipsoid(physics.x(id), physics.y(id), physics.z(id),
+                            physics.snx(id), physics.sny(id), physics.snz(id),
+                            0.5, physics.squash(id), r, g, b);
+        }
+        if (best >= 0.0) { gfx3d.sphere(hx, hy, hz, 0.1, 245, 245, 245); }
+
+        gfx3d.present();
+    }
+
+    gfx3d.close();
+}

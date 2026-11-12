@@ -42,6 +42,8 @@ MODULE INCLUDES (angle brackets)
                             physics.sphere/box/capsule, physics.step, gravity.
                             physics.mesh / physics.ray_mesh use a gfx3d.model
                             as a triangle collider, at the same scale as draw.
+                            physics.squishy(amount) lets bodies sink and spring
+                            back; physics.squash reads how flat one is.
                             Bodies translate and do not rotate. A program that
                             never calls physics carries none of it.
   #include <std/ui>       - Widgets, themes and styles on the gfx window (includes std/gfx):
