@@ -32,7 +32,7 @@ struct AstNode {
                       DllLoad, DllCall,
                       FileRead, FileWrite, FileAppend, FileExists, FileMkdir, FileCall,
                       RandomInt, RandomSeed, RandomCall,
-                      MathCall, CryptoCall, HttpCall, TcpCall, UdpCall, GfxCall, Gfx3dCall, UiCall, JsonCall, TermCall,
+                      MathCall, PhysicsCall, CryptoCall, HttpCall, TcpCall, UdpCall, GfxCall, Gfx3dCall, UiCall, JsonCall, TermCall,
                       ResultMake,
                       StrMethod,
                       TimeSleep, TimeSeconds, TimeMilliseconds, TimeNowMs, TimeCall,
@@ -1012,7 +1012,7 @@ private:
         static const std::vector<std::string> mods = {
             "std/io", "std/os", "std/file", "std/dll", "std/random", "std/math",
             "std/crypto", "std/network", "std/json", "std/time", "std/thread",
-            "std/gfx", "std/gfx3d", "std/ui", "std/inline", "std/term",
+            "std/gfx", "std/gfx3d", "std/physics", "std/ui", "std/inline", "std/term",
         };
         return mods;
     }
@@ -3049,6 +3049,10 @@ private:
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
             return applyIndexAndDotPostfix(parseMathCall());
         }
+        if (peek().type == TokenType::Identifier && peek().value == "physics" && pos_ + 2 < tokens_.size() &&
+            tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
+            return applyIndexAndDotPostfix(parsePhysicsCall());
+        }
         if (peek().type == TokenType::Identifier && peek().value == "term" && pos_ + 2 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::Dot && tokens_[pos_ + 2].type == TokenType::Identifier) {
             return applyIndexAndDotPostfix(parseTermCall());
@@ -4429,6 +4433,59 @@ private:
         }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' after math." + method + " arguments at line " + std::to_string(peek().line));
+        }
+        return node;
+    }
+
+    AstNode parsePhysicsCall() {
+        size_t line = peek().line;
+        if (!modules_.hasPhysics()) {
+            throw std::runtime_error("physics.* requires #include <std/physics> at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Identifier) || tokens_[pos_ - 1].value != "physics") {
+            throw std::runtime_error("Expected 'physics' at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Dot)) {
+            throw std::runtime_error("Expected '.' at line " + std::to_string(peek().line));
+        }
+        const Token& methodTok = peek();
+        if (methodTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected physics function name at line " + std::to_string(methodTok.line));
+        }
+        std::string method = methodTok.value;
+        advance();
+        struct Spec { const char* name; int argc; };
+        static const Spec specs[] = {
+            {"overlap_spheres", 8}, {"overlap_boxes", 12}, {"overlap_sphere_box", 10},
+            {"overlap_sphere_capsule", 11},
+            {"ray_sphere", 10}, {"ray_box", 12}, {"ray_capsule", 13},
+            {"hx", 0}, {"hy", 0}, {"hz", 0}, {"nx", 0}, {"ny", 0}, {"nz", 0},
+            {"sphere", 4}, {"box", 6}, {"capsule", 7},
+            {"mass", 2}, {"bounce", 2}, {"velocity", 4}, {"set", 4}, {"remove", 1},
+            {"gravity", 3}, {"step", 1},
+            {"x", 1}, {"y", 1}, {"z", 1}, {"vx", 1}, {"vy", 1}, {"vz", 1},
+            {"x1", 1}, {"y1", 1}, {"z1", 1}, {"x2", 1}, {"y2", 1}, {"z2", 1},
+        };
+        const Spec* spec = nullptr;
+        for (const Spec& s : specs) {
+            if (method == s.name) { spec = &s; break; }
+        }
+        if (!spec) {
+            throw std::runtime_error("Unknown physics function 'physics." + method +
+                "' at line " + std::to_string(methodTok.line));
+        }
+        AstNode node{AstNode::Type::PhysicsCall, method, {}};
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after physics." + method + " at line " + std::to_string(peek().line));
+        }
+        for (int i = 0; i < spec->argc; i++) {
+            if (i > 0 && !match(TokenType::Comma)) {
+                throw std::runtime_error("Expected ',' in physics." + method + " at line " + std::to_string(peek().line));
+            }
+            node.children.push_back(parseValueExpr());
+        }
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' after physics." + method + " at line " + std::to_string(peek().line));
         }
         return node;
     }

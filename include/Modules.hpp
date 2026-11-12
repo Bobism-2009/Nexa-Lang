@@ -10,6 +10,7 @@
 #include "GfxRuntime.hpp"
 #include "UiRuntime.hpp"
 #include "Gfx3dRuntime.hpp"
+#include "PhysicsRuntime.hpp"
 #include "JsonRuntime.hpp"
 #include "PlatformEmit.hpp"
 #include "ResultRuntime.hpp"
@@ -89,6 +90,10 @@ public:
         bool randomIndex = false;    // random.choice
         bool randomShuffle = false;
         bool math = false;
+        // std/physics. Queries are the overlap and ray tests. Bodies are the
+        // world: a program that only asks "does this hit" carries no solver.
+        bool physicsQuery = false;
+        bool physicsBody = false;
         bool crypto = false;
         bool cryptoHex = false;
         bool cryptoXor = false;
@@ -273,6 +278,10 @@ public:
 
     bool hasMath() const {
         return enabled_.count("std/math") > 0;
+    }
+
+    bool hasPhysics() const {
+        return enabled_.count("std/physics") > 0;
     }
 
     bool hasCrypto() const {
@@ -2033,6 +2042,9 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
             out += "#include <cstdlib>\n";
             out += "#include <algorithm>\n";
         }
+        if (hasPhysics() && (usage.physicsQuery || usage.physicsBody)) {
+            out += physicsRuntimeCpp(usage.physicsQuery, usage.physicsBody);
+        }
         if (hasCrypto() && usage.crypto) {
             CryptoEmit need;
             need.hex = usage.cryptoHex;
@@ -2633,6 +2645,7 @@ static __nexa_mutex_t* __nexa_mutex_at(int id) {
         all.osTempDir = all.osArch = all.osCpuCount = all.osWhich = all.osCwd = all.osInfo = true;
         all.osExit = all.osHostname = all.osUsername = all.osHome = all.osSetenv = true;
         all.file = all.fileIo = all.fileWrite = all.fileRead = all.fileFs = all.random = all.math = all.time = all.timeSleep = all.timeChrono = all.timeWall = all.timeCalendar = all.timeFormat = all.thread = all.dll = true;
+        all.physicsQuery = all.physicsBody = true;
         all.str = true;
         return getCppIncludes(all);
     }

@@ -711,6 +711,38 @@ same picture, shaders underneath. Nothing to install for any of them.
 Colours are 0..255. The draws hand nothing back and are statements only, so
 `let C = gfx3d.cube(...);` is an error naming the call -- as in std/gfx.)HELP" },
 
+{ "std/physics", "physics collision raycast rigid body gravity sphere box capsule", Group::Module,
+  "overlap tests, rays, and a small rigid world for gfx3d's shapes",
+  R"HELP(std/physics - collision and a small rigid world
+  #include <std/physics>
+  Full reference: SYNTAX/Modules.txt (std/physics)
+
+Overlap and ray tests, plus bodies you can step. Nothing is linked. A program
+that never calls physics carries none of it; one that only tests hits carries
+no solver. Up to 256 bodies. They translate and do not rotate. A box is
+axis-aligned, with the full w, h, d gfx3d.box takes. Gravity starts at
+(0, -9.81, 0). physics.mass(id, 0) is static. A ray returns the distance
+along its direction, or -1, and leaves the hit in hx/hy/hz and nx/ny/nz.
+
+  query   physics.overlap_spheres(...)  physics.overlap_boxes(...)
+          physics.overlap_sphere_box(...)  physics.overlap_sphere_capsule(...)
+          physics.ray_sphere(...)  physics.ray_box(...)  physics.ray_capsule(...)
+          physics.hx() physics.hy() physics.hz()
+          physics.nx() physics.ny() physics.nz()
+  body    physics.sphere(...)  physics.box(...)  physics.capsule(...)
+          physics.mass(id, m)  physics.bounce(id, e)  physics.velocity(id, vx, vy, vz)
+          physics.set(id, x, y, z)  physics.remove(id)  physics.gravity(x, y, z)
+          physics.step(dt)
+          physics.x(id) physics.y(id) physics.z(id)
+          physics.vx(id) physics.vy(id) physics.vz(id)
+          physics.x1(id) physics.y1(id) physics.z1(id)
+          physics.x2(id) physics.y2(id) physics.z2(id)
+
+  let ground = physics.box(0, 0, 0, 10, 1, 10);
+  physics.mass(ground, 0);
+  let ball = physics.sphere(0, 5, 0, 0.5);
+  physics.step(0.016);)HELP" },
+
 { "std/ui", "ui gui widget widgets button checkbox slider textbox dropdown menu theme themes style styles fluent windows tabs list table menu menubar dialog modal tooltip dark light panel form settings font", Group::Module,
   "widgets, themes and styles: buttons, text boxes, sliders, dropdowns, smooth text",
   R"HELP(std/ui - widgets, themes and styles on the gfx window

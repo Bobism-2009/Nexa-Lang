@@ -410,6 +410,17 @@ public:
                     if (n.value == "shuffle") cppUsage.randomShuffle = true;
                     break;
                 case AstNode::Type::MathCall: cppUsage.math = true; break;
+                case AstNode::Type::PhysicsCall: {
+                    const std::string& m = n.value;
+                    const bool world = m == "sphere" || m == "box" || m == "capsule" || m == "mass" ||
+                        m == "bounce" || m == "velocity" || m == "set" || m == "remove" ||
+                        m == "gravity" || m == "step" || m == "x" || m == "y" || m == "z" ||
+                        m == "vx" || m == "vy" || m == "vz" || m == "x1" || m == "y1" || m == "z1" ||
+                        m == "x2" || m == "y2" || m == "z2";
+                    if (world) cppUsage.physicsBody = true;
+                    else cppUsage.physicsQuery = true;
+                    break;
+                }
                 case AstNode::Type::TermCall: {
                     const std::string& m = n.value;
                     if (m == "color" || m == "bg" || m == "bold" || m == "dim" || m == "italic" ||
@@ -3057,6 +3068,15 @@ private:
                 // math.* operates in the floating-point domain and always yields float (double).
                 // For an integer result, assign to an int (e.g. let n: int = math.floor(x);).
                 return "float";
+            case AstNode::Type::PhysicsCall:
+                if (e.value == "ray_sphere" || e.value == "ray_box" || e.value == "ray_capsule" ||
+                    e.value == "hx" || e.value == "hy" || e.value == "hz" ||
+                    e.value == "nx" || e.value == "ny" || e.value == "nz" ||
+                    e.value == "x" || e.value == "y" || e.value == "z" ||
+                    e.value == "vx" || e.value == "vy" || e.value == "vz" ||
+                    e.value == "x1" || e.value == "y1" || e.value == "z1" ||
+                    e.value == "x2" || e.value == "y2" || e.value == "z2") return "float";
+                return "int";
             case AstNode::Type::CryptoCall:
                 return "string";
             case AstNode::Type::TermCall:
@@ -4726,6 +4746,49 @@ private:
         return rows;
     }
 
+    // std/physics. Every number is a double on the way in; a body id is an int.
+    static const BuiltinArgRow* physicsArgRows() {
+        static const BuiltinArgRow rows[] = {
+            {"overlap_spheres", "physics.overlap_spheres(x1, y1, z1, r1, x2, y2, z2, r2)", "nnnnnnnn"},
+            {"overlap_boxes", "physics.overlap_boxes(x1, y1, z1, w1, h1, d1, x2, y2, z2, w2, h2, d2)", "nnnnnnnnnnnn"},
+            {"overlap_sphere_box", "physics.overlap_sphere_box(sx, sy, sz, r, x, y, z, w, h, d)", "nnnnnnnnnn"},
+            {"overlap_sphere_capsule", "physics.overlap_sphere_capsule(sx, sy, sz, r, x1, y1, z1, x2, y2, z2, cr)", "nnnnnnnnnnn"},
+            {"ray_sphere", "physics.ray_sphere(ox, oy, oz, dx, dy, dz, cx, cy, cz, r)", "nnnnnnnnnn"},
+            {"ray_box", "physics.ray_box(ox, oy, oz, dx, dy, dz, cx, cy, cz, w, h, d)", "nnnnnnnnnnnn"},
+            {"ray_capsule", "physics.ray_capsule(ox, oy, oz, dx, dy, dz, x1, y1, z1, x2, y2, z2, r)", "nnnnnnnnnnnnn"},
+            {"hx", "physics.hx()", ""},
+            {"hy", "physics.hy()", ""},
+            {"hz", "physics.hz()", ""},
+            {"nx", "physics.nx()", ""},
+            {"ny", "physics.ny()", ""},
+            {"nz", "physics.nz()", ""},
+            {"sphere", "physics.sphere(x, y, z, radius)", "nnnn"},
+            {"box", "physics.box(x, y, z, w, h, d)", "nnnnnn"},
+            {"capsule", "physics.capsule(x1, y1, z1, x2, y2, z2, radius)", "nnnnnnn"},
+            {"mass", "physics.mass(id, mass)", "nn"},
+            {"bounce", "physics.bounce(id, restitution)", "nn"},
+            {"velocity", "physics.velocity(id, vx, vy, vz)", "nnnn"},
+            {"set", "physics.set(id, x, y, z)", "nnnn"},
+            {"remove", "physics.remove(id)", "n"},
+            {"gravity", "physics.gravity(x, y, z)", "nnn"},
+            {"step", "physics.step(dt)", "n"},
+            {"x", "physics.x(id)", "n"},
+            {"y", "physics.y(id)", "n"},
+            {"z", "physics.z(id)", "n"},
+            {"vx", "physics.vx(id)", "n"},
+            {"vy", "physics.vy(id)", "n"},
+            {"vz", "physics.vz(id)", "n"},
+            {"x1", "physics.x1(id)", "n"},
+            {"y1", "physics.y1(id)", "n"},
+            {"z1", "physics.z1(id)", "n"},
+            {"x2", "physics.x2(id)", "n"},
+            {"y2", "physics.y2(id)", "n"},
+            {"z2", "physics.z2(id)", "n"},
+            {"", nullptr, nullptr},
+        };
+        return rows;
+    }
+
     // std/term.
     static const BuiltinArgRow* termArgRows() {
         static const BuiltinArgRow rows[] = {
@@ -5093,6 +5156,9 @@ private:
                 break;
             case AstNode::Type::MathCall:
                 semCheckBuiltinArgRow(e, findBuiltinArgRow(mathArgRows(), e.value, e.children.size()));
+                break;
+            case AstNode::Type::PhysicsCall:
+                semCheckBuiltinArgRow(e, findBuiltinArgRow(physicsArgRows(), e.value, e.children.size()));
                 break;
             case AstNode::Type::RandomCall:
                 if (e.value == "float" || e.value == "chance") {
@@ -6165,6 +6231,13 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         if (e.type == AstNode::Type::ExprFloatLiteral) return true;
         if (e.type == AstNode::Type::TimeNowMs) return true;
         if (e.type == AstNode::Type::MathCall) return true;
+        if (e.type == AstNode::Type::PhysicsCall) {
+            const std::string& m = e.value;
+            return m == "ray_sphere" || m == "ray_box" || m == "ray_capsule" ||
+                   m == "hx" || m == "hy" || m == "hz" || m == "nx" || m == "ny" || m == "nz" ||
+                   m == "x" || m == "y" || m == "z" || m == "vx" || m == "vy" || m == "vz" ||
+                   m == "x1" || m == "y1" || m == "z1" || m == "x2" || m == "y2" || m == "z2";
+        }
         if (e.type == AstNode::Type::RandomCall) return e.value == "float";
         if (e.type == AstNode::Type::GfxCall) return e.value == "pad_axis";
         if (e.type == AstNode::Type::Gfx3dCall) return e.value == "pad_axis";
@@ -6894,6 +6967,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             } else if (child.type == AstNode::Type::GfxCall || child.type == AstNode::Type::UiCall) {
                 out << indent << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::Gfx3dCall) {
+                out << indent << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
+            } else if (child.type == AstNode::Type::PhysicsCall) {
                 out << indent << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::JsonCall) {
                 out << indent << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
@@ -8520,6 +8595,58 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 // sqrt, floor, ceil, round, trunc, sin, cos, tan, asin, acos, atan, sinh, cosh, tanh,
                 // log, log2, log10, exp, cbrt
                 return "std::" + fn + "(" + da0 + ")";
+            }
+            case AstNode::Type::PhysicsCall: {
+                const std::string& fn = e.value;
+                auto num = [&](size_t i) {
+                    return "static_cast<double>(" + emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
+                };
+                auto id = [&](size_t i) {
+                    return "(int)(" + emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
+                };
+                if (fn == "overlap_spheres")
+                    return "__nexa_phys_overlap_spheres(" + num(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ", " + num(4) + ", " + num(5) + ", " + num(6) + ", " + num(7) + ")";
+                if (fn == "overlap_boxes")
+                    return "__nexa_phys_overlap_boxes(" + num(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ", " + num(4) + ", " + num(5) + ", " + num(6) + ", " + num(7) + ", " + num(8) + ", " + num(9) + ", " + num(10) + ", " + num(11) + ")";
+                if (fn == "overlap_sphere_box")
+                    return "__nexa_phys_overlap_sphere_box(" + num(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ", " + num(4) + ", " + num(5) + ", " + num(6) + ", " + num(7) + ", " + num(8) + ", " + num(9) + ")";
+                if (fn == "overlap_sphere_capsule")
+                    return "__nexa_phys_overlap_sphere_capsule(" + num(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ", " + num(4) + ", " + num(5) + ", " + num(6) + ", " + num(7) + ", " + num(8) + ", " + num(9) + ", " + num(10) + ")";
+                if (fn == "ray_sphere")
+                    return "__nexa_phys_ray_sphere(" + num(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ", " + num(4) + ", " + num(5) + ", " + num(6) + ", " + num(7) + ", " + num(8) + ", " + num(9) + ")";
+                if (fn == "ray_box")
+                    return "__nexa_phys_ray_box(" + num(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ", " + num(4) + ", " + num(5) + ", " + num(6) + ", " + num(7) + ", " + num(8) + ", " + num(9) + ", " + num(10) + ", " + num(11) + ")";
+                if (fn == "ray_capsule")
+                    return "__nexa_phys_ray_capsule(" + num(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ", " + num(4) + ", " + num(5) + ", " + num(6) + ", " + num(7) + ", " + num(8) + ", " + num(9) + ", " + num(10) + ", " + num(11) + ", " + num(12) + ")";
+                if (fn == "hx") return "__nexa_phys_hitx()";
+                if (fn == "hy") return "__nexa_phys_hity()";
+                if (fn == "hz") return "__nexa_phys_hitz()";
+                if (fn == "nx") return "__nexa_phys_hitnx()";
+                if (fn == "ny") return "__nexa_phys_hitny()";
+                if (fn == "nz") return "__nexa_phys_hitnz()";
+                if (fn == "sphere") return "__nexa_phys_sphere(" + num(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ")";
+                if (fn == "box") return "__nexa_phys_box(" + num(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ", " + num(4) + ", " + num(5) + ")";
+                if (fn == "capsule") return "__nexa_phys_capsule(" + num(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ", " + num(4) + ", " + num(5) + ", " + num(6) + ")";
+                if (fn == "mass") return "__nexa_phys_mass(" + id(0) + ", " + num(1) + ")";
+                if (fn == "bounce") return "__nexa_phys_bounce(" + id(0) + ", " + num(1) + ")";
+                if (fn == "velocity") return "__nexa_phys_velocity(" + id(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ")";
+                if (fn == "set") return "__nexa_phys_set(" + id(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ")";
+                if (fn == "remove") return "__nexa_phys_remove(" + id(0) + ")";
+                if (fn == "gravity") return "__nexa_phys_gravity(" + num(0) + ", " + num(1) + ", " + num(2) + ")";
+                if (fn == "step") return "__nexa_phys_step(" + num(0) + ")";
+                int which = 0;
+                if (fn == "y") which = 1;
+                else if (fn == "z") which = 2;
+                else if (fn == "vx") which = 3;
+                else if (fn == "vy") which = 4;
+                else if (fn == "vz") which = 5;
+                else if (fn == "x1") which = 6;
+                else if (fn == "y1") which = 7;
+                else if (fn == "z1") which = 8;
+                else if (fn == "x2") which = 9;
+                else if (fn == "y2") which = 10;
+                else if (fn == "z2") which = 11;
+                return "__nexa_phys_coord(" + id(0) + ", " + std::to_string(which) + ")";
             }
             case AstNode::Type::CryptoCall: {
                 const std::string& fn = e.value;

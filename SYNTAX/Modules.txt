@@ -1748,6 +1748,52 @@ ARGUMENT TYPES
            gfx3d.close();
        }
 
+#include <std/physics>
+  Collision tests and a small rigid world for the shapes std/gfx3d draws.
+  Nothing is linked. A program that never calls physics carries none of it.
+  One that only tests overlaps and rays carries no solver. Up to 256 bodies.
+  Boxes stay axis-aligned and capsules keep their shape: bodies translate,
+  they do not rotate. Positions are the centres gfx3d draws from, and a box's
+  w, h, d are the full sizes gfx3d.box takes. A capsule is the same segment
+  and radius as gfx3d.capsule. Gravity starts at (0, -9.81, 0).
+  physics.overlap_spheres(x1, y1, z1, r1, x2, y2, z2, r2) - 1 if they meet
+  physics.overlap_boxes(x1, y1, z1, w1, h1, d1, x2, y2, z2, w2, h2, d2)
+  physics.overlap_sphere_box(sx, sy, sz, r, x, y, z, w, h, d)
+  physics.overlap_sphere_capsule(sx, sy, sz, r, x1, y1, z1, x2, y2, z2, cr)
+                                 - 1/0. The last ray writes the hit; an overlap
+                                   does not.
+  physics.ray_sphere(ox, oy, oz, dx, dy, dz, cx, cy, cz, r)
+  physics.ray_box(ox, oy, oz, dx, dy, dz, cx, cy, cz, w, h, d)
+  physics.ray_capsule(ox, oy, oz, dx, dy, dz, x1, y1, z1, x2, y2, z2, r)
+                                 - distance along the direction, or -1 on a miss.
+                                   The direction does not have to be unit length.
+                                   A hit is origin + t * direction.
+  physics.hx() physics.hy() physics.hz()
+  physics.nx() physics.ny() physics.nz()
+                                 - the last ray's point and its normal. A miss
+                                   clears them to 0.
+  physics.sphere(x, y, z, radius)          - a dynamic body; id, or 0 if the
+  physics.box(x, y, z, w, h, d)              world is full (256)
+  physics.capsule(x1, y1, z1, x2, y2, z2, radius)
+  physics.mass(id, m)            - 0 makes the body static. Default mass is 1.
+  physics.bounce(id, e)          - 0 to 1. Default 0, so a landing body rests.
+  physics.velocity(id, vx, vy, vz)
+  physics.set(id, x, y, z)       - move it, keeping its velocity
+  physics.remove(id)
+  physics.gravity(x, y, z)
+  physics.step(dt)               - seconds. A step longer than 0.05 is clamped,
+                                   so one hitch cannot fall through a floor.
+  physics.x(id) physics.y(id) physics.z(id)
+  physics.vx(id) physics.vy(id) physics.vz(id)
+  physics.x1(id) ... physics.z2(id)
+                                 - a capsule's two endpoints in world space.
+                                   On a sphere or a box both ends are the centre.
+  Use: let ground = physics.box(0, 0, 0, 10, 1, 10);
+       physics.mass(ground, 0);
+       let ball = physics.sphere(0, 5, 0, 0.5);
+       physics.step(0.016);
+       gfx3d.sphere(physics.x(ball), physics.y(ball), physics.z(ball), 0.5, 220, 90, 70);
+
 #include <std/ui>
   Buttons, text boxes, checkboxes, sliders, dropdowns and panels, drawn in a
   theme and a style (std/ui's own, or Windows 11's), with smooth text -- for

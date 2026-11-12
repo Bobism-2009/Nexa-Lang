@@ -37,6 +37,11 @@ MODULE INCLUDES (angle brackets)
                             renderer: gfx3d.renderer/backend
                             OpenGL 1.1 by default on Windows, macOS and Linux.
                             Windows can open Vulkan 1.4 instead. --wasm is WebGL.
+  #include <std/physics> - Collision and a small rigid world for gfx3d's shapes:
+                            overlap and rays for spheres, boxes and capsules;
+                            physics.sphere/box/capsule, physics.step, gravity.
+                            Bodies translate and do not rotate. A program that
+                            never calls physics carries none of it.
   #include <std/ui>       - Widgets, themes and styles on the gfx window (includes std/gfx):
                             ui.open/background/theme/style/accent, ui.text/heading/caption,
                             ui.panel, ui.button/checkbox/toggle/radio/slider/progress,
