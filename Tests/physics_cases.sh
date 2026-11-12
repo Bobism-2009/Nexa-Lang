@@ -77,7 +77,40 @@ fn main() {
         i = i + 1;
     }
     let y = physics.y(ball);
-    if (y < 0.9 || y > 1.15) { io.println("fail rest"); io.println(y); return 1; }
+    if (y < 0.98 || y > 1.04) { io.println("fail rest"); io.println(y); return 1; }
+
+    // Three spheres, one above another, rest a diameter apart.
+    let a = physics.sphere(2, 2.0, 0, 0.5);
+    let b = physics.sphere(2, 3.2, 0, 0.5);
+    let c = physics.sphere(2, 4.4, 0, 0.5);
+    i = 0;
+    while (i < 400) { physics.step(0.016); i = i + 1; }
+    let ya = physics.y(a);
+    let yb = physics.y(b);
+    let yc = physics.y(c);
+    if (ya < 0.98 || ya > 1.06) { io.println("fail stack a"); io.println(ya); return 1; }
+    if (yb < 1.90 || yb > 2.12) { io.println("fail stack b"); io.println(yb); return 1; }
+    if (yc < 2.80 || yc > 3.18) { io.println("fail stack c"); io.println(yc); return 1; }
+
+    // Horizontal speed on the floor dies under friction, and the ball stays put.
+    let slide = physics.sphere(0, 1, 4, 0.5);
+    physics.velocity(slide, 4, 0, 0);
+    i = 0;
+    while (i < 200) { physics.step(0.016); i = i + 1; }
+    let sv = physics.vx(slide);
+    let sy = physics.y(slide);
+    if (sv > 0.08 || sv < -0.08) { io.println("fail slide"); io.println(sv); return 1; }
+    if (sy < 0.98 || sy > 1.06) { io.println("fail slide y"); io.println(sy); return 1; }
+
+    // A long step from high up used to jump a thin floor. The centre stays on it.
+    let thin = physics.box(0, 0, 8, 8, 0.1, 8);
+    physics.mass(thin, 0);
+    let drop = physics.sphere(0, 25, 8, 0.25);
+    i = 0;
+    while (i < 80) { physics.step(0.05); i = i + 1; }
+    let dy = physics.y(drop);
+    if (dy < 0.22 || dy > 0.45) { io.println("fail tunnel"); io.println(dy); return 1; }
+
     io.println("ok");
     return 0;
 }
@@ -87,7 +120,7 @@ if ! "$NEXAC" "$WORK/use.nxa" -o "$WORK/use$EXE" > "$WORK/use.log" 2>&1; then
 else
     out=$("$WORK/use$EXE" 2>&1 | tr -d '\r')
     if [ "$out" = "ok" ]; then
-        ok "overlaps, rays, and a sphere resting on a box"
+        ok "overlaps, rays, rest, stack, friction, and no tunnel"
     else
         bad "run" "got [$out]"
     fi
