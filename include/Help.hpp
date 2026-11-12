@@ -642,6 +642,8 @@ no array of pixels to read back.
             gfx3d.mirror(x, y, z, nx, ny, nz, w, h)
                                               the glass; draw the world, that is the reflection
             gfx3d.mirror()                    keep that picture and put the camera back
+            gfx3d.shadow()                    the light's picture, then the camera's;
+                                              what the light missed is drawn darker
   place     gfx3d.translate(x, y, z)   moves what is drawn next
             gfx3d.rotate(rx, ry, rz)   degrees, right-hand rule, X then Y then Z
             gfx3d.scale(s)             uniform
@@ -697,8 +699,10 @@ OpenGL and backend() says which. Depth test and back-face culling are
 on from the start, though a lone gfx3d.tri is drawn from both sides. A cube's
 flat sides take the direction of the face and stay sharp-edged; curved ones
 take the direction the surface really points and come out smooth. One
-directional light, in world space, with no shadows: nothing here knows that
-one shape is between another and the light.
+directional light, in world space. gfx3d.shadow() is that light's shadow:
+the first call draws what casts, the second draws the room, and what the
+light could not see comes out darker. Without the call, brightness comes
+only from the way a surface faces.
 
 Models are Wavefront .obj, read here rather than linked: v, vn and f, with
 everything else skipped. A model is centred and divided by its longest side as

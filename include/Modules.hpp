@@ -238,6 +238,9 @@ public:
         // gfx3d.mirror. A planar reflection: the world drawn once from the
         // reflected camera, then shown on the glass. Off unless asked for.
         bool gfx3dMirror = false;
+        // gfx3d.shadow. A depth picture from the one light, sampled while the
+        // camera draws. A program that never calls it carries none of it.
+        bool gfx3dShadow = false;
         // gfx3d.ellipsoid. A squashed sphere, outside the main renderer so a
         // program that only draws round spheres does not carry it.
         bool gfx3dEllipsoid = false;
@@ -2244,7 +2247,7 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
             // reads the pads, gfx.poll takes the snapshot and a second one taken
             // by gfx3d.poll in the same frame would leave pad_pressed with
             // nothing between the two samples to report.
-            out += gfx3dRuntimeCpp(usage.gfx3dPad, usage.gfx3dShader, usage.gfx3dAa, usage.gfx3dFog, usage.gfx3dMirror);
+            out += gfx3dRuntimeCpp(usage.gfx3dPad, usage.gfx3dShader, usage.gfx3dAa, usage.gfx3dFog, usage.gfx3dMirror, usage.gfx3dShadow);
             if (usage.gfx3dEllipsoid) out += gfx3dEllipsoidCpp();
             // After the runtime, not before: the model block draws through
             // __nexa_g3_vert_n and the vertex batch, which are defined up there.

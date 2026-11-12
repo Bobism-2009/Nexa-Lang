@@ -5352,6 +5352,7 @@ private:
         else if (method == "light") { argc = 3; argcMax = 6; }
         else if (method == "fog") { argc = 0; argcMax = 5; }
         else if (method == "mirror") { argc = 0; argcMax = 8; }
+        else if (method == "shadow") argc = 0;
         // Sound. The same names and the same arities as std/gfx, down to which
         // argument may be left off, because it is the same mixer underneath --
         // see soundStackCpp in GfxRuntime.hpp. A program that knows gfx.play
@@ -5403,7 +5404,7 @@ private:
                 "' at line " + std::to_string(methodTok.line) +
                 " (use open, close, poll, closed, present, width, height, clear, camera,"
                 " perspective, tri, cube, box, sphere, capsule, cylinder, cone,"
-                " line3, grid, translate, rotate, scale, reset, light, ambient, fog, mirror,"
+                " line3, grid, translate, rotate, scale, reset, light, ambient, fog, mirror, shadow,"
                 " maxfps, vsync, renderer, antialias, backend, key, pressed,"
                 " released, typed, wheel, wheel_x, mouse, mouse_x, mouse_y,"
                 " pads, pad, pad_pressed, pad_axis, rumble,"
@@ -5439,6 +5440,8 @@ private:
             // The glass, or the call that keeps the picture. Anything in
             // between is a half-written mirror.
             arityOk = (got == 0 || got == 8);
+        } else if (method == "shadow") {
+            arityOk = (got == 0);
         } else if (argcMax >= 0) {
             arityOk = (got >= argc && got <= argcMax);
         } else {
@@ -5469,6 +5472,7 @@ private:
             else if (method == "light") sig = "gfx3d.light(x, y, z) or gfx3d.light(x, y, z, r, g, b)";
             else if (method == "fog") sig = "gfx3d.fog(r, g, b, start, end) or gfx3d.fog()";
             else if (method == "mirror") sig = "gfx3d.mirror(x, y, z, nx, ny, nz, w, h) or gfx3d.mirror()";
+            else if (method == "shadow") sig = "gfx3d.shadow()";
             else if (method == "tri") sig = "gfx3d.tri(x1, y1, z1, x2, y2, z2, x3, y3, z3, r, g, b)";
             else if (method == "maxfps") sig = "gfx3d.maxfps(fps)";
             else if (method == "vsync") sig = "gfx3d.vsync() or gfx3d.vsync(on)";

@@ -1,0 +1,67 @@
+// std/gfx3d shadow: the one light's picture of the room.
+//
+//   build: NexaC Examples/shadow_demo.nxa -o shadow_demo
+//   drive: arrows orbit, W/S raise and lower, wheel zooms, escape quits
+//
+// Drawn twice. The first drawing is what the light sees, and it is only the
+// shapes that cast. gfx3d.shadow() keeps that picture. The second drawing is
+// the room, and anything the light could not see is darker. The floor and
+// the grid are receivers: they are not in the light's picture, so they do
+// not stripe it.
+#include <std/gfx3d>
+#include <std/io>
+#include <std/math>
+
+fn casters(bob: float): int {
+    gfx3d.sphere(-0.85, 0.75 + bob, 0.15, 0.75, 210, 140, 60);
+    gfx3d.cube(1.15, 0.55, 0.7, 1.1, 70, 130, 190);
+    gfx3d.box(-1.85, 0.85, -0.35, 0.5, 1.7, 0.5, 180, 80, 80);
+    return 0;
+}
+
+fn main() {
+    if (gfx3d.open("Nexa shadow", 900, 620) != 1) {
+        io.println("no 3D window: this platform has no backend yet");
+        return;
+    }
+    gfx3d.perspective(55.0, 0.1, 80.0);
+    gfx3d.maxfps(60);
+    gfx3d.light(-0.45, 0.82, 0.35);
+    gfx3d.ambient(70);
+    io.println("arrows orbit, W/S height, wheel zoom, escape quits");
+
+    let angle = 0.55;
+    let height = 3.2;
+    let dist = 8.0;
+    let t = 0.0;
+
+    while (gfx3d.closed() != 1) {
+        gfx3d.poll();
+        if (gfx3d.key("left"))  { angle = angle - 0.02; }
+        if (gfx3d.key("right")) { angle = angle + 0.02; }
+        if (gfx3d.key("w"))     { height = height + 0.08; }
+        if (gfx3d.key("s"))     { height = height - 0.08; }
+        dist = dist - gfx3d.wheel() * 0.45;
+        if (dist < 4.0) { dist = 4.0; }
+        if (dist > 22.0) { dist = 22.0; }
+        if (gfx3d.pressed("escape")) { gfx3d.close(); }
+        t = t + 0.03;
+
+        gfx3d.camera(math.sin(angle) * dist, height, math.cos(angle) * dist,
+                     0.2, 0.7, 0.1);
+
+        gfx3d.shadow();
+        gfx3d.clear(176, 196, 214);
+        casters(math.sin(t) * 0.25);
+        gfx3d.shadow();
+
+        gfx3d.clear(176, 196, 214);
+        gfx3d.box(0.0, -0.5, 0.0, 16.0, 1.0, 16.0, 186, 178, 164);
+        gfx3d.grid(16.0, 1.0, 150, 168, 186);
+        casters(math.sin(t) * 0.25);
+
+        gfx3d.present();
+    }
+
+    gfx3d.close();
+}

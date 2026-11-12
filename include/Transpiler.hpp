@@ -4618,6 +4618,7 @@ private:
             {"light",       "gfx3d.light(x, y, z[, r, g, b])",                        "nnnnnn"},
             {"fog",         "gfx3d.fog([r, g, b, start, end])",                       "nnnnn"},
             {"mirror",      "gfx3d.mirror([x, y, z, nx, ny, nz, w, h])",              "nnnnnnnn"},
+            {"shadow",      "gfx3d.shadow()",                                         ""},
             {"capsule",     "gfx3d.capsule(x1, y1, z1, x2, y2, z2, radius, r, g, b)", "nnnnnnnnnn"},
             {"cylinder",    "gfx3d.cylinder(x1, y1, z1, x2, y2, z2, radius, r, g, b)","nnnnnnnnnn"},
             {"cone",        "gfx3d.cone(x1, y1, z1, x2, y2, z2, radius, r, g, b)",    "nnnnnnnnnn"},
@@ -9986,6 +9987,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             cppUsage.gfx3dFog = true;
         } else if (fn == "mirror") {
             cppUsage.gfx3dMirror = true;
+        } else if (fn == "shadow") {
+            cppUsage.gfx3dShadow = true;
         } else if (fn == "renderer") {
             cppUsage.gfx3dRendererAsked = true;
             // SPIR-V is only for a name written as Vulkan in the source.

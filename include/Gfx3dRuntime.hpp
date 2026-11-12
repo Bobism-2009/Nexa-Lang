@@ -73,10 +73,12 @@ inline void gfx3dApplyAa(std::string& s);
 inline void gfx3dApplyFog(std::string& s);
 // gfx3d.mirror. A program that never calls it does not run this.
 inline void gfx3dApplyMirror(std::string& s);
+// gfx3d.shadow. The light's picture, then the camera's. Off unless asked for.
+inline void gfx3dApplyShadow(std::string& s);
 inline std::string gfx3dModelCpp();
 inline std::string gfx3dEllipsoidCpp();
 
-inline std::string gfx3dRuntimeCpp(bool pad, bool shader, bool aa, bool fog, bool mirror) {
+inline std::string gfx3dRuntimeCpp(bool pad, bool shader, bool aa, bool fog, bool mirror, bool shadow) {
     std::string s = R"NEXA_GFX3D(
 // ---------------------------------------------------------------------------
 // std/gfx3d runtime
@@ -624,6 +626,7 @@ static double __nexa_g3_now_ms(void) {
 }
 )NEXA_GFX3D" + gfx3dPlatformCpp(shader, aa, fog) + gfx3dApiCpp(pad, aa, fog);
     if (mirror) gfx3dApplyMirror(s);
+    if (shadow) gfx3dApplyShadow(s);
     return s;
 }
 
@@ -1093,6 +1096,8 @@ static void __nexa_g3_platform_camera(void) {
         "    return 0;\n"
         "}\n");
 }
+
+#include "gfx3d_shadow.inc"
 
 inline void gfx3dApplyMirror(std::string& s) {
     auto put = [&](const std::string& from, const std::string& to) {

@@ -1422,10 +1422,22 @@ ARGUMENT TYPES
                                    deep: it is not drawn into its own picture.
                                    A Vulkan window has no glass. A program that
                                    never calls either form carries none of this
+  gfx3d.shadow()                 - the light's picture of the room. The first
+                                   call answers 1: clear, then draw the shapes
+                                   that cast. Lines are left out, so a grid
+                                   does not stripe the shadow. The second call
+                                   answers 0 and keeps that picture. Clear and
+                                   draw again; anything the light could not
+                                   see is about two fifths as bright. The
+                                   picture covers the ground around the point
+                                   the camera is aimed at, about as wide as
+                                   the camera is far from that point. Vulkan
+                                   takes the same two calls. A program that
+                                   never calls it carries none of this
   The light is in WORLD space, so a shape turned by gfx3d.rotate turns into
   and out of it rather than carrying its own lighting around with it. There
-  is one light; it is directional, and there are no shadows -- nothing here
-  knows that one shape is between another and the light.
+  is one light, and it is directional. gfx3d.shadow is what asks it to cast.
+  Without that call, brightness comes only from the way a surface faces.
   SHADING. A shape has to be shape-shaped: a sphere in one flat colour comes
   out as a circle. So brightness is worked out from the direction a surface
   faces against the light above. Flat-sided shapes -- cube, box,
