@@ -140,6 +140,7 @@ expect_emit "ambient read" '__nexa_gfx3d_ambient_get\(\)'               '    let
 expect_emit "tri"         '__nexa_gfx3d_tri\(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12\)' \
                           '    gfx3d.tri(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);'
 expect_emit "renderer"    '__nexa_gfx3d_renderer\("vulkan"\)'           '    gfx3d.renderer("vulkan");'
+expect_emit "antialias"   '__nexa_gfx3d_antialias\(1\)'                 '    gfx3d.antialias(1);'
 expect_emit "key"         '__nexa_gfx3d_key\("w"\)'                     '    let k = gfx3d.key("w");'
 expect_emit "pressed"     '__nexa_gfx3d_pressed\("space"\)'             '    let k = gfx3d.pressed("space");'
 expect_emit "released"    '__nexa_gfx3d_released\("space"\)'            '    let k = gfx3d.released("space");'
@@ -228,6 +229,44 @@ if "$NEXAC" "$WORK/yesmodel.nxa" --source "$WORK/yesmodel.cpp" > /dev/null 2>&1;
     done
 else
     echo "FAIL model slicing: NexaC could not transpile"
+    fails=$((fails + 1))
+fi
+
+# Multisample is chosen when the window opens, so a program that never asks
+# carries none of the chooser. One that does carries the chooser and the enable.
+printf '#include <std/gfx3d>
+fn main() {
+    gfx3d.cube(0.0, 0.0, 0.0, 1.0, 1, 2, 3);
+}
+' > "$WORK/noaa.nxa"
+if "$NEXAC" "$WORK/noaa.nxa" --source "$WORK/noaa.cpp" > /dev/null 2>&1; then
+    if grep -qE '__nexa_g3_aa|__nexa_gfx3d_antialias|0x809D' "$WORK/noaa.cpp"; then
+        echo "FAIL antialias slicing: the multisample path is in a program that never asks"
+        fails=$((fails + 1))
+    fi
+else
+    echo "FAIL antialias slicing: NexaC could not transpile"
+    fails=$((fails + 1))
+fi
+printf '#include <std/gfx3d>
+fn main() {
+    gfx3d.antialias(1);
+    gfx3d.open("t", 320, 240);
+}
+' > "$WORK/yesaa.nxa"
+if "$NEXAC" "$WORK/yesaa.nxa" --source "$WORK/yesaa.cpp" > /dev/null 2>&1; then
+    # The other platforms' choosers are in the same string, then the host
+    # strips the #if bodies it will not compile, so a Windows run only has
+    # the wgl chooser left to see.
+    for sym in '__nexa_gfx3d_antialias' 'static int __nexa_g3_aa' '__nexa_g3_aa_pf' \
+               '0x809D' 'wglChoosePixelFormatARB'; do
+        if ! grep -q "$sym" "$WORK/yesaa.cpp"; then
+            echo "FAIL antialias slicing: no $sym in a program that asks"
+            fails=$((fails + 1))
+        fi
+    done
+else
+    echo "FAIL antialias slicing: NexaC could not transpile"
     fails=$((fails + 1))
 fi
 

@@ -64,12 +64,15 @@
 namespace nexa {
 
 // Defined below; the runtime is assembled from these three pieces.
-inline std::string gfx3dPlatformCpp(bool shader);
-inline std::string gfx3dApiCpp(bool pad);
+inline std::string gfx3dPlatformCpp(bool shader, bool aa);
+inline std::string gfx3dApiCpp(bool pad, bool aa);
+// Splices the multisample path into a runtime string. A program that never
+// calls gfx3d.antialias does not run this, so its source stays as written.
+inline void gfx3dApplyAa(std::string& s);
 inline std::string gfx3dModelCpp();
 inline std::string gfx3dEllipsoidCpp();
 
-inline std::string gfx3dRuntimeCpp(bool pad, bool shader) {
+inline std::string gfx3dRuntimeCpp(bool pad, bool shader, bool aa) {
     return R"NEXA_GFX3D(
 // ---------------------------------------------------------------------------
 // std/gfx3d runtime
@@ -615,7 +618,7 @@ static double __nexa_g3_now_ms(void) {
     return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;
 #endif
 }
-)NEXA_GFX3D" + gfx3dPlatformCpp(shader) + gfx3dApiCpp(pad);
+)NEXA_GFX3D" + gfx3dPlatformCpp(shader, aa) + gfx3dApiCpp(pad, aa);
 }
 
 
@@ -626,7 +629,174 @@ static double __nexa_g3_now_ms(void) {
 // is filling in those four and nothing else.
 #include "nexa_vk14_embed.inc"
 
-inline std::string gfx3dPlatformCpp(bool shader) {
+inline void gfx3dApplyAa(std::string& s) {
+    auto put = [&](const std::string& from, const std::string& to) {
+        const size_t at = s.find(from);
+        if (at != std::string::npos) s.replace(at, from.size(), to);
+    };
+
+    // One flag, read while the window is choosing a pixel format.
+    put("#if defined(_WIN32)\nstatic HMODULE __nexa_g3_glmod = nullptr;\n#endif\n",
+        "static int __nexa_g3_aa = 0;\n"
+        "\n"
+        "#if defined(_WIN32)\nstatic HMODULE __nexa_g3_glmod = nullptr;\n#endif\n");
+
+    // Windows cannot change a pixel format once it is set, and the extension
+    // that lists multisample formats is only reachable from a current context,
+    // so a hidden window carries that first context. No such format, and the
+    // real window opens on the ordinary one.
+    put("static int __nexa_g3_platform_open(const std::string& title, int w, int h) {\n"
+        "    __nexa_g3.core33 = 0;\n"
+        "    __nexa_g3.vulkan = 0;\n",
+        R"NEXA_AA(static int __nexa_g3_aa_pf(HDC hdc, PIXELFORMATDESCRIPTOR* pfd) {
+    int plain = ChoosePixelFormat(hdc, pfd);
+    if (!__nexa_g3_aa || !plain) return plain;
+    WNDCLASSA wc;
+    std::memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = DefWindowProcA;
+    wc.hInstance = GetModuleHandleA(nullptr);
+    wc.lpszClassName = "NexaGfx3dAA";
+    RegisterClassA(&wc);
+    HWND hw = CreateWindowExA(0, "NexaGfx3dAA", "", WS_POPUP, 0, 0, 16, 16,
+        nullptr, nullptr, wc.hInstance, nullptr);
+    if (!hw) return plain;
+    HDC dc = GetDC(hw);
+    if (!dc || !SetPixelFormat(dc, plain, pfd)) {
+        if (dc) ReleaseDC(hw, dc);
+        DestroyWindow(hw);
+        return plain;
+    }
+    typedef HGLRC (WINAPI *NxaCreate)(HDC);
+    typedef BOOL (WINAPI *NxaMake)(HDC, HGLRC);
+    typedef BOOL (WINAPI *NxaDel)(HGLRC);
+    typedef PROC (WINAPI *NxaGpa)(LPCSTR);
+    typedef BOOL (WINAPI *NxaChoose)(HDC, const int*, const FLOAT*, UINT, int*, UINT*);
+    NxaCreate create = (NxaCreate)__nexa_g3_sym("wglCreateContext");
+    NxaMake make = (NxaMake)__nexa_g3_sym("wglMakeCurrent");
+    NxaDel del = (NxaDel)__nexa_g3_sym("wglDeleteContext");
+    NxaGpa gpa = (NxaGpa)__nexa_g3_sym("wglGetProcAddress");
+    int got = 0;
+    if (create && make && del && gpa) {
+        HGLRC rc = create(dc);
+        if (rc && make(dc, rc)) {
+            NxaChoose choose = (NxaChoose)gpa("wglChoosePixelFormatARB");
+            if (choose) {
+                // DRAW_TO_WINDOW, SUPPORT_OPENGL, DOUBLE_BUFFER, pixel type
+                // RGBA, 32 colour bits, 24 depth bits, one sample buffer, four
+                // samples. Numbers, so the build needs no GL headers.
+                int list[] = {
+                    0x2001, 1, 0x2010, 1, 0x2011, 1, 0x2013, 0x202B,
+                    0x2014, 32, 0x2022, 24, 0x2041, 1, 0x2042, 4, 0
+                };
+                UINT n = 0;
+                int pf = 0;
+                if (choose(hdc, list, nullptr, 1, &pf, &n) && n > 0 && pf > 0 &&
+                    DescribePixelFormat(hdc, pf, sizeof(*pfd), pfd) > 0 &&
+                    (pfd->dwFlags & PFD_SUPPORT_OPENGL) &&
+                    (pfd->dwFlags & PFD_DRAW_TO_WINDOW)) {
+                    got = pf;
+                }
+            }
+            make(nullptr, nullptr);
+            del(rc);
+        } else if (rc) {
+            del(rc);
+        }
+    }
+    ReleaseDC(hw, dc);
+    DestroyWindow(hw);
+    return got ? got : plain;
+}
+
+static int __nexa_g3_platform_open(const std::string& title, int w, int h) {
+    __nexa_g3.core33 = 0;
+    __nexa_g3.vulkan = 0;
+)NEXA_AA");
+
+    put("    int pf = ChoosePixelFormat(__nexa_g3.hdc, &pfd);\n",
+        "    int pf = __nexa_g3_aa ? __nexa_g3_aa_pf(__nexa_g3.hdc, &pfd)\n"
+        "                           : ChoosePixelFormat(__nexa_g3.hdc, &pfd);\n");
+
+    put("    attrs.antialias = 1;\n",
+        "    attrs.antialias = __nexa_g3_aa ? 1 : 0;\n");
+
+    put("            NSOpenGLPFADepthSize, 24,\n"
+        "            0\n"
+        "        };\n"
+        "        NSOpenGLPixelFormat* pf = [[NSOpenGLPixelFormat alloc] initWithAttributes:attrs];\n"
+        "        if (!pf && wantCore) {\n"
+        "            wantCore = 0;\n"
+        "            attrs[1] = NSOpenGLProfileVersionLegacy;\n"
+        "            pf = [[NSOpenGLPixelFormat alloc] initWithAttributes:attrs];\n"
+        "        }\n"
+        "        if (!pf) return 0;\n",
+        "            NSOpenGLPFADepthSize, 24,\n"
+        "            NSOpenGLPFASampleBuffers, 1,\n"
+        "            NSOpenGLPFASamples, 4,\n"
+        "            0\n"
+        "        };\n"
+        "        if (!__nexa_g3_aa) attrs[9] = 0;\n"
+        "        NSOpenGLPixelFormat* pf = [[NSOpenGLPixelFormat alloc] initWithAttributes:attrs];\n"
+        "        if (!pf && __nexa_g3_aa) {\n"
+        "            attrs[9] = 0;\n"
+        "            pf = [[NSOpenGLPixelFormat alloc] initWithAttributes:attrs];\n"
+        "        }\n"
+        "        if (!pf && wantCore) {\n"
+        "            wantCore = 0;\n"
+        "            attrs[1] = NSOpenGLProfileVersionLegacy;\n"
+        "            if (__nexa_g3_aa) {\n"
+        "                attrs[9] = NSOpenGLPFASampleBuffers;\n"
+        "                attrs[10] = 1;\n"
+        "                attrs[11] = NSOpenGLPFASamples;\n"
+        "                attrs[12] = 4;\n"
+        "                attrs[13] = 0;\n"
+        "            }\n"
+        "            pf = [[NSOpenGLPixelFormat alloc] initWithAttributes:attrs];\n"
+        "            if (!pf && __nexa_g3_aa) {\n"
+        "                attrs[9] = 0;\n"
+        "                pf = [[NSOpenGLPixelFormat alloc] initWithAttributes:attrs];\n"
+        "            }\n"
+        "        }\n"
+        "        if (!pf) return 0;\n");
+
+    put("    int attribs[] = { 4, 5, 12, 24, 0 };\n"
+        "    XVisualInfo* vi = glXChooseVisual(__nexa_g3.dpy, DefaultScreen(__nexa_g3.dpy), attribs);\n"
+        "    if (!vi) return 0;\n",
+        "    int plain[] = { 4, 5, 12, 24, 0 };\n"
+        "    // GLX_SAMPLE_BUFFERS is 100000 and GLX_SAMPLES is 100001.\n"
+        "    int samples[] = { 4, 5, 12, 24, 100000, 1, 100001, 4, 0 };\n"
+        "    XVisualInfo* vi = glXChooseVisual(__nexa_g3.dpy, DefaultScreen(__nexa_g3.dpy),\n"
+        "        __nexa_g3_aa ? samples : plain);\n"
+        "    if (!vi && __nexa_g3_aa)\n"
+        "        vi = glXChooseVisual(__nexa_g3.dpy, DefaultScreen(__nexa_g3.dpy), plain);\n"
+        "    if (!vi) return 0;\n");
+
+    put("    if (!__nexa_g3.vulkan) {\n"
+        "    __nexa_gl.Enable(NEXA_GL_DEPTH_TEST);\n"
+        "    __nexa_gl.Enable(NEXA_GL_CULL_FACE);\n",
+        "    if (!__nexa_g3.vulkan) {\n"
+        "    __nexa_gl.Enable(NEXA_GL_DEPTH_TEST);\n"
+        "    if (__nexa_g3_aa) __nexa_gl.Enable(0x809Du);\n"
+        "    __nexa_gl.Enable(NEXA_GL_CULL_FACE);\n");
+
+    put("static int __nexa_gfx3d_vsync_get(void) {\n"
+        "    return __nexa_g3.vsync;\n"
+        "}\n",
+        "static int __nexa_gfx3d_vsync_get(void) {\n"
+        "    return __nexa_g3.vsync;\n"
+        "}\n"
+        "\n"
+        "static int __nexa_gfx3d_antialias(int on) {\n"
+        "    __nexa_g3_aa = on ? 1 : 0;\n"
+        "    if (__nexa_g3.ready && !__nexa_g3.vulkan) {\n"
+        "        if (__nexa_g3_aa) __nexa_gl.Enable(0x809Du);\n"
+        "        else __nexa_gl.Disable(0x809Du);\n"
+        "    }\n"
+        "    return __nexa_g3_aa;\n"
+        "}\n");
+}
+
+inline std::string gfx3dPlatformCpp(bool shader, bool aa) {
     std::string s = R"NEXA_GFX3D(
 // --- symbol loading ---------------------------------------------------------
 
@@ -3073,12 +3243,13 @@ static void __nexa_g3_batch_submit(void) {
         }
         s.replace(at, mark.size(), vk);
     }
+    if (aa) gfx3dApplyAa(s);
     return s;
 }
 
 // The fifteen calls std/gfx3d offers, in the shape std/gfx offers its own.
 // "pad" is the one line of it that is sliced: see __nexa_gfx3d_poll below.
-inline std::string gfx3dApiCpp(bool pad) {
+inline std::string gfx3dApiCpp(bool pad, bool aa) {
     std::string out;
     out += R"NEXA_GFX3D(
 // --- the module -------------------------------------------------------------
@@ -3700,6 +3871,7 @@ static std::string __nexa_gfx3d_backend(void) {
     return std::string("opengl");
 }
 )NEXA_GFX3D";
+    if (aa) gfx3dApplyAa(out);
     return out;
 }
 

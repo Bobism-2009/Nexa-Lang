@@ -229,6 +229,9 @@ public:
         // gfx3d.shader / use_shader / shader_set / shader_error: a custom GLSL
         // program, compiled by the graphics driver at runtime.
         bool gfx3dShader = false;
+        // gfx3d.antialias. The multisample pixel format, chosen when the
+        // window opens. A program that never asks carries none of it.
+        bool gfx3dAa = false;
         // gfx3d.ellipsoid. A squashed sphere, outside the main renderer so a
         // program that only draws round spheres does not carry it.
         bool gfx3dEllipsoid = false;
@@ -2235,7 +2238,7 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
             // reads the pads, gfx.poll takes the snapshot and a second one taken
             // by gfx3d.poll in the same frame would leave pad_pressed with
             // nothing between the two samples to report.
-            out += gfx3dRuntimeCpp(usage.gfx3dPad, usage.gfx3dShader);
+            out += gfx3dRuntimeCpp(usage.gfx3dPad, usage.gfx3dShader, usage.gfx3dAa);
             if (usage.gfx3dEllipsoid) out += gfx3dEllipsoidCpp();
             // After the runtime, not before: the model block draws through
             // __nexa_g3_vert_n and the vertex batch, which are defined up there.

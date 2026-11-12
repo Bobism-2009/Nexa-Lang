@@ -1266,6 +1266,15 @@ ARGUMENT TYPES
                                    on waits for the page's next animation frame, so
                                    a hidden tab pauses the loop; off only yields to
                                    the page between frames
+  gfx3d.antialias(on)            - smooth the edges of what is drawn. 1 asks for
+                                   four samples a pixel, 0 leaves the window as
+                                   it is, and the call answers which was stored.
+                                   Call it before gfx3d.open: the pixel format is
+                                   chosen then. A driver with no multisample
+                                   format still opens. A web build already
+                                   smooths, and this call turns that on or off.
+                                   A program that never calls it carries none of
+                                   this
   gfx3d.clear(r, g, b)           - fill the window and reset the depth buffer, then
                                    apply the camera for this frame. Colours are
                                    0..255, as everywhere in gfx

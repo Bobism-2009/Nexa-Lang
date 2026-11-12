@@ -4621,6 +4621,7 @@ private:
             {"cone",        "gfx3d.cone(x1, y1, z1, x2, y2, z2, radius, r, g, b)",    "nnnnnnnnnn"},
             {"maxfps",      "gfx3d.maxfps(fps)",                                      "n"},
             {"vsync",       "gfx3d.vsync([on])",                                      "n"},
+            {"antialias",   "gfx3d.antialias(on)",                                    "n"},
             {"renderer",    "gfx3d.renderer(name)",                                   "t"},
             {"key",         "gfx3d.key(name)",                                        "t"},
             {"pressed",     "gfx3d.pressed(name)",                                    "t"},
@@ -9975,6 +9976,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             // The shared gamepad reader, and on Windows the XInput DLL it
             // loads: a program that draws in 3D and reads no pad has neither.
             cppUsage.gfx3dPad = true;
+        } else if (fn == "antialias") {
+            cppUsage.gfx3dAa = true;
         } else if (fn == "renderer") {
             cppUsage.gfx3dRendererAsked = true;
             // SPIR-V is only for a name written as Vulkan in the source.

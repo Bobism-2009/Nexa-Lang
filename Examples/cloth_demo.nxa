@@ -14,6 +14,8 @@
 #include <std/math>
 
 fn main() {
+    // Four samples a pixel, so the sheet's silhouette is a blend.
+    gfx3d.antialias(1);
     if (gfx3d.open("Nexa cloth", 900, 620) != 1) {
         io.println("no 3D window: this platform has no backend yet");
         return;

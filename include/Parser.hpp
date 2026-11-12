@@ -5377,7 +5377,7 @@ private:
                  || method == "audio") { argc = 0; argcMax = 1; }
         else if (method == "audio_queued" || method == "audio_flush") argc = 0;
         else if (method == "translate" || method == "rotate") argc = 3;
-        else if (method == "maxfps" || method == "renderer"
+        else if (method == "maxfps" || method == "renderer" || method == "antialias"
                  || method == "key" || method == "pressed" || method == "released"
                  || method == "mouse") argc = 1;
         // Gamepads. The same names and arities as std/gfx, because it is the
@@ -5402,7 +5402,7 @@ private:
                 " (use open, close, poll, closed, present, width, height, clear, camera,"
                 " perspective, tri, cube, box, sphere, capsule, cylinder, cone,"
                 " line3, grid, translate, rotate, scale, reset, light, ambient,"
-                " maxfps, vsync, renderer, backend, key, pressed,"
+                " maxfps, vsync, renderer, antialias, backend, key, pressed,"
                 " released, typed, wheel, wheel_x, mouse, mouse_x, mouse_y,"
                 " pads, pad, pad_pressed, pad_axis, rumble,"
                 " model, draw, model_tris, texture, use,"
@@ -5461,6 +5461,7 @@ private:
             else if (method == "maxfps") sig = "gfx3d.maxfps(fps)";
             else if (method == "vsync") sig = "gfx3d.vsync() or gfx3d.vsync(on)";
             else if (method == "renderer") sig = "gfx3d.renderer(name)";
+            else if (method == "antialias") sig = "gfx3d.antialias(on)";
             else if (method == "key") sig = "gfx3d.key(name)";
             else if (method == "pressed") sig = "gfx3d.pressed(name)";
             else if (method == "released") sig = "gfx3d.released(name)";
