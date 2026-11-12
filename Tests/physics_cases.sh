@@ -289,6 +289,65 @@ fn main() {
     return 0;
 }
 EOF
+cat > "$WORK/squishload.nxa" <<'EOF'
+// A soft body should flatten more when something rests on it. It did not: a
+// ball carrying another squashed 0.148 where it squashed 0.146 on its own, and
+// a ball resting on a ball squashed half what one resting on the floor did.
+// The resting depth follows the load now, so the bottom of a stack is squatter
+// than the top.
+#include <std/io>
+#include <std/physics>
+fn main(): int {
+    physics.squishy(0.9);
+    let floor = physics.box(0, -0.5, 0, 24, 1, 24);
+    physics.mass(floor, 0);
+    let low = physics.sphere(0, 0.5, 0, 0.5);
+    let i = 0;
+    while (i < 180) { physics.step(1.0 / 60.0); i = i + 1; }
+    let alone = physics.squash(low);
+    if (alone < 0.08 || alone > 0.25) { io.println("fail alone"); io.println(alone); return 1; }
+    let high = physics.sphere(0, 3, 0, 0.5);
+    i = 0;
+    while (i < 300) { physics.step(1.0 / 60.0); i = i + 1; }
+    let loaded = physics.squash(low);
+    let upper = physics.squash(high);
+    // Carrying another of its own mass has to show, not by a rounding error.
+    if (loaded < alone * 1.6) {
+        io.println("fail load squash");
+        io.println(alone);
+        io.println(loaded);
+        return 1;
+    }
+    // And the one on top is the rounder of the two, since less rests on it.
+    if (upper >= loaded) {
+        io.println("fail upper rounder");
+        io.println(upper);
+        io.println(loaded);
+        return 1;
+    }
+    // The flattened ball still sits on the floor rather than hovering or
+    // sinking: half its radius, less what is pressed in.
+    let under = physics.y(low) - 0.5 * (1.0 - loaded);
+    if (under < -0.03 || under > 0.03) {
+        io.println("fail sits on floor");
+        io.println(under);
+        return 1;
+    }
+    io.println("ok");
+    return 0;
+}
+EOF
+if ! "$NEXAC" "$WORK/squishload.nxa" -o "$WORK/squishload$EXE" > "$WORK/squishload.log" 2>&1; then
+    bad "squish load build" "$(tail -20 "$WORK/squishload.log")"
+else
+    out=$("$WORK/squishload$EXE" 2>&1 | tr -d '\r')
+    if [ "$out" = "ok" ]; then
+        ok "a soft body flattens more when another rests on it"
+    else
+        bad "squish load" "$out"
+    fi
+fi
+
 cat > "$WORK/squishfps.nxa" <<'EOF'
 // The same drop, stepped at 30 frames and at 240, has to come to rest in the
 // same place. It did not: the squash it settled at ranged over 47% across that

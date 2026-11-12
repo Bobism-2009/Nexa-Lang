@@ -1806,6 +1806,17 @@ ARGUMENT TYPES
                                  fifteenth of a second for a half-metre ball,
                                  rising a little past where it comes to rest
                                  before it settles. Softer is a slower spring.
+                                 How deep it rests follows what is leaning on
+                                 it, so the bottom of a stack is squatter than
+                                 the top: a ball carrying another of its own
+                                 mass presses in about two and a half times as
+                                 far as one holding only itself up, and the one
+                                 on top stays rounder. The load is read from the
+                                 push the solver had to give the contact, and is
+                                 capped, so a tall pile flattens its lowest body
+                                 and then stops rather than collapsing -- the
+                                 levels between the bottom and the top reach
+                                 that cap together rather than grading smoothly.
                                  0 leaves the solver as it is. A program that
                                  never calls it carries none of this.
                                  Where it comes to rest does not depend on how

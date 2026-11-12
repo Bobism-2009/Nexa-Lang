@@ -359,7 +359,7 @@ struct __nexa_phys_body {
             out += "    int model;\n    float scl;\n";
         }
         if (squish) {
-            out += "    float sq, snx, sny, snz, hit;\n";
+            out += "    float sq, snx, sny, snz, hit, load, loadN;\n";
         }
         out += R"PHYS(};
 static __nexa_phys_body __nexa_phys_bodies[257];
@@ -368,6 +368,9 @@ static float __nexa_phys_gx = 0.f, __nexa_phys_gy = -9.81f, __nexa_phys_gz = 0.f
 )PHYS";
         if (squish) {
             out += R"PHYS(static float __nexa_phys_squish = 0.f;
+// The substep solve last ran with. separate() runs straight after it and has to
+// read the load the same way, or the two disagree about where the sag is.
+static float __nexa_phys_soft_h = 1.f / 60.f;
 static float __nexa_phys_body_rad(const __nexa_phys_body& b) {
     float rad = b.r;
     if (b.kind == 2) {
@@ -387,6 +390,46 @@ static float __nexa_phys_body_rad(const __nexa_phys_body& b) {
 // settles. Softer is a slower spring. Written once because the solver and the
 // pass that cleans up leftover speed both need the same answer, and it was two
 // copies of the same two constants before.
+// How hard a body is being pressed, against how hard it presses itself. 1 when
+// it is only holding its own weight up, 2 with another of its own mass resting
+// on it. A soft body should flatten more under load -- the bottom of a stack is
+// squatter than the top -- and nothing here knew that before: a ball carrying
+// another squashed 0.148 where it squashed 0.146 alone, which is no difference
+// anybody could see.
+static float __nexa_phys_load_ratio(const __nexa_phys_body& b, float h) {
+    if (b.inv <= 0.f || h <= 0.f) return 1.f;
+    float g = __nexa_phys_len(__nexa_phys_gx, __nexa_phys_gy, __nexa_phys_gz);
+    if (g < 1e-4f) return 1.f;
+    float own = (h * g) / b.inv;
+    if (own < 1e-9f) return 1.f;
+    float r = b.loadN / own;
+    if (r < 1.f) r = 1.f;
+    if (r > 2.5f) r = 2.5f;
+    return r;
+}
+
+// The sag a pair rests at: the softness and the size, and then how much is
+// leaning on it. Against a static shape that is the moving body's own load;
+// between two bodies it is the lesser of the two, for the reason below.
+static float __nexa_phys_soft_sag(const __nexa_phys_body& a, const __nexa_phys_body& b,
+                                  float rad, float soft, float h) {
+    float r;
+    if (a.inv <= 0.f) r = __nexa_phys_load_ratio(b, h);
+    else if (b.inv <= 0.f) r = __nexa_phys_load_ratio(a, h);
+    else {
+        // Between two bodies it is the lesser that says how hard this contact
+        // is pressed: the one with less resting on it is the one doing the
+        // pressing. Taking the greater instead gave every joint in a tower the
+        // same depth as the bottom one, so the whole stack looked equally
+        // squat; with the lesser the squash grades up the tower the way the
+        // weight does.
+        float ra = __nexa_phys_load_ratio(a, h);
+        float rb = __nexa_phys_load_ratio(b, h);
+        r = ra < rb ? ra : rb;
+    }
+    return soft * rad * 0.16f * r;
+}
+
 static float __nexa_phys_soft_want(float pen, float sag, float soft) {
     if (pen <= sag) return 0.f;
     float w = 26.f - 14.f * soft;
@@ -726,7 +769,14 @@ static void __nexa_phys_integrate(float h) {
 static void __nexa_phys_solve(float h, unsigned char* touch) {
     int hi = __nexa_phys_hi;
     if (h < 1e-6f) h = 1e-6f;
-    for (int iter = 0; iter < 8; iter++) {
+)PHYS";
+        if (squish) {
+            // The tally of what pressed on each body this substep, and the step
+            // it was measured over. Only a squishy build has either.
+            out += "    __nexa_phys_soft_h = h;\n";
+            out += "    for (int i = 1; i <= hi; i++) { __nexa_phys_bodies[i].load = 0.f; }\n";
+        }
+        out += R"PHYS(    for (int iter = 0; iter < 8; iter++) {
         int fwd = (iter & 1) == 0;
         for (int i = fwd ? 1 : hi; fwd ? (i <= hi) : (i >= 1); i += fwd ? 1 : -1) {
             if (__nexa_phys_bodies[i].kind == 0) continue;
@@ -778,7 +828,7 @@ static void __nexa_phys_solve(float h, unsigned char* touch) {
                     // speed is absorbed. Later frames ease that overlap back
                     // to a small sag. Nothing here launches the body back out.
                     float __rad = __nexa_phys_soft_rad(a, b);
-                    float __sag = __soft * __rad * 0.16f;
+                    float __sag = __nexa_phys_soft_sag(a, b, __rad, __soft, h);
                     float __maxp = __soft * __rad * 0.45f;
                     if (iter == 0 && rel < -1.2f && pen < __maxp) {
                         float __need = (-rel) * __soft * 0.04f;
@@ -809,7 +859,14 @@ static void __nexa_phys_solve(float h, unsigned char* touch) {
                     rvx = a.vx - b.vx; rvy = a.vy - b.vy; rvz = a.vz - b.vz;
                     rel = rvx * nx + rvy * ny + rvz * nz;
                 }
-                float tx = rvx - rel * nx, ty = rvy - rel * ny, tz = rvz - rel * nz;
+)PHYS";
+        if (squish) {
+            // What this contact pressed with, on both ends. Summed over the
+            // iterations it is how hard the body is being held up, which is
+            // what the resting sag is read from.
+            out += "                a.load += jn; b.load += jn;\n";
+        }
+        out += R"PHYS(                float tx = rvx - rel * nx, ty = rvy - rel * ny, tz = rvz - rel * nz;
                 float tl = __nexa_phys_len(tx, ty, tz);
                 if (tl > 1e-6f) {
                     float limit = jn;
@@ -849,6 +906,7 @@ static void __nexa_phys_solve(float h, unsigned char* touch) {
             // into the floor. Stop that leftover speed after the iterations,
             // or the next step carries it through the static shape.
             out += R"PHYS(    if (__nexa_phys_squish > 0.f) {
+        for (int i = 1; i <= hi; i++) __nexa_phys_bodies[i].loadN = __nexa_phys_bodies[i].load;
         for (int i = 1; i <= hi; i++) {
             if (__nexa_phys_bodies[i].kind == 0) continue;
             for (int j = i + 1; j <= hi; j++) {
@@ -862,7 +920,7 @@ static void __nexa_phys_solve(float h, unsigned char* touch) {
                 float sign = (a.inv > 0.f) ? 1.f : -1.f;
                 float vn = (d.vx * nx + d.vy * ny + d.vz * nz) * sign;
                 float __rad = __nexa_phys_soft_rad(a, b);
-                float __sag = __nexa_phys_squish * __rad * 0.16f;
+                float __sag = __nexa_phys_soft_sag(a, b, __rad, __nexa_phys_squish, h);
                 float hold = __nexa_phys_soft_want(pen, __sag, __nexa_phys_squish);
                 if (vn < hold) {
                     float dv = hold - vn;
@@ -901,7 +959,7 @@ static void __nexa_phys_separate() {
                 if (__nexa_phys_squish <= 0.f) corr = (pen - 0.001f) * 0.85f;
                 else {
                     float __rad = __nexa_phys_soft_rad(a, b);
-                    float __sag = __nexa_phys_squish * __rad * 0.16f;
+                    float __sag = __nexa_phys_soft_sag(a, b, __rad, __nexa_phys_squish, __nexa_phys_soft_h);
                     float __maxp = __nexa_phys_squish * __rad * 0.45f;
                     if (pen > __maxp) corr = (pen - __maxp) * 0.7f;
                     else {
