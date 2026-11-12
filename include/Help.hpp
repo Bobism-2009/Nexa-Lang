@@ -637,6 +637,8 @@ no array of pixels to read back.
             gfx3d.grid(size, step, r, g, b)          the y = 0 plane
   light     gfx3d.light(x, y, z[, r, g, b])   direction it shines from
             gfx3d.ambient([level])            0..255 facing away; default 87
+            gfx3d.fog(r, g, b, start, end)    fade into a colour with distance
+            gfx3d.fog()                       turn that fade off
   place     gfx3d.translate(x, y, z)   moves what is drawn next
             gfx3d.rotate(rx, ry, rz)   degrees, right-hand rule, X then Y then Z
             gfx3d.scale(s)             uniform

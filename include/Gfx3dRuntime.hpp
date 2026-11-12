@@ -64,15 +64,17 @@
 namespace nexa {
 
 // Defined below; the runtime is assembled from these three pieces.
-inline std::string gfx3dPlatformCpp(bool shader, bool aa);
-inline std::string gfx3dApiCpp(bool pad, bool aa);
+inline std::string gfx3dPlatformCpp(bool shader, bool aa, bool fog);
+inline std::string gfx3dApiCpp(bool pad, bool aa, bool fog);
 // Splices the multisample path into a runtime string. A program that never
 // calls gfx3d.antialias does not run this, so its source stays as written.
 inline void gfx3dApplyAa(std::string& s);
+// The same, for gfx3d.fog. Off in every program that never calls it.
+inline void gfx3dApplyFog(std::string& s);
 inline std::string gfx3dModelCpp();
 inline std::string gfx3dEllipsoidCpp();
 
-inline std::string gfx3dRuntimeCpp(bool pad, bool shader, bool aa) {
+inline std::string gfx3dRuntimeCpp(bool pad, bool shader, bool aa, bool fog) {
     return R"NEXA_GFX3D(
 // ---------------------------------------------------------------------------
 // std/gfx3d runtime
@@ -618,7 +620,7 @@ static double __nexa_g3_now_ms(void) {
     return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;
 #endif
 }
-)NEXA_GFX3D" + gfx3dPlatformCpp(shader, aa) + gfx3dApiCpp(pad, aa);
+)NEXA_GFX3D" + gfx3dPlatformCpp(shader, aa, fog) + gfx3dApiCpp(pad, aa, fog);
 }
 
 
@@ -825,7 +827,270 @@ static int __nexa_g3_platform_open(const std::string& title, int w, int h) {
         "}\n");
 }
 
-inline std::string gfx3dPlatformCpp(bool shader, bool aa) {
+inline void gfx3dApplyFog(std::string& s) {
+    auto put = [&](const std::string& from, const std::string& to) {
+        const size_t at = s.find(from);
+        if (at != std::string::npos) s.replace(at, from.size(), to);
+    };
+
+    put("#if defined(_WIN32)\nstatic HMODULE __nexa_g3_glmod = nullptr;\n#endif\n",
+        "static int __nexa_g3_fog_on = 0;\n"
+        "static float __nexa_g3_fog_r = 1.0f, __nexa_g3_fog_g = 1.0f, __nexa_g3_fog_b = 1.0f;\n"
+        "static float __nexa_g3_fog_start = 0.0f, __nexa_g3_fog_end = 1.0f;\n"
+        "\n"
+        "#if defined(_WIN32)\nstatic HMODULE __nexa_g3_glmod = nullptr;\n#endif\n");
+
+    // Browser shader: eye-space depth, the same distance the fixed-function
+    // pipeline fogs with. uFogOn stays 0 until gfx3d.fog is called.
+    put(R"FOG(    "uniform mat4 uMVP;\n"
+    "varying vec3 vCol;\n"
+    "varying vec2 vUV;\n"
+    "void main() {\n"
+    "  vCol = aCol;\n"
+    "  vUV = aUV;\n"
+    "  gl_Position = uMVP * vec4(aPos, 1.0);\n")FOG",
+        R"FOG(    "uniform mat4 uMVP;\n"
+    "uniform mat4 uMV;\n"
+    "varying vec3 vCol;\n"
+    "varying vec2 vUV;\n"
+    "varying float vEye;\n"
+    "void main() {\n"
+    "  vCol = aCol;\n"
+    "  vUV = aUV;\n"
+    "  vEye = (uMV * vec4(aPos, 1.0)).z;\n"
+    "  gl_Position = uMVP * vec4(aPos, 1.0);\n")FOG");
+
+    put(R"FOG(    "varying vec3 vCol;\n"
+    "varying vec2 vUV;\n"
+    "void main() {\n")FOG",
+        R"FOG(    "varying vec3 vCol;\n"
+    "varying vec2 vUV;\n"
+    "varying float vEye;\n"
+    "uniform float uFogR;\n"
+    "uniform float uFogG;\n"
+    "uniform float uFogB;\n"
+    "uniform float uFogS;\n"
+    "uniform float uFogE;\n"
+    "uniform float uFogOn;\n"
+    "void main() {\n")FOG");
+
+    put(R"FOG(    "  gl_FragColor = vec4(c, 1.0);\n")FOG",
+        R"FOG(    "  if (uFogOn > 0.5) {\n"
+    "    float span = uFogE - uFogS;\n"
+    "    float f = span > 0.0001 ? clamp((uFogE - abs(vEye)) / span, 0.0, 1.0) : 1.0;\n"
+    "    c = mix(vec3(uFogR, uFogG, uFogB), c, f);\n"
+    "  }\n"
+    "  gl_FragColor = vec4(c, 1.0);\n")FOG");
+
+    put("static __nexa_GLint  __nexa_g3_u_mvp = -1;\n",
+        "static __nexa_GLint  __nexa_g3_u_mvp = -1;\n"
+        "static __nexa_GLint  __nexa_g3_u_mv = -1;\n"
+        "static __nexa_GLint  __nexa_g3_u_fogR = -1, __nexa_g3_u_fogG = -1, __nexa_g3_u_fogB = -1;\n"
+        "static __nexa_GLint  __nexa_g3_u_fogS = -1, __nexa_g3_u_fogE = -1, __nexa_g3_u_fogOn = -1;\n");
+
+    put("    __nexa_g3_u_mvp = glGetUniformLocation(__nexa_g3_prog, \"uMVP\");\n",
+        "    __nexa_g3_u_mvp = glGetUniformLocation(__nexa_g3_prog, \"uMVP\");\n"
+        "    __nexa_g3_u_mv = glGetUniformLocation(__nexa_g3_prog, \"uMV\");\n"
+        "    __nexa_g3_u_fogR = glGetUniformLocation(__nexa_g3_prog, \"uFogR\");\n"
+        "    __nexa_g3_u_fogG = glGetUniformLocation(__nexa_g3_prog, \"uFogG\");\n"
+        "    __nexa_g3_u_fogB = glGetUniformLocation(__nexa_g3_prog, \"uFogB\");\n"
+        "    __nexa_g3_u_fogS = glGetUniformLocation(__nexa_g3_prog, \"uFogS\");\n"
+        "    __nexa_g3_u_fogE = glGetUniformLocation(__nexa_g3_prog, \"uFogE\");\n"
+        "    __nexa_g3_u_fogOn = glGetUniformLocation(__nexa_g3_prog, \"uFogOn\");\n");
+
+    put("static void __nexa_g3_batch_submit(void) {\n"
+        "    if (!__nexa_g3_prog || !__nexa_g3_vbo) return;\n",
+        R"FOG(static void __nexa_g3_fog_shade(const float* M) {
+    if (__nexa_g3_u_mv < 0) return;
+    float mv[16];
+    if (M) __nexa_g3_mul4(mv, __nexa_g3.view, M);
+    else { for (int i = 0; i < 16; i++) mv[i] = __nexa_g3.view[i]; }
+    glUniformMatrix4fv(__nexa_g3_u_mv, 1, 0, mv);
+    if (__nexa_g3_u_fogR >= 0) glUniform1f(__nexa_g3_u_fogR, __nexa_g3_fog_r);
+    if (__nexa_g3_u_fogG >= 0) glUniform1f(__nexa_g3_u_fogG, __nexa_g3_fog_g);
+    if (__nexa_g3_u_fogB >= 0) glUniform1f(__nexa_g3_u_fogB, __nexa_g3_fog_b);
+    if (__nexa_g3_u_fogS >= 0) glUniform1f(__nexa_g3_u_fogS, __nexa_g3_fog_start);
+    if (__nexa_g3_u_fogE >= 0) glUniform1f(__nexa_g3_u_fogE, __nexa_g3_fog_end);
+    if (__nexa_g3_u_fogOn >= 0) glUniform1f(__nexa_g3_u_fogOn, __nexa_g3_fog_on ? 1.0f : 0.0f);
+}
+
+static void __nexa_g3_batch_submit(void) {
+    if (!__nexa_g3_prog || !__nexa_g3_vbo) return;
+)FOG");
+
+    put("    glUniformMatrix4fv(__nexa_g3_u_mvp, 1, 0, mvp);\n"
+        "    // The batch is never textured: only a cached mesh has coordinates.\n",
+        "    glUniformMatrix4fv(__nexa_g3_u_mvp, 1, 0, mvp);\n"
+        "    __nexa_g3_fog_shade(nullptr);\n"
+        "    // The batch is never textured: only a cached mesh has coordinates.\n");
+
+    put("    glUniformMatrix4fv(__nexa_g3_u_mvp, 1, 0, mvp);\n"
+        "    glUniform1f(__nexa_g3_u_texon, tex ? 1.0f : 0.0f);\n",
+        "    glUniformMatrix4fv(__nexa_g3_u_mvp, 1, 0, mvp);\n"
+        "    __nexa_g3_fog_shade(M);\n"
+        "    glUniform1f(__nexa_g3_u_texon, tex ? 1.0f : 0.0f);\n");
+
+    // Desktop core shader, same distance, written in the 330 dialect.
+    put(R"FOG(    "uniform mat4 uMVP;\n"
+    "out vec3 vCol;\n"
+    "out vec2 vUV;\n"
+    "void main() {\n"
+    "  vCol = aCol;\n"
+    "  vUV = aUV;\n"
+    "  gl_Position = uMVP * vec4(aPos, 1.0);\n")FOG",
+        R"FOG(    "uniform mat4 uMVP;\n"
+    "uniform mat4 uMV;\n"
+    "out vec3 vCol;\n"
+    "out vec2 vUV;\n"
+    "out float vEye;\n"
+    "void main() {\n"
+    "  vCol = aCol;\n"
+    "  vUV = aUV;\n"
+    "  vEye = (uMV * vec4(aPos, 1.0)).z;\n"
+    "  gl_Position = uMVP * vec4(aPos, 1.0);\n")FOG");
+
+    put(R"FOG(    "in vec2 vUV;\n"
+    "out vec4 fragColor;\n")FOG",
+        R"FOG(    "in vec2 vUV;\n"
+    "in float vEye;\n"
+    "uniform float uFogR;\n"
+    "uniform float uFogG;\n"
+    "uniform float uFogB;\n"
+    "uniform float uFogS;\n"
+    "uniform float uFogE;\n"
+    "uniform float uFogOn;\n"
+    "out vec4 fragColor;\n")FOG");
+
+    put(R"FOG(    "  fragColor = vec4(c, 1.0);\n")FOG",
+        R"FOG(    "  if (uFogOn > 0.5) {\n"
+    "    float span = uFogE - uFogS;\n"
+    "    float f = span > 0.0001 ? clamp((uFogE - abs(vEye)) / span, 0.0, 1.0) : 1.0;\n"
+    "    c = mix(vec3(uFogR, uFogG, uFogB), c, f);\n"
+    "  }\n"
+    "  fragColor = vec4(c, 1.0);\n")FOG");
+
+    put("static __nexa_GLint __nexa_g33_u_mvp = -1;\n",
+        "static __nexa_GLint __nexa_g33_u_mvp = -1;\n"
+        "static __nexa_GLuint __nexa_g33_fog_prog = 0;\n"
+        "static __nexa_GLint __nexa_g33_u_mv = -1;\n"
+        "static __nexa_GLint __nexa_g33_u_fogR = -1, __nexa_g33_u_fogG = -1, __nexa_g33_u_fogB = -1;\n"
+        "static __nexa_GLint __nexa_g33_u_fogS = -1, __nexa_g33_u_fogE = -1, __nexa_g33_u_fogOn = -1;\n");
+
+    put("    __nexa_g33_u_mvp = __nexa_g33.GetUniformLocation(__nexa_g33_prog, \"uMVP\");\n",
+        "    __nexa_g33_u_mvp = __nexa_g33.GetUniformLocation(__nexa_g33_prog, \"uMVP\");\n"
+        "    __nexa_g33_fog_prog = __nexa_g33_prog;\n"
+        "    __nexa_g33_u_mv = __nexa_g33.GetUniformLocation(__nexa_g33_prog, \"uMV\");\n"
+        "    __nexa_g33_u_fogR = __nexa_g33.GetUniformLocation(__nexa_g33_prog, \"uFogR\");\n"
+        "    __nexa_g33_u_fogG = __nexa_g33.GetUniformLocation(__nexa_g33_prog, \"uFogG\");\n"
+        "    __nexa_g33_u_fogB = __nexa_g33.GetUniformLocation(__nexa_g33_prog, \"uFogB\");\n"
+        "    __nexa_g33_u_fogS = __nexa_g33.GetUniformLocation(__nexa_g33_prog, \"uFogS\");\n"
+        "    __nexa_g33_u_fogE = __nexa_g33.GetUniformLocation(__nexa_g33_prog, \"uFogE\");\n"
+        "    __nexa_g33_u_fogOn = __nexa_g33.GetUniformLocation(__nexa_g33_prog, \"uFogOn\");\n");
+
+    put("static void __nexa_g3_core_batch(void) {\n",
+        R"FOG(static void __nexa_g3_fog_shade(const float* M) {
+    if (!__nexa_g33_fog_prog || __nexa_g33_prog != __nexa_g33_fog_prog) return;
+    if (__nexa_g33_u_mv < 0) return;
+    float mv[16];
+    if (M) __nexa_g3_mul4(mv, __nexa_g3.view, M);
+    else { for (int i = 0; i < 16; i++) mv[i] = __nexa_g3.view[i]; }
+    __nexa_g33.UniformMatrix4fv(__nexa_g33_u_mv, 1, 0, mv);
+    if (__nexa_g33_u_fogR >= 0) __nexa_g33.Uniform1f(__nexa_g33_u_fogR, __nexa_g3_fog_r);
+    if (__nexa_g33_u_fogG >= 0) __nexa_g33.Uniform1f(__nexa_g33_u_fogG, __nexa_g3_fog_g);
+    if (__nexa_g33_u_fogB >= 0) __nexa_g33.Uniform1f(__nexa_g33_u_fogB, __nexa_g3_fog_b);
+    if (__nexa_g33_u_fogS >= 0) __nexa_g33.Uniform1f(__nexa_g33_u_fogS, __nexa_g3_fog_start);
+    if (__nexa_g33_u_fogE >= 0) __nexa_g33.Uniform1f(__nexa_g33_u_fogE, __nexa_g3_fog_end);
+    if (__nexa_g33_u_fogOn >= 0) __nexa_g33.Uniform1f(__nexa_g33_u_fogOn, __nexa_g3_fog_on ? 1.0f : 0.0f);
+}
+
+static void __nexa_g3_core_batch(void) {
+)FOG");
+
+    put("    __nexa_g33.UniformMatrix4fv(__nexa_g33_u_mvp, 1, 0, mvp);\n"
+        "    __nexa_g33.Uniform1f(__nexa_g33_u_texon, 0.0f);\n",
+        "    __nexa_g33.UniformMatrix4fv(__nexa_g33_u_mvp, 1, 0, mvp);\n"
+        "    __nexa_g3_fog_shade(nullptr);\n"
+        "    __nexa_g33.Uniform1f(__nexa_g33_u_texon, 0.0f);\n");
+
+    put("    __nexa_g33.UniformMatrix4fv(__nexa_g33_u_mvp, 1, 0, mvp);\n"
+        "    __nexa_g33.Uniform1f(__nexa_g33_u_texon, tex ? 1.0f : 0.0f);\n",
+        "    __nexa_g33.UniformMatrix4fv(__nexa_g33_u_mvp, 1, 0, mvp);\n"
+        "    __nexa_g3_fog_shade(M);\n"
+        "    __nexa_g33.Uniform1f(__nexa_g33_u_texon, tex ? 1.0f : 0.0f);\n");
+
+    // Fixed function: the pipeline's own fog, per fragment when the driver
+    // will do it. A core context has no glFog, which is why the shader above
+    // carries the same sum.
+    put("static void __nexa_g3_platform_camera(void) {\n"
+        "    if (__nexa_g3.vulkan) return;\n",
+        R"FOG(static void __nexa_g3_fog_bind(void) {
+    if (!__nexa_gl.Enable || !__nexa_gl.Disable) return;
+    if (!__nexa_g3_fog_on) { __nexa_gl.Disable(0x0B60u); return; }
+    typedef void (NEXA_GLAPI *NxaFogf)(unsigned int, float);
+    typedef void (NEXA_GLAPI *NxaFogi)(unsigned int, int);
+    typedef void (NEXA_GLAPI *NxaFogfv)(unsigned int, const float*);
+    typedef void (NEXA_GLAPI *NxaHint)(unsigned int, unsigned int);
+    static int ready = 0;
+    static NxaFogf fogf; static NxaFogi fogi; static NxaFogfv fogfv; static NxaHint hint;
+    if (!ready) {
+        fogf = (NxaFogf)__nexa_g3_sym("glFogf");
+        fogi = (NxaFogi)__nexa_g3_sym("glFogi");
+        fogfv = (NxaFogfv)__nexa_g3_sym("glFogfv");
+        hint = (NxaHint)__nexa_g3_sym("glHint");
+        ready = 1;
+    }
+    __nexa_gl.Enable(0x0B60u);
+    if (fogi) fogi(0x0B65u, 0x2601);
+    if (fogf) { fogf(0x0B63u, __nexa_g3_fog_start); fogf(0x0B64u, __nexa_g3_fog_end); }
+    if (fogfv) {
+        float c[4] = { __nexa_g3_fog_r, __nexa_g3_fog_g, __nexa_g3_fog_b, 1.0f };
+        fogfv(0x0B66u, c);
+    }
+    if (hint) hint(0x0C54u, 0x1102u);
+}
+
+static void __nexa_g3_platform_camera(void) {
+    if (__nexa_g3.vulkan) return;
+)FOG");
+
+    put("    if (__nexa_g3.core33) return __nexa_g3_core_mesh(m, L, M);\n",
+        "    if (__nexa_g3.core33) return __nexa_g3_core_mesh(m, L, M);\n"
+        "    __nexa_g3_fog_bind();\n");
+
+    put("    if (__nexa_g3.core33) { __nexa_g3_core_batch(); return; }\n",
+        "    if (__nexa_g3.core33) { __nexa_g3_core_batch(); return; }\n"
+        "    __nexa_g3_fog_bind();\n");
+
+    put("static int __nexa_gfx3d_vsync_get(void) {\n"
+        "    return __nexa_g3.vsync;\n"
+        "}\n",
+        "static int __nexa_gfx3d_vsync_get(void) {\n"
+        "    return __nexa_g3.vsync;\n"
+        "}\n"
+        "\n"
+        "static int __nexa_gfx3d_fog(int r, int g, int b, double start, double end) {\n"
+        "    if (r < 0) r = 0; if (r > 255) r = 255;\n"
+        "    if (g < 0) g = 0; if (g > 255) g = 255;\n"
+        "    if (b < 0) b = 0; if (b > 255) b = 255;\n"
+        "    float s = (float)start, e = (float)end;\n"
+        "    if (e < s) { float t = s; s = e; e = t; }\n"
+        "    if (e <= s) e = s + 0.001f;\n"
+        "    __nexa_g3_fog_r = (float)r / 255.0f;\n"
+        "    __nexa_g3_fog_g = (float)g / 255.0f;\n"
+        "    __nexa_g3_fog_b = (float)b / 255.0f;\n"
+        "    __nexa_g3_fog_start = s;\n"
+        "    __nexa_g3_fog_end = e;\n"
+        "    __nexa_g3_fog_on = 1;\n"
+        "    return 1;\n"
+        "}\n"
+        "\n"
+        "static int __nexa_gfx3d_fog_off(void) {\n"
+        "    __nexa_g3_fog_on = 0;\n"
+        "    return 0;\n"
+        "}\n");
+}
+
+inline std::string gfx3dPlatformCpp(bool shader, bool aa, bool fog) {
     std::string s = R"NEXA_GFX3D(
 // --- symbol loading ---------------------------------------------------------
 
@@ -3273,12 +3538,13 @@ static void __nexa_g3_batch_submit(void) {
         s.replace(at, mark.size(), vk);
     }
     if (aa) gfx3dApplyAa(s);
+    if (fog) gfx3dApplyFog(s);
     return s;
 }
 
 // The fifteen calls std/gfx3d offers, in the shape std/gfx offers its own.
 // "pad" is the one line of it that is sliced: see __nexa_gfx3d_poll below.
-inline std::string gfx3dApiCpp(bool pad, bool aa) {
+inline std::string gfx3dApiCpp(bool pad, bool aa, bool fog) {
     std::string out;
     out += R"NEXA_GFX3D(
 // --- the module -------------------------------------------------------------
@@ -3901,6 +4167,7 @@ static std::string __nexa_gfx3d_backend(void) {
 }
 )NEXA_GFX3D";
     if (aa) gfx3dApplyAa(out);
+    if (fog) gfx3dApplyFog(out);
     return out;
 }
 

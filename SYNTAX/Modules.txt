@@ -1392,6 +1392,20 @@ ARGUMENT TYPES
                                    still is, 0..255, read or set. 0 is a hard black
                                    shadow; 255 is no shading at all, every face its
                                    own flat colour. The default is 87
+  gfx3d.fog(r, g, b, start, end) - fade what is far into a colour. r, g and b
+                                   are 0..255. start is how far in front of the
+                                   camera the fade begins, and end is where the
+                                   colour is all fog. The distance is how far
+                                   ahead of the camera, the depth a triangle
+                                   sits at, not the straight line to the eye.
+                                   The call answers 1. Five numbers, or none:
+                                   one to four is a half-written fog and is
+                                   refused. A Vulkan window draws its own
+                                   colour, and a gfx3d.shader you wrote is left
+                                   as you wrote it
+  gfx3d.fog()                    - turn the fog off, and answer 0.
+                                   A program that never calls either form
+                                   carries none of this
   The light is in WORLD space, so a shape turned by gfx3d.rotate turns into
   and out of it rather than carrying its own lighting around with it. There
   is one light; it is directional, and there are no shadows -- nothing here

@@ -5350,6 +5350,7 @@ private:
         else if (method == "ambient") { argc = 0; argcMax = 1; }
         else if (method == "vsync") { argc = 0; argcMax = 1; }
         else if (method == "light") { argc = 3; argcMax = 6; }
+        else if (method == "fog") { argc = 0; argcMax = 5; }
         // Sound. The same names and the same arities as std/gfx, down to which
         // argument may be left off, because it is the same mixer underneath --
         // see soundStackCpp in GfxRuntime.hpp. A program that knows gfx.play
@@ -5401,7 +5402,7 @@ private:
                 "' at line " + std::to_string(methodTok.line) +
                 " (use open, close, poll, closed, present, width, height, clear, camera,"
                 " perspective, tri, cube, box, sphere, capsule, cylinder, cone,"
-                " line3, grid, translate, rotate, scale, reset, light, ambient,"
+                " line3, grid, translate, rotate, scale, reset, light, ambient, fog,"
                 " maxfps, vsync, renderer, antialias, backend, key, pressed,"
                 " released, typed, wheel, wheel_x, mouse, mouse_x, mouse_y,"
                 " pads, pad, pad_pressed, pad_axis, rumble,"
@@ -5429,6 +5430,10 @@ private:
             // A colour is three numbers or none of them; four or five is a
             // half-written one rather than a form to guess at.
             arityOk = (got == 3 || got == 6);
+        } else if (method == "fog") {
+            // On, with a colour and the two distances, or off. A shorter
+            // list is a half-written fog rather than a form to guess at.
+            arityOk = (got == 0 || got == 5);
         } else if (argcMax >= 0) {
             arityOk = (got >= argc && got <= argcMax);
         } else {
@@ -5457,6 +5462,7 @@ private:
             else if (method == "scale") sig = "gfx3d.scale(s)";
             else if (method == "ambient") sig = "gfx3d.ambient() or gfx3d.ambient(level)";
             else if (method == "light") sig = "gfx3d.light(x, y, z) or gfx3d.light(x, y, z, r, g, b)";
+            else if (method == "fog") sig = "gfx3d.fog(r, g, b, start, end) or gfx3d.fog()";
             else if (method == "tri") sig = "gfx3d.tri(x1, y1, z1, x2, y2, z2, x3, y3, z3, r, g, b)";
             else if (method == "maxfps") sig = "gfx3d.maxfps(fps)";
             else if (method == "vsync") sig = "gfx3d.vsync() or gfx3d.vsync(on)";

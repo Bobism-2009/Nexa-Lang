@@ -141,6 +141,8 @@ expect_emit "tri"         '__nexa_gfx3d_tri\(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 
                           '    gfx3d.tri(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);'
 expect_emit "renderer"    '__nexa_gfx3d_renderer\("vulkan"\)'           '    gfx3d.renderer("vulkan");'
 expect_emit "antialias"   '__nexa_gfx3d_antialias\(1\)'                 '    gfx3d.antialias(1);'
+expect_emit "fog"         '__nexa_gfx3d_fog\(1, 2, 3, 4, 5\)'            '    gfx3d.fog(1, 2, 3, 4, 5);'
+expect_emit "fog off"     '__nexa_gfx3d_fog_off\(\)'                    '    let f = gfx3d.fog();'
 expect_emit "key"         '__nexa_gfx3d_key\("w"\)'                     '    let k = gfx3d.key("w");'
 expect_emit "pressed"     '__nexa_gfx3d_pressed\("space"\)'             '    let k = gfx3d.pressed("space");'
 expect_emit "released"    '__nexa_gfx3d_released\("space"\)'            '    let k = gfx3d.released("space");'
@@ -267,6 +269,40 @@ if "$NEXAC" "$WORK/yesaa.nxa" --source "$WORK/yesaa.cpp" > /dev/null 2>&1; then
     done
 else
     echo "FAIL antialias slicing: NexaC could not transpile"
+    fails=$((fails + 1))
+fi
+
+# Fog is a draw-time blend, so a program that never asks carries none of the
+# loader or the shader lines. One that does carries both.
+printf '#include <std/gfx3d>
+fn main() {
+    gfx3d.cube(0.0, 0.0, 0.0, 1.0, 1, 2, 3);
+}
+' > "$WORK/nofog.nxa"
+if "$NEXAC" "$WORK/nofog.nxa" --source "$WORK/nofog.cpp" > /dev/null 2>&1; then
+    if grep -qE 'glFogf|__nexa_gfx3d_fog|vEye' "$WORK/nofog.cpp"; then
+        echo "FAIL fog slicing: fog is in a program that never asks"
+        fails=$((fails + 1))
+    fi
+else
+    echo "FAIL fog slicing: NexaC could not transpile"
+    fails=$((fails + 1))
+fi
+printf '#include <std/gfx3d>
+fn main() {
+    gfx3d.fog(180, 190, 200, 8, 40);
+    gfx3d.open("t", 320, 240);
+}
+' > "$WORK/yesfog.nxa"
+if "$NEXAC" "$WORK/yesfog.nxa" --source "$WORK/yesfog.cpp" > /dev/null 2>&1; then
+    for sym in '__nexa_gfx3d_fog' 'glFogf' 'vEye' 'uFogOn'; do
+        if ! grep -q "$sym" "$WORK/yesfog.cpp"; then
+            echo "FAIL fog slicing: no $sym in a program that asks"
+            fails=$((fails + 1))
+        fi
+    done
+else
+    echo "FAIL fog slicing: NexaC could not transpile"
     fails=$((fails + 1))
 fi
 
