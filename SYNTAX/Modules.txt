@@ -1267,8 +1267,9 @@ ARGUMENT TYPES
                                    a hidden tab pauses the loop; off only yields to
                                    the page between frames
   gfx3d.antialias(on)            - smooth the edges of what is drawn. 1 asks for
-                                   four samples a pixel, 0 leaves the window as
-                                   it is, and the call answers which was stored.
+                                   eight samples a pixel, or four where the
+                                   driver has no eight, and 0 leaves the window
+                                   as it is. The call answers which was stored.
                                    Call it before gfx3d.open: the pixel format is
                                    chosen then. A driver with no multisample
                                    format still opens. A web build already

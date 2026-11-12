@@ -651,19 +651,37 @@ inline void gfx3dApplyAa(std::string& s) {
         R"NEXA_AA(static int __nexa_g3_aa_pf(HDC hdc, PIXELFORMATDESCRIPTOR* pfd) {
     int plain = ChoosePixelFormat(hdc, pfd);
     if (!__nexa_g3_aa || !plain) return plain;
+    // The first format ChoosePixelFormat likes is often the software OpenGL,
+    // and wglGetProcAddress answers nothing from that context. A hardware
+    // format is what makes the multisample list visible.
+    int hw = plain;
+    PIXELFORMATDESCRIPTOR desc;
+    int count = DescribePixelFormat(hdc, 1, sizeof(desc), &desc);
+    for (int i = 1; i <= count; i++) {
+        if (!DescribePixelFormat(hdc, i, sizeof(desc), &desc)) continue;
+        if ((desc.dwFlags & PFD_DRAW_TO_WINDOW) &&
+            (desc.dwFlags & PFD_SUPPORT_OPENGL) &&
+            (desc.dwFlags & PFD_DOUBLEBUFFER) &&
+            desc.iPixelType == PFD_TYPE_RGBA &&
+            desc.cColorBits >= 24 && desc.cDepthBits >= 16 &&
+            !(desc.dwFlags & PFD_GENERIC_FORMAT)) {
+            hw = i;
+            break;
+        }
+    }
     WNDCLASSA wc;
     std::memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = DefWindowProcA;
     wc.hInstance = GetModuleHandleA(nullptr);
     wc.lpszClassName = "NexaGfx3dAA";
     RegisterClassA(&wc);
-    HWND hw = CreateWindowExA(0, "NexaGfx3dAA", "", WS_POPUP, 0, 0, 16, 16,
+    HWND hwnd = CreateWindowExA(0, "NexaGfx3dAA", "", WS_POPUP, 0, 0, 16, 16,
         nullptr, nullptr, wc.hInstance, nullptr);
-    if (!hw) return plain;
-    HDC dc = GetDC(hw);
-    if (!dc || !SetPixelFormat(dc, plain, pfd)) {
-        if (dc) ReleaseDC(hw, dc);
-        DestroyWindow(hw);
+    if (!hwnd) return plain;
+    HDC dc = GetDC(hwnd);
+    if (!dc || !SetPixelFormat(dc, hw, pfd)) {
+        if (dc) ReleaseDC(hwnd, dc);
+        DestroyWindow(hwnd);
         return plain;
     }
     typedef HGLRC (WINAPI *NxaCreate)(HDC);
@@ -681,20 +699,20 @@ inline void gfx3dApplyAa(std::string& s) {
         if (rc && make(dc, rc)) {
             NxaChoose choose = (NxaChoose)gpa("wglChoosePixelFormatARB");
             if (choose) {
-                // DRAW_TO_WINDOW, SUPPORT_OPENGL, DOUBLE_BUFFER, pixel type
-                // RGBA, 32 colour bits, 24 depth bits, one sample buffer, four
-                // samples. Numbers, so the build needs no GL headers.
-                int list[] = {
-                    0x2001, 1, 0x2010, 1, 0x2011, 1, 0x2013, 0x202B,
-                    0x2014, 32, 0x2022, 24, 0x2041, 1, 0x2042, 4, 0
-                };
-                UINT n = 0;
-                int pf = 0;
-                if (choose(hdc, list, nullptr, 1, &pf, &n) && n > 0 && pf > 0 &&
-                    DescribePixelFormat(hdc, pf, sizeof(*pfd), pfd) > 0 &&
-                    (pfd->dwFlags & PFD_SUPPORT_OPENGL) &&
-                    (pfd->dwFlags & PFD_DRAW_TO_WINDOW)) {
-                    got = pf;
+                // Eight samples, then four, then two. Colour is 24 bits: a
+                // minimum of 32 matches no ordinary format, so the window
+                // used to open with no samples at all.
+                int want[3] = { 8, 4, 2 };
+                for (int s = 0; s < 3 && !got; s++) {
+                    int list[] = {
+                        0x2001, 1, 0x2010, 1, 0x2011, 1, 0x2013, 0x202B,
+                        0x2014, 24, 0x2022, 24, 0x2041, 1, 0x2042, want[s], 0
+                    };
+                    UINT n = 0;
+                    int pf = 0;
+                    if ((!choose(dc, list, nullptr, 1, &pf, &n) || n == 0 || pf <= 0) && hdc != dc)
+                        choose(hdc, list, nullptr, 1, &pf, &n);
+                    if (n > 0 && pf > 0) got = pf;
                 }
             }
             make(nullptr, nullptr);
@@ -703,8 +721,8 @@ inline void gfx3dApplyAa(std::string& s) {
             del(rc);
         }
     }
-    ReleaseDC(hw, dc);
-    DestroyWindow(hw);
+    ReleaseDC(hwnd, dc);
+    DestroyWindow(hwnd);
     return got ? got : plain;
 }
 
@@ -732,11 +750,15 @@ static int __nexa_g3_platform_open(const std::string& title, int w, int h) {
         "        if (!pf) return 0;\n",
         "            NSOpenGLPFADepthSize, 24,\n"
         "            NSOpenGLPFASampleBuffers, 1,\n"
-        "            NSOpenGLPFASamples, 4,\n"
+        "            NSOpenGLPFASamples, 8,\n"
         "            0\n"
         "        };\n"
         "        if (!__nexa_g3_aa) attrs[9] = 0;\n"
         "        NSOpenGLPixelFormat* pf = [[NSOpenGLPixelFormat alloc] initWithAttributes:attrs];\n"
+        "        if (!pf && __nexa_g3_aa) {\n"
+        "            attrs[12] = 4;\n"
+        "            pf = [[NSOpenGLPixelFormat alloc] initWithAttributes:attrs];\n"
+        "        }\n"
         "        if (!pf && __nexa_g3_aa) {\n"
         "            attrs[9] = 0;\n"
         "            pf = [[NSOpenGLPixelFormat alloc] initWithAttributes:attrs];\n"
@@ -748,10 +770,14 @@ static int __nexa_g3_platform_open(const std::string& title, int w, int h) {
         "                attrs[9] = NSOpenGLPFASampleBuffers;\n"
         "                attrs[10] = 1;\n"
         "                attrs[11] = NSOpenGLPFASamples;\n"
-        "                attrs[12] = 4;\n"
+        "                attrs[12] = 8;\n"
         "                attrs[13] = 0;\n"
         "            }\n"
         "            pf = [[NSOpenGLPixelFormat alloc] initWithAttributes:attrs];\n"
+        "            if (!pf && __nexa_g3_aa) {\n"
+        "                attrs[12] = 4;\n"
+        "                pf = [[NSOpenGLPixelFormat alloc] initWithAttributes:attrs];\n"
+        "            }\n"
         "            if (!pf && __nexa_g3_aa) {\n"
         "                attrs[9] = 0;\n"
         "                pf = [[NSOpenGLPixelFormat alloc] initWithAttributes:attrs];\n"
@@ -764,9 +790,12 @@ static int __nexa_g3_platform_open(const std::string& title, int w, int h) {
         "    if (!vi) return 0;\n",
         "    int plain[] = { 4, 5, 12, 24, 0 };\n"
         "    // GLX_SAMPLE_BUFFERS is 100000 and GLX_SAMPLES is 100001.\n"
-        "    int samples[] = { 4, 5, 12, 24, 100000, 1, 100001, 4, 0 };\n"
+        "    int samples8[] = { 4, 5, 12, 24, 100000, 1, 100001, 8, 0 };\n"
+        "    int samples4[] = { 4, 5, 12, 24, 100000, 1, 100001, 4, 0 };\n"
         "    XVisualInfo* vi = glXChooseVisual(__nexa_g3.dpy, DefaultScreen(__nexa_g3.dpy),\n"
-        "        __nexa_g3_aa ? samples : plain);\n"
+        "        __nexa_g3_aa ? samples8 : plain);\n"
+        "    if (!vi && __nexa_g3_aa)\n"
+        "        vi = glXChooseVisual(__nexa_g3.dpy, DefaultScreen(__nexa_g3.dpy), samples4);\n"
         "    if (!vi && __nexa_g3_aa)\n"
         "        vi = glXChooseVisual(__nexa_g3.dpy, DefaultScreen(__nexa_g3.dpy), plain);\n"
         "    if (!vi) return 0;\n");
