@@ -1299,38 +1299,7 @@ inline void gfx3dApplyMirror(std::string& s) {
         "    if (!__nexa_g3.ready) return;\n"
         "    // Last thing before the swap, so it is over everything the frame drew.\n"
         "    __nexa_g3_overlay_present();\n",
-        R"MIR(static int __nexa_g3_inv4(float* o, const float* m) {
-    float a[4][8];
-    for (int r = 0; r < 4; r++) {
-        for (int c = 0; c < 4; c++) a[r][c] = m[c * 4 + r];
-        for (int c = 0; c < 4; c++) a[r][4 + c] = (r == c) ? 1.0f : 0.0f;
-    }
-    for (int col = 0; col < 4; col++) {
-        int piv = col;
-        float best = a[col][col] < 0.0f ? -a[col][col] : a[col][col];
-        for (int r = col + 1; r < 4; r++) {
-            float v = a[r][col] < 0.0f ? -a[r][col] : a[r][col];
-            if (v > best) { best = v; piv = r; }
-        }
-        if (best < 1e-8f) return 0;
-        if (piv != col) {
-            for (int c = 0; c < 8; c++) {
-                float t = a[col][c]; a[col][c] = a[piv][c]; a[piv][c] = t;
-            }
-        }
-        float d = a[col][col];
-        for (int c = 0; c < 8; c++) a[col][c] /= d;
-        for (int r = 0; r < 4; r++) if (r != col) {
-            float f = a[r][col];
-            for (int c = 0; c < 8; c++) a[r][c] -= f * a[col][c];
-        }
-    }
-    for (int r = 0; r < 4; r++)
-        for (int c = 0; c < 4; c++) o[c * 4 + r] = a[r][4 + c];
-    return 1;
-}
-
-static void __nexa_g3_mirror_bake(float* m, float sx, float sy) {
+        R"MIR(static void __nexa_g3_mirror_bake(float* m, float sx, float sy) {
     float r0[4], r1[4], r3[4];
     for (int i = 0; i < 4; i++) {
         r0[i] = m[i * 4 + 0];
@@ -1345,8 +1314,10 @@ static void __nexa_g3_mirror_bake(float* m, float sx, float sy) {
 }
 
 // Reflecting the world flips which way a triangle winds, so the front face
-// swaps for that pass and comes back after. The fixed-function pipeline clips
-// with its own plane; a shader discards instead, from uClip.
+// swaps for that pass and comes back after. glClipPlane takes the plane in
+// object coordinates and transforms it itself: the vertices are already in
+// world space, and the modelview is the reflected camera, so the plane is
+// handed over as the glass's own equation. A shader discards from uClip.
 static void __nexa_g3_mirror_camera(void) {
     if (!__nexa_g3.ready || __nexa_g3.vulkan) return;
 #if defined(NEXA_WASM)
@@ -1366,20 +1337,13 @@ static void __nexa_g3_mirror_camera(void) {
     if (__nexa_g3.core33) return;
     if (!__nexa_gl.Enable || !__nexa_gl.Disable) return;
     if (__nexa_g3_mirror_on && clip) {
-        float inv[16];
-        if (__nexa_g3_inv4(inv, __nexa_g3.view)) {
-            float pl[4] = {
-                __nexa_g3_mirror_n[0], __nexa_g3_mirror_n[1], __nexa_g3_mirror_n[2],
-                -__nexa_g3_mirror_d + 0.002f
-            };
-            double eq[4];
-            for (int i = 0; i < 4; i++)
-                eq[i] = (double)inv[i * 4] * pl[0] + (double)inv[i * 4 + 1] * pl[1]
-                      + (double)inv[i * 4 + 2] * pl[2] + (double)inv[i * 4 + 3] * pl[3];
-            clip(0x3000u, eq);
-            __nexa_gl.Enable(0x3000u);
-            __nexa_g3_mirror_clipped = 1;
-        }
+        double eq[4] = {
+            (double)__nexa_g3_mirror_n[0], (double)__nexa_g3_mirror_n[1],
+            (double)__nexa_g3_mirror_n[2], (double)(-__nexa_g3_mirror_d + 0.002f)
+        };
+        clip(0x3000u, eq);
+        __nexa_gl.Enable(0x3000u);
+        __nexa_g3_mirror_clipped = 1;
     } else if (__nexa_g3_mirror_clipped) {
         __nexa_gl.Disable(0x3000u);
         __nexa_g3_mirror_clipped = 0;
@@ -1399,8 +1363,8 @@ static int __nexa_g3_mirror_copy(void) {
     if (!__nexa_g3_mirror_tex) return 0;
     glBindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_mirror_tex);
     if (tw != __nexa_g3_mirror_tw || th != __nexa_g3_mirror_th) {
-        glTexImage2D(NEXA_GL_TEXTURE_2D, 0, (__nexa_GLint)0x1907, tw, th, 0,
-                     0x1907, NEXA_GL_UNSIGNED_BYTE, nullptr);
+        glTexImage2D(NEXA_GL_TEXTURE_2D, 0, (__nexa_GLint)NEXA_GL_RGBA, tw, th, 0,
+                     NEXA_GL_RGBA, NEXA_GL_UNSIGNED_BYTE, nullptr);
         glTexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_MIN_FILTER, (__nexa_GLint)NEXA_GL_LINEAR);
         glTexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_MAG_FILTER, (__nexa_GLint)NEXA_GL_LINEAR);
         glTexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_WRAP_S, 0x2900);
@@ -1421,8 +1385,8 @@ static int __nexa_g3_mirror_copy(void) {
     if (!__nexa_g3_mirror_tex) return 0;
     __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_mirror_tex);
     if (tw != __nexa_g3_mirror_tw || th != __nexa_g3_mirror_th) {
-        __nexa_gl.TexImage2D(NEXA_GL_TEXTURE_2D, 0, (__nexa_GLint)0x1907, tw, th, 0,
-                             0x1907u, NEXA_GL_UNSIGNED_BYTE, nullptr);
+        __nexa_gl.TexImage2D(NEXA_GL_TEXTURE_2D, 0, (__nexa_GLint)NEXA_GL_RGBA, tw, th, 0,
+                             NEXA_GL_RGBA, NEXA_GL_UNSIGNED_BYTE, nullptr);
         __nexa_gl.TexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_MIN_FILTER, (__nexa_GLint)NEXA_GL_LINEAR);
         __nexa_gl.TexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_MAG_FILTER, (__nexa_GLint)NEXA_GL_LINEAR);
         __nexa_gl.TexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_WRAP_S, 0x2900);
@@ -1443,8 +1407,24 @@ static int __nexa_g3_mirror_copy(void) {
 static void __nexa_g3_mirror_pane(void) {
     if (!__nexa_g3_mirror_have || !__nexa_g3_mirror_tex || __nexa_g3.vulkan) return;
     float n[3] = { __nexa_g3_mirror_n[0], __nexa_g3_mirror_n[1], __nexa_g3_mirror_n[2] };
-    float u[3], v[3];
+    float u[3], v[3], right[3], up[3];
     __nexa_g3_basis(n, u, v);
+    // w runs across the glass, h up it. basis() has no notion of up, so the
+    // more vertical of its two axes takes the height, and the cross product
+    // is kept pointing out of the glass.
+    float uy = u[1] < 0.0f ? -u[1] : u[1];
+    float vy = v[1] < 0.0f ? -v[1] : v[1];
+    if (uy > vy) {
+        up[0] = u[0]; up[1] = u[1]; up[2] = u[2];
+        right[0] = -v[0]; right[1] = -v[1]; right[2] = -v[2];
+    } else {
+        right[0] = u[0]; right[1] = u[1]; right[2] = u[2];
+        up[0] = v[0]; up[1] = v[1]; up[2] = v[2];
+    }
+    if (up[1] < 0.0f) {
+        up[0] = -up[0]; up[1] = -up[1]; up[2] = -up[2];
+        right[0] = -right[0]; right[1] = -right[1]; right[2] = -right[2];
+    }
     float hw = __nexa_g3_mirror_w * 0.5f, hh = __nexa_g3_mirror_h * 0.5f;
     float c[3] = {
         __nexa_g3_mirror_p[0] + n[0] * 0.015f,
@@ -1455,9 +1435,9 @@ static void __nexa_g3_mirror_pane(void) {
     const float su[4] = {-1, 1, 1, -1};
     const float sv[4] = {-1, -1, 1, 1};
     for (int i = 0; i < 4; i++) {
-        q[i][0] = c[0] + u[0] * su[i] * hw + v[0] * sv[i] * hh;
-        q[i][1] = c[1] + u[1] * su[i] * hw + v[1] * sv[i] * hh;
-        q[i][2] = c[2] + u[2] * su[i] * hw + v[2] * sv[i] * hh;
+        q[i][0] = c[0] + right[0] * su[i] * hw + up[0] * sv[i] * hh;
+        q[i][1] = c[1] + right[1] * su[i] * hw + up[1] * sv[i] * hh;
+        q[i][2] = c[2] + right[2] * su[i] * hw + up[2] * sv[i] * hh;
     }
     const int tri[6] = {0, 1, 2, 0, 2, 3};
     float verts[36];
