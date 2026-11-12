@@ -52,6 +52,8 @@ elif ! grep -q __nexa_phys_ray_sphere "$WORK/ray.cpp"; then
     bad "ray slice" "a ray did not emit the query"
 elif grep -q __nexa_phys_step "$WORK/ray.cpp"; then
     bad "ray slice" "a ray-only program carries the solver"
+elif grep -q __nexa_phys_mesh "$WORK/ray.cpp"; then
+    bad "ray slice" "a ray carries mesh colliders"
 else
     ok "a ray carries the query and not the solver"
 fi
@@ -161,6 +163,78 @@ else
         ok "overlaps, rays, rest, slide-off, friction, and no tunnel"
     else
         bad "run" "got [$out]"
+    fi
+fi
+
+if ! "$NEXAC" "$WORK/use.nxa" --source "$WORK/use.cpp" > "$WORK/use.src.log" 2>&1; then
+    bad "body source" "$(cat "$WORK/use.src.log")"
+elif grep -q __nexa_phys_mesh "$WORK/use.cpp"; then
+    bad "body slice" "a sphere world carries mesh colliders"
+else
+    ok "a body world carries no mesh colliders"
+fi
+
+# A floor of two triangles. Span 2, centred, so scale 4 is a floor on y = 0
+# covering x and z in [-2, 2]. Run from $WORK so the .obj path stays relative.
+cat > "$WORK/floor.obj" <<'EOF'
+v -1 0 -1
+v 1 0 -1
+v 1 0 1
+v -1 0 1
+f 1 2 3
+f 1 3 4
+EOF
+cat > "$WORK/mesh.nxa" <<'EOF'
+#include <std/io>
+#include <std/physics>
+#include <std/gfx3d>
+fn main() {
+    let model = gfx3d.model("floor.obj");
+    if (model == 0) { io.println("fail model"); return 1; }
+    let floor = physics.mesh(model, 0, 0, 0, 4);
+    if (floor == 0) { io.println("fail mesh"); return 1; }
+    physics.mass(floor, 0);
+    let ball = physics.sphere(0, 2, 0, 0.5);
+    let crate = physics.box(1.5, 3, -1.5, 1, 1, 1);
+    let post = physics.capsule(-1.5, 2, -1.2, -1.5, 3, -1.2, 0.25);
+    let i = 0;
+    while (i < 300) {
+        physics.step(0.016);
+        i = i + 1;
+    }
+    let y = physics.y(ball);
+    if (y < 0.42 || y > 0.65) { io.println("fail mesh rest"); io.println(y); return 1; }
+    let cy = physics.y(crate);
+    if (cy < 0.40 || cy > 0.70) { io.println("fail mesh box"); io.println(cy); return 1; }
+    let py = physics.y1(post);
+    if (py < 0.15 || py > 0.45) { io.println("fail mesh capsule"); io.println(py); return 1; }
+    let drop = physics.sphere(-1.5, 25, 1.5, 0.5);
+    i = 0;
+    while (i < 80) { physics.step(0.05); i = i + 1; }
+    let dy = physics.y(drop);
+    if (dy < 0.35 || dy > 0.75) { io.println("fail mesh tunnel"); io.println(dy); return 1; }
+    let t = physics.ray_mesh(0, 2, 0, 0, -1, 0, model, 0, 0, 0, 4);
+    if (t < 1.9 || t > 2.1) { io.println("fail mesh ray"); io.println(t); return 1; }
+    let hy = physics.hy();
+    if (hy < -0.05 || hy > 0.05) { io.println("fail mesh hit"); io.println(hy); return 1; }
+    io.println("ok");
+    return 0;
+}
+EOF
+if ! "$NEXAC" "$WORK/mesh.nxa" --source "$WORK/mesh.cpp" > "$WORK/mesh.src.log" 2>&1; then
+    bad "mesh transpile" "$(cat "$WORK/mesh.src.log")"
+elif ! grep -q __nexa_phys_mesh "$WORK/mesh.cpp"; then
+    bad "mesh slice" "physics.mesh did not emit a mesh collider"
+elif ! grep -q __nexa_phys_ray_mesh "$WORK/mesh.cpp"; then
+    bad "mesh slice" "physics.ray_mesh did not emit a mesh ray"
+elif ! "$NEXAC" "$WORK/mesh.nxa" -o "$WORK/use_mesh$EXE" > "$WORK/mesh.log" 2>&1; then
+    bad "mesh build" "$(tail -30 "$WORK/mesh.log")"
+else
+    out=$(cd "$WORK" && "./use_mesh$EXE" 2>&1 | tr -d '\r')
+    if [ "$out" = "ok" ]; then
+        ok "a loaded mesh is a collider"
+    else
+        bad "mesh run" "got [$out]"
     fi
 fi
 

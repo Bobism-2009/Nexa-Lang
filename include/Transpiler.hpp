@@ -417,8 +417,13 @@ public:
                         m == "gravity" || m == "step" || m == "x" || m == "y" || m == "z" ||
                         m == "vx" || m == "vy" || m == "vz" || m == "x1" || m == "y1" || m == "z1" ||
                         m == "x2" || m == "y2" || m == "z2";
-                    if (world) cppUsage.physicsBody = true;
+                    if (m == "mesh" || world) cppUsage.physicsBody = true;
                     else cppUsage.physicsQuery = true;
+                    if (m == "mesh" || m == "ray_mesh") {
+                        cppUsage.physicsMesh = true;
+                        cppUsage.gfx3d = true;
+                        cppUsage.gfx3dModel = true;
+                    }
                     break;
                 }
                 case AstNode::Type::TermCall: {
@@ -3069,7 +3074,7 @@ private:
                 // For an integer result, assign to an int (e.g. let n: int = math.floor(x);).
                 return "float";
             case AstNode::Type::PhysicsCall:
-                if (e.value == "ray_sphere" || e.value == "ray_box" || e.value == "ray_capsule" ||
+                if (e.value == "ray_sphere" || e.value == "ray_box" || e.value == "ray_capsule" || e.value == "ray_mesh" ||
                     e.value == "hx" || e.value == "hy" || e.value == "hz" ||
                     e.value == "nx" || e.value == "ny" || e.value == "nz" ||
                     e.value == "x" || e.value == "y" || e.value == "z" ||
@@ -4765,6 +4770,8 @@ private:
             {"sphere", "physics.sphere(x, y, z, radius)", "nnnn"},
             {"box", "physics.box(x, y, z, w, h, d)", "nnnnnn"},
             {"capsule", "physics.capsule(x1, y1, z1, x2, y2, z2, radius)", "nnnnnnn"},
+            {"mesh", "physics.mesh(model, x, y, z, scale)", "nnnnn"},
+            {"ray_mesh", "physics.ray_mesh(ox, oy, oz, dx, dy, dz, model, x, y, z, scale)", "nnnnnnnnnnn"},
             {"mass", "physics.mass(id, mass)", "nn"},
             {"bounce", "physics.bounce(id, restitution)", "nn"},
             {"velocity", "physics.velocity(id, vx, vy, vz)", "nnnn"},
@@ -6233,7 +6240,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         if (e.type == AstNode::Type::MathCall) return true;
         if (e.type == AstNode::Type::PhysicsCall) {
             const std::string& m = e.value;
-            return m == "ray_sphere" || m == "ray_box" || m == "ray_capsule" ||
+            return m == "ray_sphere" || m == "ray_box" || m == "ray_capsule" || m == "ray_mesh" ||
                    m == "hx" || m == "hy" || m == "hz" || m == "nx" || m == "ny" || m == "nz" ||
                    m == "x" || m == "y" || m == "z" || m == "vx" || m == "vy" || m == "vz" ||
                    m == "x1" || m == "y1" || m == "z1" || m == "x2" || m == "y2" || m == "z2";
@@ -8627,6 +8634,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (fn == "sphere") return "__nexa_phys_sphere(" + num(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ")";
                 if (fn == "box") return "__nexa_phys_box(" + num(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ", " + num(4) + ", " + num(5) + ")";
                 if (fn == "capsule") return "__nexa_phys_capsule(" + num(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ", " + num(4) + ", " + num(5) + ", " + num(6) + ")";
+                if (fn == "mesh") return "__nexa_phys_mesh(" + num(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ", " + num(4) + ")";
+                if (fn == "ray_mesh") return "__nexa_phys_ray_mesh(" + num(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ", " + num(4) + ", " + num(5) + ", " + num(6) + ", " + num(7) + ", " + num(8) + ", " + num(9) + ", " + num(10) + ")";
                 if (fn == "mass") return "__nexa_phys_mass(" + id(0) + ", " + num(1) + ")";
                 if (fn == "bounce") return "__nexa_phys_bounce(" + id(0) + ", " + num(1) + ")";
                 if (fn == "velocity") return "__nexa_phys_velocity(" + id(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ")";

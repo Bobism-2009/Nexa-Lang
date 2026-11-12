@@ -1753,7 +1753,12 @@ ARGUMENT TYPES
   Nothing is linked. A program that never calls physics carries none of it.
   One that only tests overlaps and rays carries no solver. Up to 256 bodies.
   Boxes stay axis-aligned and capsules keep their shape: bodies translate,
-  they do not rotate. A hit shares the speed by mass, so one sphere does
+  they do not rotate. A loaded model is a collider too, at the same centre
+  and scale gfx3d.draw uses. A sphere or a capsule hits its triangles, a
+  box meets each triangle, and two meshes meet by the boxes around those
+  triangles. A program that never calls mesh or ray_mesh carries none of
+  that, and it needs #include <std/gfx3d> because the handle is gfx3d.model.
+  A hit shares the speed by mass, so one sphere does
   not bulldoze another of the same weight. A sphere barely grips another
   sphere, so it slides off instead of sticking; a box keeps its grip, which
   is what stops a body on the floor. Positions are the centres gfx3d draws from, and a box's
@@ -1778,6 +1783,14 @@ ARGUMENT TYPES
   physics.sphere(x, y, z, radius)          - a dynamic body; id, or 0 if the
   physics.box(x, y, z, w, h, d)              world is full (256)
   physics.capsule(x1, y1, z1, x2, y2, z2, radius)
+  physics.mesh(model, x, y, z, scale) - the triangles of a gfx3d.model.
+                                 x, y, z and scale are the same numbers
+                                 gfx3d.draw takes, so draw the model where
+                                 the body is. 0 if the model is not loaded.
+                                 It translates and does not rotate.
+  physics.ray_mesh(ox, oy, oz, dx, dy, dz, model, x, y, z, scale)
+                                 - the same surface, without making a body.
+                                   Distance along the direction, or -1.
   physics.mass(id, m)            - 0 makes the body static. Default mass is 1.
   physics.bounce(id, e)          - 0 to 1. Default 0, so a landing body rests.
                                  A hit slower than 1 m/s does not bounce, so a

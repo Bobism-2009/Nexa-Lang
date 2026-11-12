@@ -94,6 +94,9 @@ public:
         // world: a program that only asks "does this hit" carries no solver.
         bool physicsQuery = false;
         bool physicsBody = false;
+        // Triangle colliders. Emitted after gfx3d's model block, and absent
+        // from a program that never calls physics.mesh or physics.ray_mesh.
+        bool physicsMesh = false;
         bool crypto = false;
         bool cryptoHex = false;
         bool cryptoXor = false;
@@ -2043,7 +2046,10 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
             out += "#include <algorithm>\n";
         }
         if (hasPhysics() && (usage.physicsQuery || usage.physicsBody)) {
-            out += physicsRuntimeCpp(usage.physicsQuery, usage.physicsBody);
+            out += physicsRuntimeCpp(usage.physicsQuery, usage.physicsBody, usage.physicsMesh && hasGfx3d());
+        }
+        if (hasPhysics() && usage.physicsMesh && !(hasGfx3d() && usage.gfx3d)) {
+            out += physicsMeshStubCpp();
         }
         if (hasCrypto() && usage.crypto) {
             CryptoEmit need;
@@ -2222,7 +2228,8 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
             // Before the model block and after the runtime: it swaps the
             // globals the drawing code reads its locations out of.
             if (usage.gfx3dShader) out += gfx3dShaderCpp();
-            if (usage.gfx3dModel) out += gfx3dModelCpp();
+            if (usage.gfx3dModel || usage.physicsMesh) out += gfx3dModelCpp();
+            if (usage.physicsMesh) out += physicsMeshCpp(usage.physicsBody);
             // gfx3d.texture decodes with std/gfx's decoder. Both chunks are
             // guarded, so if gfx.image already brought them they are empty here.
             if (usage.gfx3dTexture) {
@@ -2645,7 +2652,7 @@ static __nexa_mutex_t* __nexa_mutex_at(int id) {
         all.osTempDir = all.osArch = all.osCpuCount = all.osWhich = all.osCwd = all.osInfo = true;
         all.osExit = all.osHostname = all.osUsername = all.osHome = all.osSetenv = true;
         all.file = all.fileIo = all.fileWrite = all.fileRead = all.fileFs = all.random = all.math = all.time = all.timeSleep = all.timeChrono = all.timeWall = all.timeCalendar = all.timeFormat = all.thread = all.dll = true;
-        all.physicsQuery = all.physicsBody = true;
+        all.physicsQuery = all.physicsBody = all.physicsMesh = true;
         all.str = true;
         return getCppIncludes(all);
     }

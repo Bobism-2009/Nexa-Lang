@@ -40,6 +40,8 @@ MODULE INCLUDES (angle brackets)
   #include <std/physics> - Collision and a small rigid world for gfx3d's shapes:
                             overlap and rays for spheres, boxes and capsules;
                             physics.sphere/box/capsule, physics.step, gravity.
+                            physics.mesh / physics.ray_mesh use a gfx3d.model
+                            as a triangle collider, at the same scale as draw.
                             Bodies translate and do not rotate. A program that
                             never calls physics carries none of it.
   #include <std/ui>       - Widgets, themes and styles on the gfx window (includes std/gfx):
