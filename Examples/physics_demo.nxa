@@ -1,0 +1,149 @@
+// std/physics: balls falling onto a floor, a crate and a post.
+//
+//   build: NexaC Examples/physics_demo.nxa -o physics_demo && ./physics_demo
+//   drive: arrows orbit, W/S raise and lower, wheel zooms, space stops the
+//          camera drifting, click or F drops a ball where the marker sits,
+//          C clears the balls, escape quits
+//
+// gfx3d only draws. The floor, the crate and the post are physics bodies with
+// mass 0, so they never move. Each ball is a physics.sphere, and the shape on
+// screen is drawn at physics.x/y/z after physics.step. Bodies translate and
+// do not rotate, which is why the crate stays square to the world.
+//
+// The white marker is a ray from the camera through the point it is looking
+// at. It is the nearest of physics.ray_box, physics.ray_capsule and
+// physics.ray_sphere, and it is not a body: dropping a ball there is what
+// makes it one. Bounce is 0.6, so a landing ball hops and then rests.
+#include <std/gfx3d>
+#include <std/physics>
+#include <std/io>
+#include <std/math>
+
+fn main() {
+    if (gfx3d.open("Nexa physics", 900, 620) != 1) {
+        io.println("no 3D window: this platform has no backend yet");
+        return;
+    }
+    gfx3d.perspective(55.0, 0.1, 200.0);
+    gfx3d.maxfps(60);
+    gfx3d.light(-0.4, 0.85, 0.35);
+    gfx3d.ambient(60);
+
+    // Top of the floor is y = 0. The crate sits on it. The post is a capsule,
+    // the same segment and radius gfx3d.capsule draws.
+    let floor = physics.box(0.0, -0.5, 0.0, 24.0, 1.0, 24.0);
+    physics.mass(floor, 0);
+    let crate = physics.box(3.0, 1.0, -1.0, 2.0, 2.0, 2.0);
+    physics.mass(crate, 0);
+    let post = physics.capsule(-3.2, 0.45, 2.0, -3.2, 2.8, 2.0, 0.45);
+    physics.mass(post, 0);
+
+    let balls: []int;
+    let n = 0;
+    while (n < 6) {
+        let x = -4.0 + n * 1.5;
+        let id = physics.sphere(x, 4.5 + n * 0.35, 0.4, 0.45);
+        physics.bounce(id, 0.6);
+        balls.push(id);
+        n = n + 1;
+    }
+
+    let angle = 0.7;
+    let height = 7.0;
+    let dist = 16.0;
+    let spinning = 1;
+    let wasDown = 0;
+
+    while (gfx3d.closed() != 1) {
+        gfx3d.poll();
+
+        if (gfx3d.key("left"))  { angle = angle - 0.02; spinning = 0; }
+        if (gfx3d.key("right")) { angle = angle + 0.02; spinning = 0; }
+        if (gfx3d.key("w"))     { height = height + 0.1; }
+        if (gfx3d.key("s"))     { height = height - 0.1; }
+        dist = dist - gfx3d.wheel() * 0.8;
+        if (dist < 6.0) { dist = 6.0; }
+        if (dist > 40.0) { dist = 40.0; }
+        if (gfx3d.pressed("space")) { spinning = 1 - spinning; }
+        if (gfx3d.pressed("escape")) { gfx3d.close(); }
+        if (spinning == 1) { angle = angle + 0.004; }
+
+        let ex = math.sin(angle) * dist;
+        let ey = height;
+        let ez = math.cos(angle) * dist;
+        let dx = 0.0 - ex;
+        let dy = 1.2 - ey;
+        let dz = 0.0 - ez;
+
+        physics.step(0.016);
+
+        // The marker is the closest hit along the view. Each ray overwrites
+        // physics.hx, so the point is copied before the next test.
+        let best = -1.0;
+        let hx = 0.0;
+        let hy = 0.0;
+        let hz = 0.0;
+        let t = physics.ray_box(ex, ey, ez, dx, dy, dz, 0.0, -0.5, 0.0, 24.0, 1.0, 24.0);
+        if (t >= 0.0) { best = t; hx = physics.hx(); hy = physics.hy(); hz = physics.hz(); }
+        t = physics.ray_box(ex, ey, ez, dx, dy, dz, 3.0, 1.0, -1.0, 2.0, 2.0, 2.0);
+        if (t >= 0.0 && (best < 0.0 || t < best)) {
+            best = t; hx = physics.hx(); hy = physics.hy(); hz = physics.hz();
+        }
+        t = physics.ray_capsule(ex, ey, ez, dx, dy, dz,
+                                physics.x1(post), physics.y1(post), physics.z1(post),
+                                physics.x2(post), physics.y2(post), physics.z2(post), 0.45);
+        if (t >= 0.0 && (best < 0.0 || t < best)) {
+            best = t; hx = physics.hx(); hy = physics.hy(); hz = physics.hz();
+        }
+        for (i, len(balls)) {
+            let id = balls[i];
+            t = physics.ray_sphere(ex, ey, ez, dx, dy, dz, physics.x(id), physics.y(id), physics.z(id), 0.45);
+            if (t >= 0.0 && (best < 0.0 || t < best)) {
+                best = t; hx = physics.hx(); hy = physics.hy(); hz = physics.hz();
+            }
+        }
+
+        let down = gfx3d.mouse("left");
+        let drop = 0;
+        if (down == 1 && wasDown == 0) { drop = 1; }
+        wasDown = down;
+        if (gfx3d.pressed("f")) { drop = 1; }
+        if (drop == 1 && best >= 0.0) {
+            if (len(balls) > 40) {
+                physics.remove(balls[0]);
+                balls.remove(0);
+            }
+            let id = physics.sphere(hx, hy + 2.5, hz, 0.45);
+            physics.bounce(id, 0.6);
+            balls.push(id);
+        }
+        if (gfx3d.pressed("c")) {
+            for (id in balls) { physics.remove(id); }
+            balls.clear();
+        }
+
+        gfx3d.camera(ex, ey, ez, 0.0, 1.2, 0.0);
+        gfx3d.clear(16, 16, 24);
+
+        gfx3d.box(0.0, -0.5, 0.0, 24.0, 1.0, 24.0, 48, 52, 64);
+        gfx3d.box(3.0, 1.0, -1.0, 2.0, 2.0, 2.0, 90, 140, 210);
+        gfx3d.capsule(physics.x1(post), physics.y1(post), physics.z1(post),
+                      physics.x2(post), physics.y2(post), physics.z2(post),
+                      0.45, 90, 190, 120);
+
+        for (i, len(balls)) {
+            let id = balls[i];
+            let r = 220;
+            let g = 90;
+            let b = 70;
+            if (i % 3 == 1) { r = 80; g = 170; b = 220; }
+            if (i % 3 == 2) { r = 230; g = 180; b = 70; }
+            gfx3d.sphere(physics.x(id), physics.y(id), physics.z(id), 0.45, r, g, b);
+        }
+        if (best >= 0.0) { gfx3d.sphere(hx, hy, hz, 0.12, 245, 245, 245); }
+
+        gfx3d.present();
+    }
+
+    gfx3d.close();
+}
