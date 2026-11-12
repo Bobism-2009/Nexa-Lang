@@ -712,7 +712,7 @@ same picture, shaders underneath. Nothing to install for any of them.
 Colours are 0..255. The draws hand nothing back and are statements only, so
 `let C = gfx3d.cube(...);` is an error naming the call -- as in std/gfx.)HELP" },
 
-{ "std/physics", "physics collision raycast rigid body gravity sphere box capsule squish squishy soft jelly", Group::Module,
+{ "std/physics", "physics collision raycast rigid body gravity sphere box capsule squish squishy soft jelly cloth pin wind flag", Group::Module,
   "overlap tests, rays, and a small rigid world for gfx3d's shapes",
   R"HELP(std/physics - collision and a small rigid world
   #include <std/physics>
@@ -735,6 +735,9 @@ along its direction, or -1, and leaves the hit in hx/hy/hz and nx/ny/nz.
   body    physics.sphere(...)  physics.box(...)  physics.capsule(...)  physics.mesh(...)
           physics.squishy(amount)  physics.soft(id, amount)  physics.squash(id)
           physics.snx(id)  physics.sny(id)  physics.snz(id)
+          physics.cloth(x, y, z, width, height, cols, rows, face)
+          physics.pin(id, col, row)  physics.unpin(id, col, row)  physics.wind(x, y, z)
+          physics.cx(id, col, row)  physics.cy(id, col, row)  physics.cz(id, col, row)
           physics.mass(id, m)  physics.bounce(id, e)  physics.velocity(id, vx, vy, vz)
           physics.set(id, x, y, z)  physics.remove(id)  physics.gravity(x, y, z)
           physics.step(dt)

@@ -419,8 +419,11 @@ public:
                         m == "x2" || m == "y2" || m == "z2";
                     const bool squishy = m == "squishy" || m == "soft" || m == "squash" ||
                         m == "snx" || m == "sny" || m == "snz";
+                    const bool cloth = m == "cloth" || m == "pin" || m == "unpin" || m == "wind" ||
+                        m == "cx" || m == "cy" || m == "cz";
                     if (squishy) cppUsage.physicsSquish = true;
-                    if (m == "mesh" || squishy || world) cppUsage.physicsBody = true;
+                    if (cloth) cppUsage.physicsCloth = true;
+                    if (m == "mesh" || squishy || cloth || world) cppUsage.physicsBody = true;
                     else cppUsage.physicsQuery = true;
                     if (m == "mesh" || m == "ray_mesh") {
                         cppUsage.physicsMesh = true;
@@ -3084,7 +3087,8 @@ private:
                     e.value == "vx" || e.value == "vy" || e.value == "vz" ||
                     e.value == "x1" || e.value == "y1" || e.value == "z1" ||
                     e.value == "x2" || e.value == "y2" || e.value == "z2" ||
-                    e.value == "squash" || e.value == "snx" || e.value == "sny" || e.value == "snz") return "float";
+                    e.value == "squash" || e.value == "snx" || e.value == "sny" || e.value == "snz" ||
+                    e.value == "cx" || e.value == "cy" || e.value == "cz") return "float";
                 return "int";
             case AstNode::Type::CryptoCall:
                 return "string";
@@ -4802,6 +4806,13 @@ private:
             {"x2", "physics.x2(id)", "n"},
             {"y2", "physics.y2(id)", "n"},
             {"z2", "physics.z2(id)", "n"},
+            {"cloth", "physics.cloth(x, y, z, width, height, cols, rows, face)", "nnnnnnnn"},
+            {"pin", "physics.pin(id, col, row)", "nnn"},
+            {"unpin", "physics.unpin(id, col, row)", "nnn"},
+            {"wind", "physics.wind(x, y, z)", "nnn"},
+            {"cx", "physics.cx(id, col, row)", "nnn"},
+            {"cy", "physics.cy(id, col, row)", "nnn"},
+            {"cz", "physics.cz(id, col, row)", "nnn"},
             {"", nullptr, nullptr},
         };
         return rows;
@@ -6255,7 +6266,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                    m == "hx" || m == "hy" || m == "hz" || m == "nx" || m == "ny" || m == "nz" ||
                    m == "x" || m == "y" || m == "z" || m == "vx" || m == "vy" || m == "vz" ||
                    m == "x1" || m == "y1" || m == "z1" || m == "x2" || m == "y2" || m == "z2" ||
-                   m == "squash" || m == "snx" || m == "sny" || m == "snz";
+                   m == "squash" || m == "snx" || m == "sny" || m == "snz" ||
+                   m == "cx" || m == "cy" || m == "cz";
         }
         if (e.type == AstNode::Type::RandomCall) return e.value == "float";
         if (e.type == AstNode::Type::GfxCall) return e.value == "pad_axis";
@@ -8648,6 +8660,13 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (fn == "capsule") return "__nexa_phys_capsule(" + num(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ", " + num(4) + ", " + num(5) + ", " + num(6) + ")";
                 if (fn == "mesh") return "__nexa_phys_mesh(" + num(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ", " + num(4) + ")";
                 if (fn == "ray_mesh") return "__nexa_phys_ray_mesh(" + num(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ", " + num(4) + ", " + num(5) + ", " + num(6) + ", " + num(7) + ", " + num(8) + ", " + num(9) + ", " + num(10) + ")";
+                if (fn == "cloth") return "__nexa_phys_cloth(" + num(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ", " + num(4) + ", " + num(5) + ", " + num(6) + ", " + num(7) + ")";
+                if (fn == "pin") return "__nexa_phys_cloth_pin(" + id(0) + ", " + num(1) + ", " + num(2) + ", 1)";
+                if (fn == "unpin") return "__nexa_phys_cloth_pin(" + id(0) + ", " + num(1) + ", " + num(2) + ", 0)";
+                if (fn == "wind") return "__nexa_phys_wind(" + num(0) + ", " + num(1) + ", " + num(2) + ")";
+                if (fn == "cx") return "__nexa_phys_cloth_at(" + id(0) + ", " + num(1) + ", " + num(2) + ", 0)";
+                if (fn == "cy") return "__nexa_phys_cloth_at(" + id(0) + ", " + num(1) + ", " + num(2) + ", 1)";
+                if (fn == "cz") return "__nexa_phys_cloth_at(" + id(0) + ", " + num(1) + ", " + num(2) + ", 2)";
                 if (fn == "squishy") return "__nexa_phys_squishy(" + num(0) + ")";
                 if (fn == "soft") return "__nexa_phys_soft(" + id(0) + ", " + num(1) + ")";
                 if (fn == "squash") return "__nexa_phys_squash(" + id(0) + ")";

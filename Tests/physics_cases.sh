@@ -172,6 +172,8 @@ elif grep -q __nexa_phys_mesh "$WORK/use.cpp"; then
     bad "body slice" "a sphere world carries mesh colliders"
 elif grep -q __nexa_phys_squish "$WORK/use.cpp"; then
     bad "body slice" "a rigid world carries squishy mode"
+elif grep -q __nexa_phys_cloth "$WORK/use.cpp"; then
+    bad "body slice" "a rigid world carries cloth"
 else
     ok "a body world carries no mesh colliders"
 fi
@@ -689,6 +691,47 @@ elif ! grep -q __nexa_gfx3d_ellipsoid "$WORK/squish_demo.cpp"; then
     bad "squish demo" "the demo does not draw a flattened sphere"
 else
     ok "squish demo transpiles"
+fi
+
+cat > "$WORK/cloth.nxa" <<'EOF'
+#include <std/io>
+#include <std/physics>
+fn main() {
+    let ground = physics.box(0, 0, 0, 10, 1, 10);
+    physics.mass(ground, 0);
+    let sheet = physics.cloth(0, 2.5, 0, 2, 2, 5, 5, 0);
+    if (sheet == 0) { io.println("fail cloth id"); return 1; }
+    physics.pin(sheet, 0, 0);
+    let pinned = physics.cy(sheet, 0, 0);
+    let ball = physics.sphere(0, 1.0, 4, 0.55);
+    physics.mass(ball, 0);
+    let drape = physics.cloth(0, 2.2, 4, 0.9, 0.9, 5, 5, 0);
+    let i = 0;
+    while (i < 160) { physics.step(0.016); i = i + 1; }
+    let py = physics.cy(sheet, 0, 0);
+    if (py < pinned - 0.02 || py > pinned + 0.02) { io.println("fail pin"); io.println(py); return 1; }
+    let far = physics.cy(sheet, 4, 4);
+    if (far < 0.48 || far > 0.95) { io.println("fail hem"); io.println(far); return 1; }
+    let dx = physics.cx(sheet, 1, 0) - physics.cx(sheet, 0, 0);
+    let dy = physics.cy(sheet, 1, 0) - physics.cy(sheet, 0, 0);
+    let dz = physics.cz(sheet, 1, 0) - physics.cz(sheet, 0, 0);
+    let edge = dx * dx + dy * dy + dz * dz;
+    if (edge < 0.04 || edge > 0.8) { io.println("fail edge"); io.println(edge); return 1; }
+    let cy = physics.cy(drape, 2, 2);
+    if (cy < 1.2 || cy > 2.05) { io.println("fail drape"); io.println(cy); return 1; }
+    io.println("ok");
+    return 0;
+}
+EOF
+if ! "$NEXAC" "$WORK/cloth.nxa" -o "$WORK/cloth$EXE" > "$WORK/cloth.log" 2>&1; then
+    bad "cloth build" "$(tail -20 "$WORK/cloth.log")"
+else
+    out=$("$WORK/cloth$EXE" 2>&1 | tr -d '\r')
+    if [ "$out" = "ok" ]; then
+        ok "a cloth hangs from a pin and drapes over a sphere"
+    else
+        bad "cloth run" "got [$out]"
+    fi
 fi
 
 if [ "$FAIL" -eq 0 ]; then

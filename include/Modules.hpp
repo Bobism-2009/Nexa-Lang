@@ -100,6 +100,9 @@ public:
         // physics.squishy. The soft contact path and the squash it records.
         // A program that never calls it keeps the rigid solver, byte for byte.
         bool physicsSquish = false;
+        // physics.cloth. A grid of points stepped with the world. Absent
+        // from a program that never calls it.
+        bool physicsCloth = false;
         bool crypto = false;
         bool cryptoHex = false;
         bool cryptoXor = false;
@@ -2053,7 +2056,8 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
         }
         if (hasPhysics() && (usage.physicsQuery || usage.physicsBody)) {
             out += physicsRuntimeCpp(usage.physicsQuery, usage.physicsBody,
-                usage.physicsMesh && hasGfx3d(), usage.physicsSquish);
+                usage.physicsMesh && hasGfx3d(), usage.physicsSquish, usage.physicsCloth);
+            if (usage.physicsCloth) out += physicsClothCpp();
         }
         if (hasPhysics() && usage.physicsMesh && !(hasGfx3d() && usage.gfx3d)) {
             out += physicsMeshStubCpp();
@@ -2660,7 +2664,7 @@ static __nexa_mutex_t* __nexa_mutex_at(int id) {
         all.osTempDir = all.osArch = all.osCpuCount = all.osWhich = all.osCwd = all.osInfo = true;
         all.osExit = all.osHostname = all.osUsername = all.osHome = all.osSetenv = true;
         all.file = all.fileIo = all.fileWrite = all.fileRead = all.fileFs = all.random = all.math = all.time = all.timeSleep = all.timeChrono = all.timeWall = all.timeCalendar = all.timeFormat = all.thread = all.dll = true;
-        all.physicsQuery = all.physicsBody = all.physicsMesh = all.physicsSquish = true;
+        all.physicsQuery = all.physicsBody = all.physicsMesh = all.physicsSquish = all.physicsCloth = true;
         all.str = true;
         return getCppIncludes(all);
     }

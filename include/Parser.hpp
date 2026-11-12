@@ -4463,6 +4463,8 @@ private:
             {"sphere", 4}, {"box", 6}, {"capsule", 7}, {"mesh", 5},
             {"ray_mesh", 11},
             {"squishy", 1}, {"soft", 2}, {"squash", 1}, {"snx", 1}, {"sny", 1}, {"snz", 1},
+            {"cloth", 8}, {"pin", 3}, {"unpin", 3}, {"wind", 3},
+            {"cx", 3}, {"cy", 3}, {"cz", 3},
             {"mass", 2}, {"bounce", 2}, {"velocity", 4}, {"set", 4}, {"remove", 1},
             {"gravity", 3}, {"step", 1},
             {"x", 1}, {"y", 1}, {"z", 1}, {"vx", 1}, {"vy", 1}, {"vz", 1},

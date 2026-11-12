@@ -1,0 +1,122 @@
+// A cloth over a ball, and a flag on a pole.
+//
+//   build: NexaC Examples/cloth_demo.nxa -o cloth_demo
+//   drive: arrows orbit, W/S raise and lower, wheel zooms, space stops the
+//          camera drifting, escape quits
+//
+// physics.cloth is a grid. face 0 lies flat and drops onto the sphere.
+// face 1 stands up; the left column is pinned, and physics.wind blows it.
+// The points do not push the bodies they land on. Draw the grid with
+// gfx3d.tri from physics.cx/cy/cz.
+#include <std/gfx3d>
+#include <std/physics>
+#include <std/io>
+#include <std/math>
+
+fn main() {
+    if (gfx3d.open("Nexa cloth", 900, 620) != 1) {
+        io.println("no 3D window: this platform has no backend yet");
+        return;
+    }
+    gfx3d.perspective(55.0, 0.1, 200.0);
+    gfx3d.maxfps(60);
+    gfx3d.light(-0.35, 0.9, 0.25);
+    gfx3d.ambient(70);
+
+    let floor = physics.box(0.0, -0.5, 0.0, 18.0, 1.0, 18.0);
+    physics.mass(floor, 0);
+    let ball = physics.sphere(0.0, 0.75, 0.0, 0.75);
+    physics.mass(ball, 0);
+    let pole = physics.capsule(3.3, 0.0, -1.2, 3.3, 2.7, -1.2, 0.08);
+    physics.mass(pole, 0);
+
+    // 9 by 9 sheet, centred above the ball.
+    let sheet = physics.cloth(0.0, 2.4, 0.0, 2.6, 2.6, 9, 9, 0);
+    // Flag, 11 across and 7 tall. Column 0 is the hoist.
+    let flag = physics.cloth(4.3, 1.9, -1.2, 1.8, 1.15, 11, 7, 1);
+    let row = 0;
+    while (row < 7) {
+        physics.pin(flag, 0, row);
+        row = row + 1;
+    }
+    physics.wind(0.4, 0.0, 3.5);
+
+    let angle = 0.9;
+    let height = 4.2;
+    let dist = 8.5;
+    let spinning = 1;
+
+    while (gfx3d.closed() != 1) {
+        gfx3d.poll();
+        if (gfx3d.key("left"))  { angle = angle - 0.02; spinning = 0; }
+        if (gfx3d.key("right")) { angle = angle + 0.02; spinning = 0; }
+        if (gfx3d.key("w"))     { height = height + 0.08; }
+        if (gfx3d.key("s"))     { height = height - 0.08; }
+        dist = dist - gfx3d.wheel() * 0.5;
+        if (dist < 4.0) { dist = 4.0; }
+        if (dist > 24.0) { dist = 24.0; }
+        if (gfx3d.pressed("space")) { spinning = 1 - spinning; }
+        if (gfx3d.pressed("escape")) { gfx3d.close(); }
+        if (spinning == 1) { angle = angle + 0.003; }
+
+        physics.step(0.016);
+
+        let ex = math.sin(angle) * dist;
+        let ey = height;
+        let ez = math.cos(angle) * dist;
+        gfx3d.camera(ex, ey, ez, 1.2, 1.2, 0.0);
+        gfx3d.clear(18, 20, 28);
+        gfx3d.box(0.0, -0.5, 0.0, 18.0, 1.0, 18.0, 46, 50, 60);
+        gfx3d.sphere(0.0, 0.75, 0.0, 0.75, 210, 170, 70);
+        gfx3d.capsule(physics.x1(pole), physics.y1(pole), physics.z1(pole),
+                      physics.x2(pole), physics.y2(pole), physics.z2(pole),
+                      0.08, 90, 90, 96);
+
+        let r = 0;
+        while (r < 8) {
+            let c = 0;
+            while (c < 8) {
+                let x00 = physics.cx(sheet, c, r);
+                let y00 = physics.cy(sheet, c, r);
+                let z00 = physics.cz(sheet, c, r);
+                let x10 = physics.cx(sheet, c + 1, r);
+                let y10 = physics.cy(sheet, c + 1, r);
+                let z10 = physics.cz(sheet, c + 1, r);
+                let x01 = physics.cx(sheet, c, r + 1);
+                let y01 = physics.cy(sheet, c, r + 1);
+                let z01 = physics.cz(sheet, c, r + 1);
+                let x11 = physics.cx(sheet, c + 1, r + 1);
+                let y11 = physics.cy(sheet, c + 1, r + 1);
+                let z11 = physics.cz(sheet, c + 1, r + 1);
+                gfx3d.tri(x00, y00, z00, x10, y10, z10, x11, y11, z11, 230, 214, 186);
+                gfx3d.tri(x00, y00, z00, x11, y11, z11, x01, y01, z01, 214, 196, 166);
+                c = c + 1;
+            }
+            r = r + 1;
+        }
+        r = 0;
+        while (r < 6) {
+            let c = 0;
+            while (c < 10) {
+                let x00 = physics.cx(flag, c, r);
+                let y00 = physics.cy(flag, c, r);
+                let z00 = physics.cz(flag, c, r);
+                let x10 = physics.cx(flag, c + 1, r);
+                let y10 = physics.cy(flag, c + 1, r);
+                let z10 = physics.cz(flag, c + 1, r);
+                let x01 = physics.cx(flag, c, r + 1);
+                let y01 = physics.cy(flag, c, r + 1);
+                let z01 = physics.cz(flag, c, r + 1);
+                let x11 = physics.cx(flag, c + 1, r + 1);
+                let y11 = physics.cy(flag, c + 1, r + 1);
+                let z11 = physics.cz(flag, c + 1, r + 1);
+                gfx3d.tri(x00, y00, z00, x10, y10, z10, x11, y11, z11, 190, 64, 72);
+                gfx3d.tri(x00, y00, z00, x11, y11, z11, x01, y01, z01, 160, 48, 58);
+                c = c + 1;
+            }
+            r = r + 1;
+        }
+        gfx3d.present();
+    }
+    gfx3d.close();
+}

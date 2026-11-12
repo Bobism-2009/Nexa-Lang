@@ -23,7 +23,7 @@
 
 namespace nexa {
 
-inline std::string physicsRuntimeCpp(bool query, bool body, bool mesh = false, bool squish = false) {
+inline std::string physicsRuntimeCpp(bool query, bool body, bool mesh = false, bool squish = false, bool cloth = false) {
     if (!query && !body) return "";
     std::string out;
     out += "#include <cmath>\n";
@@ -366,6 +366,9 @@ static __nexa_phys_body __nexa_phys_bodies[257];
 static int __nexa_phys_hi = 0;
 static float __nexa_phys_gx = 0.f, __nexa_phys_gy = -9.81f, __nexa_phys_gz = 0.f;
 )PHYS";
+        if (cloth) {
+            out += "static void __nexa_phys_cloth_step(float dt);\n";
+        }
         if (squish) {
             out += R"PHYS(static float __nexa_phys_squish = 0.f;
 static int __nexa_phys_soft_any = 0;
@@ -1184,9 +1187,10 @@ static int __nexa_phys_step(double dtin) {
             }
         }
     }
-    return 1;
-}
-// Set by either knob: the world's softness, or one body's.
+)PHYS";
+            if (cloth) out += "    __nexa_phys_cloth_step(dt);\n";
+            out += "    return 1;\n}\n";
+            out += R"PHYS(// Set by either knob: the world's softness, or one body's.
 static void __nexa_phys_soft_seen() {
     if (__nexa_phys_squish > 0.f) { __nexa_phys_soft_any = 1; return; }
     for (int i = 1; i <= __nexa_phys_hi; i++) {
@@ -1216,6 +1220,8 @@ static double __nexa_phys_sn(int id, int w) {
     return (double)b.snz;
 }
 )PHYS";
+        } else if (cloth) {
+            out += "    __nexa_phys_cloth_step(dt);\n    return 1;\n}\n";
         } else {
             out += "    return 1;\n}\n";
         }
@@ -1662,6 +1668,221 @@ static int __nexa_phys_mesh(double model, double x, double y, double z, double s
 }
 )MESH";
     return out;
+}
+
+// A cloth is a grid of points. Emitted only when a program calls physics.cloth
+// (or pin, unpin, wind, cx, cy, cz). It steps with the world and drapes over
+// spheres and boxes. It does not push them back. Four cloths, 17 points a side.
+inline std::string physicsClothCpp() {
+    return R"CLOTH(
+static const int __nexa_phys_cloth_n = 17;
+struct __nexa_phys_sheet {
+    int cols, rows, face;
+    float rx, ry;
+    float x[17 * 17], y[17 * 17], z[17 * 17];
+    float px[17 * 17], py[17 * 17], pz[17 * 17];
+    unsigned char pin[17 * 17];
+};
+static __nexa_phys_sheet __nexa_phys_cloths[4];
+static float __nexa_phys_wx = 0.f, __nexa_phys_wy = 0.f, __nexa_phys_wz = 0.f;
+
+static void __nexa_phys_cloth_link(float* x, float* y, float* z, const unsigned char* pin,
+    int i, int j, float rest, float scale) {
+    if (pin[i] && pin[j]) return;
+    float dx = x[j] - x[i], dy = y[j] - y[i], dz = z[j] - z[i];
+    float dist = sqrtf(dx * dx + dy * dy + dz * dz);
+    if (dist < 1e-6f) return;
+    float diff = (dist - rest) / dist * scale;
+    float hx = dx * diff, hy = dy * diff, hz = dz * diff;
+    if (pin[i]) { x[j] -= hx; y[j] -= hy; z[j] -= hz; }
+    else if (pin[j]) { x[i] += hx; y[i] += hy; z[i] += hz; }
+    else {
+        hx *= 0.5f; hy *= 0.5f; hz *= 0.5f;
+        x[i] += hx; y[i] += hy; z[i] += hz;
+        x[j] -= hx; y[j] -= hy; z[j] -= hz;
+    }
+}
+
+static void __nexa_phys_cloth_hit(float* x, float* y, float* z, float* px, float* py, float* pz, int i) {
+    const float thick = 0.03f;
+    float qx = x[i], qy = y[i], qz = z[i];
+    int hi = __nexa_phys_hi;
+    for (int b = 1; b <= hi; b++) {
+        __nexa_phys_body& body = __nexa_phys_bodies[b];
+        if (body.kind == 1) {
+            float dx = qx - body.x, dy = qy - body.y, dz = qz - body.z;
+            float rad = body.r + thick;
+            if (rad < thick) rad = thick;
+            float d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 >= rad * rad || d2 < 1e-10f) continue;
+            float d = sqrtf(d2);
+            float s = (rad - d) / d;
+            qx += dx * s; qy += dy * s; qz += dz * s;
+        } else if (body.kind == 2) {
+            float hx = fabsf(body.w) * 0.5f + thick;
+            float hy = fabsf(body.h) * 0.5f + thick;
+            float hz = fabsf(body.d) * 0.5f + thick;
+            float dx = qx - body.x, dy = qy - body.y, dz = qz - body.z;
+            float ax = hx - fabsf(dx), ay = hy - fabsf(dy), az = hz - fabsf(dz);
+            if (ax <= 0.f || ay <= 0.f || az <= 0.f) continue;
+            if (ax <= ay && ax <= az) qx += (dx >= 0.f ? ax : -ax);
+            else if (ay <= az) qy += (dy >= 0.f ? ay : -ay);
+            else qz += (dz >= 0.f ? az : -az);
+        }
+    }
+    float mx = qx - x[i], my = qy - y[i], mz = qz - z[i];
+    float m2 = mx * mx + my * my + mz * mz;
+    if (m2 > 1e-12f) {
+        float inv = 1.f / sqrtf(m2);
+        float nx = mx * inv, ny = my * inv, nz = mz * inv;
+        float vx = qx - px[i], vy = qy - py[i], vz = qz - pz[i];
+        float vn = vx * nx + vy * ny + vz * nz;
+        float vnKeep = vn > 0.f ? vn : 0.f;
+        // A frictionless point slides straight off a curve. Keep a little of
+        // the slide so the sheet can still settle, and none of the speed into
+        // the surface.
+        const float keep = 0.35f;
+        float tx = (vx - vn * nx) * keep + nx * vnKeep;
+        float ty = (vy - vn * ny) * keep + ny * vnKeep;
+        float tz = (vz - vn * nz) * keep + nz * vnKeep;
+        px[i] = qx - tx; py[i] = qy - ty; pz[i] = qz - tz;
+    }
+    x[i] = qx; y[i] = qy; z[i] = qz;
+}
+
+static void __nexa_phys_cloth_step(float dt) {
+    if (dt < 1e-6f) return;
+    if (dt > 0.05f) dt = 0.05f;
+    const int S = __nexa_phys_cloth_n;
+    for (int sub = 0; sub < 2; sub++) {
+        float h = dt * 0.5f;
+        float h2 = h * h;
+        float ax = (__nexa_phys_gx + __nexa_phys_wx) * h2;
+        float ay = (__nexa_phys_gy + __nexa_phys_wy) * h2;
+        float az = (__nexa_phys_gz + __nexa_phys_wz) * h2;
+        for (int n = 0; n < 4; n++) {
+            __nexa_phys_sheet& c = __nexa_phys_cloths[n];
+            if (c.cols < 2) continue;
+            int cols = c.cols, rows = c.rows;
+            for (int r = 0; r < rows; r++) {
+                for (int col = 0; col < cols; col++) {
+                    int i = col + r * S;
+                    if (c.pin[i]) continue;
+                    float vx = (c.x[i] - c.px[i]) * 0.985f;
+                    float vy = (c.y[i] - c.py[i]) * 0.985f;
+                    float vz = (c.z[i] - c.pz[i]) * 0.985f;
+                    c.px[i] = c.x[i]; c.py[i] = c.y[i]; c.pz[i] = c.z[i];
+                    c.x[i] += vx + ax; c.y[i] += vy + ay; c.z[i] += vz + az;
+                }
+            }
+            float shear = sqrtf(c.rx * c.rx + c.ry * c.ry);
+            for (int iter = 0; iter < 4; iter++) {
+                for (int r = 0; r < rows; r++) {
+                    for (int col = 0; col < cols - 1; col++) {
+                        int i = col + r * S;
+                        __nexa_phys_cloth_link(c.x, c.y, c.z, c.pin, i, i + 1, c.rx, 1.f);
+                    }
+                }
+                for (int col = 0; col < cols; col++) {
+                    for (int r = 0; r < rows - 1; r++) {
+                        int i = col + r * S;
+                        __nexa_phys_cloth_link(c.x, c.y, c.z, c.pin, i, i + S, c.ry, 1.f);
+                    }
+                }
+                for (int r = 0; r < rows - 1; r++) {
+                    for (int col = 0; col < cols - 1; col++) {
+                        int i = col + r * S;
+                        __nexa_phys_cloth_link(c.x, c.y, c.z, c.pin, i, i + 1 + S, shear, 1.f);
+                        __nexa_phys_cloth_link(c.x, c.y, c.z, c.pin, i + 1, i + S, shear, 1.f);
+                    }
+                }
+                for (int r = 0; r < rows; r++) {
+                    for (int col = 0; col < cols - 2; col++) {
+                        int i = col + r * S;
+                        __nexa_phys_cloth_link(c.x, c.y, c.z, c.pin, i, i + 2, c.rx * 2.f, 0.25f);
+                    }
+                }
+                for (int col = 0; col < cols; col++) {
+                    for (int r = 0; r < rows - 2; r++) {
+                        int i = col + r * S;
+                        __nexa_phys_cloth_link(c.x, c.y, c.z, c.pin, i, i + S * 2, c.ry * 2.f, 0.25f);
+                    }
+                }
+                for (int r = 0; r < rows; r++) {
+                    for (int col = 0; col < cols; col++) {
+                        int i = col + r * S;
+                        if (!c.pin[i]) __nexa_phys_cloth_hit(c.x, c.y, c.z, c.px, c.py, c.pz, i);
+                    }
+                }
+            }
+        }
+    }
+}
+
+static int __nexa_phys_cloth(double x, double y, double z, double w, double h,
+    double cols, double rows, double face) {
+    int slot = -1;
+    for (int i = 0; i < 4; i++) if (__nexa_phys_cloths[i].cols == 0) { slot = i; break; }
+    if (slot < 0) return 0;
+    int c = (int)(cols + 0.5), r = (int)(rows + 0.5);
+    if (c < 2) c = 2; if (c > __nexa_phys_cloth_n) c = __nexa_phys_cloth_n;
+    if (r < 2) r = 2; if (r > __nexa_phys_cloth_n) r = __nexa_phys_cloth_n;
+    if (w < 0.0) w = -w; if (h < 0.0) h = -h;
+    __nexa_phys_sheet& cloth = __nexa_phys_cloths[slot];
+    cloth = __nexa_phys_sheet{};
+    cloth.cols = c; cloth.rows = r;
+    cloth.face = ((int)face) == 1 ? 1 : 0;
+    cloth.rx = (float)(w / (double)(c - 1));
+    cloth.ry = (float)(h / (double)(r - 1));
+    for (int row = 0; row < r; row++) {
+        for (int col = 0; col < c; col++) {
+            int i = col + row * __nexa_phys_cloth_n;
+            float u = (float)col / (float)(c - 1) - 0.5f;
+            float v = (float)row / (float)(r - 1) - 0.5f;
+            float px, py, pz;
+            if (cloth.face == 1) {
+                px = (float)x + u * (float)w;
+                py = (float)y + v * (float)h;
+                pz = (float)z;
+            } else {
+                px = (float)x + u * (float)w;
+                py = (float)y;
+                pz = (float)z + v * (float)h;
+            }
+            cloth.x[i] = cloth.px[i] = px;
+            cloth.y[i] = cloth.py[i] = py;
+            cloth.z[i] = cloth.pz[i] = pz;
+        }
+    }
+    return slot + 1;
+}
+
+static int __nexa_phys_cloth_pin(int id, double col, double row, int on) {
+    if (id < 1 || id > 4) return 0;
+    __nexa_phys_sheet& c = __nexa_phys_cloths[id - 1];
+    if (c.cols < 2) return 0;
+    int cc = (int)(col + 0.5), rr = (int)(row + 0.5);
+    if (cc < 0 || rr < 0 || cc >= c.cols || rr >= c.rows) return 0;
+    c.pin[cc + rr * __nexa_phys_cloth_n] = on ? 1 : 0;
+    return 1;
+}
+
+static int __nexa_phys_wind(double x, double y, double z) {
+    __nexa_phys_wx = (float)x; __nexa_phys_wy = (float)y; __nexa_phys_wz = (float)z;
+    return 1;
+}
+
+static double __nexa_phys_cloth_at(int id, double col, double row, int axis) {
+    if (id < 1 || id > 4) return 0.0;
+    const __nexa_phys_sheet& c = __nexa_phys_cloths[id - 1];
+    int cc = (int)(col + 0.5), rr = (int)(row + 0.5);
+    if (c.cols < 2 || cc < 0 || rr < 0 || cc >= c.cols || rr >= c.rows) return 0.0;
+    int i = cc + rr * __nexa_phys_cloth_n;
+    if (axis == 0) return (double)c.x[i];
+    if (axis == 1) return (double)c.y[i];
+    return (double)c.z[i];
+}
+)CLOTH";
 }
 
 }  // namespace nexa
