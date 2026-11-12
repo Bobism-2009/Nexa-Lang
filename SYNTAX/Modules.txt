@@ -1281,7 +1281,13 @@ ARGUMENT TYPES
                                  - that sphere flattened along (nx, ny, nz).
                                    squash is the fraction of the radius taken
                                    off that axis: 0 is round, 0.5 is half as
-                                   tall. The sides bulge so the volume stays.
+                                   tall. Below zero it goes the other way and
+                                   the shape is drawn out along the axis instead
+                                   -- -0.35 is a third again as long and thinner
+                                   to match. Either way the sides make up for it
+                                   so the volume stays, which is what lets one
+                                   number carry a soft body through a whole
+                                   squash-and-stretch.
                                    Draw it on the body. A soft body is already
                                    sitting in by that fraction, so the flat
                                    face lands on the contact. A program that
@@ -1851,9 +1857,28 @@ ARGUMENT TYPES
                                  scales restitution away, so a firm body with
                                  bounce set rebounds where a jelly one does not
                                  -- 1.64 against 0.54 from the same drop.
-  physics.squash(id)             - the fraction of its radius pressed in
-                                 right now, 0 to 1. It is the overlap still
-                                 there after the step, shared by mass.
+  physics.squash(id)             - how the body is deformed right now. Above
+                                 zero is pressed in along the axis below, a
+                                 fraction of the radius; below zero is drawn
+                                 out along it, which is the other half of the
+                                 same swing. Hand it straight to
+                                 gfx3d.ellipsoid, which takes either sign and
+                                 keeps the volume.
+                                 It is a spring, not a readout of the overlap.
+                                 A landing body carries past the depth the
+                                 contact asks for, comes back, and rings down
+                                 over about half a second; thrown into the air
+                                 it swings through round into a stretch and
+                                 back. That ringing is most of what makes a
+                                 body read as soft rather than as one that
+                                 simply flattens. Firmer bodies barely move:
+                                 at 0.08 a body stretches 0.003 where a jelly
+                                 one stretches 0.071.
+                                 On a contact it is never shallower than the
+                                 overlap really is, so the shape sits on what
+                                 it touches instead of sinking into it. The
+                                 free swing is in the air, where there is
+                                 nothing to sink into.
   physics.snx(id) physics.sny(id) physics.snz(id)
                                  - the direction it was flattened along.
                                    Draw it with gfx3d.ellipsoid.

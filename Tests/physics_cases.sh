@@ -289,6 +289,111 @@ fn main() {
     return 0;
 }
 EOF
+cat > "$WORK/wobble.nxa" <<'EOF'
+// A soft body has to ring, not just flatten. The deformation used to follow the
+// contact depth with a lag: it arrived at the depth the contact asked for and
+// stopped, so a body only ever looked pressed. It is a spring now -- it carries
+// past, comes back through round into a stretch, and rings down.
+#include <std/io>
+#include <std/physics>
+fn main(): int {
+    physics.squishy(0.9);
+    let floor = physics.box(0, -0.5, 0, 24, 1, 24);
+    physics.mass(floor, 0);
+    let b = physics.sphere(0, 0.5, 0, 0.5);
+    let i = 0;
+    while (i < 60) { physics.step(1.0 / 60.0); i = i + 1; }
+    // Thrown up off a resting squash, it must swing through round and draw out.
+    physics.velocity(b, 0, 7, 0);
+    let thinnest = 0.0;
+    let fattest = 0.0;
+    let crossings = 0;
+    let was = physics.squash(b);
+    i = 0;
+    while (i < 60) {
+        physics.step(1.0 / 60.0);
+        let q = physics.squash(b);
+        if (q < thinnest) { thinnest = q; }
+        if (q > fattest) { fattest = q; }
+        if ((was > 0.0 && q < 0.0) || (was < 0.0 && q > 0.0)) { crossings = crossings + 1; }
+        was = q;
+        i = i + 1;
+    }
+    // A stretch at all, which was impossible before: both the solver and the
+    // shape clamped the deformation at zero.
+    if (thinnest > -0.02) {
+        io.println("fail never stretched");
+        io.println(thinnest);
+        return 1;
+    }
+    // And it has to come back, not sit stretched.
+    if (fattest < 0.005) { io.println("fail never came back"); io.println(fattest); return 1; }
+    // More than one swing through round is the ring.
+    if (crossings < 2) { io.println("fail did not ring"); io.println(crossings); return 1; }
+    // It must settle, not ring for ever.
+    i = 0;
+    while (i < 400) { physics.step(1.0 / 60.0); i = i + 1; }
+    let settled = physics.squash(b);
+    if (settled < 0.08 || settled > 0.25) {
+        io.println("fail did not settle on the floor");
+        io.println(settled);
+        return 1;
+    }
+    io.println("ok");
+    return 0;
+}
+EOF
+if ! "$NEXAC" "$WORK/wobble.nxa" -o "$WORK/wobble$EXE" > "$WORK/wobble.log" 2>&1; then
+    bad "wobble build" "$(tail -20 "$WORK/wobble.log")"
+else
+    out=$("$WORK/wobble$EXE" 2>&1 | tr -d '\r')
+    if [ "$out" = "ok" ]; then
+        ok "a soft body rings through round into a stretch, then settles"
+    else
+        bad "wobble" "$out"
+    fi
+fi
+
+cat > "$WORK/nosink.nxa" <<'EOF'
+// The ringing must not let the shape be drawn rounder than the contact is deep,
+// or the body is simply buried in the floor -- measured 16cm into it on a
+// half-metre ball while the spring caught up.
+#include <std/io>
+#include <std/physics>
+fn main(): int {
+    physics.squishy(0.9);
+    let floor = physics.box(0, -0.5, 0, 24, 1, 24);
+    physics.mass(floor, 0);
+    let b = physics.sphere(0, 3, 0, 0.5);
+    let worst = 0.0;
+    let i = 0;
+    while (i < 300) {
+        physics.step(1.0 / 60.0);
+        // where the drawn underside sits: centre less the flattened half-height
+        let under = physics.y(b) - 0.5 * (1.0 - physics.squash(b));
+        if (under < worst) { worst = under; }
+        i = i + 1;
+    }
+    if (worst < -0.02) {
+        io.println("fail drawn shape sank into the floor");
+        io.println(worst);
+        return 1;
+    }
+    io.println("ok");
+    return 0;
+}
+EOF
+if ! "$NEXAC" "$WORK/nosink.nxa" -o "$WORK/nosink$EXE" > "$WORK/nosink.log" 2>&1; then
+    bad "no sink build" "$(tail -20 "$WORK/nosink.log")"
+else
+    out=$("$WORK/nosink$EXE" 2>&1 | tr -d '\r')
+    if [ "$out" = "ok" ]; then
+        ok "and the shape still sits on its contact rather than sinking in"
+    else
+        bad "no sink" "$out"
+    fi
+fi
+
 cat > "$WORK/softbody.nxa" <<'EOF'
 // physics.soft sets one body apart from the rest. Before it there was one knob
 // for the whole world, so every body was as soft as every other: a firm ball

@@ -44,7 +44,8 @@ MODULE INCLUDES (angle brackets)
                             as a triangle collider, at the same scale as draw.
                             physics.squishy(amount) lets a body compress
                             with the hit and spring back; physics.squash is
-                            the fraction of its radius still pressed in.
+                            how it is deformed now -- pressed in above zero,
+                            drawn out below, ringing down after a hit.
                             physics.soft(id, amount) sets one body apart from
                             the rest, so a firm ball dents a cushion and keeps
                             its own shape.

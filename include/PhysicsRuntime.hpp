@@ -359,7 +359,7 @@ struct __nexa_phys_body {
             out += "    int model;\n    float scl;\n";
         }
         if (squish) {
-            out += "    float sq, snx, sny, snz, hit, load, loadN, softOwn;\n";
+            out += "    float sq, sqv, snx, sny, snz, hit, load, loadN, softOwn;\n";
         }
         out += R"PHYS(};
 static __nexa_phys_body __nexa_phys_bodies[257];
@@ -1137,16 +1137,44 @@ static int __nexa_phys_step(double dtin) {
             if (rad < 0.05f) rad = 0.05f;
             float target = b.hit / rad;
             if (target > 0.72f) target = 0.72f;
-            // Rates a second, not a share per step. The old fixed 0.85 and 0.7
-            // meant the same drop squashed differently at 30 frames than at 60
-            // -- measured 0.32 against 0.23 at the same moment. These rates are
-            // the 60-frame numbers written so any step size agrees with them.
-            float rate = (target > b.sq) ? 110.f : 70.f;
-            float k = 1.f - expf(-rate * dt);
-            if (k > 1.f) k = 1.f;
-            b.sq += (target - b.sq) * k;
-            if (b.sq < 0.f) b.sq = 0.f;
-            if (b.sq > 0.72f) b.sq = 0.72f;
+            // The shape is a spring, not a readout. Following the contact depth
+            // with a lag is what made a soft body only ever flatten: it arrived
+            // at the depth the contact asked for and stopped there. A lightly
+            // damped spring carries past it instead -- compresses deeper than
+            // asked, comes back through round into a stretch, and rings down
+            // over about half a second. In the air the contact asks for nothing,
+            // so a body that has just been hit keeps wobbling, which is most of
+            // what makes it read as soft rather than as a flattened ball.
+            //
+            // Softer rings longer and slower. Firm bodies barely move.
+            float bsoft = __nexa_phys_body_soft(b);
+            if (bsoft < 0.05f) bsoft = 0.05f;
+            float w = 30.f - 10.f * bsoft;
+            float zeta = 0.45f - 0.26f * bsoft;
+            // Semi-implicit, and the step is held where that stays stable.
+            float wdt = w * dt;
+            if (wdt > 1.2f) w = 1.2f / dt;
+            float acc = (target - b.sq) * (w * w) - b.sqv * (2.f * zeta * w);
+            b.sqv += acc * dt;
+            b.sq += b.sqv * dt;
+            // Stretch is the other half of the swing, so below zero is allowed.
+            // The floor on it is shallower than the ceiling because a real body
+            // thins less easily than it flattens.
+            if (b.sq < -0.35f) { b.sq = -0.35f; if (b.sqv < 0.f) b.sqv = 0.f; }
+            if (b.sq > 0.72f) { b.sq = 0.72f; if (b.sqv > 0.f) b.sqv = 0.f; }
+            // Never shallower than the contact actually is. The shape sits on
+            // what it is touching: drawn rounder than the overlap, the body is
+            // simply buried in it -- measured 16cm into the floor on a
+            // half-metre ball, a third of its radius, while the spring caught
+            // up. So the swing is free in the air, where there is nothing to
+            // be buried in, and on a contact it may only go the flatter way.
+            if (target > 0.f && b.sq < target) b.sq = target;
+            // Settled: stop ringing rather than shivering on the spot forever.
+            if (target <= 0.0005f && b.sq > -0.002f && b.sq < 0.002f &&
+                b.sqv > -0.02f && b.sqv < 0.02f) {
+                b.sq = 0.f;
+                b.sqv = 0.f;
+            }
             b.hit = 0.f;
             float L2 = b.snx * b.snx + b.sny * b.sny + b.snz * b.snz;
             if (L2 < 1e-8f) { b.snx = 0.f; b.sny = 1.f; b.snz = 0.f; }

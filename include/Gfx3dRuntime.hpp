@@ -4272,7 +4272,10 @@ static void __nexa_gfx3d_ellipsoid(double x, double y, double z,
     if (b < 0) b = 0; if (b > 255) b = 255;
     if (rad < 0.0) rad = -rad;
     float sq = (float)squash;
-    if (sq < 0.f) sq = 0.f;
+    // Below zero is a stretch rather than a squash: the other half of a soft
+    // body's swing, where it thins across the axis and draws out along it. A
+    // body that only ever flattened never looked soft, just pressed.
+    if (sq < -0.6f) sq = -0.6f;
     if (sq > 0.72f) sq = 0.72f;
     // squash is the fraction of the radius pressed in along the axis, so a
     // body whose centre has already sunk by that much sits on the contact.
@@ -4283,7 +4286,8 @@ static void __nexa_gfx3d_ellipsoid(double x, double y, double z,
     float across = (float)rad * bulge;
     float d0 = (float)nx, d1 = (float)ny, d2 = (float)nz;
     float L = sqrtf(d0 * d0 + d1 * d1 + d2 * d2);
-    if (L < 1e-4f || sq < 0.02f || flat > 0.98f) {
+    const float mag = sq < 0.f ? -sq : sq;
+    if (L < 1e-4f || mag < 0.02f) {
         __nexa_gfx3d_sphere(x, y, z, rad, r, g, b);
         return;
     }
