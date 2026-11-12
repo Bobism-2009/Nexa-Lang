@@ -120,6 +120,10 @@ fn main() {
     let vm = physics.vx(mover);
     if (vs < 1.5) { io.println("fail share"); io.println(vs); return 1; }
     if (vm > vs) { io.println("fail heavier"); io.println(vm); return 1; }
+    let sx = physics.x(still) - physics.x(mover);
+    let sy2 = physics.y(still) - physics.y(mover);
+    let sz = physics.z(still) - physics.z(mover);
+    if (sx * sx + sy2 * sy2 + sz * sz < 0.90) { io.println("fail inside"); return 1; }
     physics.gravity(0, -9.81, 0);
 
     // Eight spheres dropped through each other have to end up separated.

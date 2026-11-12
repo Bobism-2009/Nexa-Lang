@@ -9,12 +9,13 @@
 //
 // The step is sequential impulses on a fixed array. A hit changes velocity in
 // proportion to inverse mass, so two spheres of the same weight trade speed
-// instead of one shoving the other aside. Overlap is eased out by that same
-// impulse, capped, rather than by moving the bodies apart on the spot.
-// Restitution applies only when the hit is faster than 1 m/s. Two spheres
-// barely grip, so one slides off the other; a box keeps the grip that stops
-// a body on the floor. A fast sphere is swept against the floor and against
-// other spheres, and a step is split into at most four.
+// instead of one shoving the other aside. A sphere already touching another
+// is not moved deeper into it; whatever overlap remains is taken back out,
+// split by mass, after the impulse. Restitution applies only when the hit is
+// faster than 1 m/s. Two spheres barely grip, so one slides off the other; a
+// box keeps the grip that stops a body on the floor. A fast sphere is swept
+// against the floor and against other spheres, and a step is split into at
+// most four.
 
 #include <string>
 
@@ -559,6 +560,31 @@ static int __nexa_phys_sphere_toi(float ax, float ay, float az, float bx, float 
     *tout = t;
     return 1;
 }
+// Drop the part of the step that would push two spheres deeper together.
+// Split by inverse mass, so a heavy one gives up less of its movement.
+static void __nexa_phys_clip_spheres(int hi, float* ox, float* oy, float* oz,
+    float* mx, float* my, float* mz) {
+    for (int i = 1; i <= hi; i++) {
+        if (__nexa_phys_bodies[i].kind != 1) continue;
+        for (int j = i + 1; j <= hi; j++) {
+            if (__nexa_phys_bodies[j].kind != 1) continue;
+            float dx = ox[i] - ox[j], dy = oy[i] - oy[j], dz = oz[i] - oz[j];
+            float rad = __nexa_phys_bodies[i].r + __nexa_phys_bodies[j].r;
+            float d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 >= rad * rad || d2 < 1e-12f) continue;
+            float dist = sqrtf(d2);
+            float nx = dx / dist, ny = dy / dist, nz = dz / dist;
+            float rel = (mx[i] - mx[j]) * nx + (my[i] - my[j]) * ny + (mz[i] - mz[j]) * nz;
+            if (rel >= 0.f) continue;
+            float invi = __nexa_phys_bodies[i].inv, invj = __nexa_phys_bodies[j].inv;
+            float inv = invi + invj;
+            if (inv <= 0.f) continue;
+            float alpha = -rel / inv;
+            mx[i] += nx * alpha * invi; my[i] += ny * alpha * invi; mz[i] += nz * alpha * invi;
+            mx[j] -= nx * alpha * invj; my[j] -= ny * alpha * invj; mz[j] -= nz * alpha * invj;
+        }
+    }
+}
 static void __nexa_phys_integrate(float h) {
     int hi = __nexa_phys_hi;
     float ox[257], oy[257], oz[257];
@@ -576,6 +602,7 @@ static void __nexa_phys_integrate(float h) {
         mx[i] = b.vx * h; my[i] = b.vy * h; mz[i] = b.vz * h;
         dyn[i] = 1;
     }
+    __nexa_phys_clip_spheres(hi, ox, oy, oz, mx, my, mz);
     for (int i = 1; i <= hi; i++) {
         if (!dyn[i]) continue;
         __nexa_phys_body& b = __nexa_phys_bodies[i];
@@ -685,6 +712,32 @@ static void __nexa_phys_solve(float h, unsigned char* touch) {
         }
     }
 }
+// Take the overlap back out. The impulse has already shared the speed, so
+// this only undoes the intersection, split the same way by mass.
+static void __nexa_phys_separate() {
+    int hi = __nexa_phys_hi;
+    for (int iter = 0; iter < 8; iter++) {
+        int any = 0;
+        for (int i = 1; i <= hi; i++) {
+            if (__nexa_phys_bodies[i].kind == 0) continue;
+            for (int j = i + 1; j <= hi; j++) {
+                if (__nexa_phys_bodies[j].kind == 0) continue;
+                __nexa_phys_body& a = __nexa_phys_bodies[i];
+                __nexa_phys_body& b = __nexa_phys_bodies[j];
+                float inv = a.inv + b.inv;
+                if (inv <= 0.f) continue;
+                float nx, ny, nz, pen;
+                if (!__nexa_phys_pair(i, j, &nx, &ny, &nz, &pen) || pen <= 0.001f) continue;
+                any = 1;
+                float corr = (pen - 0.001f) * 0.85f;
+                float sa = corr * (a.inv / inv), sb = corr * (b.inv / inv);
+                a.x += nx * sa; a.y += ny * sa; a.z += nz * sa;
+                b.x -= nx * sb; b.y -= ny * sb; b.z -= nz * sb;
+            }
+        }
+        if (!any) break;
+    }
+}
 static int __nexa_phys_step(double dtin) {
     float dt = (float)dtin;
     if (dt <= 0.f) return 0;
@@ -714,6 +767,7 @@ static int __nexa_phys_step(double dtin) {
     for (int s = 0; s < subs; s++) {
         __nexa_phys_integrate(h);
         __nexa_phys_solve(h, touch);
+        __nexa_phys_separate();
     }
     hi = __nexa_phys_hi;
     for (int i = 1; i <= hi; i++) {
