@@ -143,6 +143,8 @@ expect_emit "renderer"    '__nexa_gfx3d_renderer\("vulkan"\)'           '    gfx
 expect_emit "antialias"   '__nexa_gfx3d_antialias\(1\)'                 '    gfx3d.antialias(1);'
 expect_emit "fog"         '__nexa_gfx3d_fog\(1, 2, 3, 4, 5\)'            '    gfx3d.fog(1, 2, 3, 4, 5);'
 expect_emit "fog off"     '__nexa_gfx3d_fog_off\(\)'                    '    let f = gfx3d.fog();'
+expect_emit "mirror"      '__nexa_gfx3d_mirror\(0, 1, 2, 0, 1, 0, 3, 4\)' '    gfx3d.mirror(0, 1, 2, 0, 1, 0, 3, 4);'
+expect_emit "mirror end"  '__nexa_gfx3d_mirror_end\(\)'                 '    let m = gfx3d.mirror();'
 expect_emit "key"         '__nexa_gfx3d_key\("w"\)'                     '    let k = gfx3d.key("w");'
 expect_emit "pressed"     '__nexa_gfx3d_pressed\("space"\)'             '    let k = gfx3d.pressed("space");'
 expect_emit "released"    '__nexa_gfx3d_released\("space"\)'            '    let k = gfx3d.released("space");'
@@ -303,6 +305,40 @@ if "$NEXAC" "$WORK/yesfog.nxa" --source "$WORK/yesfog.cpp" > /dev/null 2>&1; the
     done
 else
     echo "FAIL fog slicing: NexaC could not transpile"
+    fails=$((fails + 1))
+fi
+
+# A mirror is a second draw of the world. A program that never asks carries
+# none of the copy or the glass.
+printf '#include <std/gfx3d>
+fn main() {
+    gfx3d.cube(0.0, 0.0, 0.0, 1.0, 1, 2, 3);
+}
+' > "$WORK/nomirror.nxa"
+if "$NEXAC" "$WORK/nomirror.nxa" --source "$WORK/nomirror.cpp" > /dev/null 2>&1; then
+    if grep -qE 'glCopyTexSubImage2D|__nexa_gfx3d_mirror|uMirrorOn' "$WORK/nomirror.cpp"; then
+        echo "FAIL mirror slicing: a mirror is in a program that never asks"
+        fails=$((fails + 1))
+    fi
+else
+    echo "FAIL mirror slicing: NexaC could not transpile"
+    fails=$((fails + 1))
+fi
+printf '#include <std/gfx3d>
+fn main() {
+    gfx3d.mirror(0, 1, -3, 0, 0, 1, 3, 2);
+    gfx3d.open("t", 320, 240);
+}
+' > "$WORK/yesmirror.nxa"
+if "$NEXAC" "$WORK/yesmirror.nxa" --source "$WORK/yesmirror.cpp" > /dev/null 2>&1; then
+    for sym in '__nexa_gfx3d_mirror' 'glCopyTexSubImage2D' 'uMirrorOn' '__nexa_g3_mirror_pane'; do
+        if ! grep -q "$sym" "$WORK/yesmirror.cpp"; then
+            echo "FAIL mirror slicing: no $sym in a program that asks"
+            fails=$((fails + 1))
+        fi
+    done
+else
+    echo "FAIL mirror slicing: NexaC could not transpile"
     fails=$((fails + 1))
 fi
 

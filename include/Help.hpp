@@ -639,6 +639,9 @@ no array of pixels to read back.
             gfx3d.ambient([level])            0..255 facing away; default 87
             gfx3d.fog(r, g, b, start, end)    fade into a colour with distance
             gfx3d.fog()                       turn that fade off
+            gfx3d.mirror(x, y, z, nx, ny, nz, w, h)
+                                              the glass; draw the world, that is the reflection
+            gfx3d.mirror()                    keep that picture and put the camera back
   place     gfx3d.translate(x, y, z)   moves what is drawn next
             gfx3d.rotate(rx, ry, rz)   degrees, right-hand rule, X then Y then Z
             gfx3d.scale(s)             uniform

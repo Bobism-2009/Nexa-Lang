@@ -1,0 +1,69 @@
+// std/gfx3d mirror: a pane of glass that shows the room from its other side.
+//
+//   build: NexaC Examples/mirror_demo.nxa -o mirror_demo
+//   drive: arrows orbit, W/S raise and lower, wheel zooms, escape quits
+//
+// The glass is drawn twice. The first time the world is taken from the
+// reflected side of the pane; gfx3d.mirror() keeps that picture and puts
+// the camera back; the second drawing is the room you are standing in.
+// gfx3d.present puts the kept picture on the glass. A shine would only
+// tint the pane. This one moves when the sphere does, and when you do.
+#include <std/gfx3d>
+#include <std/io>
+#include <std/math>
+
+fn room(bob: float): int {
+    gfx3d.grid(18.0, 1.0, 150, 168, 186);
+    gfx3d.sphere(-0.9, 0.75 + bob, 0.2, 0.75, 210, 140, 60);
+    gfx3d.cube(1.15, 0.5, 0.9, 1.0, 70, 130, 190);
+    gfx3d.box(-1.7, 0.7, -0.4, 0.45, 1.4, 0.45, 180, 80, 80);
+    return 0;
+}
+
+fn main() {
+    if (gfx3d.open("Nexa mirror", 900, 620) != 1) {
+        io.println("no 3D window: this platform has no backend yet");
+        return;
+    }
+    gfx3d.perspective(55.0, 0.1, 80.0);
+    gfx3d.maxfps(60);
+    gfx3d.light(-0.35, 0.9, 0.4);
+    gfx3d.ambient(70);
+    io.println("arrows orbit, W/S height, wheel zoom, escape quits");
+
+    let angle = 0.35;
+    let height = 2.4;
+    let dist = 7.5;
+    let t = 0.0;
+
+    while (gfx3d.closed() != 1) {
+        gfx3d.poll();
+        if (gfx3d.key("left"))  { angle = angle - 0.02; }
+        if (gfx3d.key("right")) { angle = angle + 0.02; }
+        if (gfx3d.key("w"))     { height = height + 0.08; }
+        if (gfx3d.key("s"))     { height = height - 0.08; }
+        dist = dist - gfx3d.wheel() * 0.45;
+        if (dist < 3.5) { dist = 3.5; }
+        if (dist > 20.0) { dist = 20.0; }
+        if (gfx3d.pressed("escape")) { gfx3d.close(); }
+        t = t + 0.03;
+
+        gfx3d.camera(math.sin(angle) * dist, height, math.cos(angle) * dist,
+                     0.0, 1.1, -1.0);
+
+        // The pane stands at z = -3.2, facing back toward the camera.
+        gfx3d.mirror(0.0, 1.35, -3.2,  0.0, 0.0, 1.0,  3.2, 2.5);
+        gfx3d.clear(176, 196, 214);
+        room(math.sin(t) * 0.35);
+        gfx3d.mirror();
+
+        gfx3d.clear(176, 196, 214);
+        room(math.sin(t) * 0.35);
+        // A frame, just behind the glass, so the pane has an edge.
+        gfx3d.box(0.0, 1.35, -3.32, 3.55, 2.85, 0.08, 42, 46, 54);
+
+        gfx3d.present();
+    }
+
+    gfx3d.close();
+}

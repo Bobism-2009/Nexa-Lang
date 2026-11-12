@@ -1406,6 +1406,22 @@ ARGUMENT TYPES
   gfx3d.fog()                    - turn the fog off, and answer 0.
                                    A program that never calls either form
                                    carries none of this
+  gfx3d.mirror(x, y, z, nx, ny, nz, w, h)
+                                 - a flat mirror, not a shine. (x, y, z) is the
+                                   centre of the glass, (nx, ny, nz) is the way
+                                   it faces, toward the room, and w and h are
+                                   how wide and how tall. Call it, then
+                                   gfx3d.clear and draw the world: that drawing
+                                   is taken from the other side of the glass.
+                                   The call answers 1. Eight numbers, or none
+  gfx3d.mirror()                 - keep that picture and put the camera back.
+                                   Then clear and draw the world again, the
+                                   ordinary way. gfx3d.present lays the glass
+                                   over the frame, and the picture in it is the
+                                   one just kept. Answers 0. The glass is one
+                                   deep: it is not drawn into its own picture.
+                                   A Vulkan window has no glass. A program that
+                                   never calls either form carries none of this
   The light is in WORLD space, so a shape turned by gfx3d.rotate turns into
   and out of it rather than carrying its own lighting around with it. There
   is one light; it is directional, and there are no shadows -- nothing here

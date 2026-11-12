@@ -4617,6 +4617,7 @@ private:
             {"ambient",     "gfx3d.ambient([level])",                                 "n"},
             {"light",       "gfx3d.light(x, y, z[, r, g, b])",                        "nnnnnn"},
             {"fog",         "gfx3d.fog([r, g, b, start, end])",                       "nnnnn"},
+            {"mirror",      "gfx3d.mirror([x, y, z, nx, ny, nz, w, h])",              "nnnnnnnn"},
             {"capsule",     "gfx3d.capsule(x1, y1, z1, x2, y2, z2, radius, r, g, b)", "nnnnnnnnnn"},
             {"cylinder",    "gfx3d.cylinder(x1, y1, z1, x2, y2, z2, radius, r, g, b)","nnnnnnnnnn"},
             {"cone",        "gfx3d.cone(x1, y1, z1, x2, y2, z2, radius, r, g, b)",    "nnnnnnnnnn"},
@@ -8960,6 +8961,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     return "__nexa_gfx3d_ambient_get()";
                 }
                 if (fn == "fog" && e.children.empty()) return "__nexa_gfx3d_fog_off()";
+                if (fn == "mirror" && e.children.empty()) return "__nexa_gfx3d_mirror_end()";
                 if (fn == "vsync" && e.children.empty()) return "__nexa_gfx3d_vsync_get()";
                 // Sound goes to the shared mixer, so these are the only gfx3d
                 // calls that do not emit a __nexa_gfx3d_ name. There is one
@@ -9982,6 +9984,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             cppUsage.gfx3dAa = true;
         } else if (fn == "fog") {
             cppUsage.gfx3dFog = true;
+        } else if (fn == "mirror") {
+            cppUsage.gfx3dMirror = true;
         } else if (fn == "renderer") {
             cppUsage.gfx3dRendererAsked = true;
             // SPIR-V is only for a name written as Vulkan in the source.

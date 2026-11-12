@@ -71,11 +71,13 @@ inline std::string gfx3dApiCpp(bool pad, bool aa, bool fog);
 inline void gfx3dApplyAa(std::string& s);
 // The same, for gfx3d.fog. Off in every program that never calls it.
 inline void gfx3dApplyFog(std::string& s);
+// gfx3d.mirror. A program that never calls it does not run this.
+inline void gfx3dApplyMirror(std::string& s);
 inline std::string gfx3dModelCpp();
 inline std::string gfx3dEllipsoidCpp();
 
-inline std::string gfx3dRuntimeCpp(bool pad, bool shader, bool aa, bool fog) {
-    return R"NEXA_GFX3D(
+inline std::string gfx3dRuntimeCpp(bool pad, bool shader, bool aa, bool fog, bool mirror) {
+    std::string s = R"NEXA_GFX3D(
 // ---------------------------------------------------------------------------
 // std/gfx3d runtime
 // ---------------------------------------------------------------------------
@@ -621,6 +623,8 @@ static double __nexa_g3_now_ms(void) {
 #endif
 }
 )NEXA_GFX3D" + gfx3dPlatformCpp(shader, aa, fog) + gfx3dApiCpp(pad, aa, fog);
+    if (mirror) gfx3dApplyMirror(s);
+    return s;
 }
 
 
@@ -1086,6 +1090,534 @@ static void __nexa_g3_platform_camera(void) {
         "\n"
         "static int __nexa_gfx3d_fog_off(void) {\n"
         "    __nexa_g3_fog_on = 0;\n"
+        "    return 0;\n"
+        "}\n");
+}
+
+inline void gfx3dApplyMirror(std::string& s) {
+    auto put = [&](const std::string& from, const std::string& to) {
+        const size_t at = s.find(from);
+        if (at != std::string::npos) s.replace(at, from.size(), to);
+    };
+    auto all = [&](const std::string& from, const std::string& to) {
+        size_t at = 0;
+        while ((at = s.find(from, at)) != std::string::npos) {
+            s.replace(at, from.size(), to);
+            at += to.size();
+        }
+    };
+
+    // The built-in shaders, both dialects. A mesh vertex is in object space
+    // and a batch vertex is already in the world, so uModel is the identity
+    // for a batch. The glass samples vProj; everything else ignores it.
+    all("    \"uniform mat4 uMVP;\\n\"\n",
+        "    \"uniform mat4 uMVP;\\n\"\n"
+        "    \"uniform mat4 uModel;\\n\"\n"
+        "    \"uniform mat4 uMirrorVP;\\n\"\n");
+    all("    \"varying vec3 vCol;\\n\"\n",
+        "    \"varying vec3 vCol;\\n\"\n"
+        "    \"varying vec3 vWorld;\\n\"\n"
+        "    \"varying vec4 vProj;\\n\"\n");
+    all("    \"out vec3 vCol;\\n\"\n",
+        "    \"out vec3 vCol;\\n\"\n"
+        "    \"out vec3 vWorld;\\n\"\n"
+        "    \"out vec4 vProj;\\n\"\n");
+    all("    \"in vec3 vCol;\\n\"\n",
+        "    \"in vec3 vCol;\\n\"\n"
+        "    \"in vec3 vWorld;\\n\"\n"
+        "    \"in vec4 vProj;\\n\"\n");
+    all("    \"  gl_Position = uMVP * vec4(aPos, 1.0);\\n\"\n",
+        "    \"  vec4 __mw = uModel * vec4(aPos, 1.0);\\n\"\n"
+        "    \"  vWorld = __mw.xyz;\\n\"\n"
+        "    \"  vProj = uMirrorVP * __mw;\\n\"\n"
+        "    \"  gl_Position = uMVP * vec4(aPos, 1.0);\\n\"\n");
+    all("    \"uniform float uTexOn;\\n\"\n",
+        "    \"uniform float uTexOn;\\n\"\n"
+        "    \"uniform vec4 uClip;\\n\"\n"
+        "    \"uniform float uClipOn;\\n\"\n"
+        "    \"uniform float uMirrorOn;\\n\"\n"
+        "    \"uniform sampler2D uMirrorTex;\\n\"\n");
+    all("    \"  vec3 c = vCol;\\n\"\n",
+        "    \"  vec3 c = vCol;\\n\"\n"
+        "    \"  if (uClipOn > 0.5 && dot(vWorld, uClip.xyz) + uClip.w < 0.0) discard;\\n\"\n");
+    all("    \"  gl_FragColor = vec4(c, 1.0);\\n\"\n",
+        "    \"  if (uMirrorOn > 0.5 && vProj.w > 0.0) {\\n\"\n"
+        "    \"    c = texture2D(uMirrorTex, clamp(vProj.xy / vProj.w, 0.0, 1.0)).rgb;\\n\"\n"
+        "    \"  }\\n\"\n"
+        "    \"  gl_FragColor = vec4(c, 1.0);\\n\"\n");
+    all("    \"  fragColor = vec4(c, 1.0);\\n\"\n",
+        "    \"  if (uMirrorOn > 0.5 && vProj.w > 0.0) {\\n\"\n"
+        "    \"    c = texture(uMirrorTex, clamp(vProj.xy / vProj.w, 0.0, 1.0)).rgb;\\n\"\n"
+        "    \"  }\\n\"\n"
+        "    \"  fragColor = vec4(c, 1.0);\\n\"\n");
+
+    put("void glUniform1f(__nexa_GLint, __nexa_GLfloat);\n",
+        "void glUniform1f(__nexa_GLint, __nexa_GLfloat);\n"
+        "void glUniform4f(__nexa_GLint, __nexa_GLfloat, __nexa_GLfloat, __nexa_GLfloat, __nexa_GLfloat);\n"
+        "void glCopyTexSubImage2D(__nexa_GLenum, __nexa_GLint, __nexa_GLint, __nexa_GLint, __nexa_GLint, __nexa_GLint, __nexa_GLsizei, __nexa_GLsizei);\n");
+
+    put("static void __nexa_g3_apply_camera(void) {\n",
+        "static int __nexa_g3_mirror_on = 0;\n"
+        "static int __nexa_g3_mirror_have = 0;\n"
+        "static int __nexa_g3_mirror_clipped = 0;\n"
+        "static float __nexa_g3_mirror_p[3] = {0, 0, 0};\n"
+        "static float __nexa_g3_mirror_n[3] = {0, 0, 1};\n"
+        "static float __nexa_g3_mirror_d = 0;\n"
+        "static float __nexa_g3_mirror_w = 1, __nexa_g3_mirror_h = 1;\n"
+        "static float __nexa_g3_mirror_R[16];\n"
+        "static float __nexa_g3_mirror_vp[16];\n"
+        "static const float* __nexa_g3_mirror_model = nullptr;\n"
+        "static unsigned __nexa_g3_mirror_tex = 0;\n"
+        "static int __nexa_g3_mirror_tw = 0, __nexa_g3_mirror_th = 0;\n"
+        "static void __nexa_g3_mirror_camera(void);\n"
+        "\n"
+        "static void __nexa_g3_apply_camera(void) {\n");
+    put("    __nexa_g3_look_at(__nexa_g3.view, __nexa_g3.eye, __nexa_g3.target);\n"
+        "    __nexa_g3_platform_camera();\n",
+        "    __nexa_g3_look_at(__nexa_g3.view, __nexa_g3.eye, __nexa_g3.target);\n"
+        "    if (__nexa_g3_mirror_on && !__nexa_g3.vulkan) {\n"
+        "        float __mr[16];\n"
+        "        __nexa_g3_mul4(__mr, __nexa_g3.view, __nexa_g3_mirror_R);\n"
+        "        for (int __i = 0; __i < 16; __i++) __nexa_g3.view[__i] = __mr[__i];\n"
+        "    }\n"
+        "    __nexa_g3_platform_camera();\n"
+        "    __nexa_g3_mirror_camera();\n");
+
+    put("static __nexa_GLint  __nexa_g3_u_mvp = -1;\n",
+        "static __nexa_GLint  __nexa_g3_u_mvp = -1;\n"
+        "static __nexa_GLint  __nexa_g3_u_model = -1, __nexa_g3_u_mirrorVP = -1;\n"
+        "static __nexa_GLint  __nexa_g3_u_clip = -1, __nexa_g3_u_clipOn = -1, __nexa_g3_u_mirrorOn = -1;\n"
+        "static __nexa_GLint  __nexa_g3_u_mirrorTex = -1;\n");
+    put("    __nexa_g3_u_mvp = glGetUniformLocation(__nexa_g3_prog, \"uMVP\");\n",
+        "    __nexa_g3_u_mvp = glGetUniformLocation(__nexa_g3_prog, \"uMVP\");\n"
+        "    __nexa_g3_u_model = glGetUniformLocation(__nexa_g3_prog, \"uModel\");\n"
+        "    __nexa_g3_u_mirrorVP = glGetUniformLocation(__nexa_g3_prog, \"uMirrorVP\");\n"
+        "    __nexa_g3_u_clip = glGetUniformLocation(__nexa_g3_prog, \"uClip\");\n"
+        "    __nexa_g3_u_clipOn = glGetUniformLocation(__nexa_g3_prog, \"uClipOn\");\n"
+        "    __nexa_g3_u_mirrorOn = glGetUniformLocation(__nexa_g3_prog, \"uMirrorOn\");\n"
+        "    __nexa_g3_u_mirrorTex = glGetUniformLocation(__nexa_g3_prog, \"uMirrorTex\");\n");
+    put("    glUniform1i(__nexa_g3_u_tex, 0);\n",
+        "    glUniform1i(__nexa_g3_u_tex, 0);\n"
+        "    if (__nexa_g3_u_mirrorTex >= 0) glUniform1i(__nexa_g3_u_mirrorTex, 0);\n"
+        "    if (__nexa_g3_u_mirrorOn >= 0) glUniform1f(__nexa_g3_u_mirrorOn, 0.0f);\n"
+        "    if (__nexa_g3_u_clipOn >= 0) glUniform1f(__nexa_g3_u_clipOn, 0.0f);\n"
+        "    if (__nexa_g3_u_model >= 0) {\n"
+        "        float __id[16];\n"
+        "        for (int __i = 0; __i < 16; __i++) __id[__i] = 0.0f;\n"
+        "        __id[0] = __id[5] = __id[10] = __id[15] = 1.0f;\n"
+        "        glUniformMatrix4fv(__nexa_g3_u_model, 1, 0, __id);\n"
+        "    }\n");
+
+    put("    void (NEXA_GLAPI *Uniform1f)(__nexa_GLint, __nexa_GLfloat);\n",
+        "    void (NEXA_GLAPI *Uniform1f)(__nexa_GLint, __nexa_GLfloat);\n"
+        "    void (NEXA_GLAPI *Uniform4f)(__nexa_GLint, __nexa_GLfloat, __nexa_GLfloat, __nexa_GLfloat, __nexa_GLfloat);\n");
+    put("    NEXA_G33(Uniform1f, \"glUniform1f\")\n",
+        "    NEXA_G33(Uniform1f, \"glUniform1f\")\n"
+        "    NEXA_G33(Uniform4f, \"glUniform4f\")\n");
+    put("static __nexa_GLint __nexa_g33_u_mvp = -1;\n",
+        "static __nexa_GLint __nexa_g33_u_mvp = -1;\n"
+        "static __nexa_GLuint __nexa_g33_mirror_prog = 0;\n"
+        "static __nexa_GLint __nexa_g33_u_model = -1, __nexa_g33_u_mirrorVP = -1;\n"
+        "static __nexa_GLint __nexa_g33_u_clip = -1, __nexa_g33_u_clipOn = -1, __nexa_g33_u_mirrorOn = -1;\n"
+        "static __nexa_GLint __nexa_g33_u_mirrorTex = -1;\n");
+    put("    __nexa_g33_u_mvp = __nexa_g33.GetUniformLocation(__nexa_g33_prog, \"uMVP\");\n",
+        "    __nexa_g33_u_mvp = __nexa_g33.GetUniformLocation(__nexa_g33_prog, \"uMVP\");\n"
+        "    __nexa_g33_mirror_prog = __nexa_g33_prog;\n"
+        "    __nexa_g33_u_model = __nexa_g33.GetUniformLocation(__nexa_g33_prog, \"uModel\");\n"
+        "    __nexa_g33_u_mirrorVP = __nexa_g33.GetUniformLocation(__nexa_g33_prog, \"uMirrorVP\");\n"
+        "    __nexa_g33_u_clip = __nexa_g33.GetUniformLocation(__nexa_g33_prog, \"uClip\");\n"
+        "    __nexa_g33_u_clipOn = __nexa_g33.GetUniformLocation(__nexa_g33_prog, \"uClipOn\");\n"
+        "    __nexa_g33_u_mirrorOn = __nexa_g33.GetUniformLocation(__nexa_g33_prog, \"uMirrorOn\");\n"
+        "    __nexa_g33_u_mirrorTex = __nexa_g33.GetUniformLocation(__nexa_g33_prog, \"uMirrorTex\");\n");
+    put("    if (utex >= 0) __nexa_g33.Uniform1i(utex, 0);\n",
+        "    if (utex >= 0) __nexa_g33.Uniform1i(utex, 0);\n"
+        "    if (__nexa_g33_u_mirrorTex >= 0) __nexa_g33.Uniform1i(__nexa_g33_u_mirrorTex, 0);\n"
+        "    if (__nexa_g33_u_mirrorOn >= 0) __nexa_g33.Uniform1f(__nexa_g33_u_mirrorOn, 0.0f);\n"
+        "    if (__nexa_g33_u_clipOn >= 0) __nexa_g33.Uniform1f(__nexa_g33_u_clipOn, 0.0f);\n"
+        "    if (__nexa_g33_u_model >= 0) {\n"
+        "        float __id[16];\n"
+        "        for (int __i = 0; __i < 16; __i++) __id[__i] = 0.0f;\n"
+        "        __id[0] = __id[5] = __id[10] = __id[15] = 1.0f;\n"
+        "        __nexa_g33.UniformMatrix4fv(__nexa_g33_u_model, 1, 0, __id);\n"
+        "    }\n");
+
+    put("static void __nexa_g3_batch_submit(void) {\n"
+        "    if (!__nexa_g3_prog || !__nexa_g3_vbo) return;\n",
+        "static void __nexa_g3_mirror_use(void) {\n"
+        "    if (__nexa_g3_u_model < 0) return;\n"
+        "    float id[16];\n"
+        "    const float* M = __nexa_g3_mirror_model;\n"
+        "    if (!M) {\n"
+        "        for (int i = 0; i < 16; i++) id[i] = 0.0f;\n"
+        "        id[0] = id[5] = id[10] = id[15] = 1.0f;\n"
+        "        M = id;\n"
+        "    }\n"
+        "    glUniformMatrix4fv(__nexa_g3_u_model, 1, 0, M);\n"
+        "    if (__nexa_g3_u_clipOn >= 0) glUniform1f(__nexa_g3_u_clipOn, __nexa_g3_mirror_on ? 1.0f : 0.0f);\n"
+        "    if (__nexa_g3_u_mirrorOn >= 0) glUniform1f(__nexa_g3_u_mirrorOn, 0.0f);\n"
+        "    if (__nexa_g3_mirror_on && __nexa_g3_u_clip >= 0)\n"
+        "        glUniform4f(__nexa_g3_u_clip, __nexa_g3_mirror_n[0], __nexa_g3_mirror_n[1], __nexa_g3_mirror_n[2], -__nexa_g3_mirror_d + 0.002f);\n"
+        "}\n"
+        "\n"
+        "static void __nexa_g3_batch_submit(void) {\n"
+        "    __nexa_g3_mirror_model = nullptr;\n"
+        "    if (!__nexa_g3_prog || !__nexa_g3_vbo) return;\n");
+    put("static void __nexa_g3_core_batch(void) {\n",
+        "static void __nexa_g3_mirror_use33(void) {\n"
+        "    if (!__nexa_g33_mirror_prog || __nexa_g33_prog != __nexa_g33_mirror_prog) return;\n"
+        "    if (__nexa_g33_u_model < 0) return;\n"
+        "    float id[16];\n"
+        "    const float* M = __nexa_g3_mirror_model;\n"
+        "    if (!M) {\n"
+        "        for (int i = 0; i < 16; i++) id[i] = 0.0f;\n"
+        "        id[0] = id[5] = id[10] = id[15] = 1.0f;\n"
+        "        M = id;\n"
+        "    }\n"
+        "    __nexa_g33.UniformMatrix4fv(__nexa_g33_u_model, 1, 0, M);\n"
+        "    if (__nexa_g33_u_clipOn >= 0) __nexa_g33.Uniform1f(__nexa_g33_u_clipOn, __nexa_g3_mirror_on ? 1.0f : 0.0f);\n"
+        "    if (__nexa_g33_u_mirrorOn >= 0) __nexa_g33.Uniform1f(__nexa_g33_u_mirrorOn, 0.0f);\n"
+        "    if (__nexa_g3_mirror_on && __nexa_g33_u_clip >= 0 && __nexa_g33.Uniform4f)\n"
+        "        __nexa_g33.Uniform4f(__nexa_g33_u_clip, __nexa_g3_mirror_n[0], __nexa_g3_mirror_n[1], __nexa_g3_mirror_n[2], -__nexa_g3_mirror_d + 0.002f);\n"
+        "}\n"
+        "\n"
+        "static void __nexa_g3_core_batch(void) {\n"
+        "    __nexa_g3_mirror_model = nullptr;\n");
+    put("static int __nexa_g3_core_mesh(__nexa_G3Mesh& m, __nexa_G3Mesh::Lit& L, const float* M) {\n",
+        "static int __nexa_g3_core_mesh(__nexa_G3Mesh& m, __nexa_G3Mesh::Lit& L, const float* M) {\n"
+        "    __nexa_g3_mirror_model = M;\n");
+    all("static int __nexa_g3_mesh_submit(__nexa_G3Mesh& m, __nexa_G3Mesh::Lit& L, const float* M) {\n",
+        "static int __nexa_g3_mesh_submit(__nexa_G3Mesh& m, __nexa_G3Mesh::Lit& L, const float* M) {\n"
+        "    __nexa_g3_mirror_model = M;\n");
+    all("    glUniformMatrix4fv(__nexa_g3_u_mvp, 1, 0, mvp);\n",
+        "    glUniformMatrix4fv(__nexa_g3_u_mvp, 1, 0, mvp);\n"
+        "    __nexa_g3_mirror_use();\n");
+    all("    __nexa_g33.UniformMatrix4fv(__nexa_g33_u_mvp, 1, 0, mvp);\n",
+        "    __nexa_g33.UniformMatrix4fv(__nexa_g33_u_mvp, 1, 0, mvp);\n"
+        "    __nexa_g3_mirror_use33();\n");
+
+    put("static void __nexa_gfx3d_present(void) {\n"
+        "    if (!__nexa_g3.ready) return;\n"
+        "    // Last thing before the swap, so it is over everything the frame drew.\n"
+        "    __nexa_g3_overlay_present();\n",
+        R"MIR(static int __nexa_g3_inv4(float* o, const float* m) {
+    float a[4][8];
+    for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 4; c++) a[r][c] = m[c * 4 + r];
+        for (int c = 0; c < 4; c++) a[r][4 + c] = (r == c) ? 1.0f : 0.0f;
+    }
+    for (int col = 0; col < 4; col++) {
+        int piv = col;
+        float best = a[col][col] < 0.0f ? -a[col][col] : a[col][col];
+        for (int r = col + 1; r < 4; r++) {
+            float v = a[r][col] < 0.0f ? -a[r][col] : a[r][col];
+            if (v > best) { best = v; piv = r; }
+        }
+        if (best < 1e-8f) return 0;
+        if (piv != col) {
+            for (int c = 0; c < 8; c++) {
+                float t = a[col][c]; a[col][c] = a[piv][c]; a[piv][c] = t;
+            }
+        }
+        float d = a[col][col];
+        for (int c = 0; c < 8; c++) a[col][c] /= d;
+        for (int r = 0; r < 4; r++) if (r != col) {
+            float f = a[r][col];
+            for (int c = 0; c < 8; c++) a[r][c] -= f * a[col][c];
+        }
+    }
+    for (int r = 0; r < 4; r++)
+        for (int c = 0; c < 4; c++) o[c * 4 + r] = a[r][4 + c];
+    return 1;
+}
+
+static void __nexa_g3_mirror_bake(float* m, float sx, float sy) {
+    float r0[4], r1[4], r3[4];
+    for (int i = 0; i < 4; i++) {
+        r0[i] = m[i * 4 + 0];
+        r1[i] = m[i * 4 + 1];
+        r3[i] = m[i * 4 + 3];
+    }
+    for (int i = 0; i < 4; i++) {
+        m[i * 4 + 0] = (r0[i] + r3[i]) * (0.5f * sx);
+        m[i * 4 + 1] = (r1[i] + r3[i]) * (0.5f * sy);
+        m[i * 4 + 2] = 0.0f;
+    }
+}
+
+// Reflecting the world flips which way a triangle winds, so the front face
+// swaps for that pass and comes back after. The fixed-function pipeline clips
+// with its own plane; a shader discards instead, from uClip.
+static void __nexa_g3_mirror_camera(void) {
+    if (!__nexa_g3.ready || __nexa_g3.vulkan) return;
+#if defined(NEXA_WASM)
+    glFrontFace(__nexa_g3_mirror_on ? 0x0900 : 0x0901);
+#else
+    typedef void (NEXA_GLAPI *Front)(unsigned int);
+    typedef void (NEXA_GLAPI *Clip)(unsigned int, const double*);
+    static Front front = nullptr;
+    static Clip clip = nullptr;
+    static int got = 0;
+    if (!got) {
+        front = (Front)__nexa_g3_glproc("glFrontFace");
+        clip = (Clip)__nexa_g3_glproc("glClipPlane");
+        got = 1;
+    }
+    if (front) front(__nexa_g3_mirror_on ? 0x0900u : 0x0901u);
+    if (__nexa_g3.core33) return;
+    if (!__nexa_gl.Enable || !__nexa_gl.Disable) return;
+    if (__nexa_g3_mirror_on && clip) {
+        float inv[16];
+        if (__nexa_g3_inv4(inv, __nexa_g3.view)) {
+            float pl[4] = {
+                __nexa_g3_mirror_n[0], __nexa_g3_mirror_n[1], __nexa_g3_mirror_n[2],
+                -__nexa_g3_mirror_d + 0.002f
+            };
+            double eq[4];
+            for (int i = 0; i < 4; i++)
+                eq[i] = (double)inv[i * 4] * pl[0] + (double)inv[i * 4 + 1] * pl[1]
+                      + (double)inv[i * 4 + 2] * pl[2] + (double)inv[i * 4 + 3] * pl[3];
+            clip(0x3000u, eq);
+            __nexa_gl.Enable(0x3000u);
+            __nexa_g3_mirror_clipped = 1;
+        }
+    } else if (__nexa_g3_mirror_clipped) {
+        __nexa_gl.Disable(0x3000u);
+        __nexa_g3_mirror_clipped = 0;
+    }
+#endif
+}
+
+static int __nexa_g3_mirror_copy(void) {
+    if (!__nexa_g3.ready || __nexa_g3.w < 1 || __nexa_g3.h < 1) return 0;
+    int w = __nexa_g3.w, h = __nexa_g3.h;
+    int tw = 1, th = 1;
+    while (tw < w && tw < 4096) tw <<= 1;
+    while (th < h && th < 4096) th <<= 1;
+    if (tw < w || th < h) return 0;
+#if defined(NEXA_WASM)
+    if (!__nexa_g3_mirror_tex) glGenTextures(1, &__nexa_g3_mirror_tex);
+    if (!__nexa_g3_mirror_tex) return 0;
+    glBindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_mirror_tex);
+    if (tw != __nexa_g3_mirror_tw || th != __nexa_g3_mirror_th) {
+        glTexImage2D(NEXA_GL_TEXTURE_2D, 0, (__nexa_GLint)0x1907, tw, th, 0,
+                     0x1907, NEXA_GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_MIN_FILTER, (__nexa_GLint)NEXA_GL_LINEAR);
+        glTexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_MAG_FILTER, (__nexa_GLint)NEXA_GL_LINEAR);
+        glTexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_WRAP_S, 0x2900);
+        glTexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_WRAP_T, 0x2900);
+        __nexa_g3_mirror_tw = tw;
+        __nexa_g3_mirror_th = th;
+    }
+    glCopyTexSubImage2D(NEXA_GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h);
+#else
+    if (!__nexa_gl.GenTextures || !__nexa_gl.BindTexture || !__nexa_gl.TexImage2D || !__nexa_gl.TexParameteri)
+        return 0;
+    typedef void (NEXA_GLAPI *CopySub)(unsigned int, int, int, int, int, int, int, int);
+    static CopySub copysub = nullptr;
+    static int got = 0;
+    if (!got) { copysub = (CopySub)__nexa_g3_glproc("glCopyTexSubImage2D"); got = 1; }
+    if (!copysub) return 0;
+    if (!__nexa_g3_mirror_tex) __nexa_gl.GenTextures(1, &__nexa_g3_mirror_tex);
+    if (!__nexa_g3_mirror_tex) return 0;
+    __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_mirror_tex);
+    if (tw != __nexa_g3_mirror_tw || th != __nexa_g3_mirror_th) {
+        __nexa_gl.TexImage2D(NEXA_GL_TEXTURE_2D, 0, (__nexa_GLint)0x1907, tw, th, 0,
+                             0x1907u, NEXA_GL_UNSIGNED_BYTE, nullptr);
+        __nexa_gl.TexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_MIN_FILTER, (__nexa_GLint)NEXA_GL_LINEAR);
+        __nexa_gl.TexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_MAG_FILTER, (__nexa_GLint)NEXA_GL_LINEAR);
+        __nexa_gl.TexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_WRAP_S, 0x2900);
+        __nexa_gl.TexParameteri(NEXA_GL_TEXTURE_2D, NEXA_GL_TEXTURE_WRAP_T, 0x2900);
+        __nexa_g3_mirror_tw = tw;
+        __nexa_g3_mirror_th = th;
+    }
+    copysub(NEXA_GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h);
+#endif
+    float vp[16];
+    __nexa_g3_mul4(vp, __nexa_g3.proj, __nexa_g3.view);
+    __nexa_g3_mirror_bake(vp, (float)w / (float)tw, (float)h / (float)th);
+    for (int i = 0; i < 16; i++) __nexa_g3_mirror_vp[i] = vp[i];
+    __nexa_g3_mirror_have = 1;
+    return 1;
+}
+
+static void __nexa_g3_mirror_pane(void) {
+    if (!__nexa_g3_mirror_have || !__nexa_g3_mirror_tex || __nexa_g3.vulkan) return;
+    float n[3] = { __nexa_g3_mirror_n[0], __nexa_g3_mirror_n[1], __nexa_g3_mirror_n[2] };
+    float u[3], v[3];
+    __nexa_g3_basis(n, u, v);
+    float hw = __nexa_g3_mirror_w * 0.5f, hh = __nexa_g3_mirror_h * 0.5f;
+    float c[3] = {
+        __nexa_g3_mirror_p[0] + n[0] * 0.015f,
+        __nexa_g3_mirror_p[1] + n[1] * 0.015f,
+        __nexa_g3_mirror_p[2] + n[2] * 0.015f
+    };
+    float q[4][3];
+    const float su[4] = {-1, 1, 1, -1};
+    const float sv[4] = {-1, -1, 1, 1};
+    for (int i = 0; i < 4; i++) {
+        q[i][0] = c[0] + u[0] * su[i] * hw + v[0] * sv[i] * hh;
+        q[i][1] = c[1] + u[1] * su[i] * hw + v[1] * sv[i] * hh;
+        q[i][2] = c[2] + u[2] * su[i] * hw + v[2] * sv[i] * hh;
+    }
+    const int tri[6] = {0, 1, 2, 0, 2, 3};
+    float verts[36];
+    for (int i = 0; i < 6; i++) {
+        verts[i * 6 + 0] = q[tri[i]][0];
+        verts[i * 6 + 1] = q[tri[i]][1];
+        verts[i * 6 + 2] = q[tri[i]][2];
+        verts[i * 6 + 3] = 1.0f;
+        verts[i * 6 + 4] = 1.0f;
+        verts[i * 6 + 5] = 1.0f;
+    }
+#if defined(NEXA_WASM)
+    if (!__nexa_g3_prog || !__nexa_g3_vbo || __nexa_g3_u_mirrorVP < 0) return;
+    float mvp[16], id[16];
+    __nexa_g3_mul4(mvp, __nexa_g3.proj, __nexa_g3.view);
+    for (int i = 0; i < 16; i++) id[i] = 0.0f;
+    id[0] = id[5] = id[10] = id[15] = 1.0f;
+    glUseProgram(__nexa_g3_prog);
+    glUniformMatrix4fv(__nexa_g3_u_mvp, 1, 0, mvp);
+    glUniformMatrix4fv(__nexa_g3_u_model, 1, 0, id);
+    glUniformMatrix4fv(__nexa_g3_u_mirrorVP, 1, 0, __nexa_g3_mirror_vp);
+    if (__nexa_g3_u_mirrorOn >= 0) glUniform1f(__nexa_g3_u_mirrorOn, 1.0f);
+    if (__nexa_g3_u_clipOn >= 0) glUniform1f(__nexa_g3_u_clipOn, 0.0f);
+    if (__nexa_g3_u_texon >= 0) glUniform1f(__nexa_g3_u_texon, 0.0f);
+    glBindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_mirror_tex);
+    glEnable(NEXA_GL_DEPTH_TEST);
+    glEnable(NEXA_GL_CULL_FACE);
+    glBindBuffer(NEXA_GL_ARRAY_BUFFER, __nexa_g3_vbo);
+    glBufferData(NEXA_GL_ARRAY_BUFFER, (__nexa_GLsizeiptr)sizeof(verts), verts, NEXA_GL_DYNAMIC_DRAW);
+    if (__nexa_g3_a_pos >= 0) {
+        glEnableVertexAttribArray((__nexa_GLuint)__nexa_g3_a_pos);
+        glVertexAttribPointer((__nexa_GLuint)__nexa_g3_a_pos, 3, NEXA_GL_FLOAT, 0,
+                              (__nexa_GLsizei)(6 * sizeof(float)), (const void*)0);
+    }
+    if (__nexa_g3_a_col >= 0) {
+        glEnableVertexAttribArray((__nexa_GLuint)__nexa_g3_a_col);
+        glVertexAttribPointer((__nexa_GLuint)__nexa_g3_a_col, 3, NEXA_GL_FLOAT, 0,
+                              (__nexa_GLsizei)(6 * sizeof(float)), (const void*)(3 * sizeof(float)));
+    }
+    glDrawArrays(NEXA_GL_TRIANGLES, 0, 6);
+    if (__nexa_g3_u_mirrorOn >= 0) glUniform1f(__nexa_g3_u_mirrorOn, 0.0f);
+#else
+    if (__nexa_g3.core33) {
+        if (!__nexa_g33_mirror_prog || !__nexa_g33_vbo || !__nexa_g33_vao || __nexa_g33_u_mirrorVP < 0) return;
+        float mvp[16], id[16];
+        __nexa_g3_mul4(mvp, __nexa_g3.proj, __nexa_g3.view);
+        for (int i = 0; i < 16; i++) id[i] = 0.0f;
+        id[0] = id[5] = id[10] = id[15] = 1.0f;
+        __nexa_g33.UseProgram(__nexa_g33_mirror_prog);
+        __nexa_g33.UniformMatrix4fv(__nexa_g33_u_mvp, 1, 0, mvp);
+        __nexa_g33.UniformMatrix4fv(__nexa_g33_u_model, 1, 0, id);
+        __nexa_g33.UniformMatrix4fv(__nexa_g33_u_mirrorVP, 1, 0, __nexa_g3_mirror_vp);
+        if (__nexa_g33_u_mirrorOn >= 0) __nexa_g33.Uniform1f(__nexa_g33_u_mirrorOn, 1.0f);
+        if (__nexa_g33_u_clipOn >= 0) __nexa_g33.Uniform1f(__nexa_g33_u_clipOn, 0.0f);
+        if (__nexa_g33_u_texon >= 0) __nexa_g33.Uniform1f(__nexa_g33_u_texon, 0.0f);
+        if (__nexa_g33_u_cut >= 0) __nexa_g33.Uniform1f(__nexa_g33_u_cut, 0.0f);
+        if (__nexa_gl.BindTexture) __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_mirror_tex);
+        if (__nexa_gl.Enable) {
+            __nexa_gl.Enable(NEXA_GL_DEPTH_TEST);
+            __nexa_gl.Enable(NEXA_GL_CULL_FACE);
+        }
+        __nexa_g33.BindVertexArray(__nexa_g33_vao);
+        __nexa_g33.BindBuffer(NEXA_GL_ARRAY_BUFFER, __nexa_g33_vbo);
+        __nexa_g33.BufferData(NEXA_GL_ARRAY_BUFFER, (__nexa_GLsizeiptr)sizeof(verts), verts, NEXA_GL_DYNAMIC_DRAW);
+        const __nexa_GLsizei stride = (__nexa_GLsizei)(6 * sizeof(float));
+        __nexa_g33.EnableVertexAttribArray((__nexa_GLuint)__nexa_g33_a_pos);
+        __nexa_g33.VertexAttribPointer((__nexa_GLuint)__nexa_g33_a_pos, 3, NEXA_GL_FLOAT, 0, stride, (const void*)0);
+        __nexa_g33.EnableVertexAttribArray((__nexa_GLuint)__nexa_g33_a_col);
+        __nexa_g33.VertexAttribPointer((__nexa_GLuint)__nexa_g33_a_col, 3, NEXA_GL_FLOAT, 0, stride,
+                                       (const void*)(3 * sizeof(float)));
+        if (__nexa_g33_a_uv >= 0) __nexa_g33.DisableVertexAttribArray((__nexa_GLuint)__nexa_g33_a_uv);
+        if (__nexa_gl.DrawArrays) __nexa_gl.DrawArrays(NEXA_GL_TRIANGLES, 0, 6);
+        if (__nexa_g33_u_mirrorOn >= 0) __nexa_g33.Uniform1f(__nexa_g33_u_mirrorOn, 0.0f);
+        return;
+    }
+    if (!__nexa_gl.Begin || !__nexa_gl.End || !__nexa_gl.Vertex3f || !__nexa_gl.BindTexture || !__nexa_gl.Enable)
+        return;
+    typedef void (NEXA_GLAPI *Tex4)(float, float, float, float);
+    static Tex4 tex4 = nullptr;
+    static int got = 0;
+    if (!got) { tex4 = (Tex4)__nexa_g3_glproc("glTexCoord4f"); got = 1; }
+    if (!tex4) return;
+    __nexa_gl.Enable(NEXA_GL_DEPTH_TEST);
+    __nexa_gl.Enable(NEXA_GL_CULL_FACE);
+    __nexa_gl.Enable(NEXA_GL_TEXTURE_2D);
+    __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_mirror_tex);
+    if (__nexa_gl.Color3ub) __nexa_gl.Color3ub(255, 255, 255);
+    __nexa_gl.Begin(NEXA_GL_TRIANGLES);
+    for (int i = 0; i < 6; i++) {
+        float x = q[tri[i]][0], y = q[tri[i]][1], z = q[tri[i]][2];
+        float s = __nexa_g3_mirror_vp[0] * x + __nexa_g3_mirror_vp[4] * y + __nexa_g3_mirror_vp[8] * z + __nexa_g3_mirror_vp[12];
+        float t = __nexa_g3_mirror_vp[1] * x + __nexa_g3_mirror_vp[5] * y + __nexa_g3_mirror_vp[9] * z + __nexa_g3_mirror_vp[13];
+        float qq = __nexa_g3_mirror_vp[3] * x + __nexa_g3_mirror_vp[7] * y + __nexa_g3_mirror_vp[11] * z + __nexa_g3_mirror_vp[15];
+        tex4(s, t, 0.0f, qq);
+        __nexa_gl.Vertex3f(x, y, z);
+    }
+    __nexa_gl.End();
+    if (__nexa_gl.Disable) __nexa_gl.Disable(NEXA_GL_TEXTURE_2D);
+#endif
+}
+
+static void __nexa_gfx3d_present(void) {
+    if (!__nexa_g3.ready) return;
+    __nexa_g3_mirror_pane();
+    // Last thing before the swap, so it is over everything the frame drew.
+    __nexa_g3_overlay_present();
+)MIR");
+
+    put("static int __nexa_gfx3d_vsync_get(void) {\n"
+        "    return __nexa_g3.vsync;\n"
+        "}\n",
+        "static int __nexa_gfx3d_vsync_get(void) {\n"
+        "    return __nexa_g3.vsync;\n"
+        "}\n"
+        "\n"
+        "static int __nexa_gfx3d_mirror(double x, double y, double z,\n"
+        "                               double nx, double ny, double nz,\n"
+        "                               double w, double h) {\n"
+        "    if (__nexa_g3.vulkan) return 0;\n"
+        "    float nlen = std::sqrt((float)(nx * nx + ny * ny + nz * nz));\n"
+        "    if (nlen < 1e-6f) return 0;\n"
+        "    if (w < 0.0) w = -w;\n"
+        "    if (h < 0.0) h = -h;\n"
+        "    if (w < 1e-3) w = 1e-3;\n"
+        "    if (h < 1e-3) h = 1e-3;\n"
+        "    float nnx = (float)nx / nlen, nny = (float)ny / nlen, nnz = (float)nz / nlen;\n"
+        "    __nexa_g3_mirror_p[0] = (float)x;\n"
+        "    __nexa_g3_mirror_p[1] = (float)y;\n"
+        "    __nexa_g3_mirror_p[2] = (float)z;\n"
+        "    __nexa_g3_mirror_n[0] = nnx;\n"
+        "    __nexa_g3_mirror_n[1] = nny;\n"
+        "    __nexa_g3_mirror_n[2] = nnz;\n"
+        "    __nexa_g3_mirror_d = nnx * (float)x + nny * (float)y + nnz * (float)z;\n"
+        "    __nexa_g3_mirror_w = (float)w;\n"
+        "    __nexa_g3_mirror_h = (float)h;\n"
+        "    for (int i = 0; i < 16; i++) __nexa_g3_mirror_R[i] = 0.0f;\n"
+        "    __nexa_g3_mirror_R[0] = 1.0f - 2.0f * nnx * nnx;\n"
+        "    __nexa_g3_mirror_R[1] = -2.0f * nny * nnx;\n"
+        "    __nexa_g3_mirror_R[2] = -2.0f * nnz * nnx;\n"
+        "    __nexa_g3_mirror_R[4] = -2.0f * nnx * nny;\n"
+        "    __nexa_g3_mirror_R[5] = 1.0f - 2.0f * nny * nny;\n"
+        "    __nexa_g3_mirror_R[6] = -2.0f * nnz * nny;\n"
+        "    __nexa_g3_mirror_R[8] = -2.0f * nnx * nnz;\n"
+        "    __nexa_g3_mirror_R[9] = -2.0f * nny * nnz;\n"
+        "    __nexa_g3_mirror_R[10] = 1.0f - 2.0f * nnz * nnz;\n"
+        "    __nexa_g3_mirror_R[12] = 2.0f * __nexa_g3_mirror_d * nnx;\n"
+        "    __nexa_g3_mirror_R[13] = 2.0f * __nexa_g3_mirror_d * nny;\n"
+        "    __nexa_g3_mirror_R[14] = 2.0f * __nexa_g3_mirror_d * nnz;\n"
+        "    __nexa_g3_mirror_R[15] = 1.0f;\n"
+        "    __nexa_g3_mirror_on = 1;\n"
+        "    __nexa_g3_mirror_have = 0;\n"
+        "    return 1;\n"
+        "}\n"
+        "\n"
+        "static int __nexa_gfx3d_mirror_end(void) {\n"
+        "    if (__nexa_g3.vulkan || !__nexa_g3_mirror_on) return 0;\n"
+        "    __nexa_g3_mirror_have = 0;\n"
+        "    __nexa_g3_mirror_copy();\n"
+        "    __nexa_g3_mirror_on = 0;\n"
+        "    __nexa_g3_mirror_camera();\n"
         "    return 0;\n"
         "}\n");
 }
