@@ -430,14 +430,6 @@ static float __nexa_phys_soft_sag(const __nexa_phys_body& a, const __nexa_phys_b
     return soft * rad * 0.16f * r;
 }
 
-static float __nexa_phys_soft_want(float pen, float sag, float soft) {
-    if (pen <= sag) return 0.f;
-    float w = 26.f - 14.f * soft;
-    float want = (pen - sag) * w;
-    if (want > 2.5f) want = 2.5f;
-    return want;
-}
-
 static float __nexa_phys_soft_rad(const __nexa_phys_body& a, const __nexa_phys_body& b) {
     float rad = __nexa_phys_body_rad(a);
     if (b.inv > 0.f) {
@@ -842,7 +834,14 @@ static void __nexa_phys_solve(float h, unsigned char* touch) {
                             pen = __need;
                         }
                     }
-                    want = __nexa_phys_soft_want(pen, __sag, __soft);
+                    // Nothing more than "stop coming together". Asking for a
+                    // separation speed here is what made two soft balls with
+                    // no bounce leave each other at 1.7 m/s: the ask is made
+                    // while the overlap is deepest, and the pair keeps that
+                    // speed long after the contact is over. Getting the
+                    // overlap back out is separate()'s job, and it does it by
+                    // moving them rather than by throwing them.
+                    want = 0.f;
                     if (iter == 0 && rel < -1.f) {
                         float e = a.bounce > b.bounce ? a.bounce : b.bounce;
                         float bounce = -e * rel * (1.f - __soft);
@@ -921,7 +920,7 @@ static void __nexa_phys_solve(float h, unsigned char* touch) {
                 float vn = (d.vx * nx + d.vy * ny + d.vz * nz) * sign;
                 float __rad = __nexa_phys_soft_rad(a, b);
                 float __sag = __nexa_phys_soft_sag(a, b, __rad, __nexa_phys_squish, h);
-                float hold = __nexa_phys_soft_want(pen, __sag, __nexa_phys_squish);
+                float hold = 0.f;
                 if (vn < hold) {
                     float dv = hold - vn;
                     d.vx += nx * sign * dv;
@@ -965,14 +964,21 @@ static void __nexa_phys_separate() {
                     else {
                         float __use = pen - __sag;
                         if (__use < 0.f) __use = 0.f;
-                        // Firmly only near the sag. A body that has settled is
-                        // then held by where it is rather than by a separation
-                        // speed it never gets to use, which is what left
-                        // physics.vy reading 0.12 m/s on a ball that had not
-                        // moved in a hundred seconds. A fresh impact is still
-                        // deep, and is left alone so the squash survives long
-                        // enough to be seen.
-                        corr = __use * ((__use < __sag * 0.5f) ? 0.15f : 0.012f);
+                        // Gently while the two are still coming together: that
+                        // is the impact, and taking the overlap out then would
+                        // wipe the compression before anything could see it.
+                        // Briskly once they have stopped closing, which is the
+                        // recovery -- and taking it out by moving them adds no
+                        // energy, where leaving it to the separation speed had
+                        // two soft balls bounce off each other at 1.7 m/s with
+                        // bounce set to nothing. It also holds a settled body
+                        // by where it is rather than by a speed it never gets
+                        // to use, which is what left physics.vy reading
+                        // 0.12 m/s on a ball that had not moved in a hundred
+                        // seconds.
+                        float __vn = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny
+                                   + (a.vz - b.vz) * nz;
+                        corr = __use * ((__vn < -0.2f) ? 0.012f : 0.2f);
                     }
                 }
 )PHYS";

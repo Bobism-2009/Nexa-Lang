@@ -289,6 +289,60 @@ fn main() {
     return 0;
 }
 EOF
+cat > "$WORK/squishhead.nxa" <<'EOF'
+// Two soft bodies with no bounce, thrown at each other, have to absorb the
+// collision rather than trade it back. They did not: the recovery was driven by
+// asking the solver for a separation speed, that ask was made while the overlap
+// was deepest, and the pair kept the speed long after the contact was over --
+// 1.7 m/s apart, forever, from a head-on hit at 4. Getting the overlap out by
+// moving them instead cannot hand energy back.
+#include <std/io>
+#include <std/physics>
+fn main(): int {
+    physics.squishy(0.9);
+    physics.gravity(0, 0, 0);
+    let a = physics.sphere(-2, 0, 0, 0.5);
+    let b = physics.sphere(2, 0, 0, 0.5);
+    physics.velocity(a, 4, 0, 0);
+    physics.velocity(b, -4, 0, 0);
+    let touched = 0;
+    let i = 0;
+    while (i < 150) {
+        physics.step(1.0 / 60.0);
+        if (physics.squash(a) > 0.02) { touched = 1; }
+        i = i + 1;
+    }
+    if (touched == 0) { io.println("fail no contact"); return 1; }
+    let sep = physics.vx(b) - physics.vx(a);
+    if (sep < 0.0) { sep = 0.0 - sep; }
+    if (sep > 0.25) {
+        io.println("fail soft pair bounced apart");
+        io.println(sep);
+        return 1;
+    }
+    // And they must not be left inside one another either.
+    let gap = physics.x(b) - physics.x(a);
+    if (gap < 0.0) { gap = 0.0 - gap; }
+    if (gap < 0.6) {
+        io.println("fail left overlapping");
+        io.println(gap);
+        return 1;
+    }
+    io.println("ok");
+    return 0;
+}
+EOF
+if ! "$NEXAC" "$WORK/squishhead.nxa" -o "$WORK/squishhead$EXE" > "$WORK/squishhead.log" 2>&1; then
+    bad "squish headon build" "$(tail -20 "$WORK/squishhead.log")"
+else
+    out=$("$WORK/squishhead$EXE" 2>&1 | tr -d '\r')
+    if [ "$out" = "ok" ]; then
+        ok "two soft bodies absorb a head-on hit instead of trading it back"
+    else
+        bad "squish headon" "$out"
+    fi
+fi
+
 cat > "$WORK/squishload.nxa" <<'EOF'
 // A soft body should flatten more when something rests on it. It did not: a
 // ball carrying another squashed 0.148 where it squashed 0.146 on its own, and

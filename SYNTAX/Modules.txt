@@ -1817,6 +1817,13 @@ ARGUMENT TYPES
                                  and then stops rather than collapsing -- the
                                  levels between the bottom and the top reach
                                  that cap together rather than grading smoothly.
+                                 Two soft bodies absorb a hit rather than trade
+                                 it back: the overlap is taken out by moving
+                                 them, not by asking for a separation speed, so
+                                 a pair with no bounce comes to a stop against
+                                 each other instead of flying apart. A resting
+                                 body reads a velocity of zero for the same
+                                 reason -- it is held by where it is.
                                  0 leaves the solver as it is. A program that
                                  never calls it carries none of this.
                                  Where it comes to rest does not depend on how
