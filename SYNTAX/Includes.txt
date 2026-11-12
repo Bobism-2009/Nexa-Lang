@@ -45,6 +45,9 @@ MODULE INCLUDES (angle brackets)
                             physics.squishy(amount) lets a body compress
                             with the hit and spring back; physics.squash is
                             the fraction of its radius still pressed in.
+                            physics.soft(id, amount) sets one body apart from
+                            the rest, so a firm ball dents a cushion and keeps
+                            its own shape.
                             Bodies translate and do not rotate. A program that
                             never calls physics carries none of it.
   #include <std/ui>       - Widgets, themes and styles on the gfx window (includes std/gfx):

@@ -289,6 +289,103 @@ fn main() {
     return 0;
 }
 EOF
+cat > "$WORK/softbody.nxa" <<'EOF'
+// physics.soft sets one body apart from the rest. Before it there was one knob
+// for the whole world, so every body was as soft as every other: a firm ball
+// asked for against the floor still squashed like jelly, and physics.bounce did
+// nothing at all on a soft world, since softness scales restitution away.
+#include <std/io>
+#include <std/physics>
+fn main(): int {
+    physics.squishy(0.9);
+    let floor = physics.box(0, -0.5, 0, 24, 1, 24);
+    physics.mass(floor, 0);
+    // Same drop, three characters.
+    let jelly = physics.sphere(-3, 3, 0, 0.5);
+    let firm = physics.sphere(0, 3, 0, 0.5);
+    physics.soft(firm, 0.08);
+    let rubber = physics.sphere(3, 3, 0, 0.5);
+    physics.soft(rubber, 0.08);
+    physics.bounce(rubber, 0.75);
+    let hr = 0.0;
+    let touched = 0;
+    let i = 0;
+    while (i < 300) {
+        physics.step(1.0 / 60.0);
+        if (physics.y(rubber) < 0.55) { touched = 1; }
+        if (touched == 1 && physics.y(rubber) > hr) { hr = physics.y(rubber); }
+        i = i + 1;
+    }
+    let qj = physics.squash(jelly);
+    let qf = physics.squash(firm);
+    // The firm one has to land firmly, not like the jelly beside it.
+    if (qf > qj * 0.5) {
+        io.println("fail firm squashed like jelly");
+        io.println(qj);
+        io.println(qf);
+        return 1;
+    }
+    if (qj < 0.08) { io.println("fail jelly too firm"); io.println(qj); return 1; }
+    // And a firm body with bounce set has to leave the floor.
+    if (hr < 1.0) {
+        io.println("fail bounce on a firm body");
+        io.println(hr);
+        return 1;
+    }
+    // A firm ball dropped on a soft one dents the soft one, not itself.
+    let cushion = physics.sphere(8, 0.5, 0, 0.5);
+    let press = physics.sphere(8, 3, 0, 0.5);
+    physics.soft(press, 0.05);
+    i = 0;
+    while (i < 300) { physics.step(1.0 / 60.0); i = i + 1; }
+    let qc = physics.squash(cushion);
+    let qp = physics.squash(press);
+    if (qc < 0.2) { io.println("fail cushion not dented"); io.println(qc); return 1; }
+    if (qp > 0.05) { io.println("fail presser deformed"); io.println(qp); return 1; }
+    io.println("ok");
+    return 0;
+}
+EOF
+if ! "$NEXAC" "$WORK/softbody.nxa" -o "$WORK/softbody$EXE" > "$WORK/softbody.log" 2>&1; then
+    bad "soft body build" "$(tail -20 "$WORK/softbody.log")"
+else
+    out=$("$WORK/softbody$EXE" 2>&1 | tr -d '\r')
+    if [ "$out" = "ok" ]; then
+        ok "physics.soft sets one body's softness apart from the world's"
+    else
+        bad "soft body" "$out"
+    fi
+fi
+
+cat > "$WORK/softonly.nxa" <<'EOF'
+// physics.soft on its own, with the world left rigid: the soft paths still have
+// to be emitted and to run. They used to be gated on physics.squishy alone.
+#include <std/io>
+#include <std/physics>
+fn main(): int {
+    let floor = physics.box(0, -0.5, 0, 24, 1, 24);
+    physics.mass(floor, 0);
+    let b = physics.sphere(0, 3, 0, 0.5);
+    physics.soft(b, 0.9);
+    let i = 0;
+    while (i < 300) { physics.step(1.0 / 60.0); i = i + 1; }
+    let q = physics.squash(b);
+    if (q < 0.08 || q > 0.25) { io.println("fail soft alone"); io.println(q); return 1; }
+    io.println("ok");
+    return 0;
+}
+EOF
+if ! "$NEXAC" "$WORK/softonly.nxa" -o "$WORK/softonly$EXE" > "$WORK/softonly.log" 2>&1; then
+    bad "soft only build" "$(tail -20 "$WORK/softonly.log")"
+else
+    out=$("$WORK/softonly$EXE" 2>&1 | tr -d '\r')
+    if [ "$out" = "ok" ]; then
+        ok "physics.soft works with no physics.squishy call at all"
+    else
+        bad "soft only" "$out"
+    fi
+fi
+
 cat > "$WORK/squishhead.nxa" <<'EOF'
 // Two soft bodies with no bounce, thrown at each other, have to absorb the
 // collision rather than trade it back. They did not: the recovery was driven by

@@ -359,7 +359,7 @@ struct __nexa_phys_body {
             out += "    int model;\n    float scl;\n";
         }
         if (squish) {
-            out += "    float sq, snx, sny, snz, hit, load, loadN;\n";
+            out += "    float sq, snx, sny, snz, hit, load, loadN, softOwn;\n";
         }
         out += R"PHYS(};
 static __nexa_phys_body __nexa_phys_bodies[257];
@@ -368,9 +368,27 @@ static float __nexa_phys_gx = 0.f, __nexa_phys_gy = -9.81f, __nexa_phys_gz = 0.f
 )PHYS";
         if (squish) {
             out += R"PHYS(static float __nexa_phys_squish = 0.f;
+static int __nexa_phys_soft_any = 0;
 // The substep solve last ran with. separate() runs straight after it and has to
 // read the load the same way, or the two disagree about where the sag is.
 static float __nexa_phys_soft_h = 1.f / 60.f;
+// How soft one body is. physics.soft sets it; below zero means it has not been
+// asked for and the body follows physics.squishy, which is what every body did
+// before there was a way to say otherwise.
+static float __nexa_phys_body_soft(const __nexa_phys_body& b) {
+    return b.softOwn >= 0.f ? b.softOwn : __nexa_phys_squish;
+}
+
+// A contact is as yielding as its softer side: a firm ball on a cushion dents
+// the cushion, and the pair is no firmer than the cushion is. A body that
+// cannot move lends no softness at all, whatever it inherited -- otherwise
+// every contact with the floor is as soft as physics.squishy and asking for a
+// firm body does nothing, which is what it did before this line.
+static float __nexa_phys_pair_soft(const __nexa_phys_body& a, const __nexa_phys_body& b) {
+    float sa = (a.inv > 0.f) ? __nexa_phys_body_soft(a) : 0.f;
+    float sb = (b.inv > 0.f) ? __nexa_phys_body_soft(b) : 0.f;
+    return sa > sb ? sa : sb;
+}
 static float __nexa_phys_body_rad(const __nexa_phys_body& b) {
     float rad = b.r;
     if (b.kind == 2) {
@@ -455,7 +473,14 @@ static int __nexa_phys_alloc(int kind) {
             b = __nexa_phys_body{};
             b.kind = kind;
             b.inv = 1.f;
-            if (i > __nexa_phys_hi) __nexa_phys_hi = i;
+)PHYS";
+        if (squish) {
+            // Below zero is "nobody has said", and the body follows
+            // physics.squishy. Zero would mean rigid, which is a different
+            // thing and not the default.
+            out += "            b.softOwn = -1.f;\n";
+        }
+        out += R"PHYS(            if (i > __nexa_phys_hi) __nexa_phys_hi = i;
             return i;
         }
     }
@@ -493,7 +518,21 @@ static int __nexa_phys_mass(int id, double m) {
     else b.inv = (float)(1.0 / m);
     return 1;
 }
-static int __nexa_phys_bounce(int id, double e) {
+)PHYS";
+        if (squish) {
+            out += R"PHYS(static void __nexa_phys_soft_seen();
+static int __nexa_phys_soft(int id, double amount) {
+    if (!__nexa_phys_alive(id)) return 0;
+    float f = (float)amount;
+    if (f < 0.f) f = 0.f;
+    if (f > 1.f) f = 1.f;
+    __nexa_phys_bodies[id].softOwn = f;
+    __nexa_phys_soft_seen();
+    return 1;
+}
+)PHYS";
+        }
+        out += R"PHYS(static int __nexa_phys_bounce(int id, double e) {
     if (!__nexa_phys_alive(id)) return 0;
     float f = (float)e;
     if (f < 0.f) f = 0.f;
@@ -803,7 +842,7 @@ static void __nexa_phys_solve(float h, unsigned char* touch) {
         } else {
             out += R"PHYS(                const float slop = 0.005f;
                 float want = 0.f;
-                float __soft = __nexa_phys_squish;
+                float __soft = __nexa_phys_pair_soft(a, b);
                 if (__soft <= 0.f) {
                     if (pen > slop) {
                         want = 2.f * (pen - slop) / h;
@@ -904,7 +943,7 @@ static void __nexa_phys_solve(float h, unsigned char* touch) {
             // A soft pair shares the hit, so the lower body is left moving
             // into the floor. Stop that leftover speed after the iterations,
             // or the next step carries it through the static shape.
-            out += R"PHYS(    if (__nexa_phys_squish > 0.f) {
+            out += R"PHYS(    if (__nexa_phys_soft_any) {
         for (int i = 1; i <= hi; i++) __nexa_phys_bodies[i].loadN = __nexa_phys_bodies[i].load;
         for (int i = 1; i <= hi; i++) {
             if (__nexa_phys_bodies[i].kind == 0) continue;
@@ -919,7 +958,7 @@ static void __nexa_phys_solve(float h, unsigned char* touch) {
                 float sign = (a.inv > 0.f) ? 1.f : -1.f;
                 float vn = (d.vx * nx + d.vy * ny + d.vz * nz) * sign;
                 float __rad = __nexa_phys_soft_rad(a, b);
-                float __sag = __nexa_phys_soft_sag(a, b, __rad, __nexa_phys_squish, h);
+                float __sag = __nexa_phys_soft_sag(a, b, __rad, __nexa_phys_pair_soft(a, b), h);
                 float hold = 0.f;
                 if (vn < hold) {
                     float dv = hold - vn;
@@ -955,11 +994,12 @@ static void __nexa_phys_separate() {
             out += "                float corr = (pen - 0.001f) * 0.85f;\n";
         } else {
             out += R"PHYS(                float corr;
-                if (__nexa_phys_squish <= 0.f) corr = (pen - 0.001f) * 0.85f;
+                if (!__nexa_phys_soft_any) corr = (pen - 0.001f) * 0.85f;
                 else {
                     float __rad = __nexa_phys_soft_rad(a, b);
-                    float __sag = __nexa_phys_soft_sag(a, b, __rad, __nexa_phys_squish, __nexa_phys_soft_h);
-                    float __maxp = __nexa_phys_squish * __rad * 0.45f;
+                    float __psoft = __nexa_phys_pair_soft(a, b);
+                    float __sag = __nexa_phys_soft_sag(a, b, __rad, __psoft, __nexa_phys_soft_h);
+                    float __maxp = __psoft * __rad * 0.45f;
                     if (pen > __maxp) corr = (pen - __maxp) * 0.7f;
                     else {
                         float __use = pen - __sag;
@@ -994,7 +1034,7 @@ static void __nexa_phys_separate() {
         if (squish) {
             // The pair above can shove a body into a static shape while it
             // eases two soft bodies apart. Put it back on the near side.
-            out += R"PHYS(    if (__nexa_phys_squish > 0.f) {
+            out += R"PHYS(    if (__nexa_phys_soft_any) {
         for (int i = 1; i <= hi; i++) {
             if (__nexa_phys_bodies[i].kind == 0) continue;
             for (int j = i + 1; j <= hi; j++) {
@@ -1006,7 +1046,7 @@ static void __nexa_phys_separate() {
                 if (inv <= 0.f) continue;
                 float nx, ny, nz, pen;
                 if (!__nexa_phys_pair(i, j, &nx, &ny, &nz, &pen)) continue;
-                float __maxp = __nexa_phys_squish * __nexa_phys_soft_rad(a, b) * 0.45f;
+                float __maxp = __nexa_phys_pair_soft(a, b) * __nexa_phys_soft_rad(a, b) * 0.45f;
                 if (pen <= __maxp) continue;
                 float corr = pen - __maxp;
                 float sa = corr * (a.inv / inv), sb = corr * (b.inv / inv);
@@ -1059,7 +1099,7 @@ static int __nexa_phys_step(double dtin) {
 )PHYS";
         if (squish) {
             out += R"PHYS(
-    if (__nexa_phys_squish > 0.f) {
+    if (__nexa_phys_soft_any) {
         for (int i = 1; i <= hi; i++) __nexa_phys_bodies[i].hit = 0.f;
         for (int i = 1; i <= hi; i++) {
             if (__nexa_phys_bodies[i].kind == 0) continue;
@@ -1071,8 +1111,21 @@ static int __nexa_phys_step(double dtin) {
                 if (inv <= 0.f) continue;
                 float nx, ny, nz, pen;
                 if (!__nexa_phys_pair(i, j, &nx, &ny, &nz, &pen) || pen <= 0.001f) continue;
-                float pa = pen * (a.inv / inv);
-                float pb = pen * (b.inv / inv);
+                // Shared by how soft each one is, not by mass: a firm body
+                // pressed into a soft one dents the soft one and keeps its own
+                // shape. Equal softness is half each, which is what sharing by
+                // mass gave for two of the same.
+                // A body that cannot move cannot be dented either, whatever
+                // softness it inherited, so it takes none of the share and the
+                // moving one takes all of it -- which is what sharing by mass
+                // used to give against a static floor.
+                float sa = (a.inv > 0.f) ? __nexa_phys_body_soft(a) : 0.f;
+                float sb = (b.inv > 0.f) ? __nexa_phys_body_soft(b) : 0.f;
+                float st = sa + sb;
+                float fa = (st > 1e-6f) ? (sa / st) : (a.inv / inv);
+                float fb = (st > 1e-6f) ? (sb / st) : (b.inv / inv);
+                float pa = pen * fa;
+                float pb = pen * fb;
                 if (a.inv > 0.f && pa > a.hit) { a.hit = pa; a.snx = nx; a.sny = ny; a.snz = nz; }
                 if (b.inv > 0.f && pb > b.hit) { b.hit = pb; b.snx = -nx; b.sny = -ny; b.snz = -nz; }
             }
@@ -1105,11 +1158,20 @@ static int __nexa_phys_step(double dtin) {
     }
     return 1;
 }
+// Set by either knob: the world's softness, or one body's.
+static void __nexa_phys_soft_seen() {
+    if (__nexa_phys_squish > 0.f) { __nexa_phys_soft_any = 1; return; }
+    for (int i = 1; i <= __nexa_phys_hi; i++) {
+        if (__nexa_phys_bodies[i].softOwn > 0.f) { __nexa_phys_soft_any = 1; return; }
+    }
+    __nexa_phys_soft_any = 0;
+}
 static int __nexa_phys_squishy(double amount) {
     float s = (float)amount;
     if (s < 0.f) s = 0.f;
     if (s > 1.f) s = 1.f;
     __nexa_phys_squish = s;
+    __nexa_phys_soft_seen();
     return 1;
 }
 static double __nexa_phys_squash(int id) {

@@ -733,7 +733,7 @@ along its direction, or -1, and leaves the hit in hx/hy/hz and nx/ny/nz.
           physics.hx() physics.hy() physics.hz()
           physics.nx() physics.ny() physics.nz()
   body    physics.sphere(...)  physics.box(...)  physics.capsule(...)  physics.mesh(...)
-          physics.squishy(amount)  physics.squash(id)
+          physics.squishy(amount)  physics.soft(id, amount)  physics.squash(id)
           physics.snx(id)  physics.sny(id)  physics.snz(id)
           physics.mass(id, m)  physics.bounce(id, e)  physics.velocity(id, vx, vy, vz)
           physics.set(id, x, y, z)  physics.remove(id)  physics.gravity(x, y, z)

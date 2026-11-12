@@ -417,7 +417,8 @@ public:
                         m == "gravity" || m == "step" || m == "x" || m == "y" || m == "z" ||
                         m == "vx" || m == "vy" || m == "vz" || m == "x1" || m == "y1" || m == "z1" ||
                         m == "x2" || m == "y2" || m == "z2";
-                    const bool squishy = m == "squishy" || m == "squash" || m == "snx" || m == "sny" || m == "snz";
+                    const bool squishy = m == "squishy" || m == "soft" || m == "squash" ||
+                        m == "snx" || m == "sny" || m == "snz";
                     if (squishy) cppUsage.physicsSquish = true;
                     if (m == "mesh" || squishy || world) cppUsage.physicsBody = true;
                     else cppUsage.physicsQuery = true;
@@ -4777,6 +4778,7 @@ private:
             {"mesh", "physics.mesh(model, x, y, z, scale)", "nnnnn"},
             {"ray_mesh", "physics.ray_mesh(ox, oy, oz, dx, dy, dz, model, x, y, z, scale)", "nnnnnnnnnnn"},
             {"squishy", "physics.squishy(amount)", "n"},
+            {"soft", "physics.soft(id, amount)", "nn"},
             {"squash", "physics.squash(id)", "n"},
             {"snx", "physics.snx(id)", "n"},
             {"sny", "physics.sny(id)", "n"},
@@ -8647,6 +8649,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (fn == "mesh") return "__nexa_phys_mesh(" + num(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ", " + num(4) + ")";
                 if (fn == "ray_mesh") return "__nexa_phys_ray_mesh(" + num(0) + ", " + num(1) + ", " + num(2) + ", " + num(3) + ", " + num(4) + ", " + num(5) + ", " + num(6) + ", " + num(7) + ", " + num(8) + ", " + num(9) + ", " + num(10) + ")";
                 if (fn == "squishy") return "__nexa_phys_squishy(" + num(0) + ")";
+                if (fn == "soft") return "__nexa_phys_soft(" + id(0) + ", " + num(1) + ")";
                 if (fn == "squash") return "__nexa_phys_squash(" + id(0) + ")";
                 if (fn == "snx") return "__nexa_phys_sn(" + id(0) + ", 0)";
                 if (fn == "sny") return "__nexa_phys_sn(" + id(0) + ", 1)";

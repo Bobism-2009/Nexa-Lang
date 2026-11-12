@@ -1836,6 +1836,21 @@ ARGUMENT TYPES
                                  reached the contact -- a long step lands
                                  deeper. Step at a steady rate for a steady
                                  look.
+  physics.soft(id, amount)       - how soft this one body is, 0 to 1, apart
+                                 from the rest. Unset, a body follows
+                                 physics.squishy. A contact is as yielding as
+                                 its softer side and the deformation goes to
+                                 that side, so a firm ball dropped on a cushion
+                                 dents the cushion and keeps its own shape --
+                                 measured 0.008 of its radius pressed in
+                                 against the cushion's 0.365. A body that
+                                 cannot move lends no softness, so asking for a
+                                 firm body against the floor gets a firm
+                                 landing. It is also what makes physics.bounce
+                                 mean something on a soft world: softness
+                                 scales restitution away, so a firm body with
+                                 bounce set rebounds where a jelly one does not
+                                 -- 1.64 against 0.54 from the same drop.
   physics.squash(id)             - the fraction of its radius pressed in
                                  right now, 0 to 1. It is the overlap still
                                  there after the step, shared by mass.
