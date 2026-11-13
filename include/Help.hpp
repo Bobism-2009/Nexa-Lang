@@ -647,6 +647,8 @@ no array of pixels to read back.
             gfx3d.lamp(x, y, z, reach[, r, g, b])
                                               a place in the room; full there, gone at reach
             gfx3d.lamp()                      turn that lamp off
+            gfx3d.glint([level])              a tight highlight toward the camera
+                                              0..255; leaving the number off is full on
   place     gfx3d.translate(x, y, z)   moves what is drawn next
             gfx3d.rotate(rx, ry, rz)   degrees, right-hand rule, X then Y then Z
             gfx3d.scale(s)             uniform
@@ -705,10 +707,15 @@ take the direction the surface really points and come out smooth. One
 directional light, in world space. gfx3d.lamp is a second light you place
 in the room: full at that spot, gone at its reach, and it does not cast.
 It is added on top of the sun, so a corner the sun has shaded can stay
-bright. gfx3d.shadow() is the sun's shadow: the first call draws what
+bright. gfx3d.glint() is the bright spot where that sun, or that lamp,
+bounces toward the camera. A flat face stays mostly flat, because the
+spot is only a few degrees wide. The sun's spot is part of the sun, so a
+shadow darkens it. The lamp's is added after the shadow, so it can sit in
+the shade. gfx3d.shadow() is the sun's shadow: the first call draws what
 casts, the second draws the room, and what the light could not see comes
 out darker. Without the shadow call, brightness comes only from the way a
-surface faces. A program that never places a lamp carries none of that light.
+surface faces. A program that never places a lamp carries none of that
+light, and one that never asks for a glint carries none of that highlight.
 
 Models are Wavefront .obj, read here rather than linked: v, vn and f, with
 everything else skipped. A model is centred and divided by its longest side as

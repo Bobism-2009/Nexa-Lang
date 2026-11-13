@@ -1454,11 +1454,30 @@ ARGUMENT TYPES
   gfx3d.lamp()                   - turn the lamp off, and answer 0.
                                    A program that never calls any of these
                                    carries none of this
+  gfx3d.glint()                  - a tight highlight where the sun or the lamp
+                                   bounces toward the camera. The call answers
+                                   1. A flat face stays mostly flat: the
+                                   highlight is only a few degrees wide, so a
+                                   face lights up only where it aims the bounce
+                                   at you. Lines are left alone, and so is a
+                                   shape wearing a texture
+  gfx3d.glint(level)             - how strong that highlight is, from 0 to 255.
+                                   0 turns it off and answers 0. The sun's
+                                   highlight is part of the sun, so a shadow
+                                   darkens it. The lamp's is added after the
+                                   shadow, so it can sit in the shade. On
+                                   Vulkan the highlight is added at each corner,
+                                   and a shadow there darkens it with the sun.
+                                   The OpenGL window darkens only the sun's.
+                                   A program that never calls either form
+                                   carries none of this
   The light is in WORLD space, so a shape turned by gfx3d.rotate turns into
   and out of it rather than carrying its own lighting around with it. The
   sun is one light, and it is directional. A lamp is extra light at a place,
   and it does not cast. gfx3d.shadow is what asks the sun to cast.
   Without that call, brightness comes only from the way a surface faces.
+  A highlight on top of that, where the light bounces toward the camera,
+  is there only in a program that asks for one.
   SHADING. A shape has to be shape-shaped: a sphere in one flat colour comes
   out as a circle. So brightness is worked out from the direction a surface
   faces against the light above. Flat-sided shapes -- cube, box,
@@ -1467,7 +1486,9 @@ ARGUMENT TYPES
   direction the surface really points at each corner, so they come out smooth
   rather than faceted. It costs nothing either way: the colour of a vertex is
   already carried and already interpolated, so shading is only a matter of
-  which colour a vertex is given.
+  which colour a vertex is given. That colour is the sun and the ambient.
+  A highlight asked for on top of it is worked out as the picture is drawn,
+  and it is left out of every program that never asks.
   gfx3d.line3 and gfx3d.grid are not shaded -- a line has no surface to catch
   anything -- and are drawn at the colour asked for.
   gfx3d.key(name)                - 1 if that key is down. The same names std/gfx uses

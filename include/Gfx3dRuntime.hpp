@@ -78,10 +78,13 @@ inline void gfx3dApplyShadow(std::string& s);
 // gfx3d.lamp. A light with a place. Off unless asked for, and applied after
 // the shadow so a program that uses both can be bright inside the shade.
 inline void gfx3dApplyLamp(std::string& s);
+// gfx3d.glint. A tight highlight toward the camera. Off unless asked for,
+// and applied after the lamp so it can ride that light as well as the sun.
+inline void gfx3dApplyGlint(std::string& s);
 inline std::string gfx3dModelCpp();
 inline std::string gfx3dEllipsoidCpp();
 
-inline std::string gfx3dRuntimeCpp(bool pad, bool shader, bool aa, bool fog, bool mirror, bool shadow, bool lamp) {
+inline std::string gfx3dRuntimeCpp(bool pad, bool shader, bool aa, bool fog, bool mirror, bool shadow, bool lamp, bool glint) {
     std::string s = R"NEXA_GFX3D(
 // ---------------------------------------------------------------------------
 // std/gfx3d runtime
@@ -631,6 +634,7 @@ static double __nexa_g3_now_ms(void) {
     if (mirror) gfx3dApplyMirror(s);
     if (shadow) gfx3dApplyShadow(s);
     if (lamp) gfx3dApplyLamp(s);
+    if (glint) gfx3dApplyGlint(s);
     return s;
 }
 
@@ -1103,6 +1107,7 @@ static void __nexa_g3_platform_camera(void) {
 
 #include "gfx3d_shadow.inc"
 #include "gfx3d_lamp.inc"
+#include "gfx3d_glint.inc"
 
 inline void gfx3dApplyMirror(std::string& s) {
     auto put = [&](const std::string& from, const std::string& to) {

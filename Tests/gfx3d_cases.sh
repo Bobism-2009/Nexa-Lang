@@ -149,6 +149,8 @@ expect_emit "shadow"      '__nexa_gfx3d_shadow\(\)'                     '    let
 expect_emit "lamp"        '__nexa_gfx3d_lamp\(1, 2, 3, 4\)'              '    gfx3d.lamp(1, 2, 3, 4);'
 expect_emit "lamp colour" '__nexa_gfx3d_lamp\(1, 2, 3, 4, 5, 6, 7\)'     '    gfx3d.lamp(1, 2, 3, 4, 5, 6, 7);'
 expect_emit "lamp off"    '__nexa_gfx3d_lamp_off\(\)'                    '    let l = gfx3d.lamp();'
+expect_emit "glint"       '__nexa_gfx3d_glint\(\)'                       '    let g = gfx3d.glint();'
+expect_emit "glint level" '__nexa_gfx3d_glint_set\(40\)'                 '    gfx3d.glint(40);'
 expect_emit "key"         '__nexa_gfx3d_key\("w"\)'                     '    let k = gfx3d.key("w");'
 expect_emit "pressed"     '__nexa_gfx3d_pressed\("space"\)'             '    let k = gfx3d.pressed("space");'
 expect_emit "released"    '__nexa_gfx3d_released\("space"\)'            '    let k = gfx3d.released("space");'
@@ -442,6 +444,100 @@ if "$NEXAC" "$WORK/lampshadow.nxa" --source "$WORK/lampshadow.cpp" > /dev/null 2
     fi
 else
     echo "FAIL lamp slicing: NexaC could not transpile lamp and shadow"
+    fails=$((fails + 1))
+fi
+
+# A glint is a tight highlight. A program that never asks carries none of it,
+# and a lamp or a shadow on its own stays as it was.
+printf '#include <std/gfx3d>
+fn main() {
+    gfx3d.cube(0.0, 0.0, 0.0, 1.0, 1, 2, 3);
+}
+' > "$WORK/noglint.nxa"
+if "$NEXAC" "$WORK/noglint.nxa" --source "$WORK/noglint.cpp" > /dev/null 2>&1; then
+    if grep -qE '__nexa_gfx3d_glint|uGlint|__nexa_g3_glint_on' "$WORK/noglint.cpp"; then
+        echo "FAIL glint slicing: a glint is in a program that never asks"
+        fails=$((fails + 1))
+    fi
+else
+    echo "FAIL glint slicing: NexaC could not transpile"
+    fails=$((fails + 1))
+fi
+if "$NEXAC" "$WORK/yeslamp.nxa" --source "$WORK/lampnoglint.cpp" > /dev/null 2>&1; then
+    if grep -qE '__nexa_gfx3d_glint|uGlint' "$WORK/lampnoglint.cpp"; then
+        echo "FAIL glint slicing: a glint is in a lamp that never asks"
+        fails=$((fails + 1))
+    fi
+else
+    echo "FAIL glint slicing: NexaC could not transpile the lamp"
+    fails=$((fails + 1))
+fi
+if "$NEXAC" "$WORK/shadownolamp.nxa" --source "$WORK/shadownoglint.cpp" > /dev/null 2>&1; then
+    if grep -qE '__nexa_gfx3d_glint|uGlint' "$WORK/shadownoglint.cpp"; then
+        echo "FAIL glint slicing: a glint is in a shadow that never asks"
+        fails=$((fails + 1))
+    fi
+else
+    echo "FAIL glint slicing: NexaC could not transpile the shadow"
+    fails=$((fails + 1))
+fi
+printf '#include <std/gfx3d>
+fn main() {
+    gfx3d.glint();
+    gfx3d.open("t", 320, 240);
+}
+' > "$WORK/yesglint.nxa"
+if "$NEXAC" "$WORK/yesglint.nxa" --source "$WORK/yesglint.cpp" > /dev/null 2>&1; then
+    for sym in '__nexa_gfx3d_glint' 'uGlint' 'pow(snh, 256.0)'; do
+        if ! grep -q "$sym" "$WORK/yesglint.cpp"; then
+            echo "FAIL glint slicing: no $sym in a program that asks"
+            fails=$((fails + 1))
+        fi
+    done
+else
+    echo "FAIL glint slicing: NexaC could not transpile"
+    fails=$((fails + 1))
+fi
+printf '#include <std/gfx3d>
+fn main() {
+    gfx3d.shadow();
+    gfx3d.glint(200);
+    gfx3d.open("t", 320, 240);
+}
+' > "$WORK/glintshadow.nxa"
+if "$NEXAC" "$WORK/glintshadow.nxa" --source "$WORK/glintshadow.cpp" > /dev/null 2>&1; then
+    if ! awk '
+        /vec3 c = vCol/ { c = NR; sun = 0 }
+        /uSunCol \* \(uGlint/ { if (c) sun = NR }
+        /if \(vLight\.w > 0\.0\)/ { if (!(c && sun && c < sun && sun < NR)) bad = 1 }
+        END { exit bad ? 1 : 0 }
+    ' "$WORK/glintshadow.cpp"; then
+        echo "FAIL glint slicing: the sun highlight is not darkened by the shadow"
+        fails=$((fails + 1))
+    fi
+else
+    echo "FAIL glint slicing: NexaC could not transpile glint and shadow"
+    fails=$((fails + 1))
+fi
+printf '#include <std/gfx3d>
+fn main() {
+    gfx3d.shadow();
+    gfx3d.lamp(0, 1, 0, 4, 255, 200, 140);
+    gfx3d.glint();
+    gfx3d.open("t", 320, 240);
+}
+' > "$WORK/glintlamp.nxa"
+if "$NEXAC" "$WORK/glintlamp.nxa" --source "$WORK/glintlamp.cpp" > /dev/null 2>&1; then
+    if ! awk '
+        /c \*= mix\(1\.0, mix\(1\.0, 0\.42/ { dark = NR }
+        /uLampCol \* \(uGlint/ { if (dark && NR > dark) after = 1 }
+        END { exit after ? 0 : 1 }
+    ' "$WORK/glintlamp.cpp"; then
+        echo "FAIL glint slicing: the lamp highlight is not after the shadow"
+        fails=$((fails + 1))
+    fi
+else
+    echo "FAIL glint slicing: NexaC could not transpile glint, lamp and shadow"
     fails=$((fails + 1))
 fi
 

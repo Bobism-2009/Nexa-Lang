@@ -244,6 +244,9 @@ public:
         // gfx3d.lamp. A light with a place and a reach. A program that never
         // calls it carries none of it.
         bool gfx3dLamp = false;
+        // gfx3d.glint. A tight highlight toward the camera. A program that
+        // never calls it carries none of it.
+        bool gfx3dGlint = false;
         // gfx3d.ellipsoid. A squashed sphere, outside the main renderer so a
         // program that only draws round spheres does not carry it.
         bool gfx3dEllipsoid = false;
@@ -2250,7 +2253,7 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
             // reads the pads, gfx.poll takes the snapshot and a second one taken
             // by gfx3d.poll in the same frame would leave pad_pressed with
             // nothing between the two samples to report.
-            out += gfx3dRuntimeCpp(usage.gfx3dPad, usage.gfx3dShader, usage.gfx3dAa, usage.gfx3dFog, usage.gfx3dMirror, usage.gfx3dShadow, usage.gfx3dLamp);
+            out += gfx3dRuntimeCpp(usage.gfx3dPad, usage.gfx3dShader, usage.gfx3dAa, usage.gfx3dFog, usage.gfx3dMirror, usage.gfx3dShadow, usage.gfx3dLamp, usage.gfx3dGlint);
             if (usage.gfx3dEllipsoid) out += gfx3dEllipsoidCpp();
             // After the runtime, not before: the model block draws through
             // __nexa_g3_vert_n and the vertex batch, which are defined up there.
