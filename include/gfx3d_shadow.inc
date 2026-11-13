@@ -35,6 +35,7 @@ inline void gfx3dApplyShadow(std::string& s) {
     all("    \"uniform float uTexOn;\\n\"\n",
         "    \"uniform float uTexOn;\\n\"\n"
         "    \"uniform float uShadowOn;\\n\"\n"
+        "    \"uniform float uShadowLine;\\n\"\n"
         "    \"uniform sampler2D uShadowTex;\\n\"\n"
         "    \"uniform float uShadowSx;\\n\"\n"
         "    \"uniform float uShadowSy;\\n\"\n");
@@ -56,13 +57,44 @@ inline void gfx3dApplyShadow(std::string& s) {
         "    \"    float slope = abs(dFdx(sz)) + abs(dFdy(sz));\\n\"\n"
         "    \"    float bias = 0.005 + slope;\\n\"\n"
         "    \"    if (bias > 0.012) bias = 0.012;\\n\"\n"
-        "    \"    if (n.z > 0.0 && su > 0.0 && su < uShadowSx && sv > 0.0 && sv < uShadowSy) {\\n\"\n"
-        "    \"      vec3 e = ";
-    const char* dark2 =
-        "(uShadowTex, vec2(su, sv)).rgb;\\n\"\n"
-        "    \"      if (sz - bias > dot(e, vec3(1.0, 1.0/255.0, 1.0/65025.0))) c *= 0.42;\\n\"\n"
-        "    \"    }\\n\"\n"
-        "    \"  }\\n\"\n";
+        "    \"    vec2 uv = vec2(su, sv);\\n\"\n"
+        "    \"    vec2 dx = dFdx(uv);\\n\"\n"
+        "    \"    vec2 dy = dFdy(uv);\\n\"\n";
+    // One sample in the middle of a shadow stays dark. A sample on the
+    // edge takes its neighbours too, so the outline fades instead of
+    // stepping. A grid line has no face; where it runs through a shadow
+    // it is left out, so the line does not cut across the dark.
+    // A shadow's middle stays solid. Only the rim, where a neighbour a
+    // few texels away disagrees, is averaged, so a close view does not
+    // show the map's steps. The body of a lit curve never reaches that.
+    auto shade = [](const char* tex) {
+        return std::string(
+            "    \"    if ((n.z > 0.0 || uShadowLine > 0.5) && su > 0.0 && su < uShadowSx && sv > 0.0 && sv < uShadowSy) {\\n\"\n"
+            "    \"      vec3 e = ") + tex + "(uShadowTex, uv).rgb;\\n\"\n"
+            "    \"      float diff = sz - bias - dot(e, vec3(1.0, 1.0/255.0, 1.0/65025.0));\\n\"\n"
+            "    \"      if (uShadowLine > 0.5) {\\n\"\n"
+            "    \"        if (diff > -0.006) discard;\\n\"\n"
+            "    \"      } else {\\n\"\n"
+            "    \"        float occ = 0.0;\\n\"\n"
+            "    \"        float cnt = 0.0;\\n\"\n"
+            "    \"        for (int j = -2; j <= 2; j++) {\\n\"\n"
+            "    \"          for (int i = -2; i <= 2; i++) {\\n\"\n"
+            "    \"            vec2 q = uv + dx * float(i) + dy * float(j);\\n\"\n"
+            "    \"            if (q.x > 0.0 && q.x < uShadowSx && q.y > 0.0 && q.y < uShadowSy) {\\n\"\n"
+            "    \"              e = " + tex + "(uShadowTex, q).rgb;\\n\"\n"
+            "    \"              occ += (sz - bias - dot(e, vec3(1.0, 1.0/255.0, 1.0/65025.0)) > 0.008) ? 1.0 : 0.0;\\n\"\n"
+            "    \"              cnt += 1.0;\\n\"\n"
+            "    \"            }\\n\"\n"
+            "    \"          }\\n\"\n"
+            "    \"        }\\n\"\n"
+            "    \"        float w = cnt > 0.0 ? occ / cnt : 0.0;\\n\"\n"
+            "    \"        c *= mix(1.0, 0.42, w);\\n\"\n"
+            "    \"      }\\n\"\n"
+            "    \"    }\\n\"\n"
+            "    \"  }\\n\"\n";
+    };
+    std::string shade2 = shade("texture2D");
+    std::string shade1 = shade("texture");
     all("    \"precision mediump float;\\n\"\n"
         "    \"uniform sampler2D uTex;\\n\"\n"
         "    \"uniform float uTexOn;\\n\"\n",
@@ -71,16 +103,17 @@ inline void gfx3dApplyShadow(std::string& s) {
         "    \"uniform sampler2D uTex;\\n\"\n"
         "    \"uniform float uTexOn;\\n\"\n");
     all("    \"  gl_FragColor = vec4(c, 1.0);\\n\"\n",
-        std::string(dark) + "texture2D" + dark2 +
+        std::string(dark) + shade2 +
         "    \"  gl_FragColor = vec4(c, 1.0);\\n\"\n");
     all("    \"  fragColor = vec4(c, 1.0);\\n\"\n",
-        std::string(dark) + "texture" + dark2 +
+        std::string(dark) + shade1 +
         "    \"  fragColor = vec4(c, 1.0);\\n\"\n");
 
     put("static void __nexa_g3_apply_camera(void) {\n",
         "static int __nexa_g3_shadow_on = 0;\n"
         "static int __nexa_g3_shadow_have = 0;\n"
         "static int __nexa_g3_shadow_biased = 0;\n"
+        "static int __nexa_g3_shadow_lines = 0;\n"
         "static float __nexa_g3_shadow_vp[16];\n"
         "static float __nexa_g3_shadow_lp[16];\n"
         "static const float* __nexa_g3_shadow_model = nullptr;\n"
@@ -90,7 +123,8 @@ inline void gfx3dApplyShadow(std::string& s) {
         "static unsigned __nexa_g3_shadow_cast = 0, __nexa_g3_shadow_recv = 0;\n"
         "static int __nexa_g3_shadow_tried = 0;\n"
         "static int __nexa_g3_shadow_u_vp = -1, __nexa_g3_shadow_u_tex = -1;\n"
-        "static int __nexa_g3_shadow_u_sx = -1, __nexa_g3_shadow_u_sy = -1;\n"
+        "static int __nexa_g3_shadow_u_sx = -1, __nexa_g3_shadow_u_sy = -1, __nexa_g3_shadow_u_line = -1;\n"
+        "static int __nexa_g3_shadow_u_to = -1;\n"
         "static int __nexa_g3_shadow_bound = 0;\n"
         "static void __nexa_g3_shadow_look(void);\n"
         "static void __nexa_g3_shadow_guard(void);\n"
@@ -98,6 +132,7 @@ inline void gfx3dApplyShadow(std::string& s) {
         "static void __nexa_g3_shadow_use(void);\n"
         "static void __nexa_g3_shadow_use33(void);\n"
         "static void __nexa_g3_shadow_bind(void);\n"
+        "static void __nexa_g3_shadow_normals(const float* n);\n"
         "static void __nexa_g3_shadow_make(void);\n"
         "static void __nexa_g3_shadow_copy(void);\n"
         "static void __nexa_g3_shadow_unbind(void);\n"
@@ -113,16 +148,19 @@ inline void gfx3dApplyShadow(std::string& s) {
     all("static int __nexa_g3_mesh_submit(__nexa_G3Mesh& m, __nexa_G3Mesh::Lit& L, const float* M) {\n",
         "static int __nexa_g3_mesh_submit(__nexa_G3Mesh& m, __nexa_G3Mesh::Lit& L, const float* M) {\n"
         "    __nexa_g3_shadow_model = M;\n"
+        "    __nexa_g3_shadow_lines = 0;\n"
         "    __nexa_g3_shadow_lp_now();\n");
     put("static void __nexa_g3_batch_submit(void) {\n#if defined(_WIN32)\n    if (__nexa_g3.vulkan) {\n",
         "static void __nexa_g3_batch_submit(void) {\n"
         "    __nexa_g3_shadow_model = nullptr;\n"
+        "    __nexa_g3_shadow_lines = __nexa_g3_prim;\n"
         "    __nexa_g3_shadow_lp_now();\n"
         "    if (__nexa_g3_shadow_on && __nexa_g3_prim) return;\n"
         "#if defined(_WIN32)\n    if (__nexa_g3.vulkan) {\n");
     put("static void __nexa_g3_batch_submit(void) {\n    if (!__nexa_g3_prog || !__nexa_g3_vbo) return;\n",
         "static void __nexa_g3_batch_submit(void) {\n"
         "    __nexa_g3_shadow_model = nullptr;\n"
+        "    __nexa_g3_shadow_lines = __nexa_g3_prim;\n"
         "    __nexa_g3_shadow_lp_now();\n"
         "    if (__nexa_g3_shadow_on && __nexa_g3_prim) return;\n"
         "    if (!__nexa_g3_prog || !__nexa_g3_vbo) return;\n");
@@ -132,6 +170,18 @@ inline void gfx3dApplyShadow(std::string& s) {
     put("    if (__nexa_g3.core33) { __nexa_g3_core_batch(); return; }\n",
         "    if (__nexa_g3.core33) { __nexa_g3_core_batch(); return; }\n"
         "    __nexa_g3_shadow_bind();\n");
+    // The sphere's own normals, so the shadow follows the smooth shade
+    // instead of cutting off on each flat triangle. Lines have none.
+    put("    __nexa_gl.ColorPointer(3, NEXA_GL_FLOAT, 0, col);\n",
+        "    __nexa_gl.ColorPointer(3, NEXA_GL_FLOAT, 0, col);\n"
+        "    __nexa_g3_shadow_normals(m.nrm.empty() ? nullptr : m.nrm.data());\n");
+    put("    __nexa_gl.DrawArrays(NEXA_GL_TRIANGLES, 0, (__nexa_GLsizei)(m.pos.size() / 3));\n"
+        "    if (cut) {\n"
+        "        __nexa_gl.Disable(NEXA_GL_ALPHA_TEST);\n",
+        "    __nexa_gl.DrawArrays(NEXA_GL_TRIANGLES, 0, (__nexa_GLsizei)(m.pos.size() / 3));\n"
+        "    __nexa_g3_shadow_normals(nullptr);\n"
+        "    if (cut) {\n"
+        "        __nexa_gl.Disable(NEXA_GL_ALPHA_TEST);\n");
 
     all("    __nexa_g33.UniformMatrix4fv(__nexa_g33_u_mvp, 1, 0, mvp);\n",
         "    __nexa_g33.UniformMatrix4fv(__nexa_g33_u_mvp, 1, 0, mvp);\n"
@@ -142,16 +192,17 @@ inline void gfx3dApplyShadow(std::string& s) {
 
     put("static __nexa_GLint __nexa_g33_u_mvp = -1;\n",
         "static __nexa_GLint __nexa_g33_u_mvp = -1;\n"
-        "static __nexa_GLint __nexa_g33_u_shadowVP = -1, __nexa_g33_u_shadowOn = -1;\n"
+        "static __nexa_GLint __nexa_g33_u_shadowVP = -1, __nexa_g33_u_shadowOn = -1, __nexa_g33_u_shadowLine = -1;\n"
         "static __nexa_GLint __nexa_g33_u_shadowTex = -1, __nexa_g33_u_shadowSx = -1, __nexa_g33_u_shadowSy = -1;\n");
     put("static __nexa_GLint  __nexa_g3_u_mvp = -1;\n",
         "static __nexa_GLint  __nexa_g3_u_mvp = -1;\n"
-        "static __nexa_GLint  __nexa_g3_u_shadowVP = -1, __nexa_g3_u_shadowOn = -1;\n"
+        "static __nexa_GLint  __nexa_g3_u_shadowVP = -1, __nexa_g3_u_shadowOn = -1, __nexa_g3_u_shadowLine = -1;\n"
         "static __nexa_GLint  __nexa_g3_u_shadowTex = -1, __nexa_g3_u_shadowSx = -1, __nexa_g3_u_shadowSy = -1;\n");
     put("    __nexa_g33_u_mvp = __nexa_g33.GetUniformLocation(__nexa_g33_prog, \"uMVP\");\n",
         "    __nexa_g33_u_mvp = __nexa_g33.GetUniformLocation(__nexa_g33_prog, \"uMVP\");\n"
         "    __nexa_g33_u_shadowVP = __nexa_g33.GetUniformLocation(__nexa_g33_prog, \"uShadowVP\");\n"
         "    __nexa_g33_u_shadowOn = __nexa_g33.GetUniformLocation(__nexa_g33_prog, \"uShadowOn\");\n"
+        "    __nexa_g33_u_shadowLine = __nexa_g33.GetUniformLocation(__nexa_g33_prog, \"uShadowLine\");\n"
         "    __nexa_g33_u_shadowTex = __nexa_g33.GetUniformLocation(__nexa_g33_prog, \"uShadowTex\");\n"
         "    __nexa_g33_u_shadowSx = __nexa_g33.GetUniformLocation(__nexa_g33_prog, \"uShadowSx\");\n"
         "    __nexa_g33_u_shadowSy = __nexa_g33.GetUniformLocation(__nexa_g33_prog, \"uShadowSy\");\n");
@@ -159,6 +210,7 @@ inline void gfx3dApplyShadow(std::string& s) {
         "    __nexa_g3_u_mvp = glGetUniformLocation(__nexa_g3_prog, \"uMVP\");\n"
         "    __nexa_g3_u_shadowVP = glGetUniformLocation(__nexa_g3_prog, \"uShadowVP\");\n"
         "    __nexa_g3_u_shadowOn = glGetUniformLocation(__nexa_g3_prog, \"uShadowOn\");\n"
+        "    __nexa_g3_u_shadowLine = glGetUniformLocation(__nexa_g3_prog, \"uShadowLine\");\n"
         "    __nexa_g3_u_shadowTex = glGetUniformLocation(__nexa_g3_prog, \"uShadowTex\");\n"
         "    __nexa_g3_u_shadowSx = glGetUniformLocation(__nexa_g3_prog, \"uShadowSx\");\n"
         "    __nexa_g3_u_shadowSy = glGetUniformLocation(__nexa_g3_prog, \"uShadowSy\");\n");
@@ -271,71 +323,122 @@ static const uint32_t __nexa_sh_cvs[] = {
     196670, 39, 48, 65789, 65592
 };
 static const uint32_t __nexa_sh_cfs[] = {
-    119734787, 65536, 851979, 132, 0, 131089, 1, 393227, 1, 1280527431, 1685353262, 808793134,
-    0, 196622, 0, 1, 524303, 4, 4, 1852399981, 0, 12, 122, 124,
+    119734787, 65536, 851979, 246, 0, 131089, 1, 393227, 1, 1280527431, 1685353262, 808793134,
+    0, 196622, 0, 1, 524303, 4, 4, 1852399981, 0, 12, 236, 238,
     196624, 4, 7, 196611, 2, 450, 655364, 1197427783, 1279741775, 1885560645, 1953718128, 1600482425,
     1701734764, 1919509599, 1769235301, 25974, 524292, 1197427783, 1279741775, 1852399429, 1685417059, 1768185701, 1952671090, 6649449,
     262149, 4, 1852399981, 0, 196613, 8, 7629164, 262149, 12, 1734954102, 29800, 196613,
-    25, 112, 196613, 34, 30325, 196613, 41, 122, 196613, 47, 110, 262149,
-    53, 1886350451, 101, 262149, 61, 1935763810, 0, 196613, 104, 100, 262149, 108,
-    1634227061, 7827300, 262149, 122, 1734439526, 0, 262149, 124, 1819231094, 0, 262215, 12,
-    30, 1, 262215, 108, 33, 0, 262215, 108, 34, 0, 262215, 122,
-    30, 0, 262215, 124, 30, 0, 131091, 2, 196641, 3, 2, 196630,
-    6, 32, 262176, 7, 7, 6, 262187, 6, 9, 1065353216, 262167, 10,
-    6, 4, 262176, 11, 1, 10, 262203, 11, 12, 1, 262165, 13,
-    32, 0, 262187, 13, 14, 3, 262176, 15, 1, 6, 262187, 6,
-    18, 0, 131092, 19, 262167, 23, 6, 3, 262176, 24, 7, 23,
-    262167, 32, 6, 2, 262176, 33, 7, 32, 262187, 6, 37, 1056964608,
-    262187, 13, 42, 2, 262187, 6, 62, 990057071, 262187, 6, 66, 1011129254,
-    262187, 13, 75, 0, 262187, 13, 88, 1, 589849, 105, 6, 1,
-    0, 0, 0, 1, 0, 196635, 106, 105, 262176, 107, 0, 106,
-    262203, 107, 108, 0, 262187, 6, 120, 1054280253, 262176, 121, 3, 10,
-    262203, 121, 122, 3, 262176, 123, 1, 23, 262203, 123, 124, 1,
-    327734, 2, 4, 0, 3, 131320, 5, 262203, 7, 8, 7, 262203,
-    24, 25, 7, 262203, 33, 34, 7, 262203, 7, 41, 7, 262203,
-    24, 47, 7, 262203, 7, 53, 7, 262203, 7, 61, 7, 262203,
-    7, 104, 7, 196670, 8, 9, 327745, 15, 16, 12, 14, 262205,
-    6, 17, 16, 327866, 19, 20, 17, 18, 196855, 22, 0, 262394,
-    20, 21, 22, 131320, 21, 262205, 10, 26, 12, 524367, 23, 27,
-    26, 26, 0, 1, 2, 327745, 15, 28, 12, 14, 262205, 6,
-    29, 28, 393296, 23, 30, 29, 29, 29, 327816, 23, 31, 27,
-    30, 196670, 25, 31, 262205, 23, 35, 25, 458831, 32, 36, 35,
-    35, 0, 1, 327822, 32, 38, 36, 37, 327760, 32, 39, 37,
-    37, 327809, 32, 40, 38, 39, 196670, 34, 40, 327745, 7, 43,
-    25, 42, 262205, 6, 44, 43, 327813, 6, 45, 44, 37, 327809,
-    6, 46, 45, 37, 196670, 41, 46, 262205, 23, 48, 25, 262351,
-    23, 49, 48, 262205, 23, 50, 25, 262352, 23, 51, 50, 458764,
-    23, 52, 1, 68, 49, 51, 196670, 47, 52, 262205, 6, 54,
-    41, 262351, 6, 55, 54, 393228, 6, 56, 1, 4, 55, 262205,
-    6, 57, 41, 262352, 6, 58, 57, 393228, 6, 59, 1, 4,
-    58, 327809, 6, 60, 56, 59, 196670, 53, 60, 262205, 6, 63,
-    53, 327809, 6, 64, 62, 63, 196670, 61, 64, 262205, 6, 65,
-    61, 327866, 19, 67, 65, 66, 196855, 69, 0, 262394, 67, 68,
-    69, 131320, 68, 196670, 61, 66, 131321, 69, 131320, 69, 327745, 7,
-    70, 47, 42, 262205, 6, 71, 70, 327864, 19, 72, 71, 18,
-    196855, 74, 0, 262394, 72, 73, 74, 131320, 73, 327745, 7, 76,
-    34, 75, 262205, 6, 77, 76, 327866, 19, 78, 77, 18, 131321,
-    74, 131320, 74, 458997, 19, 79, 72, 69, 78, 73, 196855, 81,
-    0, 262394, 79, 80, 81, 131320, 80, 327745, 7, 82, 34, 75,
-    262205, 6, 83, 82, 327864, 19, 84, 83, 9, 131321, 81, 131320,
-    81, 458997, 19, 85, 79, 74, 84, 80, 196855, 87, 0, 262394,
-    85, 86, 87, 131320, 86, 327745, 7, 89, 34, 88, 262205, 6,
-    90, 89, 327866, 19, 91, 90, 18, 131321, 87, 131320, 87, 458997,
-    19, 92, 85, 81, 91, 86, 196855, 94, 0, 262394, 92, 93,
-    94, 131320, 93, 327745, 7, 95, 34, 88, 262205, 6, 96, 95,
-    327864, 19, 97, 96, 9, 131321, 94, 131320, 94, 458997, 19, 98,
-    92, 87, 97, 93, 262205, 6, 99, 41, 327864, 19, 100, 99,
-    9, 327847, 19, 101, 98, 100, 196855, 103, 0, 262394, 101, 102,
-    103, 131320, 102, 262205, 106, 109, 108, 262205, 32, 110, 34, 327767,
-    10, 111, 109, 110, 327761, 6, 112, 111, 0, 196670, 104, 112,
-    262205, 6, 113, 41, 262205, 6, 114, 61, 327811, 6, 115, 113,
-    114, 262205, 6, 116, 104, 327866, 19, 117, 115, 116, 196855, 119,
-    0, 262394, 117, 118, 119, 131320, 118, 196670, 8, 120, 131321, 119,
-    131320, 119, 131321, 103, 131320, 103, 131321, 22, 131320, 22, 262205, 23,
-    125, 124, 262205, 6, 126, 8, 327822, 23, 127, 125, 126, 327761,
-    6, 128, 127, 0, 327761, 6, 129, 127, 1, 327761, 6, 130,
-    127, 2, 458832, 10, 131, 128, 129, 130, 9, 196670, 122, 131,
-    65789, 65592
+    25, 112, 196613, 34, 30325, 196613, 41, 122, 196613, 47, 30820, 196613,
+    50, 31076, 196613, 53, 110, 262149, 59, 1886350451, 101, 262149, 67, 1935763810,
+    0, 262149, 77, 1919508840, 0, 196613, 119, 100, 262149, 123, 1634227061, 7827300,
+    262149, 128, 1717987684, 0, 196613, 144, 6513519, 196613, 145, 7630435, 196613, 148,
+    106, 196613, 158, 105, 196613, 166, 113, 196613, 221, 119, 262149, 236,
+    1734439526, 0, 262149, 238, 1819231094, 0, 262215, 12, 30, 1, 262215, 123,
+    33, 0, 262215, 123, 34, 0, 262215, 236, 30, 0, 262215, 238,
+    30, 0, 131091, 2, 196641, 3, 2, 196630, 6, 32, 262176, 7,
+    7, 6, 262187, 6, 9, 1065353216, 262167, 10, 6, 4, 262176, 11,
+    1, 10, 262203, 11, 12, 1, 262165, 13, 32, 0, 262187, 13,
+    14, 3, 262176, 15, 1, 6, 262187, 6, 18, 0, 131092, 19,
+    262167, 23, 6, 3, 262176, 24, 7, 23, 262167, 32, 6, 2,
+    262176, 33, 7, 32, 262187, 6, 37, 1056964608, 262187, 13, 42, 2,
+    262187, 6, 68, 990057071, 262187, 6, 72, 1011129254, 262176, 76, 7, 19,
+    262187, 6, 81, 841731191, 262187, 13, 90, 0, 262187, 13, 103, 1,
+    589849, 120, 6, 1, 0, 0, 0, 1, 0, 196635, 121, 120,
+    262176, 122, 0, 121, 262203, 122, 123, 0, 262187, 6, 138, 3150224294,
+    262165, 146, 32, 1, 262176, 147, 7, 146, 262187, 146, 149, 4294967294,
+    262187, 146, 156, 2, 262187, 6, 209, 1006834287, 262187, 146, 217, 1,
+    262187, 6, 232, 1054280253, 262176, 235, 3, 10, 262203, 235, 236, 3,
+    262176, 237, 1, 23, 262203, 237, 238, 1, 327734, 2, 4, 0,
+    3, 131320, 5, 262203, 7, 8, 7, 262203, 24, 25, 7, 262203,
+    33, 34, 7, 262203, 7, 41, 7, 262203, 33, 47, 7, 262203,
+    33, 50, 7, 262203, 24, 53, 7, 262203, 7, 59, 7, 262203,
+    7, 67, 7, 262203, 76, 77, 7, 262203, 7, 119, 7, 262203,
+    7, 128, 7, 262203, 7, 144, 7, 262203, 7, 145, 7, 262203,
+    147, 148, 7, 262203, 147, 158, 7, 262203, 33, 166, 7, 262203,
+    7, 221, 7, 262203, 7, 224, 7, 196670, 8, 9, 327745, 15,
+    16, 12, 14, 262205, 6, 17, 16, 327866, 19, 20, 17, 18,
+    196855, 22, 0, 262394, 20, 21, 22, 131320, 21, 262205, 10, 26,
+    12, 524367, 23, 27, 26, 26, 0, 1, 2, 327745, 15, 28,
+    12, 14, 262205, 6, 29, 28, 393296, 23, 30, 29, 29, 29,
+    327816, 23, 31, 27, 30, 196670, 25, 31, 262205, 23, 35, 25,
+    458831, 32, 36, 35, 35, 0, 1, 327822, 32, 38, 36, 37,
+    327760, 32, 39, 37, 37, 327809, 32, 40, 38, 39, 196670, 34,
+    40, 327745, 7, 43, 25, 42, 262205, 6, 44, 43, 327813, 6,
+    45, 44, 37, 327809, 6, 46, 45, 37, 196670, 41, 46, 262205,
+    32, 48, 34, 262351, 32, 49, 48, 196670, 47, 49, 262205, 32,
+    51, 34, 262352, 32, 52, 51, 196670, 50, 52, 262205, 23, 54,
+    25, 262351, 23, 55, 54, 262205, 23, 56, 25, 262352, 23, 57,
+    56, 458764, 23, 58, 1, 68, 55, 57, 196670, 53, 58, 262205,
+    6, 60, 41, 262351, 6, 61, 60, 393228, 6, 62, 1, 4,
+    61, 262205, 6, 63, 41, 262352, 6, 64, 63, 393228, 6, 65,
+    1, 4, 64, 327809, 6, 66, 62, 65, 196670, 59, 66, 262205,
+    6, 69, 59, 327809, 6, 70, 68, 69, 196670, 67, 70, 262205,
+    6, 71, 67, 327866, 19, 73, 71, 72, 196855, 75, 0, 262394,
+    73, 74, 75, 131320, 74, 196670, 67, 72, 131321, 75, 131320, 75,
+    262205, 23, 78, 53, 262205, 23, 79, 53, 327828, 6, 80, 78,
+    79, 327864, 19, 82, 80, 81, 196670, 77, 82, 327745, 7, 83,
+    53, 42, 262205, 6, 84, 83, 327864, 19, 85, 84, 18, 262205,
+    19, 86, 77, 327846, 19, 87, 85, 86, 196855, 89, 0, 262394,
+    87, 88, 89, 131320, 88, 327745, 7, 91, 34, 90, 262205, 6,
+    92, 91, 327866, 19, 93, 92, 18, 131321, 89, 131320, 89, 458997,
+    19, 94, 87, 75, 93, 88, 196855, 96, 0, 262394, 94, 95,
+    96, 131320, 95, 327745, 7, 97, 34, 90, 262205, 6, 98, 97,
+    327864, 19, 99, 98, 9, 131321, 96, 131320, 96, 458997, 19, 100,
+    94, 89, 99, 95, 196855, 102, 0, 262394, 100, 101, 102, 131320,
+    101, 327745, 7, 104, 34, 103, 262205, 6, 105, 104, 327866, 19,
+    106, 105, 18, 131321, 102, 131320, 102, 458997, 19, 107, 100, 96,
+    106, 101, 196855, 109, 0, 262394, 107, 108, 109, 131320, 108, 327745,
+    7, 110, 34, 103, 262205, 6, 111, 110, 327864, 19, 112, 111,
+    9, 131321, 109, 131320, 109, 458997, 19, 113, 107, 102, 112, 108,
+    262205, 6, 114, 41, 327864, 19, 115, 114, 9, 327847, 19, 116,
+    113, 115, 196855, 118, 0, 262394, 116, 117, 118, 131320, 117, 262205,
+    121, 124, 123, 262205, 32, 125, 34, 327767, 10, 126, 124, 125,
+    327761, 6, 127, 126, 0, 196670, 119, 127, 262205, 6, 129, 41,
+    262205, 6, 130, 67, 327811, 6, 131, 129, 130, 262205, 6, 132,
+    119, 327811, 6, 133, 131, 132, 196670, 128, 133, 262205, 19, 134,
+    77, 196855, 136, 0, 262394, 134, 135, 143, 131320, 135, 262205, 6,
+    137, 128, 327866, 19, 139, 137, 138, 196855, 141, 0, 262394, 139,
+    140, 141, 131320, 140, 65788, 131320, 141, 131321, 136, 131320, 143, 196670,
+    144, 18, 196670, 145, 18, 196670, 148, 149, 131321, 150, 131320, 150,
+    262390, 152, 153, 0, 131321, 154, 131320, 154, 262205, 146, 155, 148,
+    327859, 19, 157, 155, 156, 262394, 157, 151, 152, 131320, 151, 196670,
+    158, 149, 131321, 159, 131320, 159, 262390, 161, 162, 0, 131321, 163,
+    131320, 163, 262205, 146, 164, 158, 327859, 19, 165, 164, 156, 262394,
+    165, 160, 161, 131320, 160, 262205, 32, 167, 34, 262205, 32, 168,
+    47, 262205, 146, 169, 158, 262255, 6, 170, 169, 327822, 32, 171,
+    168, 170, 327809, 32, 172, 167, 171, 262205, 32, 173, 50, 262205,
+    146, 174, 148, 262255, 6, 175, 174, 327822, 32, 176, 173, 175,
+    327809, 32, 177, 172, 176, 196670, 166, 177, 327745, 7, 178, 166,
+    90, 262205, 6, 179, 178, 327866, 19, 180, 179, 18, 196855, 182,
+    0, 262394, 180, 181, 182, 131320, 181, 327745, 7, 183, 166, 90,
+    262205, 6, 184, 183, 327864, 19, 185, 184, 9, 131321, 182, 131320,
+    182, 458997, 19, 186, 180, 160, 185, 181, 196855, 188, 0, 262394,
+    186, 187, 188, 131320, 187, 327745, 7, 189, 166, 103, 262205, 6,
+    190, 189, 327866, 19, 191, 190, 18, 131321, 188, 131320, 188, 458997,
+    19, 192, 186, 182, 191, 187, 196855, 194, 0, 262394, 192, 193,
+    194, 131320, 193, 327745, 7, 195, 166, 103, 262205, 6, 196, 195,
+    327864, 19, 197, 196, 9, 131321, 194, 131320, 194, 458997, 19, 198,
+    192, 188, 197, 193, 196855, 200, 0, 262394, 198, 199, 200, 131320,
+    199, 262205, 6, 201, 41, 262205, 6, 202, 67, 327811, 6, 203,
+    201, 202, 262205, 121, 204, 123, 262205, 32, 205, 166, 327767, 10,
+    206, 204, 205, 327761, 6, 207, 206, 0, 327811, 6, 208, 203,
+    207, 327866, 19, 210, 208, 209, 393385, 6, 211, 210, 9, 18,
+    262205, 6, 212, 144, 327809, 6, 213, 212, 211, 196670, 144, 213,
+    262205, 6, 214, 145, 327809, 6, 215, 214, 9, 196670, 145, 215,
+    131321, 200, 131320, 200, 131321, 162, 131320, 162, 262205, 146, 216, 158,
+    327808, 146, 218, 216, 217, 196670, 158, 218, 131321, 159, 131320, 161,
+    131321, 153, 131320, 153, 262205, 146, 219, 148, 327808, 146, 220, 219,
+    217, 196670, 148, 220, 131321, 150, 131320, 152, 262205, 6, 222, 145,
+    327866, 19, 223, 222, 18, 196855, 226, 0, 262394, 223, 225, 230,
+    131320, 225, 262205, 6, 227, 144, 262205, 6, 228, 145, 327816, 6,
+    229, 227, 228, 196670, 224, 229, 131321, 226, 131320, 230, 196670, 224,
+    18, 131321, 226, 131320, 226, 262205, 6, 231, 224, 196670, 221, 231,
+    262205, 6, 233, 221, 524300, 6, 234, 1, 46, 9, 232, 233,
+    196670, 8, 234, 131321, 136, 131320, 136, 131321, 118, 131320, 118, 131321,
+    22, 131320, 22, 262205, 23, 239, 238, 262205, 6, 240, 8, 327822,
+    23, 241, 239, 240, 327761, 6, 242, 241, 0, 327761, 6, 243,
+    241, 1, 327761, 6, 244, 241, 2, 458832, 10, 245, 242, 243,
+    244, 9, 196670, 236, 245, 65789, 65592
 };
 struct __nexa_VkSh {
     Img img;
@@ -345,7 +448,7 @@ struct __nexa_VkSh {
     int hold = 0;
     uint64_t pass = 0, fb = 0;
     uint64_t vs = 0, fs = 0, cvs = 0, cfs = 0;
-    uint64_t pipeD = 0, pipeC = 0, pipeC2 = 0;
+    uint64_t pipeD = 0, pipeC = 0, pipeC2 = 0, pipeCL = 0;
     uint64_t layD = 0, layC = 0, setLay = 0, pool = 0, set = 0, samp = 0;
     uint64_t forPass = 0;
 };
@@ -356,7 +459,8 @@ inline void __nexa_vk_shadow_down(Dev& d) {
     if (s.pipeD && d.DestroyPipeline) d.DestroyPipeline(d.device, s.pipeD, nullptr);
     if (s.pipeC && d.DestroyPipeline) d.DestroyPipeline(d.device, s.pipeC, nullptr);
     if (s.pipeC2 && d.DestroyPipeline) d.DestroyPipeline(d.device, s.pipeC2, nullptr);
-    s.pipeD = s.pipeC = s.pipeC2 = 0;
+    if (s.pipeCL && d.DestroyPipeline) d.DestroyPipeline(d.device, s.pipeCL, nullptr);
+    s.pipeD = s.pipeC = s.pipeC2 = s.pipeCL = 0;
     if (s.vs && d.DestroyShaderModule) d.DestroyShaderModule(d.device, s.vs, nullptr);
     if (s.fs && d.DestroyShaderModule) d.DestroyShaderModule(d.device, s.fs, nullptr);
     if (s.cvs && d.DestroyShaderModule) d.DestroyShaderModule(d.device, s.cvs, nullptr);
@@ -428,10 +532,12 @@ inline int __nexa_vk_shadow_ensure(Dev& d) {
     if (d.pass && s.forPass != d.pass) {
         if (s.pipeC && d.DestroyPipeline) d.DestroyPipeline(d.device, s.pipeC, nullptr);
         if (s.pipeC2 && d.DestroyPipeline) d.DestroyPipeline(d.device, s.pipeC2, nullptr);
-        s.pipeC = s.pipeC2 = 0;
+        if (s.pipeCL && d.DestroyPipeline) d.DestroyPipeline(d.device, s.pipeCL, nullptr);
+        s.pipeC = s.pipeC2 = s.pipeCL = 0;
         if (!make_pipe(d, s.cvs, s.cfs, 3, 2, 1, 0, d.pass, 24, 0, s.layC, &s.pipeC) ||
-            !make_pipe(d, s.cvs, s.cfs, 3, 0, 1, 0, d.pass, 24, 0, s.layC, &s.pipeC2)) {
-            s.pipeC = s.pipeC2 = 0;
+            !make_pipe(d, s.cvs, s.cfs, 3, 0, 1, 0, d.pass, 24, 0, s.layC, &s.pipeC2) ||
+            !make_pipe(d, s.cvs, s.cfs, 1, 0, 1, 0, d.pass, 24, 0, s.layC, &s.pipeCL)) {
+            s.pipeC = s.pipeC2 = s.pipeCL = 0;
             return 1;
         }
         s.forPass = d.pass;
@@ -547,7 +653,9 @@ inline int __nexa_vk_shadow_draw(Dev& d, const float* xyzrgb, int nvert, int lin
         d.vused += bytes;
         return 1;
     }
-    if (lines || !s.pipeC) return 0;
+    if (lines) {
+        if (!s.pipeCL) return 0;
+    } else if (!s.pipeC) return 0;
     /*NEXA_SHADOW_CUSTOM*/
     uint64_t bytes = (uint64_t)nvert * 6ull * 4ull;
     if (d.vused + bytes > d.vcap) return 0;
@@ -558,7 +666,7 @@ inline int __nexa_vk_shadow_draw(Dev& d, const float* xyzrgb, int nvert, int lin
         pc[c * 4 + 0] = x; pc[c * 4 + 1] = y; pc[c * 4 + 2] = 0.5f * z + 0.5f * w; pc[c * 4 + 3] = w;
     }
     for (int i = 0; i < 16; ++i) pc[16 + i] = __nexa_g3_shadow_lp[i];
-    uint64_t pipe = twoSided ? s.pipeC2 : s.pipeC;
+    uint64_t pipe = lines ? s.pipeCL : (twoSided ? s.pipeC2 : s.pipeC);
     d.CmdBindPipeline(d.cmd, 0, pipe);
     d.CmdBindDescriptorSets(d.cmd, 0, s.layC, 0, 1, &s.set, 0, nullptr);
     d.CmdPushConstants(d.cmd, s.layC, 1, 0, 128, pc);
@@ -641,6 +749,7 @@ static void __nexa_g3_shadow_use(void) {
         glUniformMatrix4fv(__nexa_g3_u_shadowVP, 1, 0, __nexa_g3_shadow_lp);
         if (__nexa_g3_u_shadowSx >= 0) glUniform1f(__nexa_g3_u_shadowSx, __nexa_g3_shadow_sx);
         if (__nexa_g3_u_shadowSy >= 0) glUniform1f(__nexa_g3_u_shadowSy, __nexa_g3_shadow_sy);
+        if (__nexa_g3_u_shadowLine >= 0) glUniform1f(__nexa_g3_u_shadowLine, __nexa_g3_shadow_lines ? 1.0f : 0.0f);
         glActiveTexture(0x84C1u);
         glBindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_shadow_tex);
         glActiveTexture(0x84C0u);
@@ -661,6 +770,7 @@ static void __nexa_g3_shadow_use33(void) {
         __nexa_g33.UniformMatrix4fv(__nexa_g33_u_shadowVP, 1, 0, __nexa_g3_shadow_lp);
         if (__nexa_g33_u_shadowSx >= 0) __nexa_g33.Uniform1f(__nexa_g33_u_shadowSx, __nexa_g3_shadow_sx);
         if (__nexa_g33_u_shadowSy >= 0) __nexa_g33.Uniform1f(__nexa_g33_u_shadowSy, __nexa_g3_shadow_sy);
+        if (__nexa_g33_u_shadowLine >= 0) __nexa_g33.Uniform1f(__nexa_g33_u_shadowLine, __nexa_g3_shadow_lines ? 1.0f : 0.0f);
         typedef void (NEXA_GLAPI *Act)(unsigned int);
         static Act act = nullptr;
         static int got = 0;
@@ -757,20 +867,25 @@ static void __nexa_g3_shadow_make(void) {
     const char* rvs =
         "#version 120\n"
         "uniform mat4 uLightVP;\n"
+        "uniform vec3 uToLight;\n"
         "varying vec4 vLight;\n"
         "varying vec3 vCol;\n"
+        "varying float vFace;\n"
         "void main() {\n"
         "  gl_Position = ftransform();\n"
         "  vLight = uLightVP * gl_Vertex;\n"
         "  vCol = gl_Color.rgb;\n"
+        "  vFace = dot(gl_NormalMatrix * gl_Normal, uToLight);\n"
         "}\n";
     const char* rfs =
         "#version 120\n"
         "uniform sampler2D uShadow;\n"
         "uniform float uSx;\n"
         "uniform float uSy;\n"
+        "uniform float uLine;\n"
         "varying vec4 vLight;\n"
         "varying vec3 vCol;\n"
+        "varying float vFace;\n"
         "void main() {\n"
         "  vec3 c = vCol;\n"
         "  if (vLight.w > 0.0) {\n"
@@ -778,13 +893,36 @@ static void __nexa_g3_shadow_make(void) {
         "    float su = (p.x * 0.5 + 0.5) * uSx;\n"
         "    float sv = (p.y * 0.5 + 0.5) * uSy;\n"
         "    float sz = p.z * 0.5 + 0.5;\n"
-        "    vec3 n = cross(dFdx(p), dFdy(p));\n"
         "    float slope = abs(dFdx(sz)) + abs(dFdy(sz));\n"
         "    float bias = 0.005 + slope;\n"
         "    if (bias > 0.012) bias = 0.012;\n"
-        "    if (n.z > 0.0 && su > 0.0 && su < uSx && sv > 0.0 && sv < uSy) {\n"
-        "      vec3 e = texture2D(uShadow, vec2(su, sv)).rgb;\n"
-        "      if (sz - bias > dot(e, vec3(1.0, 1.0/255.0, 1.0/65025.0))) c *= 0.42;\n"
+        "    vec2 uv = vec2(su, sv);\n"
+        "    vec2 dx = dFdx(uv);\n"
+        "    vec2 dy = dFdy(uv);\n"
+        "    if ((vFace > 0.0 || uLine > 0.5) && su > 0.0 && su < uSx && sv > 0.0 && sv < uSy) {\n"
+        "      vec3 e = texture2D(uShadow, uv).rgb;\n"
+        "      float diff = sz - bias - dot(e, vec3(1.0, 1.0/255.0, 1.0/65025.0));\n"
+        "      if (uLine > 0.5) {\n"
+        "        if (diff > -0.006) discard;\n"
+        "      } else {\n"
+        "        float occ = 0.0;\n"
+        "        float cnt = 0.0;\n"
+        "        for (int j = -2; j <= 2; j++) {\n"
+        "          for (int i = -2; i <= 2; i++) {\n"
+        "            vec2 q = uv + dx * float(i) + dy * float(j);\n"
+        "            if (q.x > 0.0 && q.x < uSx && q.y > 0.0 && q.y < uSy) {\n"
+        "              e = texture2D(uShadow, q).rgb;\n"
+        "              occ += (sz - bias - dot(e, vec3(1.0, 1.0/255.0, 1.0/65025.0)) > 0.008) ? 1.0 : 0.0;\n"
+        "              cnt += 1.0;\n"
+        "            }\n"
+        "          }\n"
+        "        }\n"
+        "        float w = cnt > 0.0 ? occ / cnt : 0.0;\n"
+        "        float face = vFace * 5.0;\n"
+        "        if (face < 0.0) face = 0.0;\n"
+        "        if (face > 1.0) face = 1.0;\n"
+        "        c *= mix(1.0, mix(1.0, 0.42, w), face);\n"
+        "      }\n"
         "    }\n"
         "  }\n"
         "  gl_FragColor = vec4(c, 1.0);\n"
@@ -796,6 +934,8 @@ static void __nexa_g3_shadow_make(void) {
         __nexa_g3_shadow_u_tex = loc(__nexa_g3_shadow_recv, "uShadow");
         __nexa_g3_shadow_u_sx = loc(__nexa_g3_shadow_recv, "uSx");
         __nexa_g3_shadow_u_sy = loc(__nexa_g3_shadow_recv, "uSy");
+        __nexa_g3_shadow_u_line = loc(__nexa_g3_shadow_recv, "uLine");
+        __nexa_g3_shadow_u_to = loc(__nexa_g3_shadow_recv, "uToLight");
         if (use && u1i && __nexa_g3_shadow_u_tex >= 0) {
             use(__nexa_g3_shadow_recv);
             u1i(__nexa_g3_shadow_u_tex, 1);
@@ -806,20 +946,43 @@ static void __nexa_g3_shadow_make(void) {
 #endif
 }
 
+static void __nexa_g3_shadow_normals(const float* n) {
+#if !defined(NEXA_WASM)
+    if (__nexa_g3.core33 || __nexa_g3.vulkan) return;
+    if (!__nexa_gl.EnableClientState || !__nexa_gl.DisableClientState) return;
+    if (!n || !__nexa_g3_shadow_have || __nexa_g3_shadow_on) {
+        __nexa_gl.DisableClientState(0x8075u);
+        return;
+    }
+    typedef void (NEXA_GLAPI *NP)(unsigned int, int, const void*);
+    static NP np = nullptr;
+    static int got = 0;
+    if (!got) { np = (NP)__nexa_g3_glproc("glNormalPointer"); got = 1; }
+    if (!np) return;
+    __nexa_gl.EnableClientState(0x8075u);
+    np(0x1406u, 0, n);
+#else
+    (void)n;
+#endif
+}
+
 static void __nexa_g3_shadow_bind(void) {
 #if !defined(NEXA_WASM)
     if (__nexa_g3.core33 || __nexa_g3.vulkan) return;
     __nexa_g3_shadow_make();
+    __nexa_g3_shadow_normals(nullptr);
     typedef void (NEXA_GLAPI *Use)(unsigned int);
     typedef void (NEXA_GLAPI *Mat)(int, int, unsigned char, const float*);
     typedef void (NEXA_GLAPI *U1f)(int, float);
+    typedef void (NEXA_GLAPI *U3f)(int, float, float, float);
     typedef void (NEXA_GLAPI *Act)(unsigned int);
-    static Use use = nullptr; static Mat mat = nullptr; static U1f u1f = nullptr; static Act act = nullptr;
+    static Use use = nullptr; static Mat mat = nullptr; static U1f u1f = nullptr; static U3f u3f = nullptr; static Act act = nullptr;
     static int got = 0;
     if (!got) {
         use = (Use)__nexa_g3_glproc("glUseProgram");
         mat = (Mat)__nexa_g3_glproc("glUniformMatrix4fv");
         u1f = (U1f)__nexa_g3_glproc("glUniform1f");
+        u3f = (U3f)__nexa_g3_glproc("glUniform3f");
         act = (Act)__nexa_g3_glproc("glActiveTexture");
         got = 1;
     }
@@ -836,6 +999,14 @@ static void __nexa_g3_shadow_bind(void) {
             mat(__nexa_g3_shadow_u_vp, 1, 0, __nexa_g3_shadow_lp);
         if (u1f && __nexa_g3_shadow_u_sx >= 0) u1f(__nexa_g3_shadow_u_sx, __nexa_g3_shadow_sx);
         if (u1f && __nexa_g3_shadow_u_sy >= 0) u1f(__nexa_g3_shadow_u_sy, __nexa_g3_shadow_sy);
+        if (u1f && __nexa_g3_shadow_u_line >= 0) u1f(__nexa_g3_shadow_u_line, __nexa_g3_shadow_lines ? 1.0f : 0.0f);
+        if (u3f && __nexa_g3_shadow_u_to >= 0) {
+            const float* V = __nexa_g3.view;
+            u3f(__nexa_g3_shadow_u_to,
+                V[0] * __nexa_g3_lx + V[4] * __nexa_g3_ly + V[8] * __nexa_g3_lz,
+                V[1] * __nexa_g3_lx + V[5] * __nexa_g3_ly + V[9] * __nexa_g3_lz,
+                V[2] * __nexa_g3_lx + V[6] * __nexa_g3_ly + V[10] * __nexa_g3_lz);
+        }
         if (act && __nexa_gl.BindTexture) {
             act(0x84C1u);
             __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_shadow_tex);
