@@ -718,8 +718,8 @@ casts, the second draws the room, and what the light could not see comes
 out darker. Without the shadow call, brightness comes only from the way a
 surface faces. A program that never places a lamp carries none of that
 light, and one that never asks for a glint carries none of that highlight.
-gfx3d.bloom() lets those bright pixels bleed a soft glow onto what is
-next to them. A dim surface is left as it is. A program that never asks
+gfx3d.bloom() lets those bright pixels bleed a wide, soft glow across
+the surfaces around them. A dim surface is left as it is. A program that never asks
 for the glow carries none of it.
 
 Models are Wavefront .obj, read here rather than linked: v, vn and f, with

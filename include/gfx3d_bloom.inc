@@ -18,9 +18,13 @@ inline void gfx3dApplyBloom(std::string& s) {
         "static unsigned __nexa_g3_bloom_scene = 0;\n"
         "static unsigned __nexa_g3_bloom_a = 0;\n"
         "static unsigned __nexa_g3_bloom_b = 0;\n"
+        "static unsigned __nexa_g3_bloom_c = 0;\n"
+        "static unsigned __nexa_g3_bloom_d = 0;\n"
         "static int __nexa_g3_bloom_sw = 0, __nexa_g3_bloom_sh = 0;\n"
         "static int __nexa_g3_bloom_aw = 0, __nexa_g3_bloom_ah = 0;\n"
         "static int __nexa_g3_bloom_bw = 0, __nexa_g3_bloom_bh = 0;\n"
+        "static int __nexa_g3_bloom_cw = 0, __nexa_g3_bloom_ch = 0;\n"
+        "static int __nexa_g3_bloom_dw = 0, __nexa_g3_bloom_dh = 0;\n"
         "static int __nexa_g3_bloom_u_mode = -1, __nexa_g3_bloom_u_texel = -1, __nexa_g3_bloom_u_str = -1;\n"
         "static void __nexa_g3_bloom_present(void);\n"
         "static void __nexa_g3_apply_camera(void) {\n");
@@ -90,6 +94,10 @@ static void __nexa_g3_bloom_make(void) {
         "    c += texture2D(uTex, vUv + uTexel * 4.0).rgb * 0.016216;\n"
         "    c += texture2D(uTex, vUv - uTexel * 4.0).rgb * 0.016216;\n"
         "    gl_FragColor = vec4(c, 1.0);\n"
+        "  } else if (uMode < 2.5) {\n"
+        "    vec3 tight = texture2D(uTex, vUv).rgb;\n"
+        "    vec3 wide = texture2D(uBloom, vUv).rgb;\n"
+        "    gl_FragColor = vec4(tight + wide * 1.65, 1.0);\n"
         "  } else {\n"
         "    vec3 scene = texture2D(uTex, vUv).rgb;\n"
         "    vec3 glow = texture2D(uBloom, vUv).rgb;\n"
@@ -160,9 +168,11 @@ static void __nexa_g3_bloom_present(void) {
     }
     if (!use || !u1f || !u2f || !copysub) return;
     int w = __nexa_g3.w, h = __nexa_g3.h;
-    if (w < 4 || h < 4 || w > 4096 || h > 4096) return;
-    int bw = w / 4; if (bw < 2) bw = 2;
-    int bh = h / 4; if (bh < 2) bh = 2;
+    if (w < 8 || h < 8 || w > 4096 || h > 4096) return;
+    int qw = w / 4; if (qw < 2) qw = 2;
+    int qh = h / 4; if (qh < 2) qh = 2;
+    int ew = w / 8; if (ew < 2) ew = 2;
+    int eh = h / 8; if (eh < 2) eh = 2;
     if (act) act(0x84C0u);
     auto tex = [&](unsigned* id, int* tw, int* th, int ww, int hh) {
         if (!*id || *tw != ww || *th != hh) {
@@ -181,8 +191,10 @@ static void __nexa_g3_bloom_present(void) {
     };
     tex(&__nexa_g3_bloom_scene, &__nexa_g3_bloom_sw, &__nexa_g3_bloom_sh, w, h);
     copysub(NEXA_GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h);
-    tex(&__nexa_g3_bloom_a, &__nexa_g3_bloom_aw, &__nexa_g3_bloom_ah, bw, bh);
-    tex(&__nexa_g3_bloom_b, &__nexa_g3_bloom_bw, &__nexa_g3_bloom_bh, bw, bh);
+    tex(&__nexa_g3_bloom_a, &__nexa_g3_bloom_aw, &__nexa_g3_bloom_ah, qw, qh);
+    tex(&__nexa_g3_bloom_b, &__nexa_g3_bloom_bw, &__nexa_g3_bloom_bh, qw, qh);
+    tex(&__nexa_g3_bloom_c, &__nexa_g3_bloom_cw, &__nexa_g3_bloom_ch, ew, eh);
+    tex(&__nexa_g3_bloom_d, &__nexa_g3_bloom_dw, &__nexa_g3_bloom_dh, ew, eh);
 
     use(__nexa_g3_bloom_prog);
     typedef int (NEXA_GLAPI *Loc)(unsigned int, const char*);
@@ -214,36 +226,62 @@ static void __nexa_g3_bloom_present(void) {
         __nexa_gl.TexCoord2f(1.0f, 1.0f); __nexa_gl.Vertex3f( 1.0f,  1.0f, 0.0f);
         __nexa_gl.End();
     };
-    __nexa_gl.Viewport(0, 0, bw, bh);
+    // A tight blur keeps a hot core. A second, much wider blur at a coarser
+    // size is what carries the glow across the surfaces around the light.
+    auto blur = [&](unsigned src, unsigned dst, int tw, int th, float spread) {
+        __nexa_gl.Viewport(0, 0, tw, th);
+        if (act) act(0x84C0u);
+        __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, src);
+        if (u1f && __nexa_g3_bloom_u_mode >= 0) u1f(__nexa_g3_bloom_u_mode, 1.0f);
+        if (u2f && __nexa_g3_bloom_u_texel >= 0) u2f(__nexa_g3_bloom_u_texel, spread / (float)tw, 0.0f);
+        quad();
+        __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, dst);
+        copysub(NEXA_GL_TEXTURE_2D, 0, 0, 0, 0, 0, tw, th);
+        __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, dst);
+        if (u2f && __nexa_g3_bloom_u_texel >= 0) u2f(__nexa_g3_bloom_u_texel, 0.0f, spread / (float)th);
+        quad();
+        __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, src);
+        copysub(NEXA_GL_TEXTURE_2D, 0, 0, 0, 0, 0, tw, th);
+    };
+    __nexa_gl.Viewport(0, 0, qw, qh);
     if (act) act(0x84C0u);
     __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_bloom_scene);
     if (u1f && __nexa_g3_bloom_u_mode >= 0) u1f(__nexa_g3_bloom_u_mode, 0.0f);
     if (u2f && __nexa_g3_bloom_u_texel >= 0) u2f(__nexa_g3_bloom_u_texel, 0.0f, 0.0f);
     quad();
     __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_bloom_a);
-    copysub(NEXA_GL_TEXTURE_2D, 0, 0, 0, 0, 0, bw, bh);
-    // Two wide passes. One tight blur dies on the silhouette of a big bright shape.
-    for (int pass = 0; pass < 2; pass++) {
-        __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_bloom_a);
-        if (u1f && __nexa_g3_bloom_u_mode >= 0) u1f(__nexa_g3_bloom_u_mode, 1.0f);
-        if (u2f && __nexa_g3_bloom_u_texel >= 0) u2f(__nexa_g3_bloom_u_texel, 2.0f / (float)bw, 0.0f);
-        quad();
-        __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_bloom_b);
-        copysub(NEXA_GL_TEXTURE_2D, 0, 0, 0, 0, 0, bw, bh);
-        __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_bloom_b);
-        if (u2f && __nexa_g3_bloom_u_texel >= 0) u2f(__nexa_g3_bloom_u_texel, 0.0f, 2.0f / (float)bh);
-        quad();
-        __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_bloom_a);
-        copysub(NEXA_GL_TEXTURE_2D, 0, 0, 0, 0, 0, bw, bh);
-    }
+    copysub(NEXA_GL_TEXTURE_2D, 0, 0, 0, 0, 0, qw, qh);
+    blur(__nexa_g3_bloom_a, __nexa_g3_bloom_b, qw, qh, 2.0f);
+
+    __nexa_gl.Viewport(0, 0, ew, eh);
+    if (act) act(0x84C0u);
+    __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_bloom_a);
+    if (u1f && __nexa_g3_bloom_u_mode >= 0) u1f(__nexa_g3_bloom_u_mode, 1.0f);
+    if (u2f && __nexa_g3_bloom_u_texel >= 0) u2f(__nexa_g3_bloom_u_texel, 0.0f, 0.0f);
+    quad();
+    __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_bloom_c);
+    copysub(NEXA_GL_TEXTURE_2D, 0, 0, 0, 0, 0, ew, eh);
+    blur(__nexa_g3_bloom_c, __nexa_g3_bloom_d, ew, eh, 4.0f);
+    blur(__nexa_g3_bloom_c, __nexa_g3_bloom_d, ew, eh, 4.0f);
+
+    __nexa_gl.Viewport(0, 0, qw, qh);
+    if (act) act(0x84C0u);
+    __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_bloom_a);
+    if (act) act(0x84C1u);
+    __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_bloom_c);
+    if (act) act(0x84C0u);
+    if (u1f && __nexa_g3_bloom_u_mode >= 0) u1f(__nexa_g3_bloom_u_mode, 2.0f);
+    quad();
+    __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_bloom_b);
+    copysub(NEXA_GL_TEXTURE_2D, 0, 0, 0, 0, 0, qw, qh);
 
     __nexa_gl.Viewport(0, 0, w, h);
     if (act) act(0x84C0u);
     __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_bloom_scene);
     if (act) act(0x84C1u);
-    __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_bloom_a);
+    __nexa_gl.BindTexture(NEXA_GL_TEXTURE_2D, __nexa_g3_bloom_b);
     if (act) act(0x84C0u);
-    if (u1f && __nexa_g3_bloom_u_mode >= 0) u1f(__nexa_g3_bloom_u_mode, 2.0f);
+    if (u1f && __nexa_g3_bloom_u_mode >= 0) u1f(__nexa_g3_bloom_u_mode, 3.0f);
     if (u1f && __nexa_g3_bloom_u_str >= 0) u1f(__nexa_g3_bloom_u_str, __nexa_g3_bloom);
     quad();
 

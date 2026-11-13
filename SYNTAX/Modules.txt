@@ -1471,9 +1471,10 @@ ARGUMENT TYPES
                                    The OpenGL window darkens only the sun's.
                                    A program that never calls either form
                                    carries none of this
-  gfx3d.bloom()                  - bright pixels bleed a soft glow onto what
-                                   is next to them. The call answers 1. A dim
-                                   surface is left as it is. The glow is added
+  gfx3d.bloom()                  - bright pixels bleed a wide, soft glow
+                                   across the surfaces around them. The call
+                                   answers 1. A dim surface is left as it is.
+                                   The glow is added
                                    once the picture is drawn, so a highlight,
                                    a lamp and the sun can all bloom. A Vulkan
                                    window has no glow
