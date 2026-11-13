@@ -81,10 +81,13 @@ inline void gfx3dApplyLamp(std::string& s);
 // gfx3d.glint. A tight highlight toward the camera. Off unless asked for,
 // and applied after the lamp so it can ride that light as well as the sun.
 inline void gfx3dApplyGlint(std::string& s);
+// gfx3d.bloom. A soft glow around bright pixels, once the picture is drawn.
+// Off unless asked for.
+inline void gfx3dApplyBloom(std::string& s);
 inline std::string gfx3dModelCpp();
 inline std::string gfx3dEllipsoidCpp();
 
-inline std::string gfx3dRuntimeCpp(bool pad, bool shader, bool aa, bool fog, bool mirror, bool shadow, bool lamp, bool glint) {
+inline std::string gfx3dRuntimeCpp(bool pad, bool shader, bool aa, bool fog, bool mirror, bool shadow, bool lamp, bool glint, bool bloom) {
     std::string s = R"NEXA_GFX3D(
 // ---------------------------------------------------------------------------
 // std/gfx3d runtime
@@ -635,6 +638,7 @@ static double __nexa_g3_now_ms(void) {
     if (shadow) gfx3dApplyShadow(s);
     if (lamp) gfx3dApplyLamp(s);
     if (glint) gfx3dApplyGlint(s);
+    if (bloom) gfx3dApplyBloom(s);
     return s;
 }
 
@@ -1108,6 +1112,7 @@ static void __nexa_g3_platform_camera(void) {
 #include "gfx3d_shadow.inc"
 #include "gfx3d_lamp.inc"
 #include "gfx3d_glint.inc"
+#include "gfx3d_bloom.inc"
 
 inline void gfx3dApplyMirror(std::string& s) {
     auto put = [&](const std::string& from, const std::string& to) {

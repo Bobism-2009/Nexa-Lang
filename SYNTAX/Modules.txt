@@ -1471,6 +1471,16 @@ ARGUMENT TYPES
                                    The OpenGL window darkens only the sun's.
                                    A program that never calls either form
                                    carries none of this
+  gfx3d.bloom()                  - bright pixels bleed a soft glow onto what
+                                   is next to them. The call answers 1. A dim
+                                   surface is left as it is. The glow is added
+                                   once the picture is drawn, so a highlight,
+                                   a lamp and the sun can all bloom. A Vulkan
+                                   window has no glow
+  gfx3d.bloom(level)             - how strong that glow is, from 0 to 255.
+                                   0 turns it off and answers 0. A program
+                                   that never calls either form carries none
+                                   of this
   The light is in WORLD space, so a shape turned by gfx3d.rotate turns into
   and out of it rather than carrying its own lighting around with it. The
   sun is one light, and it is directional. A lamp is extra light at a place,

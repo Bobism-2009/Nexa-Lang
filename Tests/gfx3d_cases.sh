@@ -151,6 +151,8 @@ expect_emit "lamp colour" '__nexa_gfx3d_lamp\(1, 2, 3, 4, 5, 6, 7\)'     '    gf
 expect_emit "lamp off"    '__nexa_gfx3d_lamp_off\(\)'                    '    let l = gfx3d.lamp();'
 expect_emit "glint"       '__nexa_gfx3d_glint\(\)'                       '    let g = gfx3d.glint();'
 expect_emit "glint level" '__nexa_gfx3d_glint_set\(40\)'                 '    gfx3d.glint(40);'
+expect_emit "bloom"       '__nexa_gfx3d_bloom\(\)'                       '    let b = gfx3d.bloom();'
+expect_emit "bloom level" '__nexa_gfx3d_bloom_set\(40\)'                 '    gfx3d.bloom(40);'
 expect_emit "key"         '__nexa_gfx3d_key\("w"\)'                     '    let k = gfx3d.key("w");'
 expect_emit "pressed"     '__nexa_gfx3d_pressed\("space"\)'             '    let k = gfx3d.pressed("space");'
 expect_emit "released"    '__nexa_gfx3d_released\("space"\)'            '    let k = gfx3d.released("space");'
@@ -538,6 +540,44 @@ if "$NEXAC" "$WORK/glintlamp.nxa" --source "$WORK/glintlamp.cpp" > /dev/null 2>&
     fi
 else
     echo "FAIL glint slicing: NexaC could not transpile glint, lamp and shadow"
+    fails=$((fails + 1))
+fi
+
+# A bloom is a glow around bright pixels. A program that never asks carries
+# none of it, and a glint on its own stays a glint.
+if "$NEXAC" "$WORK/noglint.nxa" --source "$WORK/nobloom.cpp" > /dev/null 2>&1; then
+    if grep -qE '__nexa_gfx3d_bloom|__nexa_g3_bloom_present|uStrength' "$WORK/nobloom.cpp"; then
+        echo "FAIL bloom slicing: a bloom is in a program that never asks"
+        fails=$((fails + 1))
+    fi
+else
+    echo "FAIL bloom slicing: NexaC could not transpile"
+    fails=$((fails + 1))
+fi
+if "$NEXAC" "$WORK/yesglint.nxa" --source "$WORK/glintnobloom.cpp" > /dev/null 2>&1; then
+    if grep -qE '__nexa_gfx3d_bloom|__nexa_g3_bloom_present' "$WORK/glintnobloom.cpp"; then
+        echo "FAIL bloom slicing: a bloom is in a glint that never asks"
+        fails=$((fails + 1))
+    fi
+else
+    echo "FAIL bloom slicing: NexaC could not transpile the glint"
+    fails=$((fails + 1))
+fi
+printf '#include <std/gfx3d>
+fn main() {
+    gfx3d.bloom();
+    gfx3d.open("t", 320, 240);
+}
+' > "$WORK/yesbloom.nxa"
+if "$NEXAC" "$WORK/yesbloom.nxa" --source "$WORK/yesbloom.cpp" > /dev/null 2>&1; then
+    for sym in '__nexa_gfx3d_bloom' '__nexa_g3_bloom_present' 'smoothstep(0.72, 1.0, b)'; do
+        if ! grep -q "$sym" "$WORK/yesbloom.cpp"; then
+            echo "FAIL bloom slicing: no $sym in a program that asks"
+            fails=$((fails + 1))
+        fi
+    done
+else
+    echo "FAIL bloom slicing: NexaC could not transpile"
     fails=$((fails + 1))
 fi
 
