@@ -1,5 +1,8 @@
 # Build output
 *.exe
+# A program dropped in the repo root to look at a feature. Demos live in
+# Examples/, and these stay on the machine that made them.
+/*.nxa
 *.o
 *.cpp
 *.so
