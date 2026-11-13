@@ -146,6 +146,9 @@ expect_emit "fog off"     '__nexa_gfx3d_fog_off\(\)'                    '    let
 expect_emit "mirror"      '__nexa_gfx3d_mirror\(0, 1, 2, 0, 1, 0, 3, 4\)' '    gfx3d.mirror(0, 1, 2, 0, 1, 0, 3, 4);'
 expect_emit "mirror end"  '__nexa_gfx3d_mirror_end\(\)'                 '    let m = gfx3d.mirror();'
 expect_emit "shadow"      '__nexa_gfx3d_shadow\(\)'                     '    let s = gfx3d.shadow();'
+expect_emit "lamp"        '__nexa_gfx3d_lamp\(1, 2, 3, 4\)'              '    gfx3d.lamp(1, 2, 3, 4);'
+expect_emit "lamp colour" '__nexa_gfx3d_lamp\(1, 2, 3, 4, 5, 6, 7\)'     '    gfx3d.lamp(1, 2, 3, 4, 5, 6, 7);'
+expect_emit "lamp off"    '__nexa_gfx3d_lamp_off\(\)'                    '    let l = gfx3d.lamp();'
 expect_emit "key"         '__nexa_gfx3d_key\("w"\)'                     '    let k = gfx3d.key("w");'
 expect_emit "pressed"     '__nexa_gfx3d_pressed\("space"\)'             '    let k = gfx3d.pressed("space");'
 expect_emit "released"    '__nexa_gfx3d_released\("space"\)'            '    let k = gfx3d.released("space");'
@@ -374,6 +377,71 @@ if "$NEXAC" "$WORK/yesshadow.nxa" --source "$WORK/yesshadow.cpp" > /dev/null 2>&
     done
 else
     echo "FAIL shadow slicing: NexaC could not transpile"
+    fails=$((fails + 1))
+fi
+
+# A lamp is a light with a place. A program that never asks carries none of it,
+# and a shadow on its own stays the shadow it was.
+printf '#include <std/gfx3d>
+fn main() {
+    gfx3d.cube(0.0, 0.0, 0.0, 1.0, 1, 2, 3);
+}
+' > "$WORK/nolamp.nxa"
+if "$NEXAC" "$WORK/nolamp.nxa" --source "$WORK/nolamp.cpp" > /dev/null 2>&1; then
+    if grep -qE '__nexa_gfx3d_lamp|uLampCol|vLampPos' "$WORK/nolamp.cpp"; then
+        echo "FAIL lamp slicing: a lamp is in a program that never asks"
+        fails=$((fails + 1))
+    fi
+else
+    echo "FAIL lamp slicing: NexaC could not transpile"
+    fails=$((fails + 1))
+fi
+printf '#include <std/gfx3d>
+fn main() {
+    gfx3d.shadow();
+    gfx3d.open("t", 320, 240);
+}
+' > "$WORK/shadownolamp.nxa"
+if "$NEXAC" "$WORK/shadownolamp.nxa" --source "$WORK/shadownolamp.cpp" > /dev/null 2>&1; then
+    if grep -qE '__nexa_gfx3d_lamp|uLampCol|vLampPos' "$WORK/shadownolamp.cpp"; then
+        echo "FAIL lamp slicing: a lamp is in a shadow that never asks"
+        fails=$((fails + 1))
+    fi
+else
+    echo "FAIL lamp slicing: NexaC could not transpile the shadow"
+    fails=$((fails + 1))
+fi
+printf '#include <std/gfx3d>
+fn main() {
+    gfx3d.lamp(0, 1, 0, 4);
+    gfx3d.open("t", 320, 240);
+}
+' > "$WORK/yeslamp.nxa"
+if "$NEXAC" "$WORK/yeslamp.nxa" --source "$WORK/yeslamp.cpp" > /dev/null 2>&1; then
+    for sym in '__nexa_gfx3d_lamp' 'uLampCol' 'vLampPos' 'const int N = 8'; do
+        if ! grep -q "$sym" "$WORK/yeslamp.cpp"; then
+            echo "FAIL lamp slicing: no $sym in a program that asks"
+            fails=$((fails + 1))
+        fi
+    done
+else
+    echo "FAIL lamp slicing: NexaC could not transpile"
+    fails=$((fails + 1))
+fi
+printf '#include <std/gfx3d>
+fn main() {
+    gfx3d.shadow();
+    gfx3d.lamp(0, 1, 0, 4, 255, 200, 140);
+    gfx3d.open("t", 320, 240);
+}
+' > "$WORK/lampshadow.nxa"
+if "$NEXAC" "$WORK/lampshadow.nxa" --source "$WORK/lampshadow.cpp" > /dev/null 2>&1; then
+    if ! grep -q 'uLamp - vLampPos' "$WORK/lampshadow.cpp"; then
+        echo "FAIL lamp slicing: the shadow shader does not add the lamp"
+        fails=$((fails + 1))
+    fi
+else
+    echo "FAIL lamp slicing: NexaC could not transpile lamp and shadow"
     fails=$((fails + 1))
 fi
 

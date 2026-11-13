@@ -4619,6 +4619,7 @@ private:
             {"fog",         "gfx3d.fog([r, g, b, start, end])",                       "nnnnn"},
             {"mirror",      "gfx3d.mirror([x, y, z, nx, ny, nz, w, h])",              "nnnnnnnn"},
             {"shadow",      "gfx3d.shadow()",                                         ""},
+            {"lamp",        "gfx3d.lamp([x, y, z, reach, r, g, b])",                  "nnnnnnn"},
             {"capsule",     "gfx3d.capsule(x1, y1, z1, x2, y2, z2, radius, r, g, b)", "nnnnnnnnnn"},
             {"cylinder",    "gfx3d.cylinder(x1, y1, z1, x2, y2, z2, radius, r, g, b)","nnnnnnnnnn"},
             {"cone",        "gfx3d.cone(x1, y1, z1, x2, y2, z2, radius, r, g, b)",    "nnnnnnnnnn"},
@@ -8962,6 +8963,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     return "__nexa_gfx3d_ambient_get()";
                 }
                 if (fn == "fog" && e.children.empty()) return "__nexa_gfx3d_fog_off()";
+                if (fn == "lamp" && e.children.empty()) return "__nexa_gfx3d_lamp_off()";
                 if (fn == "mirror" && e.children.empty()) return "__nexa_gfx3d_mirror_end()";
                 if (fn == "vsync" && e.children.empty()) return "__nexa_gfx3d_vsync_get()";
                 // Sound goes to the shared mixer, so these are the only gfx3d
@@ -9989,6 +9991,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             cppUsage.gfx3dMirror = true;
         } else if (fn == "shadow") {
             cppUsage.gfx3dShadow = true;
+        } else if (fn == "lamp") {
+            cppUsage.gfx3dLamp = true;
         } else if (fn == "renderer") {
             cppUsage.gfx3dRendererAsked = true;
             // SPIR-V is only for a name written as Vulkan in the source.

@@ -1434,9 +1434,30 @@ ARGUMENT TYPES
                                    the camera is far from that point. Vulkan
                                    takes the same two calls. A program that
                                    never calls it carries none of this
+  gfx3d.lamp(x, y, z, reach)     - a lamp you can put in the room. (x, y, z)
+                                   is where it sits, and reach is how far its
+                                   light goes, in the same units as the room.
+                                   It is full at the lamp and gone at reach.
+                                   It does not cast, and it is added on top of
+                                   the sun, so a corner the sun has shaded can
+                                   still be bright. The call answers 1. Four
+                                   numbers, or seven, or none
+  gfx3d.lamp(x, y, z, reach, r, g, b)
+                                 - the same, with a colour 0..255. A colour is
+                                   three numbers or none. A reach of 0 or less
+                                   turns the lamp off and answers 0. Lines are
+                                   not lit, and neither is a shape wearing a
+                                   texture. On Vulkan the lamp is added at each
+                                   corner, and a shadow there darkens it with
+                                   the sun. The OpenGL window adds it after the
+                                   shadow, so a lamp in the shade stays bright
+  gfx3d.lamp()                   - turn the lamp off, and answer 0.
+                                   A program that never calls any of these
+                                   carries none of this
   The light is in WORLD space, so a shape turned by gfx3d.rotate turns into
-  and out of it rather than carrying its own lighting around with it. There
-  is one light, and it is directional. gfx3d.shadow is what asks it to cast.
+  and out of it rather than carrying its own lighting around with it. The
+  sun is one light, and it is directional. A lamp is extra light at a place,
+  and it does not cast. gfx3d.shadow is what asks the sun to cast.
   Without that call, brightness comes only from the way a surface faces.
   SHADING. A shape has to be shape-shaped: a sphere in one flat colour comes
   out as a circle. So brightness is worked out from the direction a surface

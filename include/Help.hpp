@@ -644,6 +644,9 @@ no array of pixels to read back.
             gfx3d.mirror()                    keep that picture and put the camera back
             gfx3d.shadow()                    the light's picture, then the camera's;
                                               what the light missed is drawn darker
+            gfx3d.lamp(x, y, z, reach[, r, g, b])
+                                              a place in the room; full there, gone at reach
+            gfx3d.lamp()                      turn that lamp off
   place     gfx3d.translate(x, y, z)   moves what is drawn next
             gfx3d.rotate(rx, ry, rz)   degrees, right-hand rule, X then Y then Z
             gfx3d.scale(s)             uniform
@@ -699,10 +702,13 @@ OpenGL and backend() says which. Depth test and back-face culling are
 on from the start, though a lone gfx3d.tri is drawn from both sides. A cube's
 flat sides take the direction of the face and stay sharp-edged; curved ones
 take the direction the surface really points and come out smooth. One
-directional light, in world space. gfx3d.shadow() is that light's shadow:
-the first call draws what casts, the second draws the room, and what the
-light could not see comes out darker. Without the call, brightness comes
-only from the way a surface faces.
+directional light, in world space. gfx3d.lamp is a second light you place
+in the room: full at that spot, gone at its reach, and it does not cast.
+It is added on top of the sun, so a corner the sun has shaded can stay
+bright. gfx3d.shadow() is the sun's shadow: the first call draws what
+casts, the second draws the room, and what the light could not see comes
+out darker. Without the shadow call, brightness comes only from the way a
+surface faces. A program that never places a lamp carries none of that light.
 
 Models are Wavefront .obj, read here rather than linked: v, vn and f, with
 everything else skipped. A model is centred and divided by its longest side as
