@@ -114,3 +114,4 @@ FILE INCLUDES (quotes)
     An included file cannot declare fn main.
     A shape is named the same way: from outside it is lib.Drawable.
     A function that names a type is lib.first. The type name stays T.
+    An enum is named the same way. A variant with fields is lib.Event.Click { x: 1 }.

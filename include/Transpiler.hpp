@@ -260,6 +260,10 @@ public:
                 }
             } else if (n.type == AstNode::Type::EnumDef) {
                 for (const std::string& v : n.paramNames) if (isCppKeyword(v)) kw.insert(v);
+                for (const AstNode& var : n.children) {
+                    if (var.type != AstNode::Type::EnumVariant) continue;
+                    for (const std::string& f : var.paramNames) if (isCppKeyword(f)) kw.insert(f);
+                }
             }
         }
         if (kw.empty()) return;
@@ -268,7 +272,9 @@ public:
             switch (n.type) {
                 case AstNode::Type::StructDef:
                 case AstNode::Type::EnumDef:
+                case AstNode::Type::EnumVariant:
                 case AstNode::Type::ExprStructLit:
+                case AstNode::Type::ExprEnumLit:
                     for (std::string& f : n.paramNames) fix(f);
                     break;
                 case AstNode::Type::ExprMember:
@@ -581,6 +587,8 @@ public:
         structCppNames_.clear();
         enumCppNames_.clear();
         enumVariants_.clear();
+        enumPayload_.clear();
+        enumOrder_.clear();
         enumFirstVariant_.clear();
         std::set<std::string> typeNames;
         int structId = 0;
@@ -637,6 +645,15 @@ public:
                 }
                 for (const std::string& v : node.paramNames) {
                     enumVariants_[node.value].insert(v);
+                }
+                enumOrder_[node.value] = node.paramNames;
+                for (const AstNode& var : node.children) {
+                    if (var.type != AstNode::Type::EnumVariant || var.paramNames.empty()) continue;
+                    auto& fields = enumPayload_[node.value][var.value];
+                    for (size_t i = 0; i < var.paramNames.size(); i++) {
+                        std::string ty = (i < var.paramTypes.size() && !var.paramTypes[i].empty()) ? var.paramTypes[i] : "int";
+                        fields.push_back(EnumField{var.paramNames[i], std::move(ty)});
+                    }
                 }
                 enumFirstVariant_[node.value] = node.paramNames[0];
                 enumCppNames_[node.value] = preserveNames_ ? cppSafeName(node.value) : ("__nexa_E" + std::to_string(enumId++));
@@ -972,11 +989,48 @@ public:
         auto emitEnumNow = [&](const AstNode& node) {
             const std::string& nexaName = node.value;
             std::string cppName = enumCppNames_.at(nexaName);
-            out << "enum class " << cppName << " : int {\n";
-            for (size_t i = 0; i < node.paramNames.size(); i++) {
-                out << "    " << node.paramNames[i];
-                if (i + 1 < node.paramNames.size()) out << ",";
-                out << "\n";
+            if (!enumHasPayload(nexaName)) {
+                out << "enum class " << cppName << " : int {\n";
+                for (size_t i = 0; i < node.paramNames.size(); i++) {
+                    out << "    " << node.paramNames[i];
+                    if (i + 1 < node.paramNames.size()) out << ",";
+                    out << "\n";
+                }
+                out << "};\n\n";
+                return;
+            }
+            out << "struct " << cppName << " {\n";
+            out << "    int __tag;\n";
+            for (size_t vi = 0; vi < node.paramNames.size(); vi++) {
+                const auto fields = enumPayloadFields(nexaName, node.paramNames[vi]);
+                for (const EnumField& f : fields) {
+                    out << "    " << nexaTypeToCpp(f.type) << " " << enumFieldCpp(nexaName, node.paramNames[vi], f.name) << ";\n";
+                }
+            }
+            bool closure = false;
+            for (size_t vi = 0; vi < node.paramNames.size() && !closure; vi++) {
+                for (const EnumField& f : enumPayloadFields(nexaName, node.paramNames[vi])) {
+                    std::set<std::string> seen;
+                    if (typeHoldsClosure(f.type, seen)) closure = true;
+                }
+            }
+            if (!closure) {
+                out << "    bool operator==(const " << cppName << "& __o) const {\n";
+                out << "        if (__tag != __o.__tag) return false;\n";
+                for (size_t vi = 0; vi < node.paramNames.size(); vi++) {
+                    const auto fields = enumPayloadFields(nexaName, node.paramNames[vi]);
+                    if (fields.empty()) continue;
+                    out << "        if (__tag == " << vi << ") return ";
+                    for (size_t fi = 0; fi < fields.size(); fi++) {
+                        if (fi) out << " && ";
+                        std::string c = enumFieldCpp(nexaName, node.paramNames[vi], fields[fi].name);
+                        out << c << " == __o." << c;
+                    }
+                    out << ";\n";
+                }
+                out << "        return true;\n";
+                out << "    }\n";
+                out << "    bool operator!=(const " << cppName << "& __o) const { return !(*this == __o); }\n";
             }
             out << "};\n\n";
         };
@@ -1039,6 +1093,36 @@ public:
             if (!enumDone.insert(name).second) return;
             auto it = enumByName.find(name);
             if (it == enumByName.end()) return;
+            if (enumHasPayload(name)) {
+                std::function<void(const std::string&)> emitDeps = [&](const std::string& t) {
+                    if (t.empty() || isPointerType(t)) return;
+                    if (typeContainsEnumValue(t, name)) {
+                        throw std::runtime_error(name + " holds " + name + " by value");
+                    }
+                    if (isStructDeclType(t)) {
+                        const std::string sn = structNameFromDecl(t);
+                        if (structStackSet.count(sn)) {
+                            throw std::runtime_error(name + " holds " + sn + " by value, and " + sn + " holds " + name);
+                        }
+                        if (structByName.count(sn)) emitStructNamed(sn);
+                        return;
+                    }
+                    if (isEnumDeclType(t)) {
+                        const std::string en = enumNameFromDecl(t);
+                        if (en != name) emitEnumNamed(en);
+                        return;
+                    }
+                    if (nexaIsSliceType(t)) { emitDeps(nexaSliceElem(t)); return; }
+                    if (nexaIsResultType(t)) { emitDeps(nexaResultInner(t)); return; }
+                    if (nexaIsMapType(t)) {
+                        std::string k, v;
+                        if (nexaSplitMapType(t, k, v)) { emitDeps(k); emitDeps(v); }
+                    }
+                };
+                for (const auto& vf : enumPayload_[name]) {
+                    for (const EnumField& f : vf.second) emitDeps(f.type);
+                }
+            }
             emitEnumNow(*it->second);
         };
         // behindPointer: the immediate pointee of a pointer may be incomplete.
@@ -1589,7 +1673,8 @@ public:
                 } else if (!node.declType.empty() && isEnumDeclType(node.declType)) {
                     std::string en = enumNameFromDecl(node.declType);
                     std::string cpp = enumCppNames_.at(en);
-                    out << c << cpp << " " << vname << " = " << cpp << "::" << enumFirstVariant_.at(en) << ";\n";
+                    if (enumHasPayload(en)) out << c << cpp << " " << vname << " = {};\n";
+                    else out << c << cpp << " " << vname << " = " << cpp << "::" << enumFirstVariant_.at(en) << ";\n";
                 } else if (!node.declType.empty() && (nexaIsSliceType(node.declType) || nexaIsMapType(node.declType) || nexaIsFnType(node.declType) || nexaIsResultType(node.declType) || node.declType == "json")) {
                     out << c << nexaTypeToCpp(node.declType) << " " << vname << ";\n";
                 } else {
@@ -1644,6 +1729,8 @@ public:
                     if (!inferred.empty() && isPointerType(inferred)) {
                         out << c << nexaTypeToCpp(inferred) << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
                     } else if (!inferred.empty() && nexaIsNumericIntType(inferred)) {
+                        out << c << nexaTypeToCpp(inferred) << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
+                    } else if (!inferred.empty() && isEnumDeclType(inferred) && enumHasPayload(enumNameFromDecl(inferred))) {
                         out << c << nexaTypeToCpp(inferred) << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
                     } else if (!inferred.empty() && (nexaIsFnType(inferred) || nexaIsSliceType(inferred) || nexaIsMapType(inferred) || nexaIsResultType(inferred) || isStructDeclType(inferred) || inferred == "json")) {
                         out << c << nexaTypeToCpp(inferred) << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
@@ -1900,6 +1987,21 @@ private:
     std::map<std::string, std::string> enumCppNames_;
     std::map<std::string, std::set<std::string>> enumVariants_;
     std::map<std::string, std::string> enumFirstVariant_;
+    struct EnumField {
+        std::string name;
+        std::string type;
+    };
+    // Only variants that hold fields. A plain enum is not in here.
+    std::map<std::string, std::map<std::string, std::vector<EnumField>>> enumPayload_;
+    std::map<std::string, std::vector<std::string>> enumOrder_;
+    struct PayloadFrame {
+        std::string nexaVar;
+        std::string sw;
+        std::string en;
+        std::string variant;
+    };
+    std::vector<PayloadFrame> payloadEmit_;
+    mutable std::vector<PayloadFrame> payloadSem_;
     mutable std::vector<std::map<std::string, std::string>> varStructScopes_;
     std::map<std::string, std::map<std::string, const AstNode*>> structMethods_;
 
@@ -3619,6 +3721,8 @@ private:
             }
             case AstNode::Type::ExprStructLit:
                 return std::string("struct:") + e.value;
+            case AstNode::Type::ExprEnumLit:
+                return std::string("enum:") + e.value;
             case AstNode::Type::ExprLambda:
                 return fnTypeFromLambdaAst(e);
             case AstNode::Type::ExprCall: {
@@ -4990,7 +5094,8 @@ private:
                 for (const AstNode& c : s.children) semExpr(c);
                 if (initWasStrMethod && s.children.back().type == AstNode::Type::FnCall) {
                     semRetypeLetFromMethod(s);
-                } else if (s.typeFromFields && s.declType.empty()) {
+                } else if (s.declType.empty() && !s.children.empty() &&
+                           (s.typeFromFields || s.children.back().type == AstNode::Type::ExprEnumLit)) {
                     semTypeLetFromFields(s);
                 }
                 semCheckVariableInit(s);
@@ -5051,9 +5156,31 @@ private:
             case AstNode::Type::Switch: {
                 if (!s.children.empty()) semExpr(s.children[0]);
                 semSwitchDepth_++;
-                for (size_t i = 1; i < s.children.size(); i++) {
-                    if (s.children[i].type != AstNode::Type::SwitchCase) continue;
-                    semBlock(s.children[i].children);
+                {
+                    std::string scrut;
+                    std::string scrutEn;
+                    if (!s.children.empty()) {
+                        std::string t = inferExprNexaType(s.children[0]);
+                        if (s.children[0].type == AstNode::Type::ExprVarRef) {
+                            scrut = s.children[0].value;
+                            const std::string d = lookupNexaDecl(scrut);
+                            if (!d.empty()) t = d;
+                        }
+                        if (isEnumDeclType(t) && enumHasPayload(enumNameFromDecl(t))) scrutEn = enumNameFromDecl(t);
+                    }
+                    for (size_t i = 1; i < s.children.size(); i++) {
+                        if (s.children[i].type != AstNode::Type::SwitchCase) continue;
+                        const AstNode& c = s.children[i];
+                        const bool bind = c.caseIsEnum && !scrutEn.empty() && c.value == scrutEn;
+                        nexaDeclStack_.push_back({});
+                        if (bind) {
+                            payloadSem_.push_back(PayloadFrame{scrut, "", scrutEn, c.initValue});
+                            for (const EnumField& f : enumPayloadFields(scrutEn, c.initValue)) semDeclare(f.name, f.type);
+                        }
+                        for (const AstNode& st : c.children) semStmt(st);
+                        if (bind) payloadSem_.pop_back();
+                        nexaDeclStack_.pop_back();
+                    }
                 }
                 semSwitchDepth_--;
                 break;
@@ -6259,6 +6386,9 @@ private:
                 if (!ev->second.count(e.value)) {
                     semError(e, "Unknown enum variant '" + e.value + "' for '" + base.value + "'");
                 }
+                if (!enumPayloadFields(base.value, e.value).empty()) {
+                    semError(e, e.value + " has fields; write " + base.value + "." + e.value + " { ... }");
+                }
                 return;  // Enum.Variant: the base names a type, not a variable
             }
         }
@@ -6267,6 +6397,28 @@ private:
         if (isPointerType(baseT)) baseT = pointerPointeeType(baseT);
         if (isShapeType(baseT)) {
             semError(e, shapeNameFromDecl(baseT) + " names functions, so it has no field '" + e.value + "'");
+        }
+        if (isEnumDeclType(baseT) && enumHasPayload(enumNameFromDecl(baseT))) {
+            const std::string en = enumNameFromDecl(baseT);
+            if (base.type == AstNode::Type::ExprVarRef && !payloadSem_.empty() &&
+                payloadSem_.back().nexaVar == base.value && payloadSem_.back().en == en) {
+                for (const EnumField& f : enumPayloadFields(en, payloadSem_.back().variant)) {
+                    if (f.name == e.value) return;
+                }
+                semError(e, payloadSem_.back().variant + " has no field '" + e.value + "'");
+            }
+            std::string where;
+            auto it = enumPayload_.find(en);
+            if (it != enumPayload_.end()) {
+                for (const auto& vf : it->second) {
+                    for (const EnumField& f : vf.second) {
+                        if (f.name == e.value) { where = en + "." + vf.first; break; }
+                    }
+                    if (!where.empty()) break;
+                }
+            }
+            if (where.empty()) semError(e, en + " has no field '" + e.value + "'");
+            semError(e, e.value + " is there in case " + where);
         }
         if (!isStructDeclType(baseT)) return;  // not a known Nexa struct: no opinion
         const std::string sname = structNameFromDecl(baseT);
@@ -6386,6 +6538,68 @@ private:
         if (nexaIsIntegerType(baseT) || baseT == "bool" || nexaIsFloatType(baseT)) return baseT;
         return "int";
     }
+    bool enumHasPayload(const std::string& en) const {
+        auto it = enumPayload_.find(en);
+        return it != enumPayload_.end() && !it->second.empty();
+    }
+    std::vector<EnumField> enumPayloadFields(const std::string& en, const std::string& variant) const {
+        auto it = enumPayload_.find(en);
+        if (it == enumPayload_.end()) return {};
+        auto v = it->second.find(variant);
+        if (v == it->second.end()) return {};
+        return v->second;
+    }
+    int enumVariantIndex(const std::string& en, const std::string& variant) const {
+        auto it = enumOrder_.find(en);
+        if (it == enumOrder_.end()) return 0;
+        for (size_t i = 0; i < it->second.size(); i++) if (it->second[i] == variant) return (int)i;
+        return 0;
+    }
+    std::string enumFieldCpp(const std::string& en, const std::string& variant, const std::string& field) const {
+        return "__f" + std::to_string(enumVariantIndex(en, variant)) + "_" + field;
+    }
+    // A pointer does not. A slice, a map or a Result does: the enum would contain itself.
+    bool typeContainsEnumValue(const std::string& t, const std::string& en) const {
+        if (t.empty() || isPointerType(t)) return false;
+        if (isEnumDeclType(t)) return enumNameFromDecl(t) == en;
+        if (nexaIsSliceType(t)) return typeContainsEnumValue(nexaSliceElem(t), en);
+        if (nexaIsResultType(t)) return typeContainsEnumValue(nexaResultInner(t), en);
+        if (nexaIsMapType(t)) {
+            std::string k, v;
+            return nexaSplitMapType(t, k, v) && (typeContainsEnumValue(k, en) || typeContainsEnumValue(v, en));
+        }
+        return false;
+    }
+    std::string emitPayloadCtor(const std::string& en, const std::string& variant,
+                                const std::vector<std::pair<std::string, std::string>>& assigns) const {
+        const std::string cpp = enumCppNames_.at(en);
+        std::string s = "([&](){ " + cpp + " __n = {}; __n.__tag = " +
+            std::to_string(enumVariantIndex(en, variant)) + ";";
+        for (const auto& a : assigns) {
+            s += " __n." + enumFieldCpp(en, variant, a.first) + " = " + a.second + ";";
+        }
+        s += " return __n; })()";
+        return s;
+    }
+    std::string enumPrintfCast(const std::string& ntype, const std::string& expr) const {
+        if (isEnumDeclType(ntype) && enumHasPayload(enumNameFromDecl(ntype)))
+            return "static_cast<int>((" + expr + ").__tag)";
+        return "static_cast<int>(" + expr + ")";
+    }
+    bool enumExprIsPayload(const AstNode& e) const {
+        if (e.type == AstNode::Type::ExprEnumLit) return enumHasPayload(e.value);
+        if (e.type == AstNode::Type::ExprVarRef) {
+            const std::string t = lookupNexaDecl(e.value);
+            return isEnumDeclType(t) && enumHasPayload(enumNameFromDecl(t));
+        }
+        if (e.type == AstNode::Type::ExprMember && !e.children.empty() &&
+            e.children[0].type == AstNode::Type::ExprVarRef &&
+            lookupNexaDecl(e.children[0].value).empty()) {
+            return enumHasPayload(e.children[0].value);
+        }
+        return false;
+    }
+
     std::string nexaTypeToCpp(const std::string& t) const {
         if (t.find("typevar:") != std::string::npos) {
             size_t p = t.find("typevar:");
@@ -6517,7 +6731,10 @@ private:
     std::string wrapExprForPrintf(const AstNode& e, const std::string& expr,
                                   const std::map<std::string, std::string>& varMap,
                                   const std::map<std::string, bool>& varIsEnum) const {
-        if (exprIsEnumLike(e, varMap, varIsEnum)) return "static_cast<int>(" + expr + ")";
+        if (exprIsEnumLike(e, varMap, varIsEnum)) {
+            if (enumExprIsPayload(e)) return "(" + expr + ").__tag";
+            return "static_cast<int>(" + expr + ")";
+        }
         return expr;
     }
 
@@ -6739,7 +6956,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         } else if (nexaIsNumericIntType(ntype)) {
             emitIntegerPrintf(out, indent, ntype, expr, newline, stream);
         } else {
-            std::string carg = isNexaEnum ? ("static_cast<int>(" + expr + ")") : expr;
+            std::string carg = isNexaEnum ? enumPrintfCast(ntype, expr) : expr;
             out << indent << pf << "\"%d" << (newline ? "\\n" : "") << "\", " << carg << ");\n";
         }
     }
@@ -6892,6 +7109,12 @@ static std::string __nexa_show(const std::map<K, V>& m) {
     }
     std::string fieldTypeOfMemberExpr(const AstNode& e) const {
         if (e.type != AstNode::Type::ExprMember || e.children.empty()) return "";
+        if (e.children[0].type == AstNode::Type::ExprVarRef && !payloadSem_.empty() &&
+            payloadSem_.back().nexaVar == e.children[0].value) {
+            for (const EnumField& f : enumPayloadFields(payloadSem_.back().en, payloadSem_.back().variant)) {
+                if (f.name == e.value) return f.type;
+            }
+        }
         std::string st;
         if (e.isArrowMember) {
             std::string baseT = inferExprNexaType(e.children[0]);
@@ -7360,7 +7583,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             out << "    return " << cpp << "{};\n";
         } else if (isEnumDeclType(nexaType)) {
             std::string en = enumNameFromDecl(nexaType);
-            out << "    return " << enumCppNames_.at(en) << "::" << enumFirstVariant_.at(en) << ";\n";
+            if (enumHasPayload(en)) out << "    return {};\n";
+            else out << "    return " << enumCppNames_.at(en) << "::" << enumFirstVariant_.at(en) << ";\n";
         } else if (nexaIsSliceType(nexaType) || nexaIsMapType(nexaType) || nexaIsFnType(nexaType) || nexaIsResultType(nexaType) || nexaType == "json") {
             out << "    return " << nexaTypeToCpp(nexaType) << "{};\n";
         } else {
@@ -7710,7 +7934,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     } else if (!child.declType.empty() && isEnumDeclType(child.declType)) {
                         std::string en = enumNameFromDecl(child.declType);
                         std::string cpp = enumCppNames_.at(en);
-                        out << indent << c << cpp << " " << vname << " = " << cpp << "::" << enumFirstVariant_.at(en) << ";\n";
+                        if (enumHasPayload(en)) out << indent << c << cpp << " " << vname << " = {};\n";
+                        else out << indent << c << cpp << " " << vname << " = " << cpp << "::" << enumFirstVariant_.at(en) << ";\n";
                     } else if (!child.declType.empty() && (nexaIsSliceType(child.declType) || nexaIsMapType(child.declType) || nexaIsFnType(child.declType) || nexaIsResultType(child.declType) || child.declType == "json")) {
                         out << indent << c << nexaTypeToCpp(child.declType) << " " << vname << ";\n";
                     } else {
@@ -7836,7 +8061,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     } else if (t == "json") {
                         line += " + (" + e + ").stringify()";
                     } else if (isEnumDeclType(t)) {
-                        line += " + std::to_string(static_cast<int>(" + e + "))";
+                        line += " + std::to_string(" + enumPrintfCast(t, e) + ")";
                     } else {
                         line += " + " + emitConcatOperand(a, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                     }
@@ -7877,7 +8102,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     } else if (nexaIsNumericIntType(ntype)) {
                         emitIntegerPrintf(out, indent, ntype, v, true);
                     } else {
-                        std::string arg = isNexaEnum ? ("static_cast<int>(" + v + ")") : v;
+                        std::string arg = isNexaEnum ? enumPrintfCast(ntype, v) : v;
                         out << indent << "printf(\"%d\\n\", " << arg << ");\n";
                     }
                 } else {
@@ -7907,7 +8132,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     } else if (nexaIsNumericIntType(ntype)) {
                         emitIntegerPrintf(out, indent, ntype, v, false);
                     } else {
-                        std::string arg = isNexaEnum ? ("static_cast<int>(" + v + ")") : v;
+                        std::string arg = isNexaEnum ? enumPrintfCast(ntype, v) : v;
                         out << indent << "printf(\"%d\", " << arg << ");\n";
                     }
                 } else {
@@ -8716,6 +8941,100 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 useStringSwitch = true;
                 break;
             }
+        }
+        std::string scrutEn;
+        std::string scrutVar;
+        if (!useStringSwitch && !node.children.empty()) {
+            std::string t = inferExprNexaType(node.children[0]);
+            if (node.children[0].type == AstNode::Type::ExprVarRef) {
+                scrutVar = node.children[0].value;
+                const std::string d = lookupNexaDecl(scrutVar);
+                if (!d.empty()) t = d;
+            }
+            if (isEnumDeclType(t) && enumHasPayload(enumNameFromDecl(t))) scrutEn = enumNameFromDecl(t);
+        }
+        if (!scrutEn.empty()) {
+            const std::string sw = "__nexa_sw_" + std::to_string(varIdx++);
+            const bool lvalue = node.children[0].type == AstNode::Type::ExprVarRef;
+            out << indent << "{\n";
+            out << indent << "    " << (lvalue ? "auto& " : "auto ") << sw << " = " << expr << ";\n";
+            out << indent << "    switch (" << sw << ".__tag) {\n";
+            for (size_t i = 1; i < node.children.size(); i++) {
+                const AstNode& c = node.children[i];
+                if (c.type != AstNode::Type::SwitchCase) continue;
+                if (c.value == "default") out << indent << "    default:";
+                else if (c.caseIsEnum) {
+                    if (c.value != scrutEn) throw std::runtime_error("Unknown enum '" + c.value + "' in switch case");
+                    auto vsIt = enumVariants_.find(c.value);
+                    if (vsIt == enumVariants_.end() || !vsIt->second.count(c.initValue)) {
+                        throw std::runtime_error("Unknown enum variant '" + c.initValue + "' for '" + c.value + "'");
+                    }
+                    out << indent << "    case " << enumVariantIndex(c.value, c.initValue) << ":";
+                } else {
+                    out << indent << "    case " << c.value << ":";
+                }
+                out << " {\n";
+                struct Hold {
+                    bool hadM = false; std::string map;
+                    bool hadS = false, s = false, hadF = false, f = false, hadC = false, c = false;
+                    bool hadB = false, b = false, hadE = false, e = false, hadD = false;
+                    std::string decl;
+                };
+                std::vector<std::pair<std::string, Hold>> saved;
+                const bool bind = c.caseIsEnum && c.value == scrutEn;
+                if (bind) {
+                    payloadEmit_.push_back(PayloadFrame{scrutVar, sw, scrutEn, c.initValue});
+                    for (const EnumField& f : enumPayloadFields(scrutEn, c.initValue)) {
+                        Hold h;
+                        auto mit = varMap.find(f.name);
+                        if (mit != varMap.end()) { h.hadM = true; h.map = mit->second; }
+                        auto take = [](std::map<std::string, bool>& m, const std::string& n, bool& had, bool& v) {
+                            auto it = m.find(n);
+                            if (it != m.end()) { had = true; v = it->second; }
+                        };
+                        take(varIsString, f.name, h.hadS, h.s);
+                        take(varIsFloat, f.name, h.hadF, h.f);
+                        take(varIsChar, f.name, h.hadC, h.c);
+                        take(varIsBool, f.name, h.hadB, h.b);
+                        take(varIsEnum, f.name, h.hadE, h.e);
+                        if (!nexaDeclStack_.empty()) {
+                            auto dit = nexaDeclStack_.back().find(f.name);
+                            if (dit != nexaDeclStack_.back().end()) { h.hadD = true; h.decl = dit->second; }
+                            nexaDeclStack_.back()[f.name] = f.type;
+                        }
+                        varMap[f.name] = sw + "." + enumFieldCpp(scrutEn, c.initValue, f.name);
+                        varIsString[f.name] = f.type == "string";
+                        varIsFloat[f.name] = nexaIsFloatType(f.type);
+                        varIsChar[f.name] = f.type == "char";
+                        varIsBool[f.name] = f.type == "bool";
+                        varIsEnum[f.name] = isEnumDeclType(f.type);
+                        saved.push_back({f.name, h});
+                    }
+                }
+                emitBlock(out, c.children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "        ");
+                if (bind) payloadEmit_.pop_back();
+                for (auto it = saved.rbegin(); it != saved.rend(); ++it) {
+                    const std::string& n = it->first;
+                    const Hold& h = it->second;
+                    if (h.hadM) varMap[n] = h.map; else varMap.erase(n);
+                    auto put = [](std::map<std::string, bool>& m, const std::string& name, bool had, bool v) {
+                        if (had) m[name] = v; else m.erase(name);
+                    };
+                    put(varIsString, n, h.hadS, h.s);
+                    put(varIsFloat, n, h.hadF, h.f);
+                    put(varIsChar, n, h.hadC, h.c);
+                    put(varIsBool, n, h.hadB, h.b);
+                    put(varIsEnum, n, h.hadE, h.e);
+                    if (!nexaDeclStack_.empty()) {
+                        if (h.hadD) nexaDeclStack_.back()[n] = h.decl;
+                        else nexaDeclStack_.back().erase(n);
+                    }
+                }
+                out << indent << "    }\n";
+            }
+            out << indent << "    }\n";
+            out << indent << "}\n";
+            return;
         }
         if (useStringSwitch) {
             // The text picks a case number once, and a C++ switch on that number
@@ -10456,8 +10775,26 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 return "([&](){ const auto& __nexa_s = " + asCppStdString(v) + "; " + bounds +
                     "return " + cppT + "(__nexa_s.begin() + __nexa_a, __nexa_s.begin() + __nexa_b); })()";
             }
+            case AstNode::Type::ExprEnumLit: {
+                std::vector<std::pair<std::string, std::string>> assigns;
+                for (size_t i = 0; i < e.paramNames.size() && i < e.children.size(); i++) {
+                    assigns.push_back({e.paramNames[i],
+                        emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool)});
+                }
+                return emitPayloadCtor(e.value, e.initValue, assigns);
+            }
             case AstNode::Type::ExprMember: {
                 if (e.children.empty()) return e.value;
+                if (e.children[0].type == AstNode::Type::ExprVarRef && !payloadEmit_.empty() &&
+                    payloadEmit_.back().nexaVar == e.children[0].value) {
+                    const PayloadFrame& fr = payloadEmit_.back();
+                    bool found = false;
+                    for (const EnumField& f : enumPayloadFields(fr.en, fr.variant)) {
+                        if (f.name == e.value) found = true;
+                    }
+                    if (!found) throw std::runtime_error(fr.variant + " has no field '" + e.value + "'");
+                    return fr.sw + "." + enumFieldCpp(fr.en, fr.variant, e.value);
+                }
                 if (!e.children.empty() && e.children[0].type == AstNode::Type::ExprVarRef) {
                     const std::string& base = e.children[0].value;
                     if (varMap.find(base) == varMap.end()) {
@@ -10465,6 +10802,12 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                         if (enIt != enumCppNames_.end()) {
                             auto evIt = enumVariants_.find(base);
                             if (evIt != enumVariants_.end() && evIt->second.count(e.value)) {
+                                if (enumHasPayload(base)) {
+                                    if (!enumPayloadFields(base, e.value).empty()) {
+                                        throw std::runtime_error(e.value + " has fields; write " + base + "." + e.value + " { ... }");
+                                    }
+                                    return emitPayloadCtor(base, e.value, {});
+                                }
                                 return enIt->second + "::" + e.value;
                             }
                             throw std::runtime_error("Unknown enum variant '" + e.value + "' for '" + base + "'");

@@ -116,6 +116,26 @@ ENUMS
   - Variants in expressions:    Name.VariantB
   - Uninitialized:              let x: enum Name;   // first variant in the enum body
   - switch: only enum cases together (case Name.A:) or only int or only string — do not mix
+  - A variant may hold fields. One value is one variant, so a list can hold
+    several kinds:
+      enum Event {
+          Click { x: int; y: int; };
+          Key { code: int; };
+          Quit;
+      }
+      let e = Event.Click { x: 3, y: 4 };
+      switch (e) {
+          case Event.Click:
+              io.println(x);
+          case Event.Key:
+              io.println(code);
+          case Event.Quit:
+              io.println(0);
+      }
+    The fields are names only inside that case. Write the enum before the
+    value, the way a struct literal needs its struct. A variant with fields
+    is written with them: Event.Click { x: 3, y: 4 }. A field left out is
+    zero. A program that never writes fields on an enum is unchanged.
 
 FUNCTIONS
   fn name() { ... }           - No parameters, void return

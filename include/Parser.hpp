@@ -82,6 +82,7 @@ struct AstNode {
                       ExprLambda,
                       ExprCall,
                       ExprStructLit,
+                      ExprEnumLit,   // Event.Click { x: 1, y: 2 }; value = enum, initValue = variant
                       ExprStringLiteral,
                       ExprLen, ExprBits,
                       ExprTrim,
@@ -89,6 +90,7 @@ struct AstNode {
                       AssnDeref,
                       StructDef,
                       EnumDef,
+                      EnumVariant,   // one variant that holds fields; value = variant, paramNames/paramTypes = fields
                       ShapeDef,
                       ExprMember,
                       AssnMember,
@@ -392,6 +394,9 @@ private:
     std::set<std::string> structNames_;
     std::map<std::string, std::set<std::string>> structFieldNames_;
     std::set<std::string> enumNames_;
+    // Variant -> fields, only for a variant that holds some. A plain Color.Red
+    // is not in here, so a '{' after it is still not part of the value.
+    std::map<std::string, std::map<std::string, std::vector<std::pair<std::string, std::string>>>> enumFields_;
     std::set<std::string> shapeNames_;
     // Type names of the function currently being parsed (fn first[T]).
     // Empty for every other type, so a program with no [T] parses as before.
@@ -648,6 +653,18 @@ private:
         return "struct:" + v;
     }
 
+    void noteEnumPayload(const AstNode& n) {
+        for (const AstNode& c : n.children) {
+            if (c.type != AstNode::Type::EnumVariant || c.paramNames.empty()) continue;
+            auto& fields = enumFields_[n.value][c.value];
+            fields.clear();
+            for (size_t i = 0; i < c.paramNames.size(); i++) {
+                std::string ty = (i < c.paramTypes.size() && !c.paramTypes[i].empty()) ? c.paramTypes[i] : "int";
+                fields.push_back({c.paramNames[i], std::move(ty)});
+            }
+        }
+    }
+
     void noteStructFields(const AstNode& n) {
         if (n.type != AstNode::Type::StructDef) return;
         structNames_.insert(n.value);
@@ -677,7 +694,10 @@ private:
     void noteTypeDefs(const std::vector<AstNode>& nodes) {
         for (const AstNode& n : nodes) {
             if (n.type == AstNode::Type::StructDef) noteStructFields(n);
-            else if (n.type == AstNode::Type::EnumDef) enumNames_.insert(n.value);
+            else if (n.type == AstNode::Type::EnumDef) {
+                enumNames_.insert(n.value);
+                noteEnumPayload(n);
+            }
             else if (n.type == AstNode::Type::ShapeDef) shapeNames_.insert(n.value);
         }
     }
@@ -1004,6 +1024,7 @@ private:
             throw std::runtime_error("Expected '{' at line " + std::to_string(peek().line));
         }
         AstNode node{AstNode::Type::EnumDef, ename, {}};
+        std::set<std::string> seenVariant;
         while (peek().type != TokenType::RBrace) {
             if (peek().type == TokenType::Eof) {
                 throw std::runtime_error("Unclosed enum body starting at line " + std::to_string(line));
@@ -1013,11 +1034,52 @@ private:
                 throw std::runtime_error("Expected variant name at line " + std::to_string(vTok.line));
             }
             advance();
+            if (!seenVariant.insert(vTok.value).second) {
+                throw std::runtime_error("Duplicate variant '" + vTok.value + "' at line " + std::to_string(vTok.line));
+            }
             node.paramNames.push_back(vTok.value);
+            if (peek().type == TokenType::LBrace) {
+                advance();
+                AstNode var{AstNode::Type::EnumVariant, vTok.value, {}};
+                var.line = vTok.line;
+                var.srcFile = currentFilePath_;
+                std::set<std::string> seenField;
+                while (peek().type != TokenType::RBrace) {
+                    if (peek().type == TokenType::Eof) {
+                        throw std::runtime_error("Unclosed variant '" + vTok.value + "' at line " + std::to_string(vTok.line));
+                    }
+                    const Token& ftok = peek();
+                    if (ftok.type != TokenType::Identifier) {
+                        throw std::runtime_error("Expected a field name in " + vTok.value + " at line " + std::to_string(ftok.line));
+                    }
+                    if (!seenField.insert(ftok.value).second) {
+                        throw std::runtime_error("Duplicate field '" + ftok.value + "' in " + vTok.value + " at line " +
+                            std::to_string(ftok.line));
+                    }
+                    advance();
+                    if (!match(TokenType::Colon)) {
+                        throw std::runtime_error("Expected ':' after '" + ftok.value + "' at line " + std::to_string(peek().line));
+                    }
+                    std::string fty = parseTypeName();
+                    if (fty == "void") {
+                        throw std::runtime_error("A field cannot be void at line " + std::to_string(ftok.line));
+                    }
+                    var.paramNames.push_back(ftok.value);
+                    var.paramTypes.push_back(std::move(fty));
+                    if (!match(TokenType::Semicolon)) {
+                        throw std::runtime_error("Expected ';' after the field at line " + std::to_string(peek().line));
+                    }
+                }
+                if (!match(TokenType::RBrace)) {
+                    throw std::runtime_error("Expected '}' after " + vTok.value + " at line " + std::to_string(peek().line));
+                }
+                if (!var.paramNames.empty()) node.children.push_back(std::move(var));
+            }
             if (!match(TokenType::Semicolon)) {
                 throw std::runtime_error("Expected ';' after enum variant at line " + std::to_string(peek().line));
             }
         }
+        noteEnumPayload(node);
         if (node.paramNames.empty()) {
             throw std::runtime_error("Enum must have at least one variant at line " + std::to_string(line));
         }
@@ -1406,6 +1468,7 @@ private:
             case AstNode::Type::IncPost:
             case AstNode::Type::DecPost:
             case AstNode::Type::ExprStructLit:
+            case AstNode::Type::ExprEnumLit:
                 take(n.value);
                 break;
             case AstNode::Type::SwitchCase:
@@ -3200,7 +3263,61 @@ private:
             }
             break;
         }
+        if (cur.type == AstNode::Type::ExprMember && !cur.isArrowMember &&
+            peek().type == TokenType::LBrace && !cur.children.empty() &&
+            cur.children[0].type == AstNode::Type::ExprVarRef &&
+            enumFields_.count(cur.children[0].value) &&
+            enumFields_[cur.children[0].value].count(cur.value)) {
+            cur = parseEnumPayloadLit(std::move(cur));
+        }
         return cur;
+    }
+
+    // Event.Click { x: 1, y: 2 }. The '{' is read only when Click holds fields,
+    // so Color.Red stays the member it has always been.
+    AstNode parseEnumPayloadLit(AstNode member) {
+        const std::string en = member.children[0].value;
+        const std::string variant = member.value;
+        const auto& fields = enumFields_[en][variant];
+        if (!match(TokenType::LBrace)) {
+            throw std::runtime_error("Expected '{' after " + en + "." + variant + " at line " + std::to_string(peek().line));
+        }
+        AstNode lit{AstNode::Type::ExprEnumLit, en, {}};
+        lit.initValue = variant;
+        lit.line = member.line;
+        lit.srcFile = member.srcFile;
+        std::set<std::string> seen;
+        while (peek().type != TokenType::RBrace) {
+            if (peek().type == TokenType::Eof) {
+                throw std::runtime_error("Unclosed " + en + "." + variant + " at line " + std::to_string(member.line));
+            }
+            const Token& ftok = peek();
+            if (ftok.type != TokenType::Identifier) {
+                throw std::runtime_error("Expected a field name in " + variant + " at line " + std::to_string(ftok.line));
+            }
+            bool known = false;
+            for (const auto& f : fields) if (f.first == ftok.value) known = true;
+            if (!known) {
+                throw std::runtime_error("Unknown field '" + ftok.value + "' in " + variant + " at line " +
+                    std::to_string(ftok.line));
+            }
+            if (!seen.insert(ftok.value).second) {
+                throw std::runtime_error("Duplicate field '" + ftok.value + "' in " + variant + " at line " +
+                    std::to_string(ftok.line));
+            }
+            advance();
+            if (!match(TokenType::Colon)) {
+                throw std::runtime_error("Expected ':' after '" + ftok.value + "' at line " + std::to_string(peek().line));
+            }
+            lit.paramNames.push_back(ftok.value);
+            lit.children.push_back(parseTernary());
+            if (match(TokenType::Comma)) continue;
+            break;
+        }
+        if (!match(TokenType::RBrace)) {
+            throw std::runtime_error("Expected '}' after " + variant + " at line " + std::to_string(peek().line));
+        }
+        return lit;
     }
 
     // Parses a chain of `.field` / `->field` accesses and `.method(args)` calls on a base expression.
@@ -6625,7 +6742,8 @@ private:
                 node.initIsBool = true;
             } else if (b.type == AstNode::Type::ExprCharLiteral) {
                 node.initIsChar = true;
-            } else if (b.type == AstNode::Type::ExprLambda || b.type == AstNode::Type::ExprStructLit) {
+            } else if (b.type == AstNode::Type::ExprLambda || b.type == AstNode::Type::ExprStructLit ||
+                       b.type == AstNode::Type::ExprEnumLit) {
                 node.initIsInt = false;
             } else if (b.type == AstNode::Type::JsonCall) {
                 node.initIsInt = false;
