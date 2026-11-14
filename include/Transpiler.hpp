@@ -589,6 +589,10 @@ public:
         genericStructs_.clear();
         structInst_.clear();
         structLitApplied_.clear();
+        genericEnums_.clear();
+        enumInst_.clear();
+        enumLitApplied_.clear();
+        enumMemberApplied_.clear();
         enumCppNames_.clear();
         enumVariants_.clear();
         enumPayload_.clear();
@@ -653,6 +657,11 @@ public:
                 if (!typeNames.insert(node.value).second) {
                     throw std::runtime_error("Duplicate type name '" + node.value + "'");
                 }
+                // enum Option[T] is a pattern. Option[int] is the enum, made later.
+                if (!node.typeParams.empty()) {
+                    genericEnums_[node.value] = &node;
+                    continue;
+                }
                 for (const std::string& v : node.paramNames) {
                     enumVariants_[node.value].insert(v);
                 }
@@ -686,7 +695,8 @@ public:
             }
         }
         structId_ = structId;
-        if (!genericStructs_.empty()) materializeGenericStructs();
+        enumId_ = enumId;
+        if (!genericStructs_.empty() || !genericEnums_.empty()) materializeGenericStructs();
         bool needsString = false;
         bool needsCstr = false;
         bool needsCstdlib = false;
@@ -993,9 +1003,12 @@ public:
         for (const AstNode& node : ast_) {
             if (node.type == AstNode::Type::StructDef) {
                 if (node.typeParams.empty()) structByName[node.value] = &node;
-            } else if (node.type == AstNode::Type::EnumDef) enumByName[node.value] = &node;
+            } else if (node.type == AstNode::Type::EnumDef) {
+                if (node.typeParams.empty()) enumByName[node.value] = &node;
+            }
         }
         for (const AstNode& node : structInst_) structByName[node.value] = &node;
+        for (const AstNode& node : enumInst_) enumByName[node.value] = &node;
         std::set<std::string> structDone, enumDone, structForward;
         std::vector<std::string> structStack;
         std::set<std::string> structStackSet;
@@ -1248,9 +1261,12 @@ public:
         for (const AstNode& node : ast_) {
             if (node.type == AstNode::Type::StructDef) {
                 if (node.typeParams.empty()) emitStructNamed(node.value);
-            } else if (node.type == AstNode::Type::EnumDef) emitEnumNamed(node.value);
+            } else if (node.type == AstNode::Type::EnumDef) {
+                if (node.typeParams.empty()) emitEnumNamed(node.value);
+            }
         }
         for (const AstNode& node : structInst_) emitStructNamed(node.value);
+        for (const AstNode& node : enumInst_) emitEnumNamed(node.value);
 
         varStructScopes_.clear();
         varStructScopes_.push_back({});
@@ -2032,6 +2048,12 @@ private:
     std::deque<AstNode> structInst_;
     mutable std::map<const AstNode*, std::string> structLitApplied_;
     int structId_ = 0;
+    // enum Option[T] lives here. Each Option[int] is a copy in enumInst_.
+    std::map<std::string, const AstNode*> genericEnums_;
+    std::deque<AstNode> enumInst_;
+    mutable std::map<const AstNode*, std::string> enumLitApplied_;
+    mutable std::map<const AstNode*, std::string> enumMemberApplied_;
+    int enumId_ = 0;
 
     // A shape names functions. It is not a C++ type. Each struct passed for
     // one gets its own copy of the function, so the call is the struct's method.
@@ -2965,20 +2987,23 @@ private:
             }
             return unifyType(fr.empty() ? "int" : fr, ar.empty() ? "int" : ar, b, fail);
         }
-        // struct Slot[T] against Slot[int]: the name matches, and each type is unified.
-        if (formal.compare(0, 7, "struct:") == 0 && actual.compare(0, 7, "struct:") == 0 &&
-            formal.find('[') != std::string::npos && actual.find('[') != std::string::npos) {
+        // struct Slot[T] against Slot[int], or enum Option[T] against Option[int].
+        auto unifyApplied = [&](const char* tag, size_t tagLen) {
+            if (formal.compare(0, tagLen, tag) != 0 || actual.compare(0, tagLen, tag) != 0) return false;
+            if (formal.find('[') == std::string::npos || actual.find('[') == std::string::npos) return false;
             std::string fb, ab;
             std::vector<std::string> fa, aa;
-            if (splitAppliedStruct(formal.substr(7), fb, fa) &&
-                splitAppliedStruct(actual.substr(7), ab, aa) &&
-                fb == ab && fa.size() == aa.size()) {
-                for (size_t i = 0; i < fa.size(); i++) {
-                    if (!unifyType(fa[i], aa[i], b, fail)) return false;
-                }
-                return true;
+            if (!splitAppliedStruct(formal.substr(tagLen), fb, fa) ||
+                !splitAppliedStruct(actual.substr(tagLen), ab, aa) ||
+                fb != ab || fa.size() != aa.size()) {
+                return false;
             }
-        }
+            for (size_t i = 0; i < fa.size(); i++) {
+                if (!unifyType(fa[i], aa[i], b, fail)) return false;
+            }
+            return true;
+        };
+        if (unifyApplied("struct:", 7) || unifyApplied("enum:", 5)) return true;
         fail = formal + " and " + actual;
         return false;
     }
@@ -3781,7 +3806,7 @@ private:
                 return std::string("struct:") + e.value;
             }
             case AstNode::Type::ExprEnumLit:
-                return std::string("enum:") + e.value;
+                return std::string("enum:") + enumLitUseName(e);
             case AstNode::Type::ExprLambda:
                 return fnTypeFromLambdaAst(e);
             case AstNode::Type::ExprCall: {
@@ -3804,9 +3829,12 @@ private:
                     // reporting int here said gfx.clear(Colour.Red, 0, 0) was
                     // fine and left clang to mention __nexa_E0.
                     if (e.children[0].type == AstNode::Type::ExprVarRef &&
-                        lookupNexaDecl(e.children[0].value).empty() &&
-                        enumCppNames_.count(e.children[0].value)) {
-                        return "enum:" + e.children[0].value;
+                        lookupNexaDecl(e.children[0].value).empty()) {
+                        const std::string applied = enumMemberUseName(e);
+                        if (!applied.empty()) return "enum:" + applied;
+                        if (enumCppNames_.count(e.children[0].value)) {
+                            return "enum:" + e.children[0].value;
+                        }
                     }
                 }
                 return "int";
@@ -4974,7 +5002,7 @@ private:
         for (const AstNode& n : ast_) visit(n);
     }
 
-    static std::string genericStructSpell(const AstNode& tmpl) {
+    static std::string genericTypeSpell(const AstNode& tmpl) {
         std::string s = tmpl.value + "[";
         for (size_t i = 0; i < tmpl.typeParams.size(); i++) {
             if (i) s += ", ";
@@ -4983,6 +5011,7 @@ private:
         s += "]";
         return s;
     }
+    static std::string genericStructSpell(const AstNode& tmpl) { return genericTypeSpell(tmpl); }
 
     static bool splitAppliedStruct(const std::string& applied, std::string& base,
                                    std::vector<std::string>& args) {
@@ -5076,9 +5105,94 @@ private:
         return e.value;
     }
 
-    // Turn every Slot[int] the program actually uses into a struct. Slot[T]
-    // itself is not emitted. A program that never writes [T] on a struct
-    // never calls this, and its structs are numbered and emitted as before.
+    // Slot { value: 3 } for enums: Option.Some { value: 4 } binds T from fields.
+    std::string inferEnumLitApp(const AstNode& lit, const std::map<std::string, std::string>& subst,
+                                std::string& fail) const {
+        fail.clear();
+        const std::string& written = lit.value;
+        size_t br = written.find('[');
+        if (br != std::string::npos) {
+            std::string t = "enum:" + written;
+            if (!subst.empty()) substTypeStr(t, subst);
+            if (t.find("typevar:") != std::string::npos) {
+                size_t p = t.find("typevar:");
+                size_t b = p + 8, e = b;
+                while (e < t.size() && (std::isalnum((unsigned char)t[e]) || t[e] == '_')) e++;
+                fail = t.substr(b, e - b) + " has no value to take its type from";
+                return "";
+            }
+            return t.substr(5);
+        }
+        auto git = genericEnums_.find(written);
+        if (git == genericEnums_.end()) return written;
+        const AstNode& tmpl = *git->second;
+        const AstNode* varNode = nullptr;
+        for (const AstNode& c : tmpl.children) {
+            if (c.type == AstNode::Type::EnumVariant && c.value == lit.initValue) { varNode = &c; break; }
+        }
+        std::map<std::string, std::string> binds;
+        if (varNode) {
+            for (size_t i = 0; i < lit.paramNames.size(); i++) {
+                std::string formal;
+                for (size_t f = 0; f < varNode->paramNames.size(); f++) {
+                    if (varNode->paramNames[f] != lit.paramNames[i]) continue;
+                    formal = (f < varNode->paramTypes.size() && !varNode->paramTypes[f].empty())
+                                 ? varNode->paramTypes[f] : "int";
+                    break;
+                }
+                if (formal.empty() || formal.find("typevar:") == std::string::npos) continue;
+                std::string actual = (i < lit.children.size()) ? inferExprNexaType(lit.children[i]) : std::string("int");
+                if (!subst.empty()) substTypeStr(actual, subst);
+                if (!unifyType(formal, actual, binds, fail)) {
+                    if (fail.empty()) fail = lit.paramNames[i] + " is " + formal + " and " + actual;
+                    return "";
+                }
+            }
+        }
+        for (const std::string& p : tmpl.typeParams) {
+            if (!binds.count(p)) {
+                fail = p + " has no value to take its type from";
+                return "";
+            }
+        }
+        std::string app = written + "[";
+        for (size_t i = 0; i < tmpl.typeParams.size(); i++) {
+            if (i) app += ",";
+            app += binds[tmpl.typeParams[i]];
+        }
+        app += "]";
+        return app;
+    }
+
+    std::string enumLitUseName(const AstNode& e) const {
+        if (!enumLitApplied_.empty()) {
+            auto it = enumLitApplied_.find(&e);
+            if (it != enumLitApplied_.end()) return it->second;
+        }
+        if (!genericEnums_.empty() && e.value.find('[') == std::string::npos &&
+            genericEnums_.count(e.value)) {
+            std::string why;
+            std::string app = inferEnumLitApp(e, {}, why);
+            if (app.empty()) throw std::runtime_error(why.empty() ? std::string("Unknown enum type: ") + e.value : why);
+            return app;
+        }
+        return e.value;
+    }
+
+    std::string enumMemberUseName(const AstNode& e) const {
+        if (e.children.empty() || e.children[0].type != AstNode::Type::ExprVarRef) return "";
+        if (!enumMemberApplied_.empty()) {
+            auto it = enumMemberApplied_.find(&e);
+            if (it != enumMemberApplied_.end()) return it->second;
+        }
+        const std::string& base = e.children[0].value;
+        if (enumCppNames_.count(base)) return base;
+        return "";
+    }
+
+    // Turn every Slot[int] / Option[int] the program actually uses into a type.
+    // Slot[T] / Option[T] themselves are not emitted. A program that never writes
+    // [T] on a struct or enum never calls this.
     void materializeGenericStructs() {
         struct Pending {
             const AstNode* call;
@@ -5086,17 +5200,22 @@ private:
         };
         std::vector<Pending> pending;
         std::set<std::string> building;
+        std::set<std::string> buildingEnum;
         const AstNode* at = nullptr;
 
         std::function<void(const std::string&)> ensureApp;
+        std::function<void(const std::string&)> ensureEnumApp;
         std::function<void(const std::string&)> noteType;
-        std::function<void(const AstNode&, const std::map<std::string, std::string>&)> scanAny;
+        std::function<void(const AstNode&, const std::map<std::string, std::string>&, const std::string&)> scanAny;
 
         noteType = [&](const std::string& t) {
-            if (t.find("struct:") == std::string::npos) return;
             for (size_t i = 0; i < t.size();) {
-                if (t.compare(i, 7, "struct:") != 0) { ++i; continue; }
-                size_t b = i + 7, e = b;
+                size_t prefix = 0;
+                bool isStruct = false, isEnum = false;
+                if (t.compare(i, 7, "struct:") == 0) { prefix = 7; isStruct = true; }
+                else if (t.compare(i, 5, "enum:") == 0) { prefix = 5; isEnum = true; }
+                else { ++i; continue; }
+                size_t b = i + prefix, e = b;
                 while (e < t.size() && (std::isalnum((unsigned char)t[e]) || t[e] == '_' || t[e] == '.')) e++;
                 const std::string base = t.substr(b, e - b);
                 if (e < t.size() && t[e] == '[') {
@@ -5108,14 +5227,26 @@ private:
                         a++;
                     } while (depth > 0 && a < t.size());
                     std::string applied = t.substr(b, a - b);
-                    if (applied.find("typevar:") == std::string::npos) ensureApp(applied);
-                    i = e + 1;
+                    if (applied.find("typevar:") == std::string::npos) {
+                        if (isStruct) ensureApp(applied);
+                        if (isEnum) ensureEnumApp(applied);
+                    }
+                    i = a;
                     continue;
                 }
-                auto git = genericStructs_.find(base);
-                if (git != genericStructs_.end()) {
-                    const AstNode& where = at ? *at : *git->second;
-                    semError(where, base + " names a type; write " + genericStructSpell(*git->second));
+                if (isStruct) {
+                    auto git = genericStructs_.find(base);
+                    if (git != genericStructs_.end()) {
+                        const AstNode& where = at ? *at : *git->second;
+                        semError(where, base + " names a type; write " + genericTypeSpell(*git->second));
+                    }
+                }
+                if (isEnum) {
+                    auto git = genericEnums_.find(base);
+                    if (git != genericEnums_.end()) {
+                        const AstNode& where = at ? *at : *git->second;
+                        semError(where, base + " names a type; write " + genericTypeSpell(*git->second));
+                    }
                 }
                 i = e;
             }
@@ -5181,7 +5312,61 @@ private:
                 if (m.type != AstNode::Type::Function) continue;
                 for (const std::string& pt : m.paramTypes) noteType(pt);
                 noteType(m.fnReturnType);
-                scanAny(m, {});
+                scanAny(m, {}, "");
+            }
+        };
+        ensureEnumApp = [&](const std::string& applied) {
+            if (enumCppNames_.count(applied) || !buildingEnum.insert(applied).second) return;
+            std::string base;
+            std::vector<std::string> args;
+            if (!splitAppliedStruct(applied, base, args)) {
+                throw std::runtime_error("Unknown enum type: " + applied);
+            }
+            auto git = genericEnums_.find(base);
+            if (git == genericEnums_.end()) {
+                if (!at) throw std::runtime_error(base + " does not name a type");
+                semError(*at, base + " does not name a type");
+            }
+            const AstNode& tmpl = *git->second;
+            if (args.size() != tmpl.typeParams.size()) {
+                if (!at) {
+                    throw std::runtime_error(base + " names " + std::to_string(tmpl.typeParams.size()) +
+                                              (tmpl.typeParams.size() == 1 ? " type" : " types"));
+                }
+                semError(*at, base + " names " + std::to_string(tmpl.typeParams.size()) +
+                                  (tmpl.typeParams.size() == 1 ? " type" : " types"));
+            }
+            for (const std::string& a : args) {
+                if (a.find("typevar:") != std::string::npos) {
+                    buildingEnum.erase(applied);
+                    return;
+                }
+            }
+            std::map<std::string, std::string> subst;
+            for (size_t i = 0; i < tmpl.typeParams.size(); i++) subst[tmpl.typeParams[i]] = args[i];
+            AstNode copy = tmpl;
+            substTypeTree(copy, subst);
+            copy.value = applied;
+            copy.typeParams.clear();
+            enumInst_.push_back(std::move(copy));
+            AstNode& node = enumInst_.back();
+            for (const std::string& v : node.paramNames) enumVariants_[applied].insert(v);
+            enumOrder_[applied] = node.paramNames;
+            for (const AstNode& var : node.children) {
+                if (var.type != AstNode::Type::EnumVariant || var.paramNames.empty()) continue;
+                auto& fields = enumPayload_[applied][var.value];
+                for (size_t i = 0; i < var.paramNames.size(); i++) {
+                    std::string ty = (i < var.paramTypes.size() && !var.paramTypes[i].empty()) ? var.paramTypes[i] : "int";
+                    fields.push_back(EnumField{var.paramNames[i], std::move(ty)});
+                }
+            }
+            enumFirstVariant_[applied] = node.paramNames[0];
+            enumCppNames_[applied] = preserveNames_
+                ? cppSafeName(typeFileTag("enum:" + applied))
+                : ("__nexa_E" + std::to_string(enumId_++));
+            for (const AstNode& var : node.children) {
+                if (var.type != AstNode::Type::EnumVariant) continue;
+                for (const std::string& ft : var.paramTypes) noteType(ft);
             }
         };
         auto namedTypeParam = [&](const std::string& name) {
@@ -5190,7 +5375,7 @@ private:
             }
             return false;
         };
-        scanAny = [&](const AstNode& n, const std::map<std::string, std::string>& subst) {
+        scanAny = [&](const AstNode& n, const std::map<std::string, std::string>& subst, const std::string& want) {
             const AstNode* saved = at;
             at = &n;
             if (n.type == AstNode::Type::Function && fnHasTypeParams(n) && subst.empty()) {
@@ -5198,6 +5383,10 @@ private:
                 return;
             }
             if (n.type == AstNode::Type::StructDef && !n.typeParams.empty() && subst.empty()) {
+                at = saved;
+                return;
+            }
+            if (n.type == AstNode::Type::EnumDef && !n.typeParams.empty() && subst.empty()) {
                 at = saved;
                 return;
             }
@@ -5222,30 +5411,32 @@ private:
                     }
                     noteTypeSub(n.fnReturnType, subst);
                 }
-                for (const AstNode& c : n.children) scanAny(c, subst);
+                std::string retWant = n.fnReturnType;
+                if (!subst.empty() && retWant.find("typevar:") != std::string::npos) substTypeStr(retWant, subst);
+                for (const AstNode& c : n.children) scanAny(c, subst, retWant);
                 nexaDeclStack_.pop_back();
                 at = saved;
                 return;
             }
             if (n.type == AstNode::Type::Block || n.type == AstNode::Type::SwitchCase) {
                 nexaDeclStack_.push_back({});
-                for (const AstNode& c : n.children) scanAny(c, subst);
+                for (const AstNode& c : n.children) scanAny(c, subst, want);
                 nexaDeclStack_.pop_back();
                 at = saved;
                 return;
             }
             if (n.type == AstNode::Type::Variable) {
-                for (const AstNode& c : n.children) scanAny(c, subst);
                 std::string t = n.declType;
-                if (t.empty()) t = n.children.empty() ? std::string("int") : inferExprNexaType(n.children[0]);
                 if (!subst.empty() && t.find("typevar:") != std::string::npos) substTypeStr(t, subst);
+                for (const AstNode& c : n.children) scanAny(c, subst, t);
+                if (t.empty()) t = n.children.empty() ? std::string("int") : inferExprNexaType(n.children[0]);
                 noteType(t);
                 if (!nexaDeclStack_.empty()) nexaDeclStack_.back()[n.value] = t.empty() ? std::string("int") : t;
                 at = saved;
                 return;
             }
             if (n.type == AstNode::Type::ExprStructLit) {
-                for (const AstNode& c : n.children) scanAny(c, subst);
+                for (const AstNode& c : n.children) scanAny(c, subst, "");
                 std::string why;
                 std::string app = inferStructLitApp(n, subst, why);
                 if (app.empty()) semError(n, why.empty() ? "Unknown struct type: " + n.value : why);
@@ -5254,8 +5445,49 @@ private:
                 at = saved;
                 return;
             }
+            if (n.type == AstNode::Type::ExprEnumLit) {
+                for (const AstNode& c : n.children) scanAny(c, subst, "");
+                std::string why;
+                std::string app = inferEnumLitApp(n, subst, why);
+                if (app.empty()) semError(n, why.empty() ? "Unknown enum type: " + n.value : why);
+                if (subst.empty() && app.find('[') != std::string::npos) enumLitApplied_[&n] = app;
+                if (app.find('[') != std::string::npos && app.find("typevar:") == std::string::npos) ensureEnumApp(app);
+                at = saved;
+                return;
+            }
+            if (n.type == AstNode::Type::ExprMember && !n.children.empty() &&
+                n.children[0].type == AstNode::Type::ExprVarRef) {
+                scanAny(n.children[0], subst, "");
+                const std::string& base = n.children[0].value;
+                if (base.find('[') != std::string::npos) {
+                    // Option[int].None
+                    if (base.find("typevar:") == std::string::npos &&
+                        (genericEnums_.count(nexaTypeAppBase(base)) || enumCppNames_.count(base))) {
+                        ensureEnumApp(base);
+                        if (subst.empty()) enumMemberApplied_[&n] = base;
+                    }
+                } else if (genericEnums_.count(base)) {
+                    // Option.None beside let a: Option[int]
+                    std::string w = want;
+                    if (!subst.empty() && w.find("typevar:") != std::string::npos) substTypeStr(w, subst);
+                    if (isEnumDeclType(w)) {
+                        const std::string en = enumNameFromDecl(w);
+                        if (nexaTypeAppBase(en) == base && en.find('[') != std::string::npos &&
+                            en.find("typevar:") == std::string::npos) {
+                            ensureEnumApp(en);
+                            if (subst.empty()) enumMemberApplied_[&n] = en;
+                        }
+                    }
+                }
+                at = saved;
+                return;
+            }
             if (n.type == AstNode::Type::FnCall && n.initValue != "." && n.initValue != "->") {
-                for (const AstNode& c : n.children) scanAny(c, subst);
+                for (size_t i = 0; i < n.children.size(); i++) {
+                    std::string formal = stampParamType(n.value, i);
+                    if (!subst.empty() && formal.find("typevar:") != std::string::npos) substTypeStr(formal, subst);
+                    scanAny(n.children[i], subst, formal);
+                }
                 if (namedTypeParam(n.value)) {
                     Pending p;
                     p.call = &n;
@@ -5269,21 +5501,26 @@ private:
                 at = saved;
                 return;
             }
+            if (n.type == AstNode::Type::Return) {
+                for (const AstNode& c : n.children) scanAny(c, subst, want);
+                at = saved;
+                return;
+            }
             noteTypeSub(n.declType, subst);
             noteTypeSub(n.fnReturnType, subst);
             noteTypeSub(n.receiverType, subst);
             for (const std::string& pt : n.paramTypes) noteTypeSub(pt, subst);
-            for (const AstNode& c : n.children) scanAny(c, subst);
-            for (const AstNode& d : n.paramDefaults) scanAny(d, subst);
+            for (const AstNode& c : n.children) scanAny(c, subst, want);
+            for (const AstNode& d : n.paramDefaults) scanAny(d, subst, "");
             at = saved;
         };
 
-        nexaDeclStack_.clear();
-        nexaDeclStack_.push_back({});
-        for (const AstNode& n : ast_) scanAny(n, {});
-        nexaDeclStack_.pop_back();
-
+        // Overloads are known before the walk so a call's parameter type can
+        // fill Option.None (show(Option.None) when show takes Option[int]).
         buildFnOverloadTableAndInitGlobalNexaDecl();
+        nexaDeclStack_.clear();
+        nexaDeclStack_.push_back(globalNexaDecl_);
+        for (const AstNode& n : ast_) scanAny(n, {}, "");
         nexaDeclStack_.clear();
         nexaDeclStack_.push_back(globalNexaDecl_);
 
@@ -5311,7 +5548,7 @@ private:
             at = p.call;
             for (size_t i = 0; i < fn.paramNames.size(); i++) noteTypeSub(canonicalParamType(fn, i), subst);
             noteTypeSub(fn.fnReturnType, subst);
-            scanAny(fn, subst);
+            scanAny(fn, subst, "");
         }
         nexaDeclStack_.clear();
         at = nullptr;
@@ -5584,7 +5821,8 @@ private:
                     for (size_t i = 1; i < s.children.size(); i++) {
                         if (s.children[i].type != AstNode::Type::SwitchCase) continue;
                         const AstNode& c = s.children[i];
-                        const bool bind = c.caseIsEnum && !scrutEn.empty() && c.value == scrutEn;
+                        const bool bind = c.caseIsEnum && !scrutEn.empty() &&
+                            (c.value == scrutEn || nexaTypeAppBase(c.value) == nexaTypeAppBase(scrutEn));
                         nexaDeclStack_.push_back({});
                         if (bind) {
                             payloadSem_.push_back(PayloadFrame{scrut, "", scrutEn, c.initValue});
@@ -6786,7 +7024,9 @@ private:
         if (name == "self" || name == "null" || name == "true" || name == "false") return;
         if (hasNexaFnNamed(name)) return;          // a function used as a value
         if (enumCppNames_.count(name)) return;     // bare enum type name
+        if (genericEnums_.count(nexaTypeAppBase(name))) return;
         if (structCppNames_.count(name)) return;   // bare struct type name
+        if (genericStructs_.count(nexaTypeAppBase(name))) return;
         semError(at, "Undefined variable '" + name + "'");
     }
 
@@ -6794,13 +7034,29 @@ private:
         if (e.children.empty()) return;
         const AstNode& base = e.children[0];
         if (base.type == AstNode::Type::ExprVarRef && lookupNexaDecl(base.value).empty()) {
-            auto ev = enumVariants_.find(base.value);
+            std::string ename = base.value;
+            const std::string applied = enumMemberUseName(e);
+            if (!applied.empty()) ename = applied;
+            auto ev = enumVariants_.find(ename);
+            if (ev == enumVariants_.end() && genericEnums_.count(nexaTypeAppBase(base.value))) {
+                const AstNode& tmpl = *genericEnums_[nexaTypeAppBase(base.value)];
+                bool known = false;
+                for (const std::string& v : tmpl.paramNames) if (v == e.value) known = true;
+                if (!known) semError(e, "Unknown enum variant '" + e.value + "' for '" + base.value + "'");
+                for (const AstNode& c : tmpl.children) {
+                    if (c.type == AstNode::Type::EnumVariant && c.value == e.value && !c.paramNames.empty()) {
+                        semError(e, e.value + " has fields; write " + base.value + "." + e.value + " { ... }");
+                    }
+                }
+                // Option.None with no type beside it is refused when the type is needed.
+                return;
+            }
             if (ev != enumVariants_.end()) {
                 if (!ev->second.count(e.value)) {
-                    semError(e, "Unknown enum variant '" + e.value + "' for '" + base.value + "'");
+                    semError(e, "Unknown enum variant '" + e.value + "' for '" + ename + "'");
                 }
-                if (!enumPayloadFields(base.value, e.value).empty()) {
-                    semError(e, e.value + " has fields; write " + base.value + "." + e.value + " { ... }");
+                if (!enumPayloadFields(ename, e.value).empty()) {
+                    semError(e, e.value + " has fields; write " + ename + "." + e.value + " { ... }");
                 }
                 return;  // Enum.Variant: the base names a type, not a variable
             }
@@ -7000,7 +7256,7 @@ private:
         return "static_cast<int>(" + expr + ")";
     }
     bool enumExprIsPayload(const AstNode& e) const {
-        if (e.type == AstNode::Type::ExprEnumLit) return enumHasPayload(e.value);
+        if (e.type == AstNode::Type::ExprEnumLit) return enumHasPayload(enumLitUseName(e));
         if (e.type == AstNode::Type::ExprVarRef) {
             const std::string t = lookupNexaDecl(e.value);
             return isEnumDeclType(t) && enumHasPayload(enumNameFromDecl(t));
@@ -7008,7 +7264,8 @@ private:
         if (e.type == AstNode::Type::ExprMember && !e.children.empty() &&
             e.children[0].type == AstNode::Type::ExprVarRef &&
             lookupNexaDecl(e.children[0].value).empty()) {
-            return enumHasPayload(e.children[0].value);
+            const std::string applied = enumMemberUseName(e);
+            return enumHasPayload(applied.empty() ? e.children[0].value : applied);
         }
         return false;
     }
@@ -7079,7 +7336,7 @@ private:
             if (it != structCppNames_.end()) return it->second;
             auto git = genericStructs_.find(n);
             if (git != genericStructs_.end()) {
-                throw std::runtime_error(n + " names a type; write " + genericStructSpell(*git->second));
+                throw std::runtime_error(n + " names a type; write " + genericTypeSpell(*git->second));
             }
             if (modules_.hasCppHeader()) return n;
             throw std::runtime_error("Unknown struct type: " + n);
@@ -7087,8 +7344,12 @@ private:
         if (t.size() >= 5 && t.compare(0, 5, "enum:") == 0) {
             std::string n = t.substr(5);
             auto it = enumCppNames_.find(n);
-            if (it == enumCppNames_.end()) throw std::runtime_error("Unknown enum type: " + n);
-            return it->second;
+            if (it != enumCppNames_.end()) return it->second;
+            auto git = genericEnums_.find(nexaTypeAppBase(n));
+            if (git != genericEnums_.end() && n.find('[') == std::string::npos) {
+                throw std::runtime_error(n + " names a type; write " + genericTypeSpell(*git->second));
+            }
+            throw std::runtime_error("Unknown enum type: " + n);
         }
         throw std::runtime_error("Unknown type: " + t);
     }
@@ -9381,12 +9642,15 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (c.type != AstNode::Type::SwitchCase) continue;
                 if (c.value == "default") out << indent << "    default:";
                 else if (c.caseIsEnum) {
-                    if (c.value != scrutEn) throw std::runtime_error("Unknown enum '" + c.value + "' in switch case");
-                    auto vsIt = enumVariants_.find(c.value);
-                    if (vsIt == enumVariants_.end() || !vsIt->second.count(c.initValue)) {
-                        throw std::runtime_error("Unknown enum variant '" + c.initValue + "' for '" + c.value + "'");
+                    // case Option.Some matches a scrutinee of Option[int].
+                    if (c.value != scrutEn && nexaTypeAppBase(c.value) != nexaTypeAppBase(scrutEn)) {
+                        throw std::runtime_error("Unknown enum '" + c.value + "' in switch case");
                     }
-                    out << indent << "    case " << enumVariantIndex(c.value, c.initValue) << ":";
+                    auto vsIt = enumVariants_.find(scrutEn);
+                    if (vsIt == enumVariants_.end() || !vsIt->second.count(c.initValue)) {
+                        throw std::runtime_error("Unknown enum variant '" + c.initValue + "' for '" + scrutEn + "'");
+                    }
+                    out << indent << "    case " << enumVariantIndex(scrutEn, c.initValue) << ":";
                 } else {
                     out << indent << "    case " << c.value << ":";
                 }
@@ -9398,7 +9662,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     std::string decl;
                 };
                 std::vector<std::pair<std::string, Hold>> saved;
-                const bool bind = c.caseIsEnum && c.value == scrutEn;
+                const bool bind = c.caseIsEnum &&
+                    (c.value == scrutEn || nexaTypeAppBase(c.value) == nexaTypeAppBase(scrutEn));
                 if (bind) {
                     payloadEmit_.push_back(PayloadFrame{scrutVar, sw, scrutEn, c.initValue});
                     for (const EnumField& f : enumPayloadFields(scrutEn, c.initValue)) {
@@ -11194,12 +11459,13 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     "return " + cppT + "(__nexa_s.begin() + __nexa_a, __nexa_s.begin() + __nexa_b); })()";
             }
             case AstNode::Type::ExprEnumLit: {
+                const std::string en = enumLitUseName(e);
                 std::vector<std::pair<std::string, std::string>> assigns;
                 for (size_t i = 0; i < e.paramNames.size() && i < e.children.size(); i++) {
                     assigns.push_back({e.paramNames[i],
                         emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool)});
                 }
-                return emitPayloadCtor(e.value, e.initValue, assigns);
+                return emitPayloadCtor(en, e.initValue, assigns);
             }
             case AstNode::Type::ExprMember: {
                 if (e.children.empty()) return e.value;
@@ -11214,8 +11480,10 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     return fr.sw + "." + enumFieldCpp(fr.en, fr.variant, e.value);
                 }
                 if (!e.children.empty() && e.children[0].type == AstNode::Type::ExprVarRef) {
-                    const std::string& base = e.children[0].value;
-                    if (varMap.find(base) == varMap.end()) {
+                    std::string base = e.children[0].value;
+                    const std::string applied = enumMemberUseName(e);
+                    if (!applied.empty()) base = applied;
+                    if (varMap.find(e.children[0].value) == varMap.end()) {
                         auto enIt = enumCppNames_.find(base);
                         if (enIt != enumCppNames_.end()) {
                             auto evIt = enumVariants_.find(base);
@@ -11229,6 +11497,10 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                                 return enIt->second + "::" + e.value;
                             }
                             throw std::runtime_error("Unknown enum variant '" + e.value + "' for '" + base + "'");
+                        }
+                        if (genericEnums_.count(nexaTypeAppBase(base))) {
+                            throw std::runtime_error(nexaTypeAppBase(base) + " names a type; write " +
+                                genericTypeSpell(*genericEnums_[nexaTypeAppBase(base)]));
                         }
                     }
                 }

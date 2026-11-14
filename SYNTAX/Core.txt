@@ -136,6 +136,17 @@ ENUMS
     value, the way a struct literal needs its struct. A variant with fields
     is written with them: Event.Click { x: 3, y: 4 }. A field left out is
     zero. A program that never writes fields on an enum is unchanged.
+  - An enum may name a type, like a struct:
+      enum Option[T] {
+          Some { value: T; };
+          None;
+      }
+      let a = Option.Some { value: 4 };
+      let b: Option[int] = Option.None;
+      let c = Option[string].None;
+    Option of an int and Option of a string are two enums. Write Option[int]
+    where a type is named and nothing gives T a value. A program that never
+    writes [T] on an enum is unchanged.
 
 FUNCTIONS
   fn name() { ... }           - No parameters, void return

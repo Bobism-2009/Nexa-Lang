@@ -123,7 +123,7 @@ struct AstNode {
     bool isArrowMember = false; // for ExprMember: true = ptr->field, false = value.field
     std::string arraySize = ""; // for Variable: size for fixed array, e.g. "4080"
     std::string fnReturnType = ""; // Function / MainFunction: explicit ": type" before `{`; empty = infer from returns
-    std::vector<std::string> typeParams; // fn first[T] or struct Slot[T]; empty when the name takes no type
+    std::vector<std::string> typeParams; // fn first[T], struct Slot[T], or enum Option[T]; empty when none
     bool isExtern = false;         // Function: true = extern fn (C linkage declaration, no body)
     bool isVariadic = false;       // Function: true = trailing ... (C varargs)
     std::string receiverType = ""; // Function: "struct:Point" when this is a method inside a struct
@@ -223,6 +223,12 @@ inline std::string nexaResultInner(const std::string& t) {
 
 inline std::string nexaMakeResultType(const std::string& inner) {
     return "Result[" + inner + "]";
+}
+
+// Slot[int] / Option[int] → Slot / Option. A name with no '[' is unchanged.
+inline std::string nexaTypeAppBase(const std::string& name) {
+    size_t br = name.find('[');
+    return br == std::string::npos ? name : name.substr(0, br);
 }
 
 inline bool nexaSplitMapType(const std::string& t, std::string& key, std::string& val) {
@@ -399,9 +405,11 @@ private:
     // is not in here, so a '{' after it is still not part of the value.
     std::map<std::string, std::map<std::string, std::vector<std::pair<std::string, std::string>>>> enumFields_;
     std::set<std::string> shapeNames_;
-    // struct Slot[T] remembers T so a later Slot[int] is that struct.
-    // A struct with no [T] is not here, so a '[' after its name is still a fixed array.
+    // struct Slot[T] / enum Option[T] remember T so a later Slot[int] or Option[int]
+    // is that type. A name with no [T] is not here, so a '[' after it is still a
+    // fixed array (or an index).
     std::map<std::string, std::vector<std::string>> structTypeParams_;
+    std::map<std::string, std::vector<std::string>> enumTypeParams_;
     // Type names of the function or struct currently being parsed.
     // Empty for every other type, so a program with no [T] parses as before.
     std::set<std::string> typeParamScope_;
@@ -554,6 +562,17 @@ private:
         return "struct:" + name;
     }
 
+    // enum:Name, or enum:Name[T] when the name is given types.
+    std::string enumTypeWithArgs(const std::string& name) {
+        if (peek().type == TokenType::LBracket && pos_ + 1 < tokens_.size() &&
+            tokens_[pos_ + 1].type != TokenType::Number) {
+            return "enum:" + name + parseTypeArgs();
+        }
+        return "enum:" + name;
+    }
+
+    static std::string typeAppBase(const std::string& name) { return nexaTypeAppBase(name); }
+
     std::string parseTypeName() {
         // Pointer types: *int, **char, *Point, etc. (prefix *, like Go / systems style)
         if (match(TokenType::Star)) {
@@ -572,7 +591,7 @@ private:
                 throw std::runtime_error("Expected enum name at line " + std::to_string(t.line));
             }
             advance();
-            return "enum:" + t.value;
+            return enumTypeWithArgs(t.value);
         }
         if (match(TokenType::Fn)) {
             if (!match(TokenType::LParen)) {
@@ -645,7 +664,7 @@ private:
             advance();
             std::string q = v + "." + part.value;
             if (shapeNames_.count(q)) return "shape:" + q;
-            if (enumNames_.count(q)) return "enum:" + q;
+            if (enumNames_.count(q)) return enumTypeWithArgs(q);
             return structTypeWithArgs(q);
         }
         if (v == "map") {
@@ -686,7 +705,7 @@ private:
             return "json";
         }
         if (shapeNames_.count(v)) return "shape:" + v;
-        if (enumNames_.count(v)) return "enum:" + v;
+        if (enumNames_.count(v)) return enumTypeWithArgs(v);
         if (typeParamScope_.count(v)) return "typevar:" + v;
         return structTypeWithArgs(v);
     }
@@ -736,6 +755,7 @@ private:
             else if (n.type == AstNode::Type::EnumDef) {
                 enumNames_.insert(n.value);
                 noteEnumPayload(n);
+                if (!n.typeParams.empty()) enumTypeParams_[n.value] = n.typeParams;
             }
             else if (n.type == AstNode::Type::ShapeDef) shapeNames_.insert(n.value);
         }
@@ -1066,6 +1086,11 @@ private:
             throw std::runtime_error("Duplicate type name '" + ename + "' at line " + std::to_string(line));
         }
         enumNames_.insert(ename);
+        std::vector<std::string> typeParams;
+        if (peek().type == TokenType::LBracket) {
+            typeParams = parseTypeParams(line);
+            enumTypeParams_[ename] = typeParams;
+        }
         if (!match(TokenType::LBrace)) {
             throw std::runtime_error("Expected '{' at line " + std::to_string(peek().line));
         }
@@ -1132,6 +1157,8 @@ private:
         if (!match(TokenType::RBrace)) {
             throw std::runtime_error("Expected '}' at end of enum at line " + std::to_string(peek().line));
         }
+        node.typeParams = std::move(typeParams);
+        if (!node.typeParams.empty()) typeParamScope_.clear();
         match(TokenType::Semicolon);
         return node;
     }
@@ -1498,7 +1525,19 @@ private:
             case AstNode::Type::FnCall:
                 if (n.initValue != ".") take(n.value);
                 break;
-            case AstNode::Type::ExprVarRef:
+            case AstNode::Type::ExprVarRef: {
+                // Option[int] as a type name in an expression (Option[int].None).
+                size_t br = n.value.find('[');
+                if (br != std::string::npos) {
+                    std::string base = n.value.substr(0, br);
+                    if (bareName(base) && !locals.count(base) && ownsName(base)) {
+                        n.value = filePrefix_ + "." + base + n.value.substr(br);
+                    }
+                    break;
+                }
+                take(n.value);
+                break;
+            }
             case AstNode::Type::Assignment:
             case AstNode::Type::AssnAdd:
             case AstNode::Type::AssnSub:
@@ -1513,8 +1552,11 @@ private:
             case AstNode::Type::AssnIndex:
             case AstNode::Type::IncPost:
             case AstNode::Type::DecPost:
-            case AstNode::Type::ExprStructLit: {
-                // Slot[int] is the struct Slot, so the file's name lands on Slot.
+                take(n.value);
+                break;
+            case AstNode::Type::ExprStructLit:
+            case AstNode::Type::ExprEnumLit: {
+                // Slot[int] / Option[int]: the file's name lands on Slot / Option.
                 size_t br = n.value.find('[');
                 std::string base = br == std::string::npos ? n.value : n.value.substr(0, br);
                 if (bareName(base) && !locals.count(base) && ownsName(base)) {
@@ -1523,11 +1565,15 @@ private:
                 }
                 break;
             }
-            case AstNode::Type::ExprEnumLit:
-                take(n.value);
-                break;
             case AstNode::Type::SwitchCase:
-                if (n.caseIsEnum) take(n.value);
+                if (n.caseIsEnum) {
+                    size_t br = n.value.find('[');
+                    std::string base = br == std::string::npos ? n.value : n.value.substr(0, br);
+                    if (bareName(base) && !locals.count(base) && ownsName(base)) {
+                        n.value = filePrefix_ + "." + base +
+                                  (br == std::string::npos ? std::string() : n.value.substr(br));
+                    }
+                }
                 break;
             default:
                 break;
@@ -3312,6 +3358,13 @@ private:
 
     AstNode applyIndexAndDotPostfix(AstNode cur) {
         for (;;) {
+            // Option[int].None: the '[' names a type, not an index.
+            if (cur.type == AstNode::Type::ExprVarRef &&
+                enumTypeParams_.count(typeAppBase(cur.value)) &&
+                peek().type == TokenType::LBracket && looksLikeTypeAt(pos_ + 1)) {
+                cur.value += parseTypeArgs();
+                continue;
+            }
             if (match(TokenType::LBracket)) {
                 cur = parseIndexOrSliceOn(std::move(cur));
                 // ops["dbl"](21), fs[0](4): a closure out of a map or slice, called.
@@ -3328,10 +3381,11 @@ private:
         }
         if (cur.type == AstNode::Type::ExprMember && !cur.isArrowMember &&
             peek().type == TokenType::LBrace && !cur.children.empty() &&
-            cur.children[0].type == AstNode::Type::ExprVarRef &&
-            enumFields_.count(cur.children[0].value) &&
-            enumFields_[cur.children[0].value].count(cur.value)) {
-            cur = parseEnumPayloadLit(std::move(cur));
+            cur.children[0].type == AstNode::Type::ExprVarRef) {
+            const std::string base = typeAppBase(cur.children[0].value);
+            if (enumFields_.count(base) && enumFields_[base].count(cur.value)) {
+                cur = parseEnumPayloadLit(std::move(cur));
+            }
         }
         return cur;
     }
@@ -3341,7 +3395,7 @@ private:
     AstNode parseEnumPayloadLit(AstNode member) {
         const std::string en = member.children[0].value;
         const std::string variant = member.value;
-        const auto& fields = enumFields_[en][variant];
+        const auto& fields = enumFields_[typeAppBase(en)][variant];
         if (!match(TokenType::LBrace)) {
             throw std::runtime_error("Expected '{' after " + en + "." + variant + " at line " + std::to_string(peek().line));
         }
