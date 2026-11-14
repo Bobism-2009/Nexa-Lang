@@ -92,6 +92,7 @@ struct AstNode {
                       EnumDef,
                       EnumVariant,   // one variant that holds fields; value = variant, paramNames/paramTypes = fields
                       ShapeDef,
+                      TypeAlias,     // type Id = int; value = name, declType = the type it names
                       ExprMember,
                       AssnMember,
                       InlineCpp };
@@ -355,6 +356,13 @@ public:
                 // `shape` is a word only in this position, so a variable or a
                 // function of that name still parses as it always has.
                 ast.push_back(parseShape());
+            } else if (t.type == TokenType::Identifier && t.value == "type" &&
+                       pos_ + 2 < tokens_.size() &&
+                       tokens_[pos_ + 1].type == TokenType::Identifier &&
+                       tokens_[pos_ + 2].type == TokenType::Assign) {
+                // `type` is a word only here, so os.type and a variable named
+                // type still parse as they always have.
+                ast.push_back(parseTypeAlias());
             } else if (t.type == TokenType::Let) {
                 ast.push_back(parseVariable());
             } else if (t.type == TokenType::InlineCppBlock) {
@@ -397,10 +405,14 @@ private:
     std::string filePrefix_;
     std::map<std::string, std::string> ownedPrefixes_;
     std::map<std::string, std::string>* filePrefixes_;
-    std::set<std::string> ownFns_, ownStructs_, ownEnums_, ownGlobals_, ownShapes_;
+    std::set<std::string> ownFns_, ownStructs_, ownEnums_, ownGlobals_, ownShapes_, ownAliases_;
     std::set<std::string> structNames_;
     std::map<std::string, std::set<std::string>> structFieldNames_;
     std::set<std::string> enumNames_;
+    // type Id = int: Id stands for int everywhere a type is written. Expanded
+    // here so the rest of the compiler never sees the alias.
+    std::map<std::string, std::string> typeAliases_;
+    std::string definingAlias_;
     // Variant -> fields, only for a variant that holds some. A plain Color.Red
     // is not in here, so a '{' after it is still not part of the value.
     std::map<std::string, std::map<std::string, std::vector<std::pair<std::string, std::string>>>> enumFields_;
@@ -663,6 +675,14 @@ private:
             }
             advance();
             std::string q = v + "." + part.value;
+            if (typeAliases_.count(q)) {
+                if (peek().type == TokenType::LBracket && pos_ + 1 < tokens_.size() &&
+                    tokens_[pos_ + 1].type != TokenType::Number) {
+                    throw std::runtime_error("'" + q + "' is a name for a type; it does not take [...] at line " +
+                        std::to_string(peek().line));
+                }
+                return typeAliases_.at(q);
+            }
             if (shapeNames_.count(q)) return "shape:" + q;
             if (enumNames_.count(q)) return enumTypeWithArgs(q);
             return structTypeWithArgs(q);
@@ -704,9 +724,20 @@ private:
             }
             return "json";
         }
+        if (typeAliases_.count(v)) {
+            if (peek().type == TokenType::LBracket && pos_ + 1 < tokens_.size() &&
+                tokens_[pos_ + 1].type != TokenType::Number) {
+                throw std::runtime_error("'" + v + "' is a name for a type; it does not take [...] at line " +
+                    std::to_string(peek().line));
+            }
+            return typeAliases_.at(v);
+        }
         if (shapeNames_.count(v)) return "shape:" + v;
         if (enumNames_.count(v)) return enumTypeWithArgs(v);
         if (typeParamScope_.count(v)) return "typevar:" + v;
+        if (!definingAlias_.empty() && v == definingAlias_) {
+            throw std::runtime_error("'" + v + "' names itself at line " + std::to_string(t.line));
+        }
         return structTypeWithArgs(v);
     }
 
@@ -758,6 +789,9 @@ private:
                 if (!n.typeParams.empty()) enumTypeParams_[n.value] = n.typeParams;
             }
             else if (n.type == AstNode::Type::ShapeDef) shapeNames_.insert(n.value);
+            else if (n.type == AstNode::Type::TypeAlias) {
+                typeAliases_[n.value] = n.declType;
+            }
         }
     }
 
@@ -787,7 +821,7 @@ private:
             return true;
         }
         return structNames_.count(v) != 0 || enumNames_.count(v) != 0 || shapeNames_.count(v) != 0 ||
-               typeParamScope_.count(v) != 0;
+               typeAliases_.count(v) != 0 || typeParamScope_.count(v) != 0;
     }
 
     bool looksLikeType() const {
@@ -881,7 +915,8 @@ private:
         if (sname == "main") {
             throw std::runtime_error("Invalid shape name 'main' at line " + std::to_string(line));
         }
-        if (structNames_.count(sname) || enumNames_.count(sname) || shapeNames_.count(sname)) {
+        if (structNames_.count(sname) || enumNames_.count(sname) || shapeNames_.count(sname) ||
+            typeAliases_.count(sname)) {
             throw std::runtime_error("Duplicate type name '" + sname + "' at line " + std::to_string(line));
         }
         shapeNames_.insert(sname);
@@ -994,7 +1029,7 @@ private:
         if (sname == "main") {
             throw std::runtime_error("Invalid struct name 'main' at line " + std::to_string(line));
         }
-        if (shapeNames_.count(sname)) {
+        if (shapeNames_.count(sname) || typeAliases_.count(sname)) {
             throw std::runtime_error("Duplicate type name '" + sname + "' at line " + std::to_string(line));
         }
         structNames_.insert(sname);
@@ -1082,7 +1117,7 @@ private:
         if (ename == "main") {
             throw std::runtime_error("Invalid enum name 'main' at line " + std::to_string(line));
         }
-        if (shapeNames_.count(ename)) {
+        if (shapeNames_.count(ename) || typeAliases_.count(ename)) {
             throw std::runtime_error("Duplicate type name '" + ename + "' at line " + std::to_string(line));
         }
         enumNames_.insert(ename);
@@ -1160,6 +1195,56 @@ private:
         node.typeParams = std::move(typeParams);
         if (!node.typeParams.empty()) typeParamScope_.clear();
         match(TokenType::Semicolon);
+        return node;
+    }
+
+    // type Id = int; Id is that type wherever a type is written. The name is
+    // expanded here, so a program that never writes type is unchanged later.
+    AstNode parseTypeAlias() {
+        size_t line = peek().line;
+        if (peek().type != TokenType::Identifier || peek().value != "type") {
+            throw std::runtime_error("Expected 'type' at line " + std::to_string(line));
+        }
+        advance();
+        const Token& nameTok = peek();
+        if (nameTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected a name after type at line " + std::to_string(nameTok.line));
+        }
+        const std::string name = nameTok.value;
+        advance();
+        if (name == "main") {
+            throw std::runtime_error("Invalid type name 'main' at line " + std::to_string(line));
+        }
+        if (isBuiltinTypeName(name) || name == "float64") {
+            throw std::runtime_error("'" + name + "' is already a type at line " + std::to_string(line));
+        }
+        if (structNames_.count(name) || enumNames_.count(name) || shapeNames_.count(name) ||
+            typeAliases_.count(name)) {
+            throw std::runtime_error("Duplicate type name '" + name + "' at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Assign)) {
+            throw std::runtime_error("Expected '=' after the type name at line " + std::to_string(peek().line));
+        }
+        definingAlias_ = name;
+        std::string ty;
+        try {
+            ty = parseTypeName();
+        } catch (...) {
+            definingAlias_.clear();
+            throw;
+        }
+        definingAlias_.clear();
+        if (ty == "void") {
+            throw std::runtime_error("a type name cannot be void at line " + std::to_string(line));
+        }
+        if (!match(TokenType::Semicolon)) {
+            throw std::runtime_error("Expected ';' after the type at line " + std::to_string(peek().line));
+        }
+        typeAliases_[name] = ty;
+        AstNode node{AstNode::Type::TypeAlias, name, {}};
+        node.declType = std::move(ty);
+        node.line = line;
+        node.srcFile = currentFilePath_;
         return node;
     }
 
@@ -1471,7 +1556,8 @@ private:
     }
 
     bool ownsName(const std::string& s) const {
-        return ownFns_.count(s) || ownStructs_.count(s) || ownEnums_.count(s) || ownGlobals_.count(s);
+        return ownFns_.count(s) || ownStructs_.count(s) || ownEnums_.count(s) || ownGlobals_.count(s) ||
+               ownAliases_.count(s);
     }
 
     std::string qualifyTypeStr(const std::string& t) const {
@@ -1636,6 +1722,7 @@ private:
         ownEnums_.clear();
         ownGlobals_.clear();
         ownShapes_.clear();
+        ownAliases_.clear();
         for (AstNode& n : ast) {
             if (foreignFile(n)) continue;
             if (n.type == AstNode::Type::MainFunction) {
@@ -1653,6 +1740,17 @@ private:
             } else if (n.type == AstNode::Type::ShapeDef && bareName(n.value)) {
                 ownShapes_.insert(n.value);
                 n.value = filePrefix_ + "." + n.value;
+            } else if (n.type == AstNode::Type::TypeAlias && bareName(n.value)) {
+                ownAliases_.insert(n.value);
+                // Uses already expanded to the real type. The alias name itself
+                // is prefixed so the parent can write lib.Id.
+                std::string old = n.value;
+                n.value = filePrefix_ + "." + n.value;
+                auto it = typeAliases_.find(old);
+                if (it != typeAliases_.end()) {
+                    typeAliases_[n.value] = it->second;
+                    typeAliases_.erase(it);
+                }
             } else if (n.type == AstNode::Type::Variable && bareName(n.value)) {
                 ownGlobals_.insert(n.value);
                 n.value = filePrefix_ + "." + n.value;
@@ -1941,7 +2039,8 @@ private:
             if (t.type != TokenType::Identifier) {
                 throw std::runtime_error("Expected a type name at line " + std::to_string(t.line));
             }
-            if (isBuiltinTypeName(t.value)) {
+            if (isBuiltinTypeName(t.value) || typeAliases_.count(t.value) ||
+                structNames_.count(t.value) || enumNames_.count(t.value) || shapeNames_.count(t.value)) {
                 throw std::runtime_error("'" + t.value + "' is already a type at line " + std::to_string(t.line));
             }
             if (!typeParamScope_.insert(t.value).second) {

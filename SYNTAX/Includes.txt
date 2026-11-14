@@ -117,3 +117,4 @@ FILE INCLUDES (quotes)
     A struct that names a type is lib.Slot. The value is lib.Slot { value: 1 }.
     An enum is named the same way. A variant with fields is lib.Event.Click { x: 1 }.
     An enum that names a type is lib.Option. The value is lib.Option.Some { value: 1 }.
+    A type alias is lib.Id. It still means the type on the right.

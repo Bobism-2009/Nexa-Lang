@@ -106,6 +106,17 @@ SHAPES
   - A function that takes a shape is not a value you can pass around. The
     struct is chosen at the call.
 
+TYPE ALIASES
+  type Id = int;
+  type Bag = map[string]Option[int];
+  type SlotInt = Slot[int];
+  - Id is still an int. Bag is still that map. The short name is for writing;
+    the program means the type on the right.
+  - Write the alias before you use it. It does not take [T] of its own.
+  - `type` is a word only in this place, so os.type and a variable named type
+    are unchanged.
+  - A program that never writes type is unchanged.
+
 ENUMS
   enum Name {
     VariantA;

@@ -5390,6 +5390,11 @@ private:
                 at = saved;
                 return;
             }
+            // The alias was expanded at parse time. The node is only a name.
+            if (n.type == AstNode::Type::TypeAlias) {
+                at = saved;
+                return;
+            }
             if (n.type == AstNode::Type::Function || n.type == AstNode::Type::MainFunction) {
                 nexaDeclStack_.push_back({});
                 if (n.type == AstNode::Type::MainFunction) {
