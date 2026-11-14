@@ -121,6 +121,7 @@ struct AstNode {
     bool isArrowMember = false; // for ExprMember: true = ptr->field, false = value.field
     std::string arraySize = ""; // for Variable: size for fixed array, e.g. "4080"
     std::string fnReturnType = ""; // Function / MainFunction: explicit ": type" before `{`; empty = infer from returns
+    std::vector<std::string> typeParams; // Function: names in fn first[T], empty when the function names no type
     bool isExtern = false;         // Function: true = extern fn (C linkage declaration, no body)
     bool isVariadic = false;       // Function: true = trailing ... (C varargs)
     std::string receiverType = ""; // Function: "struct:Point" when this is a method inside a struct
@@ -392,6 +393,9 @@ private:
     std::map<std::string, std::set<std::string>> structFieldNames_;
     std::set<std::string> enumNames_;
     std::set<std::string> shapeNames_;
+    // Type names of the function currently being parsed (fn first[T]).
+    // Empty for every other type, so a program with no [T] parses as before.
+    std::set<std::string> typeParamScope_;
     // Recursive-descent depth across expressions and statement bodies combined.
     // Without a cap, pathological nesting (hundreds of parens or braces)
     // overflows the C++ stack and segfaults the compiler instead of erroring.
@@ -640,6 +644,7 @@ private:
         }
         if (shapeNames_.count(v)) return "shape:" + v;
         if (enumNames_.count(v)) return "enum:" + v;
+        if (typeParamScope_.count(v)) return "typevar:" + v;
         return "struct:" + v;
     }
 
@@ -702,7 +707,8 @@ private:
             v == "Result" || v == "result") {
             return true;
         }
-        return structNames_.count(v) != 0 || enumNames_.count(v) != 0 || shapeNames_.count(v) != 0;
+        return structNames_.count(v) != 0 || enumNames_.count(v) != 0 || shapeNames_.count(v) != 0 ||
+               typeParamScope_.count(v) != 0;
     }
 
     bool looksLikeType() const {
@@ -932,6 +938,10 @@ private:
                         throw std::runtime_error("Method '" + meth.value + "' collides with field '" + f +
                             "' at line " + std::to_string(line));
                     }
+                }
+                if (!meth.typeParams.empty()) {
+                    throw std::runtime_error("a method cannot name a type; write a function, at line " +
+                        std::to_string(line));
                 }
                 meth.receiverType = "struct:" + sname;
                 node.children.push_back(std::move(meth));
@@ -1684,6 +1694,10 @@ private:
         if (name == "main") {
             throw std::runtime_error("Use fn main() for entry point at line " + std::to_string(line));
         }
+        std::vector<std::string> typeParams;
+        if (peek().type == TokenType::LBracket) {
+            typeParams = parseTypeParams(line);
+        }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
         }
@@ -1737,11 +1751,51 @@ private:
         fnNode.paramTypes = std::move(types);
         fnNode.paramHasDefault = std::move(hasDefault);
         fnNode.paramDefaults = std::move(defaults);
+        fnNode.typeParams = std::move(typeParams);
         fnNode.children = parseBlock();
+        typeParamScope_.clear();
         if (!match(TokenType::RBrace)) {
             throw std::runtime_error("Expected '}' at line " + std::to_string(peek().line));
         }
         return fnNode;
+    }
+
+    // fn first[T] and fn put[K, V]. The names are types until the function ends.
+    std::vector<std::string> parseTypeParams(size_t line) {
+        if (!match(TokenType::LBracket)) {
+            throw std::runtime_error("Expected '[' at line " + std::to_string(line));
+        }
+        if (peek().type == TokenType::RBracket) {
+            throw std::runtime_error("Expected a type name at line " + std::to_string(peek().line));
+        }
+        std::vector<std::string> names;
+        typeParamScope_.clear();
+        for (;;) {
+            const Token& t = peek();
+            if (t.type != TokenType::Identifier) {
+                throw std::runtime_error("Expected a type name at line " + std::to_string(t.line));
+            }
+            if (isBuiltinTypeName(t.value)) {
+                throw std::runtime_error("'" + t.value + "' is already a type at line " + std::to_string(t.line));
+            }
+            if (!typeParamScope_.insert(t.value).second) {
+                throw std::runtime_error("Duplicate type name '" + t.value + "' at line " + std::to_string(t.line));
+            }
+            names.push_back(t.value);
+            advance();
+            if (!match(TokenType::Comma) || peek().type == TokenType::RBracket) break;
+        }
+        if (!match(TokenType::RBracket)) {
+            throw std::runtime_error("Expected ']' after the type name at line " + std::to_string(peek().line));
+        }
+        return names;
+    }
+
+    static bool isBuiltinTypeName(const std::string& v) {
+        return v == "int" || v == "short" || v == "long" || v == "size_t" || v == "string" ||
+               v == "bool" || v == "float" || v == "float32" || v == "char" || v == "void" ||
+               v == "unsigned" || v == "map" || v == "Result" || v == "result" ||
+               v == "Json" || v == "json";
     }
 
     AstNode parseExternFunction() {

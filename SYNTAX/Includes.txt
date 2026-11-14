@@ -113,3 +113,4 @@ FILE INCLUDES (quotes)
     and #include <pkg/module> as wire names it wire.
     An included file cannot declare fn main.
     A shape is named the same way: from outside it is lib.Drawable.
+    A function that names a type is lib.first. The type name stays T.

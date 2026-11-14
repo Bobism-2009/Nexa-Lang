@@ -915,6 +915,7 @@ public:
         // Before any struct is emitted: a method parameter that names a shape
         // would otherwise fail while writing the C++ type.
         semCheckShapePlaces();
+        semCheckTypeParams();
         analyzeParamPassing();
 
         // A struct that keys a map needs an order (std::map sorts its keys): field by
@@ -1204,37 +1205,47 @@ public:
                 }
                 const std::vector<ShapeSpec>* shapeSpecs = nullptr;
                 size_t specCount = 1;
-                if (fnHasShapeParams(node)) {
+                if (fnHasShapeParams(node) || fnHasTypeParams(node)) {
                     shapeSpecs = shapeSpecsForAst(astIdx);
                     if (!shapeSpecs) continue;
                     specCount = shapeSpecs->size();
                 }
                 for (size_t spi = 0; spi < specCount; ++spi) {
-                    if (shapeSpecs) {
+                    AstNode rewritten;
+                    const AstNode* emitPtr = &node;
+                    if (shapeSpecs && !(*shapeSpecs)[spi].subst.empty()) {
+                        rewritten = node;
+                        substTypeTree(rewritten, (*shapeSpecs)[spi].subst);
+                        auto by = paramByRef_.find(&node);
+                        if (by != paramByRef_.end()) paramByRef_[&rewritten] = by->second;
+                        emitPtr = &rewritten;
+                    } else if (shapeSpecs) {
                         specAst_ = &node;
                         specTypes_ = (*shapeSpecs)[spi].types;
                     }
+                    const AstNode& fn = *emitPtr;
                     std::string cppName = shapeSpecs ? (*shapeSpecs)[spi].cppName : cppFnNameForAstIndex(astIdx);
                     bool hasValRet = false, hasVoidRet = false;
-                    stmtsClassifyReturns(node.children, hasValRet, hasVoidRet);
+                    stmtsClassifyReturns(fn.children, hasValRet, hasVoidRet);
                     std::string retCpp;
-                    if (!node.fnReturnType.empty()) {
-                        if (node.fnReturnType == "void") retCpp = "void";
-                        else                              retCpp = nexaTypeToCpp(node.fnReturnType);
+                    if (!fn.fnReturnType.empty()) {
+                        if (fn.fnReturnType == "void") retCpp = "void";
+                        else                              retCpp = nexaTypeToCpp(fn.fnReturnType);
                     } else {
                         retCpp = hasValRet ? "int" : "void";
                     }
                     out << ((buildDll_ && !shapeSpecs) ? "extern \"C\" NEXA_EXPORT " : "static ") << retCpp << " " << cppName << "(";
-                    for (size_t i = 0; i < node.paramNames.size(); i++) {
+                    for (size_t i = 0; i < fn.paramNames.size(); i++) {
                         if (i > 0) out << ", ";
                         std::string nexaT = "int";
-                        if (i < node.paramTypes.size() && !node.paramTypes[i].empty()) {
-                            nexaT = canonicalParamType(node, i);
+                        if (i < fn.paramTypes.size() && !fn.paramTypes[i].empty()) {
+                            nexaT = canonicalParamType(fn, i);
                         }
-                        out << (buildDll_ ? dllExportParamCpp(nexaT) : paramSigCpp(node, i));
+                        out << (buildDll_ ? dllExportParamCpp(nexaT) : paramSigCpp(fn, i));
                     }
                     out << ");\n";
                     wroteAnyProto = true;
+                    if (emitPtr != &node) paramByRef_.erase(emitPtr);
                     specAst_ = nullptr;
                     specTypes_.clear();
                 }
@@ -1269,38 +1280,47 @@ public:
                 if (node.isExtern) continue;
                 const std::vector<ShapeSpec>* shapeSpecs = nullptr;
                 size_t specCount = 1;
-                if (fnHasShapeParams(node)) {
+                if (fnHasShapeParams(node) || fnHasTypeParams(node)) {
                     shapeSpecs = shapeSpecsForAst(astIdx);
                     if (!shapeSpecs) continue;
                     specCount = shapeSpecs->size();
                 }
                 for (size_t spi = 0; spi < specCount; ++spi) {
-                if (shapeSpecs) {
+                AstNode rewritten;
+                const AstNode* emitPtr = &node;
+                if (shapeSpecs && !(*shapeSpecs)[spi].subst.empty()) {
+                    rewritten = node;
+                    substTypeTree(rewritten, (*shapeSpecs)[spi].subst);
+                    auto by = paramByRef_.find(&node);
+                    if (by != paramByRef_.end()) paramByRef_[&rewritten] = by->second;
+                    emitPtr = &rewritten;
+                } else if (shapeSpecs) {
                     specAst_ = &node;
                     specTypes_ = (*shapeSpecs)[spi].types;
                 }
+                const AstNode& fn = *emitPtr;
                 std::string cppName = shapeSpecs ? (*shapeSpecs)[spi].cppName : cppFnNameForAstIndex(astIdx);
                 bool hasValRet = false, hasVoidRet = false;
-                stmtsClassifyReturns(node.children, hasValRet, hasVoidRet);
+                stmtsClassifyReturns(fn.children, hasValRet, hasVoidRet);
                 if (hasValRet && hasVoidRet) {
-                    throw std::runtime_error("function '" + node.value + "' mixes 'return;' and 'return expr;'");
+                    throw std::runtime_error("function '" + fn.value + "' mixes 'return;' and 'return expr;'");
                 }
                 bool voidFn = false;
                 std::string retCpp;
-                if (!node.fnReturnType.empty()) {
-                    if (node.fnReturnType == "void") {
+                if (!fn.fnReturnType.empty()) {
+                    if (fn.fnReturnType == "void") {
                         if (hasValRet) {
-                            throw std::runtime_error("cannot return a value from void function '" + node.value + "'");
+                            throw std::runtime_error("cannot return a value from void function '" + fn.value + "'");
                         }
                         voidFn = true;
                         retCpp = "void";
                     } else {
                         if (hasVoidRet) {
                             throw std::runtime_error(
-                                "return with no value in function '" + node.value + "' that returns " + node.fnReturnType);
+                                "return with no value in function '" + fn.value + "' that returns " + fn.fnReturnType);
                         }
                         voidFn = false;
-                        retCpp = nexaTypeToCpp(node.fnReturnType);
+                        retCpp = nexaTypeToCpp(fn.fnReturnType);
                     }
                 } else {
                     voidFn = !hasValRet;
@@ -1310,64 +1330,65 @@ public:
                 std::map<std::string, std::string> varMap = globalVarMap;
                 int varIdx = 0;
                 std::vector<std::pair<std::string, std::string>> dllStringParams;
-                for (size_t i = 0; i < node.paramNames.size(); i++) {
+                for (size_t i = 0; i < fn.paramNames.size(); i++) {
                     if (i > 0) out << ", ";
-                    std::string pname = preserveNames_ ? preservedVarName(node.paramNames[i], varMap) : ("__nexa_param_" + std::to_string(i));
+                    std::string pname = preserveNames_ ? preservedVarName(fn.paramNames[i], varMap) : ("__nexa_param_" + std::to_string(i));
                     std::string nexaT = "int";
-                    if (i < node.paramTypes.size() && !node.paramTypes[i].empty()) {
-                        nexaT = canonicalParamType(node, i);
+                    if (i < fn.paramTypes.size() && !fn.paramTypes[i].empty()) {
+                        nexaT = canonicalParamType(fn, i);
                     }
                     if (buildDll_ && nexaT == "string") {
                         std::string cname = "__nexa_c_" + pname;
                         out << "const char* " << cname;
                         dllStringParams.push_back({pname, cname});
                     } else {
-                        out << paramSigCpp(node, i) << " " << pname;
+                        out << paramSigCpp(fn, i) << " " << pname;
                     }
-                    varMap[node.paramNames[i]] = pname;
+                    varMap[fn.paramNames[i]] = pname;
                 }
                 out << ") {\n";
                 for (const auto& sp : dllStringParams) {
                     out << "    std::string " << sp.first << " = " << sp.second << " ? " << sp.second << " : \"\";\n";
                 }
-                varIdx = static_cast<int>(node.paramNames.size());
+                varIdx = static_cast<int>(fn.paramNames.size());
                 std::map<std::string, bool> varIsString = globalVarIsString;
                 std::map<std::string, bool> varIsConst = globalVarIsConst;
                 std::map<std::string, bool> varIsFloat = globalVarIsFloat;
                 std::map<std::string, bool> varIsChar = globalVarIsChar;
                 std::map<std::string, bool> varIsBool = globalVarIsBool;
                 std::map<std::string, bool> varIsEnum = globalVarIsEnum;
-                for (size_t i = 0; i < node.paramNames.size(); i++) {
-                    bool isStr = (i < node.paramTypes.size() && node.paramTypes[i] == "string");
-                    varIsString[node.paramNames[i]] = isStr;
-                    varIsFloat[node.paramNames[i]] = (i < node.paramTypes.size() && nexaIsFloatType(node.paramTypes[i]));
-                    varIsChar[node.paramNames[i]] = (i < node.paramTypes.size() && node.paramTypes[i] == "char");
-                    varIsBool[node.paramNames[i]] = (i < node.paramTypes.size() && node.paramTypes[i] == "bool");
-                    varIsEnum[node.paramNames[i]] = (i < node.paramTypes.size() && isEnumDeclType(node.paramTypes[i]));
+                for (size_t i = 0; i < fn.paramNames.size(); i++) {
+                    bool isStr = (i < fn.paramTypes.size() && fn.paramTypes[i] == "string");
+                    varIsString[fn.paramNames[i]] = isStr;
+                    varIsFloat[fn.paramNames[i]] = (i < fn.paramTypes.size() && nexaIsFloatType(fn.paramTypes[i]));
+                    varIsChar[fn.paramNames[i]] = (i < fn.paramTypes.size() && fn.paramTypes[i] == "char");
+                    varIsBool[fn.paramNames[i]] = (i < fn.paramTypes.size() && fn.paramTypes[i] == "bool");
+                    varIsEnum[fn.paramNames[i]] = (i < fn.paramTypes.size() && isEnumDeclType(fn.paramTypes[i]));
                 }
                 varStructPush();
-                for (size_t i = 0; i < node.paramNames.size(); i++) {
-                    std::string pt = canonicalParamType(node, i);
+                for (size_t i = 0; i < fn.paramNames.size(); i++) {
+                    std::string pt = canonicalParamType(fn, i);
                     if (isStructDeclType(pt)) {
-                        varStructDeclare(node.paramNames[i], structNameFromDecl(pt));
+                        varStructDeclare(fn.paramNames[i], structNameFromDecl(pt));
                     }
                 }
                 nexaDeclStack_.push_back(globalNexaDecl_);
-                for (size_t i = 0; i < node.paramNames.size(); i++) {
-                    nexaDeclStack_.back()[node.paramNames[i]] = canonicalParamType(node, i);
+                for (size_t i = 0; i < fn.paramNames.size(); i++) {
+                    nexaDeclStack_.back()[fn.paramNames[i]] = canonicalParamType(fn, i);
                 }
                 emitFnRet_ = voidFn ? EmitFnRet::VoidFn : EmitFnRet::IntFn;
-                tryFnRet_ = node.fnReturnType; tryFnName_ = node.value; tryInMain_ = false;
-                inferredIntFn_ = (node.fnReturnType.empty() && hasValRet) ? node.value : std::string();
-                emitBlockStatements(out, node.children, varMap, varIdx, varIsString, varIsConst, varIsFloat,
+                tryFnRet_ = fn.fnReturnType; tryFnName_ = fn.value; tryInMain_ = false;
+                inferredIntFn_ = (fn.fnReturnType.empty() && hasValRet) ? fn.value : std::string();
+                emitBlockStatements(out, fn.children, varMap, varIdx, varIsString, varIsConst, varIsFloat,
                                     varIsChar, varIsBool, varIsEnum);
                 emitFnRet_ = EmitFnRet::Main;
                 tryInMain_ = true; tryFnRet_.clear(); tryFnName_.clear();
                 inferredIntFn_.clear();
                 nexaDeclStack_.pop_back();
                 varStructPop();
-                emitImplicitFnTail(out, node, hasValRet);
+                emitImplicitFnTail(out, fn, hasValRet);
                 out << "}\n\n";
+                if (emitPtr != &node) paramByRef_.erase(emitPtr);
                 specAst_ = nullptr;
                 specTypes_.clear();
                 }
@@ -1893,6 +1914,9 @@ private:
     struct ShapeSpec {
         std::vector<std::string> types;
         std::string cppName;
+        // When the function names a type (fn first[T]), each name's concrete type.
+        // Empty for a shape, and for every program that names no type.
+        std::map<std::string, std::string> subst;
     };
     std::map<size_t, std::vector<ShapeSpec>> shapeSpecs_;
     std::set<std::string> shapeSpecSeen_;
@@ -2514,6 +2538,10 @@ private:
             throw std::runtime_error("'" + name +
                 "' takes a shape, so the struct is chosen at the call; it cannot be passed as a value");
         }
+        if (fnHasTypeParams(fn)) {
+            throw std::runtime_error("'" + name +
+                "' names a type, so the type is chosen at the call; it cannot be passed as a value");
+        }
         return fnTypeFromFnAst(fn);
     }
 
@@ -2532,6 +2560,10 @@ private:
         if (fnHasShapeParams(ast_[fnOverloadSlots_[slot].astIndex])) {
             throw std::runtime_error("'" + name +
                 "' takes a shape, so the struct is chosen at the call; it cannot be passed as a value");
+        }
+        if (fnHasTypeParams(ast_[fnOverloadSlots_[slot].astIndex])) {
+            throw std::runtime_error("'" + name +
+                "' names a type, so the type is chosen at the call; it cannot be passed as a value");
         }
         return slot;
     }
@@ -2695,14 +2727,153 @@ private:
         if (isStructDeclType(u)) return p + structNameFromDecl(u);
         return p + u;
     }
-    std::string shapeSpecCppName(size_t slot, const AstNode& fn, const std::vector<std::string>& types) const {
+    static bool fnHasTypeParams(const AstNode& fn) { return !fn.typeParams.empty(); }
+    static bool isTypeVar(const std::string& t) {
+        return t.size() >= 8 && t.compare(0, 8, "typevar:") == 0;
+    }
+    static std::string typeVarName(const std::string& t) { return t.substr(8); }
+
+    // A C++ name for a concrete type: list_int, Result_string, map_string_int.
+    std::string typeFileTag(const std::string& t) const {
+        if (nexaIsSliceType(t)) return "list_" + typeFileTag(nexaSliceElem(t));
+        if (nexaIsResultType(t)) return "Result_" + typeFileTag(nexaResultInner(t));
+        if (nexaIsMapType(t)) {
+            std::string k, v;
+            if (nexaSplitMapType(t, k, v)) return "map_" + typeFileTag(k) + "_" + typeFileTag(v);
+        }
+        if (isPointerType(t)) return "p_" + typeFileTag(pointerPointeeType(t));
+        std::string s = isStructDeclType(t) ? structNameFromDecl(t) : (isEnumDeclType(t) ? enumNameFromDecl(t) : t);
+        std::string o;
+        for (char c : s) {
+            unsigned char u = (unsigned char)c;
+            o += (std::isalnum(u) || c == '_') ? c : '_';
+        }
+        return o.empty() ? std::string("t") : o;
+    }
+
+    static void substTypeStr(std::string& t, const std::map<std::string, std::string>& b) {
+        if (t.find("typevar:") == std::string::npos) return;
+        std::string out;
+        for (size_t i = 0; i < t.size();) {
+            if (t.compare(i, 8, "typevar:") == 0) {
+                size_t k = i + 8;
+                while (k < t.size() && (std::isalnum((unsigned char)t[k]) || t[k] == '_')) k++;
+                std::string name = t.substr(i + 8, k - (i + 8));
+                auto it = b.find(name);
+                out += it == b.end() ? t.substr(i, k - i) : it->second;
+                i = k;
+            } else {
+                out += t[i++];
+            }
+        }
+        t = std::move(out);
+    }
+    static void substTypeTree(AstNode& n, const std::map<std::string, std::string>& b) {
+        substTypeStr(n.declType, b);
+        substTypeStr(n.fnReturnType, b);
+        substTypeStr(n.receiverType, b);
+        for (std::string& p : n.paramTypes) substTypeStr(p, b);
+        for (AstNode& c : n.children) substTypeTree(c, b);
+        for (AstNode& d : n.paramDefaults) substTypeTree(d, b);
+    }
+
+    // Bind each type name from the arguments. T in []T, map[K]V, Result[T], *T, or T itself.
+    bool unifyType(const std::string& formal, const std::string& actual,
+                   std::map<std::string, std::string>& b, std::string& fail) const {
+        if (isTypeVar(formal)) {
+            const std::string name = typeVarName(formal);
+            auto it = b.find(name);
+            if (it != b.end()) {
+                if (it->second != actual) {
+                    fail = name + " is " + it->second + " and " + actual;
+                    return false;
+                }
+                return true;
+            }
+            if (actual.empty() || isTypeVar(actual)) {
+                fail = name + " has no value to take its type from";
+                return false;
+            }
+            b[name] = actual;
+            return true;
+        }
+        if (formal.find("typevar:") == std::string::npos) {
+            return formal == actual || typesMatchForOverload(formal, actual);
+        }
+        if (nexaIsSliceType(formal) && nexaIsSliceType(actual)) {
+            return unifyType(nexaSliceElem(formal), nexaSliceElem(actual), b, fail);
+        }
+        if (isPointerType(formal) && isPointerType(actual)) {
+            return unifyType(pointerPointeeType(formal), pointerPointeeType(actual), b, fail);
+        }
+        if (nexaIsResultType(formal) && nexaIsResultType(actual)) {
+            return unifyType(nexaResultInner(formal), nexaResultInner(actual), b, fail);
+        }
+        if (nexaIsMapType(formal) && nexaIsMapType(actual)) {
+            std::string fk, fv, ak, av;
+            if (!nexaSplitMapType(formal, fk, fv) || !nexaSplitMapType(actual, ak, av)) {
+                fail = formal + " and " + actual;
+                return false;
+            }
+            return unifyType(fk, ak, b, fail) && unifyType(fv, av, b, fail);
+        }
+        if (nexaIsFnType(formal) && nexaIsFnType(actual)) {
+            std::vector<std::string> fp, ap;
+            std::string fr, ar;
+            if (!nexaSplitFnType(formal, fp, fr) || !nexaSplitFnType(actual, ap, ar) || fp.size() != ap.size()) {
+                fail = formal + " and " + actual;
+                return false;
+            }
+            for (size_t i = 0; i < fp.size(); i++) {
+                if (!unifyType(fp[i], ap[i], b, fail)) return false;
+            }
+            return unifyType(fr.empty() ? "int" : fr, ar.empty() ? "int" : ar, b, fail);
+        }
+        fail = formal + " and " + actual;
+        return false;
+    }
+    bool unifyFn(const AstNode& fn, const std::vector<std::string>& argT,
+                 std::map<std::string, std::string>& b, std::string& fail) const {
+        const size_t chk = argT.size() < fn.paramNames.size() ? argT.size() : fn.paramNames.size();
+        for (size_t i = 0; i < chk; i++) {
+            if (!unifyType(writtenParamType(fn, i), argT[i], b, fail)) return false;
+        }
+        for (const std::string& name : fn.typeParams) {
+            if (!b.count(name)) {
+                fail = name + " has no value to take its type from";
+                return false;
+            }
+        }
+        return true;
+    }
+    std::vector<std::string> appliedParamTypes(const AstNode& fn,
+                                               const std::map<std::string, std::string>& b) const {
+        std::vector<std::string> types;
+        for (size_t i = 0; i < fn.paramNames.size(); i++) {
+            std::string formal = writtenParamType(fn, i);
+            substTypeStr(formal, b);
+            types.push_back(std::move(formal));
+        }
+        return types;
+    }
+
+    std::string shapeSpecCppName(size_t slot, const AstNode& fn, const std::vector<std::string>& types,
+                                 const std::map<std::string, std::string>& subst = {}) const {
         if (preserveNames_) {
             std::string n = cppSafeName(fn.value);
-            for (size_t i = 0; i < types.size(); i++) {
-                std::string formal = (i < fn.paramTypes.size() && !fn.paramTypes[i].empty()) ? fn.paramTypes[i] : "int";
-                if (!isShapeFormal(formal)) continue;
-                n += "__";
-                n += cppSafeName(concreteTag(types[i]));
+            if (!fn.typeParams.empty()) {
+                for (const std::string& p : fn.typeParams) {
+                    auto it = subst.find(p);
+                    n += "__";
+                    n += cppSafeName(it == subst.end() ? p : typeFileTag(it->second));
+                }
+            } else {
+                for (size_t i = 0; i < types.size(); i++) {
+                    std::string formal = (i < fn.paramTypes.size() && !fn.paramTypes[i].empty()) ? fn.paramTypes[i] : "int";
+                    if (!isShapeFormal(formal)) continue;
+                    n += "__";
+                    n += cppSafeName(concreteTag(types[i]));
+                }
             }
             return n;
         }
@@ -2742,7 +2913,8 @@ private:
     void noteShapeCall(const AstNode& e) {
         bool any = false;
         for (const FnOverloadSlot& sl : fnOverloadSlots_) {
-            if (sl.name == e.value && fnHasShapeParams(ast_[sl.astIndex])) { any = true; break; }
+            const AstNode& cand = ast_[sl.astIndex];
+            if (sl.name == e.value && (fnHasShapeParams(cand) || fnHasTypeParams(cand))) { any = true; break; }
         }
         if (!any) return;
         std::vector<std::string> argT;
@@ -2755,31 +2927,45 @@ private:
             semError(e, ex.what());
         }
         const AstNode& fn = ast_[fnOverloadSlots_[slot].astIndex];
-        if (!fnHasShapeParams(fn)) return;
-        std::vector<std::string> types = shapeSubstTypes(fn, argT);
+        if (!fnHasShapeParams(fn) && !fnHasTypeParams(fn)) return;
+        std::map<std::string, std::string> subst;
+        std::vector<std::string> types;
+        if (fnHasTypeParams(fn)) {
+            std::string why;
+            if (!unifyFn(fn, argT, subst, why)) semError(e, why);
+            types = appliedParamTypes(fn, subst);
+        } else {
+            types = shapeSubstTypes(fn, argT);
+        }
         std::string key = std::to_string(slot);
         for (const std::string& t : types) { key.push_back('\n'); key += t; }
         if (!shapeSpecSeen_.insert(key).second) return;
-        shapeSpecs_[slot].push_back(ShapeSpec{types, shapeSpecCppName(slot, fn, types)});
+        shapeSpecs_[slot].push_back(ShapeSpec{types, shapeSpecCppName(slot, fn, types, subst), subst});
         for (const AstNode& d : fn.paramDefaults) discoverNode(d);
         discoverSpecialized(fn, types);
     }
     void discoverShapes() {
-        if (shapes_.empty()) return;
+        bool anyType = false;
+        if (shapes_.empty()) {
+            for (const AstNode& n : ast_) {
+                if (fnHasTypeParams(n)) { anyType = true; break; }
+            }
+            if (!anyType) return;
+        }
         nexaDeclStack_.clear();
         nexaDeclStack_.push_back(globalNexaDecl_);
         for (const AstNode& node : ast_) {
             if (node.type == AstNode::Type::Variable) {
                 for (const AstNode& c : node.children) discoverNode(c);
             } else if (node.type == AstNode::Type::Function && !node.isExtern &&
-                       node.receiverType.empty() && !fnHasShapeParams(node)) {
+                       node.receiverType.empty() && !fnHasShapeParams(node) && !fnHasTypeParams(node)) {
                 discoverFunction(node);
             } else if (node.type == AstNode::Type::MainFunction) {
                 discoverFunction(node);
             } else if (node.type == AstNode::Type::StructDef) {
                 for (const AstNode& d : node.paramDefaults) discoverNode(d);
                 for (const AstNode& m : node.children) {
-                    if (m.type == AstNode::Type::Function && !fnHasShapeParams(m)) discoverFunction(m);
+                    if (m.type == AstNode::Type::Function && !fnHasShapeParams(m) && !fnHasTypeParams(m)) discoverFunction(m);
                 }
             }
         }
@@ -2879,6 +3065,16 @@ private:
             const bool variadic = ast_[sl.astIndex].isVariadic;
             if (k < sl.minArgs) continue;
             if (!variadic && k > sl.paramTypes.size()) continue;
+            if (fnHasTypeParams(ast_[sl.astIndex])) {
+                std::map<std::string, std::string> binds;
+                std::string why;
+                if (!unifyFn(ast_[sl.astIndex], actualArgTypes, binds, why)) {
+                    if (shapeFail.empty() && !why.empty()) shapeFail = why;
+                    continue;
+                }
+                compat.push_back(s);
+                continue;
+            }
             bool ok = true;
             const size_t chk = k < sl.paramTypes.size() ? k : sl.paramTypes.size();
             for (size_t i = 0; i < chk; ++i) {
@@ -3541,7 +3737,15 @@ private:
                 argT.reserve(e.children.size());
                 for (const AstNode& a : e.children) argT.push_back(inferExprNexaType(a));
                 size_t slot = resolveOverload(e.value, argT, e.srcFile);
-                return inferReturnNexaType(ast_[fnOverloadSlots_[slot].astIndex]);
+                const AstNode& called = ast_[fnOverloadSlots_[slot].astIndex];
+                std::string ret = inferReturnNexaType(called);
+                if (fnHasTypeParams(called)) {
+                    std::map<std::string, std::string> binds;
+                    std::string why;
+                    if (!unifyFn(called, argT, binds, why)) throw std::runtime_error(why);
+                    substTypeStr(ret, binds);
+                }
+                return ret;
             }
             // Integer operands keep their width through an operation: `long + 1` is a long,
             // not an int. Collapsing it to "int" made every consumer of the inferred type
@@ -4100,8 +4304,17 @@ private:
         const FnOverloadSlot& sl = fnOverloadSlots_[slot];
         const AstNode& fn = ast_[sl.astIndex];
         std::string name = cppFnUseName(slot);
-        if (fnHasShapeParams(fn)) {
-            const ShapeSpec* sp = findShapeSpec(slot, shapeSubstTypes(fn, argT));
+        if (fnHasShapeParams(fn) || fnHasTypeParams(fn)) {
+            std::vector<std::string> specTypes;
+            if (fnHasTypeParams(fn)) {
+                std::map<std::string, std::string> binds;
+                std::string why;
+                if (!unifyFn(fn, argT, binds, why)) throw std::runtime_error(why);
+                specTypes = appliedParamTypes(fn, binds);
+            } else {
+                specTypes = shapeSubstTypes(fn, argT);
+            }
+            const ShapeSpec* sp = findShapeSpec(slot, specTypes);
             if (!sp) {
                 std::string msg = "'" + e.value + "' has no compiled form for this struct";
                 if (!e.srcFile.empty()) msg = e.srcFile + ": " + msg;
@@ -4591,6 +4804,28 @@ private:
             for (const AstNode& c : n.children) visit(c);
         };
         for (const AstNode& n : ast_) visit(n);
+    }
+
+    // A type name is chosen by the arguments. It has no default, and it is
+    // not also a shape. A program that names no type never enters here.
+    void semCheckTypeParams() {
+        bool any = false;
+        for (const AstNode& n : ast_) {
+            if (fnHasTypeParams(n)) { any = true; break; }
+        }
+        if (!any) return;
+        for (const AstNode& n : ast_) {
+            if (!fnHasTypeParams(n)) continue;
+            if (fnHasShapeParams(n)) {
+                semError(n, "'" + n.value + "' names a type and a shape");
+            }
+            for (size_t i = 0; i < n.paramTypes.size(); i++) {
+                if (n.paramTypes[i].find("typevar:") == std::string::npos) continue;
+                if (i < n.paramHasDefault.size() && n.paramHasDefault[i]) {
+                    semError(n, "a type parameter has no default; the type is chosen at the call");
+                }
+            }
+        }
     }
 
     void checkSemantics() {
@@ -6152,6 +6387,12 @@ private:
         return "int";
     }
     std::string nexaTypeToCpp(const std::string& t) const {
+        if (t.find("typevar:") != std::string::npos) {
+            size_t p = t.find("typevar:");
+            size_t b = p + 8, e = b;
+            while (e < t.size() && (std::isalnum((unsigned char)t[e]) || t[e] == '_')) e++;
+            throw std::runtime_error(t.substr(b, e - b) + " has no value to take its type from");
+        }
         if (isShapeType(t) || (isPointerType(t) && isShapeType(pointerPointeeType(t)))) {
             const std::string n = isShapeType(t) ? shapeNameFromDecl(t) : shapeNameFromDecl(pointerPointeeType(t));
             throw std::runtime_error(n + " names functions, so it is not a value you can store");

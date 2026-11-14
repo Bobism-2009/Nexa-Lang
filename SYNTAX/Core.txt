@@ -132,6 +132,17 @@ FUNCTIONS
   - Defaults: write = expr after the type (or after the name if untyped). Once one parameter
     has a default, every following parameter must also have a default.
   - Defaults are filled in at the call site (omitted args use the default expressions).
+  TYPE PARAMETERS
+    fn first[T](xs: []T): T { return xs[0]; }
+    fn get[V](m: map[string]V, k: string): V { return m[k]; }
+    fn value[T](r: Result[T]): T { return r.value(); }
+    - The type is taken from the arguments. first of a list of ints and first
+      of a list of strings are two functions. The call is direct.
+    - Write the return type when it is the named type. T, []T, *T, map[K]V
+      and Result[T] are the places the name can stand.
+    - A method cannot name a type. Write a function.
+    - A program that never writes [T] is unchanged.
+
   - Return type inferred: int if any `return expr;` appears (including inside if/while/for), else void
   - Returning anything else needs the type written: fn name(a: int): string { ... }. Returning a
     string, float, slice, map or struct from a function without one is an error that says so
