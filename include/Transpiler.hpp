@@ -935,11 +935,35 @@ public:
             }
         }
 
+        // A struct may name one written later. A value field needs that struct
+        // finished first; a pointer only needs the name. A cycle of value fields
+        // has no layout. Source order is kept when it already works, so a program
+        // that does not rely on this emits the same C++.
+        std::map<std::string, const AstNode*> structByName;
+        std::map<std::string, const AstNode*> enumByName;
         for (const AstNode& node : ast_) {
-            if (node.type == AstNode::Type::StructDef) {
-                const std::string& nexaName = node.value;
-                std::string cppName = structCppNames_.at(nexaName);
-                out << "struct " << cppName << " {\n";
+            if (node.type == AstNode::Type::StructDef) structByName[node.value] = &node;
+            else if (node.type == AstNode::Type::EnumDef) enumByName[node.value] = &node;
+        }
+        std::set<std::string> structDone, enumDone, structForward;
+        std::vector<std::string> structStack;
+        std::set<std::string> structStackSet;
+
+        auto emitEnumNow = [&](const AstNode& node) {
+            const std::string& nexaName = node.value;
+            std::string cppName = enumCppNames_.at(nexaName);
+            out << "enum class " << cppName << " : int {\n";
+            for (size_t i = 0; i < node.paramNames.size(); i++) {
+                out << "    " << node.paramNames[i];
+                if (i + 1 < node.paramNames.size()) out << ",";
+                out << "\n";
+            }
+            out << "};\n\n";
+        };
+        auto emitStructNow = [&](const AstNode& node) {
+            const std::string& nexaName = node.value;
+            std::string cppName = structCppNames_.at(nexaName);
+            out << "struct " << cppName << " {\n";
                 for (size_t i = 0; i < node.paramNames.size(); i++) {
                     out << "    " << nexaTypeToCpp(node.paramTypes[i]) << " " << node.paramNames[i];
                     // A field default becomes a C++ default member initializer, so a plain
@@ -958,7 +982,7 @@ public:
                         if (meth.type == AstNode::Type::Function) emitStructMethodDecl(out, meth);
                     }
                     out << "};\n\n";
-                    continue;
+                    return;
                 }
                 out << "    bool operator==(const " << cppName << "& __o) const {\n";
                 if (node.paramNames.empty()) {
@@ -987,17 +1011,125 @@ public:
                     if (meth.type == AstNode::Type::Function) emitStructMethodDecl(out, meth);
                 }
                 out << "};\n\n";
-            } else if (node.type == AstNode::Type::EnumDef) {
-                const std::string& nexaName = node.value;
-                std::string cppName = enumCppNames_.at(nexaName);
-                out << "enum class " << cppName << " : int {\n";
-                for (size_t i = 0; i < node.paramNames.size(); i++) {
-                    out << "    " << node.paramNames[i];
-                    if (i + 1 < node.paramNames.size()) out << ",";
-                    out << "\n";
-                }
-                out << "};\n\n";
+        };
+
+        std::function<void(const std::string&)> emitEnumNamed;
+        std::function<void(const std::string&)> emitStructNamed;
+        emitEnumNamed = [&](const std::string& name) {
+            if (!enumDone.insert(name).second) return;
+            auto it = enumByName.find(name);
+            if (it == enumByName.end()) return;
+            emitEnumNow(*it->second);
+        };
+        // behindPointer: the immediate pointee of a pointer may be incomplete.
+        // valueComplete: a by-value struct must be finished. A method's return
+        // type may name an unfinished struct; a field, a parameter, a slice,
+        // a map or a Result may not.
+        std::function<void(const std::string&, bool, bool, std::map<std::string, bool>&,
+                           std::vector<std::string>&, std::vector<std::string>&, std::set<std::string>&)> noteType;
+        noteType = [&](const std::string& t, bool behindPointer, bool valueComplete,
+                       std::map<std::string, bool>& structs, std::vector<std::string>& structOrder,
+                       std::vector<std::string>& enums, std::set<std::string>& enumSeen) {
+            if (t.empty()) return;
+            if (isPointerType(t)) {
+                noteType(pointerPointeeType(t), true, valueComplete, structs, structOrder, enums, enumSeen);
+                return;
             }
+            if (nexaIsSliceType(t)) {
+                noteType(nexaSliceElem(t), false, true, structs, structOrder, enums, enumSeen);
+                return;
+            }
+            if (nexaIsResultType(t)) {
+                noteType(nexaResultInner(t), false, true, structs, structOrder, enums, enumSeen);
+                return;
+            }
+            if (nexaIsMapType(t)) {
+                std::string k, v;
+                if (nexaSplitMapType(t, k, v)) {
+                    noteType(k, false, true, structs, structOrder, enums, enumSeen);
+                    noteType(v, false, true, structs, structOrder, enums, enumSeen);
+                }
+                return;
+            }
+            if (nexaIsFnType(t)) {
+                std::vector<std::string> params;
+                std::string ret;
+                if (nexaSplitFnType(t, params, ret)) {
+                    for (const std::string& p : params)
+                        noteType(p, false, true, structs, structOrder, enums, enumSeen);
+                    noteType(ret, false, true, structs, structOrder, enums, enumSeen);
+                }
+                return;
+            }
+            if (isStructDeclType(t)) {
+                const std::string n = structNameFromDecl(t);
+                if (!structByName.count(n)) return;
+                const bool complete = !behindPointer && valueComplete;
+                auto it = structs.find(n);
+                if (it == structs.end()) {
+                    structs[n] = complete;
+                    structOrder.push_back(n);
+                } else if (complete) {
+                    it->second = true;
+                }
+                return;
+            }
+            if (isEnumDeclType(t)) {
+                const std::string n = enumNameFromDecl(t);
+                if (enumByName.count(n) && enumSeen.insert(n).second) enums.push_back(n);
+            }
+        };
+        emitStructNamed = [&](const std::string& name) {
+            if (structDone.count(name)) return;
+            if (!structStackSet.insert(name).second) {
+                const AstNode* at = structStack.empty() ? nullptr : structByName[structStack.back()];
+                std::string msg;
+                if (at && !at->srcFile.empty()) msg += at->srcFile + ": ";
+                auto it = structStack.begin();
+                for (; it != structStack.end(); ++it) if (*it == name) break;
+                msg += "struct " + *it;
+                if (it + 1 == structStack.end()) {
+                    msg += " contains " + name + " by value";
+                } else {
+                    for (auto j = it + 1; j != structStack.end(); ++j)
+                        msg += " contains " + *j + " by value, and " + *j;
+                    msg += " contains " + name + " by value";
+                }
+                if (at && at->line) msg += " at line " + std::to_string(at->line);
+                throw std::runtime_error(msg);
+            }
+            structStack.push_back(name);
+            const AstNode& node = *structByName.at(name);
+            std::map<std::string, bool> depKind;
+            std::vector<std::string> depOrder, enumDeps;
+            std::set<std::string> enumSeen;
+            auto consider = [&](const std::string& t, bool valueComplete) {
+                noteType(t, false, valueComplete, depKind, depOrder, enumDeps, enumSeen);
+            };
+            for (const std::string& ft : node.paramTypes) consider(ft, true);
+            for (const AstNode& meth : node.children) {
+                if (meth.type != AstNode::Type::Function) continue;
+                for (const std::string& pt : meth.paramTypes) consider(pt, true);
+                consider(meth.fnReturnType, false);
+            }
+            for (const std::string& e : enumDeps) emitEnumNamed(e);
+            for (const std::string& d : depOrder) {
+                if (depKind[d]) emitStructNamed(d);
+            }
+            for (const std::string& d : depOrder) {
+                if (depKind[d] || d == name || structDone.count(d) || structForward.count(d)) continue;
+                out << "struct " << structCppNames_.at(d) << ";\n";
+                structForward.insert(d);
+            }
+            emitStructNow(node);
+            structDone.insert(name);
+            structStack.pop_back();
+            structStackSet.erase(name);
+        };
+
+        for (const AstNode& node : ast_) {
+            if (node.type == AstNode::Type::StructDef) emitStructNamed(node.value);
+            else if (node.type == AstNode::Type::EnumDef) emitEnumNamed(node.value);
         }
 
         varStructScopes_.clear();

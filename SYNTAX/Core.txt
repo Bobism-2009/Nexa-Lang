@@ -32,7 +32,7 @@ STRUCTS
   struct Name {
     field: int;
     other: string;
-    nested: InnerStruct;   // InnerStruct must be declared earlier in the file
+    nested: InnerStruct;   // InnerStruct may be written later in the program
   }
   - Field types: int, unsigned int, short, unsigned short, long, unsigned long, size_t, string, bool, float, char, unsigned char, *T pointers, []T, map[K]V, Result[T], fn(T): R closures
     (call one as c.run(x)), or another struct name. A struct holding a closure has no ==.
@@ -66,9 +66,12 @@ STRUCTS
     pts.push(Point { x: 1, y: 2 });
     return Point { x: self.x + q.x, y: self.y + q.y };
     Point { x: 1, y: 2 }.add(q)
-    Unknown or duplicate field names are errors. Nested structs must already
-    be declared. Omitted fields take their declared default, or are value-initialized
-    (0, "", empty slice/map) when the field has none.
+    Unknown or duplicate field names are errors. A field may name a struct that
+    is written later. A pointer may name one that is not finished yet, including
+    its own struct. A cycle of value fields (A contains a B, and B contains an A)
+    has no layout and is an error. A struct literal still needs its struct already
+    declared, so the field names are known. Omitted fields take their declared
+    default, or are value-initialized (0, "", empty slice/map) when the field has none.
 
   - A let that reads a field takes the field's type, as with any value:
     let n = p.x;   let name = items[0].name.upper();   let d = p.at.x * 2.5;
