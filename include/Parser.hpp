@@ -127,6 +127,7 @@ struct AstNode {
     std::vector<std::string> typeParams; // fn first[T], struct Slot[T], or enum Option[T]; empty when none
     bool isExtern = false;         // Function: true = extern fn (C linkage declaration, no body)
     bool isVariadic = false;       // Function: true = trailing ... (C varargs)
+    bool isPrivate = false;        // top-level priv: visible only in the file that wrote it
     std::string receiverType = ""; // Function: "struct:Point" when this is a method inside a struct
     // Source provenance, stamped by the parser on statements and on primary expressions.
     // Semantic checks that run after parsing (Transpiler::checkSemantics) report through
@@ -339,6 +340,10 @@ public:
                 for (AstNode& n : incNodes) ast.push_back(std::move(n));
             } else if (t.type == TokenType::Extern) {
                 ast.push_back(parseExternFunction());
+            } else if (t.type == TokenType::Identifier && t.value == "priv" && looksLikePrivDecl()) {
+                // `priv` is a word only before a top-level declaration, so a
+                // variable named priv still parses as it always has.
+                ast.push_back(parsePrivDecl());
             } else if (t.type == TokenType::Fn) {
                 if (pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::Main) {
                     ast.push_back(parseMainFunction());
@@ -782,6 +787,8 @@ private:
 
     void noteTypeDefs(const std::vector<AstNode>& nodes) {
         for (const AstNode& n : nodes) {
+            // A priv type is still noted so the parent can parse lib.Box { ... }
+            // and then reject it; a priv alias is not expanded for the parent.
             if (n.type == AstNode::Type::StructDef) noteStructFields(n);
             else if (n.type == AstNode::Type::EnumDef) {
                 enumNames_.insert(n.value);
@@ -789,10 +796,67 @@ private:
                 if (!n.typeParams.empty()) enumTypeParams_[n.value] = n.typeParams;
             }
             else if (n.type == AstNode::Type::ShapeDef) shapeNames_.insert(n.value);
-            else if (n.type == AstNode::Type::TypeAlias) {
+            else if (n.type == AstNode::Type::TypeAlias && !n.isPrivate) {
                 typeAliases_[n.value] = n.declType;
             }
         }
+    }
+
+    // priv fn / priv struct / priv enum / priv type / priv shape / priv let
+    bool looksLikePrivDecl() const {
+        if (peek().type != TokenType::Identifier || peek().value != "priv") return false;
+        if (pos_ + 1 >= tokens_.size()) return false;
+        const Token& n = tokens_[pos_ + 1];
+        if (n.type == TokenType::Fn || n.type == TokenType::Struct || n.type == TokenType::Enum ||
+            n.type == TokenType::Let) {
+            return true;
+        }
+        if (n.type == TokenType::Identifier && n.value == "type" &&
+            pos_ + 3 < tokens_.size() &&
+            tokens_[pos_ + 2].type == TokenType::Identifier &&
+            tokens_[pos_ + 3].type == TokenType::Assign) {
+            return true;
+        }
+        if (n.type == TokenType::Identifier && n.value == "shape" &&
+            pos_ + 3 < tokens_.size() &&
+            tokens_[pos_ + 2].type == TokenType::Identifier &&
+            tokens_[pos_ + 3].type == TokenType::LBrace) {
+            return true;
+        }
+        return false;
+    }
+
+    AstNode parsePrivDecl() {
+        size_t line = peek().line;
+        if (peek().type != TokenType::Identifier || peek().value != "priv") {
+            throw std::runtime_error("Expected 'priv' at line " + std::to_string(line));
+        }
+        advance();
+        AstNode node;
+        const Token& n = peek();
+        if (n.type == TokenType::Fn) {
+            if (pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::Main) {
+                throw std::runtime_error("fn main cannot be priv at line " + std::to_string(line));
+            }
+            node = parseFunction();
+        } else if (n.type == TokenType::Struct) {
+            node = parseStruct();
+        } else if (n.type == TokenType::Enum) {
+            node = parseEnum();
+        } else if (n.type == TokenType::Let) {
+            node = parseVariable();
+        } else if (n.type == TokenType::Identifier && n.value == "type") {
+            node = parseTypeAlias();
+        } else if (n.type == TokenType::Identifier && n.value == "shape") {
+            node = parseShape();
+        } else {
+            throw std::runtime_error("Expected a declaration after priv at line " + std::to_string(peek().line));
+        }
+        if (node.isExtern) {
+            throw std::runtime_error("extern fn cannot be priv at line " + std::to_string(line));
+        }
+        node.isPrivate = true;
+        return node;
     }
 
     bool looksLikeTypeAt(size_t p) const {

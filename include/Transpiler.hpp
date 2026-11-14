@@ -598,9 +598,18 @@ public:
         enumPayload_.clear();
         enumOrder_.clear();
         enumFirstVariant_.clear();
+        privateDeclFile_.clear();
         std::set<std::string> typeNames;
         int structId = 0;
         int enumId = 0;
+        for (const AstNode& node : ast_) {
+            if (!node.isPrivate) continue;
+            if (node.type == AstNode::Type::Function || node.type == AstNode::Type::StructDef ||
+                node.type == AstNode::Type::EnumDef || node.type == AstNode::Type::ShapeDef ||
+                node.type == AstNode::Type::TypeAlias || node.type == AstNode::Type::Variable) {
+                privateDeclFile_[node.value] = node.srcFile;
+            }
+        }
         if (modules_.hasHttp()) {
             // std/http's own structs: known like any struct, but defined by the
             // runtime, so they are seeded here and never emitted below. The
@@ -2091,6 +2100,8 @@ private:
     // Bare file-scope names belong to one file. A name with a dot is already
     // the included file's, so it is not listed here.
     std::map<std::string, std::string> fileScopeFile_;
+    // priv name -> file that wrote it. Only that file may use the name.
+    std::map<std::string, std::string> privateDeclFile_;
     std::vector<std::map<std::string, std::string>> nexaDeclStack_;
 
     std::string canonicalParamType(const AstNode& fn, size_t i) const {
@@ -2673,12 +2684,26 @@ private:
     }
 
     // A bare name is the file it was written in. prefix.name is named outright,
-    // and an extern fn is a C symbol, so both are visible from every file.
+    // and an extern fn is a C symbol, so both are visible from every file —
+    // unless it was written priv, in which case only that file sees it.
     bool sameFileScope(const std::string& name, const std::string& useFile) const {
+        auto pit = privateDeclFile_.find(name);
+        if (pit != privateDeclFile_.end()) {
+            if (useFile.empty()) return pit->second.empty();
+            return pit->second.empty() || pit->second == useFile;
+        }
         if (useFile.empty() || name.find('.') != std::string::npos) return true;
         auto it = fileScopeFile_.find(name);
         if (it == fileScopeFile_.end() || it->second.empty()) return true;
         return it->second == useFile;
+    }
+
+    static std::string privateDeclMessage(const std::string& name) {
+        size_t d = name.find('.');
+        if (d != std::string::npos && d + 1 < name.size()) {
+            return "'" + name.substr(d + 1) + "' is private to " + name.substr(0, d);
+        }
+        return "'" + name + "' is private to that file";
     }
 
     std::string uniqueNamedFnType(const std::string& name, const std::string& useFile = "") const {
@@ -3271,6 +3296,7 @@ private:
         if (compat.empty()) {
             if (!shapeFail.empty()) throw std::runtime_error(shapeFail);
             if (hidden && !sawVisible) {
+                if (privateDeclFile_.count(name)) throw std::runtime_error(privateDeclMessage(name));
                 throw std::runtime_error("'" + name + "' is in another file; call it by that file's name");
             }
             std::string msg = "No matching overload for '" + name + "'(";
@@ -4934,22 +4960,41 @@ private:
             {"str", "string"}, {"String", "string"}, {"boolean", "bool"}, {"Bool", "bool"}, {"Int", "int"},
         };
         auto check = [&](const std::string& t, const AstNode& at) {
-            for (size_t p = t.find("struct:"); p != std::string::npos; p = t.find("struct:", p + 1)) {
-                size_t b = p + 7, e = b;
-                while (e < t.size() && (std::isalnum((unsigned char)t[e]) || t[e] == '_' || t[e] == '.')) e++;
-                const std::string name = t.substr(b, e - b);
-                if (name.empty() || structs.count(name) || (e < t.size() && t[e] == ':')) continue;
-                auto it = nexaName.find(name);
-                semError(at, "unknown type '" + name + "'" +
-                                 (it != nexaName.end() ? "; Nexa calls it " + it->second
-                                                       : ": no struct, enum or built-in type has that name"));
-            }
+            auto scan = [&](const char* tag, size_t tagLen, bool requireKnownStruct) {
+                for (size_t p = t.find(tag); p != std::string::npos; p = t.find(tag, p + 1)) {
+                    size_t b = p + tagLen, e = b;
+                    while (e < t.size() && (std::isalnum((unsigned char)t[e]) || t[e] == '_' || t[e] == '.')) e++;
+                    const std::string name = t.substr(b, e - b);
+                    if (name.empty() || (e < t.size() && t[e] == ':')) continue;
+                    if (privateDeclFile_.count(name) && !sameFileScope(name, at.srcFile)) {
+                        semError(at, privateDeclMessage(name));
+                    }
+                    if (!requireKnownStruct) continue;
+                    if (structs.count(name)) continue;
+                    auto it = nexaName.find(name);
+                    semError(at, "unknown type '" + name + "'" +
+                                     (it != nexaName.end() ? "; Nexa calls it " + it->second
+                                                           : ": no struct, enum or built-in type has that name"));
+                }
+            };
+            scan("struct:", 7, true);
+            scan("enum:", 5, false);
+            scan("shape:", 6, false);
         };
         std::function<void(const AstNode&)> visit = [&](const AstNode& n) {
             if (n.type == AstNode::Type::Variable) check(n.declType, n);
             if (n.type == AstNode::Type::Function || n.type == AstNode::Type::MainFunction) {
                 for (const std::string& pt : n.paramTypes) check(pt, n);
                 check(n.fnReturnType, n);
+            }
+            if (n.type == AstNode::Type::ExprStructLit || n.type == AstNode::Type::ExprEnumLit) {
+                const std::string base = nexaTypeAppBase(n.value);
+                if (privateDeclFile_.count(base) && !sameFileScope(base, n.srcFile)) {
+                    semError(n, privateDeclMessage(base));
+                }
+                if (privateDeclFile_.count(n.value) && !sameFileScope(n.value, n.srcFile)) {
+                    semError(n, privateDeclMessage(n.value));
+                }
             }
             for (const AstNode& c : n.children) visit(c);
         };
@@ -7017,6 +7062,9 @@ private:
     void semCheckNameUse(const AstNode& at, const std::string& name) {
         if (!semNameChecks_ || name.empty()) return;
         if (!sameFileScope(name, at.srcFile)) {
+            if (privateDeclFile_.count(name)) {
+                semError(at, privateDeclMessage(name));
+            }
             bool local = false;
             for (size_t i = 1; i < nexaDeclStack_.size(); ++i) {
                 if (nexaDeclStack_[i].count(name)) { local = true; break; }

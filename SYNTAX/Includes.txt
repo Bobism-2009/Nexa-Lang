@@ -118,3 +118,5 @@ FILE INCLUDES (quotes)
     An enum is named the same way. A variant with fields is lib.Event.Click { x: 1 }.
     An enum that names a type is lib.Option. The value is lib.Option.Some { value: 1 }.
     A type alias is lib.Id. It still means the type on the right.
+    A name written priv stays inside that file. From outside, lib.helper is an
+    error: helper is private to lib. Inside the file it is still just helper().

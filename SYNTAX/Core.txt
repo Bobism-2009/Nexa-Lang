@@ -117,6 +117,19 @@ TYPE ALIASES
     are unchanged.
   - A program that never writes type is unchanged.
 
+PRIVACY
+  priv fn helper() { ... }
+  priv struct Box { n: int; }
+  priv enum Flag { On; Off; }
+  priv type Id = int;
+  priv shape Drawable { fn draw(); }
+  priv let secret = 1;
+  - A priv name is only for the file that wrote it. An include that declares
+    priv fn hide keeps hide() inside that file; from outside, lib.hide is an
+    error.
+  - `priv` is a word only before a top-level declaration. A program that never
+    writes priv is unchanged.
+
 ENUMS
   enum Name {
     VariantA;
