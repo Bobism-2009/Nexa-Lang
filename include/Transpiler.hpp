@@ -3539,7 +3539,10 @@ private:
                 if (e.value == "pop") {
                     if (e.children.size() != 1) throw std::runtime_error("pop expects no arguments");
                     std::string et = nexaTypeToCpp(nexaSliceElem(recvBare));
-                    return "([&](){ auto& __nexa_v = " + recv + "; " + et +
+                    // A normal build leaves an empty pop unchecked. --debug stops
+                    // before back(), the way a bad index stops.
+                    std::string guard = lineDirectives_ ? " if (__nexa_v.empty()) __nexa_empty_fail(\"pop\");" : "";
+                    return "([&](){ auto& __nexa_v = " + recv + ";" + guard + " " + et +
                         " __nexa_x = __nexa_v.back(); __nexa_v.pop_back(); return __nexa_x; })()";
                 }
                 if (e.value == "clear") {
@@ -3563,10 +3566,15 @@ private:
                 if (e.value == "remove") {
                     if (e.children.size() != 2) throw std::runtime_error("remove expects one argument");
                     // Unlike insert, which clamps, this is the pop rule: an index outside
-                    // [0, len) is undefined behaviour, not a silent no-op.
+                    // [0, len) is undefined behaviour, not a silent no-op. --debug stops.
                     std::string idx = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
-                    return "([&](){ auto& __nexa_v = " + recv + "; int __nexa_i = " + idx +
-                        "; __nexa_v.erase(__nexa_v.begin() + __nexa_i); })()";
+                    std::string guard = lineDirectives_
+                        ? " if (__nexa_v.empty()) __nexa_empty_fail(\"remove\");"
+                          " if ((unsigned long long)(long long)__nexa_i >= __nexa_v.size())"
+                          " __nexa_remove_fail((long long)__nexa_i, __nexa_v.size());"
+                        : "";
+                    return "([&](){ auto& __nexa_v = " + recv + "; int __nexa_i = " + idx + ";" +
+                        guard + " __nexa_v.erase(__nexa_v.begin() + __nexa_i); })()";
                 }
                 if (e.value == "reverse") {
                     if (e.children.size() != 1) throw std::runtime_error("reverse expects no arguments");
@@ -3586,10 +3594,13 @@ private:
                 if (e.value == "min" || e.value == "max") {
                     if (e.children.size() != 1) throw std::runtime_error(e.value + " expects no arguments");
                     // Seeding from [0] is the pop rule again: an empty slice has no
-                    // minimum, so asking for one is undefined behaviour.
+                    // minimum, so asking for one is undefined behaviour. --debug stops.
                     std::string op = e.value == "min" ? " < " : " > ";
-                    return "([&](){ const auto& __nexa_v = " + recv +
-                        "; auto __nexa_m = __nexa_v[0]; for (size_t __nexa_i = 1; __nexa_i < __nexa_v.size(); __nexa_i++) { if (__nexa_v[__nexa_i]" + op +
+                    std::string guard = lineDirectives_
+                        ? " if (__nexa_v.empty()) __nexa_empty_fail(\"" + e.value + "\");"
+                        : "";
+                    return "([&](){ const auto& __nexa_v = " + recv + ";" + guard +
+                        " auto __nexa_m = __nexa_v[0]; for (size_t __nexa_i = 1; __nexa_i < __nexa_v.size(); __nexa_i++) { if (__nexa_v[__nexa_i]" + op +
                         "__nexa_m) __nexa_m = __nexa_v[__nexa_i]; } return __nexa_m; })()";
                 }
                 if (e.value == "sum") {
@@ -5824,6 +5835,16 @@ static typename std::enable_if<std::is_integral<__T>::value, std::string>::type 
 [[noreturn]] __attribute__((noinline, cold)) static void __nexa_index_fail(long long __i, unsigned long long __n) {
     std::fflush(stdout);
     std::fprintf(stderr, "index %lld out of range (len %llu)\n", __i, __n);
+    std::abort();
+}
+[[noreturn]] __attribute__((noinline, cold)) static void __nexa_empty_fail(const char* __op) {
+    std::fflush(stdout);
+    std::fprintf(stderr, "%s on an empty slice\n", __op);
+    std::abort();
+}
+[[noreturn]] __attribute__((noinline, cold)) static void __nexa_remove_fail(long long __i, unsigned long long __n) {
+    std::fflush(stdout);
+    std::fprintf(stderr, "remove: index %lld out of range (len %llu)\n", __i, __n);
     std::abort();
 }
 template <class __C, class __I> inline decltype(auto) __nexa_ix(__C&& __c, __I __i) {

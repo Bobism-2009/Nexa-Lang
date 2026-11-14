@@ -399,6 +399,57 @@ else
     pass "default build indexes unchecked"
 fi
 
+# An empty pop, min, max or remove stops under --debug and names the call.
+# A remove past the end does too. A normal build emits none of the checks.
+cat > "$WORK/empty.nxa" <<'NXA'
+#include <std/io>
+
+fn main(args: []string) {
+    let xs = [4, 1, 9];
+    io.println(xs.min());
+    io.println(xs.max());
+    io.println(xs.pop());
+    xs.remove(0);
+    io.println(xs[0]);
+    let which = len(args) > 1 ? args[1] : "";
+    if (which == "pop") { let e: []int; io.println(e.pop()); }
+    if (which == "min") { let e: []int; io.println(e.min()); }
+    if (which == "max") { let e: []int; io.println(e.max()); }
+    if (which == "remove") { let e: []int; e.remove(0); }
+    if (which == "removeat") { xs.remove(4); }
+    io.println("kept");
+}
+NXA
+out=$("$NEXAC" "$WORK/empty.nxa" --debug -o "$WORK/empty$EXE" 2>&1)
+if [ $? -ne 0 ]; then
+    fail "debug empty" "NexaC exited non-zero" "$out"
+else
+    got=$("$WORK/empty$EXE" </dev/null 2>&1 | tr -d '\r')
+    want=$(printf '1\n9\n9\n1\nkept')
+    if [ "$got" = "$want" ]; then
+        pass "debug build: pop, min, max and remove still run in range"
+    else
+        fail "debug empty" "in range printed" "$got"
+    fi
+    for c in "pop:pop on an empty slice" "min:min on an empty slice" "max:max on an empty slice" \
+             "remove:remove on an empty slice" "removeat:remove: index 4 out of range (len 1)"; do
+        arg=${c%%:*}; want=${c#*:}
+        "$WORK/empty$EXE" "$arg" >"$WORK/em.out" 2>"$WORK/em.err" </dev/null
+        code=$?
+        if [ "$code" -ne 0 ] && [ "$(tr -d '\r' <"$WORK/em.out")" = "$(printf '1\n9\n9\n1')" ] && grep -q "$want" "$WORK/em.err"; then
+            pass "debug build: $arg stops with \"$want\""
+        else
+            fail "debug empty $arg" "exit $code, wanted \"$want\" after the output" "$(cat "$WORK/em.out" "$WORK/em.err" | head -6)"
+        fi
+    done
+fi
+out=$("$NEXAC" "$WORK/empty.nxa" --source "$WORK/empty_rel.cpp" 2>&1)
+if grep -q '__nexa_empty_fail\|__nexa_remove_fail' "$WORK/empty_rel.cpp" 2>/dev/null; then
+    fail "release empty" "a release build checks an empty slice; only --debug should" ""
+else
+    pass "default build leaves an empty pop, min, max and remove unchecked"
+fi
+
 if [ $fails -eq 0 ]; then
     echo "All --debug cases passed."
     exit 0

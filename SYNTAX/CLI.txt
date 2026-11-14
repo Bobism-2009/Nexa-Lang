@@ -57,8 +57,12 @@ OPTIONS
                       plain -g, printing which one it used
                     * slice and string indexes are checked: a bad one stops the
                       program with "index 5 out of range (len 2)" after what it
-                      printed. A normal build does not check (it can slow a tight
-                      2D loop several times), so --debug is how to find one
+                      printed. An empty pop, min or max stops with "pop on an
+                      empty slice" (or min, or max). remove stops with "remove on
+                      an empty slice", or "remove: index 5 out of range (len 2)"
+                      when the index is past the end. A normal build does not
+                      check (it can slow a tight 2D loop several times), so
+                      --debug is how to find one
                     * with --run the binary is kept (not deleted) so you can re-run it
                       under a debugger; it is written to the normal output path
                     * the debugger steps through your .nxa source: every statement gets

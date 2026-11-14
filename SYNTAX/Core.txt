@@ -488,13 +488,16 @@ SLICES ([]T)
   tight loop over a 2D grid several times slower. Build with --debug to find a
   bad index; check len(xs) first where one can happen.
 
-  xs.pop() on an empty slice is undefined behaviour in every build; check len(xs)
-  first if the slice may be empty.
+  xs.pop() on an empty slice is undefined behaviour in a normal build; check
+  len(xs) first if the slice may be empty. A --debug build stops, after what the
+  program printed, with "pop on an empty slice".
 
   xs.insert(i, v) and xs.remove(i) differ on purpose. insert clamps, because an
   append is a sensible reading of "insert past the end". remove has no such
   reading: an index outside [0, len) names no element, so it is the pop rule —
-  undefined behaviour, not a no-op. Check len(xs) yourself.
+  undefined behaviour in a normal build, not a no-op. A --debug build stops with
+  "remove on an empty slice", or "remove: index 5 out of range (len 2)" when the
+  slice is not empty. Check len(xs) yourself.
 
   SLICE ALGORITHMS
     In place, returning nothing:
@@ -527,9 +530,10 @@ SLICES ([]T)
     observed on a slice of numbers or strings — there is no payload beside the
     element to be reordered.
 
-    min() and max() on an empty slice are undefined behaviour, exactly like
-    pop(): there is no smallest element of nothing and no value to invent. As
-    everywhere else in Nexa there is no guard; check len(xs) first.
+    min() and max() on an empty slice are undefined behaviour in a normal build,
+    exactly like pop(): there is no smallest element of nothing and no value to
+    invent. A --debug build stops with "min on an empty slice" or "max on an
+    empty slice". Check len(xs) first.
 
     sum() of an empty slice is 0, which is not a special case — it is what
     adding up no elements comes to. It accumulates in the element type, not a
