@@ -112,3 +112,4 @@ FILE INCLUDES (quotes)
     A package include is the same: #include <pkg/module> is module.load(),
     and #include <pkg/module> as wire names it wire.
     An included file cannot declare fn main.
+    A shape is named the same way: from outside it is lib.Drawable.

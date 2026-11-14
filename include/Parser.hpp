@@ -89,6 +89,7 @@ struct AstNode {
                       AssnDeref,
                       StructDef,
                       EnumDef,
+                      ShapeDef,
                       ExprMember,
                       AssnMember,
                       InlineCpp };
@@ -297,6 +298,11 @@ public:
     std::vector<AstNode> parse() {
         try {
             std::vector<AstNode> ast = parseProgram();
+            // A shape may be named before it is written. Those uses parsed as
+            // struct:Name; now that every shape is known, they become shape:Name.
+            // This happens before an included file's names are prefixed, while
+            // the names are still the ones this file wrote.
+            if (!shapeNames_.empty()) retagShapes(ast);
             if (!filePrefix_.empty()) qualifyIncluded(ast);
             return ast;
         } catch (const std::runtime_error& e) {
@@ -332,6 +338,13 @@ public:
                 ast.push_back(parseStruct());
             } else if (t.type == TokenType::Enum) {
                 ast.push_back(parseEnum());
+            } else if (t.type == TokenType::Identifier && t.value == "shape" &&
+                       pos_ + 2 < tokens_.size() &&
+                       tokens_[pos_ + 1].type == TokenType::Identifier &&
+                       tokens_[pos_ + 2].type == TokenType::LBrace) {
+                // `shape` is a word only in this position, so a variable or a
+                // function of that name still parses as it always has.
+                ast.push_back(parseShape());
             } else if (t.type == TokenType::Let) {
                 ast.push_back(parseVariable());
             } else if (t.type == TokenType::InlineCppBlock) {
@@ -374,10 +387,11 @@ private:
     std::string filePrefix_;
     std::map<std::string, std::string> ownedPrefixes_;
     std::map<std::string, std::string>* filePrefixes_;
-    std::set<std::string> ownFns_, ownStructs_, ownEnums_, ownGlobals_;
+    std::set<std::string> ownFns_, ownStructs_, ownEnums_, ownGlobals_, ownShapes_;
     std::set<std::string> structNames_;
     std::map<std::string, std::set<std::string>> structFieldNames_;
     std::set<std::string> enumNames_;
+    std::set<std::string> shapeNames_;
     // Recursive-descent depth across expressions and statement bodies combined.
     // Without a cap, pathological nesting (hundreds of parens or braces)
     // overflows the C++ stack and segfaults the compiler instead of erroring.
@@ -583,6 +597,7 @@ private:
             }
             advance();
             std::string q = v + "." + part.value;
+            if (shapeNames_.count(q)) return "shape:" + q;
             if (enumNames_.count(q)) return "enum:" + q;
             return "struct:" + q;
         }
@@ -623,6 +638,7 @@ private:
             }
             return "json";
         }
+        if (shapeNames_.count(v)) return "shape:" + v;
         if (enumNames_.count(v)) return "enum:" + v;
         return "struct:" + v;
     }
@@ -657,6 +673,7 @@ private:
         for (const AstNode& n : nodes) {
             if (n.type == AstNode::Type::StructDef) noteStructFields(n);
             else if (n.type == AstNode::Type::EnumDef) enumNames_.insert(n.value);
+            else if (n.type == AstNode::Type::ShapeDef) shapeNames_.insert(n.value);
         }
     }
 
@@ -685,7 +702,7 @@ private:
             v == "Result" || v == "result") {
             return true;
         }
-        return structNames_.count(v) != 0 || enumNames_.count(v) != 0;
+        return structNames_.count(v) != 0 || enumNames_.count(v) != 0 || shapeNames_.count(v) != 0;
     }
 
     bool looksLikeType() const {
@@ -761,6 +778,123 @@ private:
         return {AstNode::Type::StmtDelete, isArray ? "[]" : "", {std::move(expr)}};
     }
 
+    // shape Drawable { fn draw(); fn width(): int; }
+    // The functions are named here and written on the struct. A shape is not
+    // a value, so this is only a parameter type.
+    AstNode parseShape() {
+        size_t line = peek().line;
+        if (peek().type != TokenType::Identifier || peek().value != "shape") {
+            throw std::runtime_error("Expected 'shape' at line " + std::to_string(line));
+        }
+        advance();
+        const Token& nameTok = peek();
+        if (nameTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected shape name at line " + std::to_string(nameTok.line));
+        }
+        advance();
+        std::string sname = nameTok.value;
+        if (sname == "main") {
+            throw std::runtime_error("Invalid shape name 'main' at line " + std::to_string(line));
+        }
+        if (structNames_.count(sname) || enumNames_.count(sname) || shapeNames_.count(sname)) {
+            throw std::runtime_error("Duplicate type name '" + sname + "' at line " + std::to_string(line));
+        }
+        shapeNames_.insert(sname);
+        if (!match(TokenType::LBrace)) {
+            throw std::runtime_error("Expected '{' at line " + std::to_string(peek().line));
+        }
+        AstNode node{AstNode::Type::ShapeDef, sname, {}};
+        node.line = line;
+        std::set<std::string> seen;
+        while (peek().type != TokenType::RBrace) {
+            if (peek().type == TokenType::Eof) {
+                throw std::runtime_error("Unclosed shape body starting at line " + std::to_string(line));
+            }
+            if (peek().type != TokenType::Fn) {
+                throw std::runtime_error("a shape names functions; write fn " + peek().value +
+                    "(); at line " + std::to_string(peek().line));
+            }
+            AstNode sig = parseShapeSignature();
+            if (!seen.insert(sig.value).second) {
+                throw std::runtime_error("Duplicate function '" + sig.value + "' in shape '" + sname +
+                    "' at line " + std::to_string(sig.line));
+            }
+            node.children.push_back(std::move(sig));
+        }
+        if (!match(TokenType::RBrace)) {
+            throw std::runtime_error("Expected '}' at end of shape at line " + std::to_string(peek().line));
+        }
+        match(TokenType::Semicolon);
+        return node;
+    }
+
+    // `fn draw(n: int): void;` — the name and the types, and no body.
+    AstNode parseShapeSignature() {
+        size_t line = peek().line;
+        if (!match(TokenType::Fn)) {
+            throw std::runtime_error("Expected 'fn' at line " + std::to_string(line));
+        }
+        const Token& nameTok = peek();
+        if (nameTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected function name at line " + std::to_string(nameTok.line));
+        }
+        advance();
+        std::string name = nameTok.value;
+        if (name == "self") {
+            throw std::runtime_error("Invalid function name 'self' at line " + std::to_string(line));
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
+        }
+        std::vector<std::string> params;
+        std::vector<std::string> types;
+        std::vector<bool> hasDefault;
+        std::vector<AstNode> defaults;
+        if (peek().type != TokenType::RParen) {
+            for (;;) {
+                const Token& p = peek();
+                if (p.type != TokenType::Identifier) {
+                    throw std::runtime_error("Expected parameter name at line " + std::to_string(p.line));
+                }
+                params.push_back(p.value);
+                advance();
+                std::string ptype = "int";
+                if (match(TokenType::Colon)) {
+                    ptype = parseTypeName();
+                }
+                types.push_back(ptype);
+                if (peek().type == TokenType::Assign) {
+                    throw std::runtime_error("a shape function has no default at line " + std::to_string(p.line));
+                }
+                hasDefault.push_back(false);
+                defaults.push_back(AstNode{AstNode::Type::ExprIntLiteral, "0", {}});
+                if (!match(TokenType::Comma) || peek().type == TokenType::RParen) break;
+            }
+        }
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
+        }
+        std::string fnReturnType;
+        if (match(TokenType::Colon)) {
+            fnReturnType = parseTypeName();
+        }
+        if (peek().type == TokenType::LBrace) {
+            throw std::runtime_error("a shape names the function; the struct writes it, at line " +
+                std::to_string(peek().line));
+        }
+        if (!match(TokenType::Semicolon)) {
+            throw std::runtime_error("Expected ';' after the function at line " + std::to_string(peek().line));
+        }
+        AstNode sig{AstNode::Type::Function, name, {}};
+        sig.line = line;
+        sig.fnReturnType = std::move(fnReturnType);
+        sig.paramNames = std::move(params);
+        sig.paramTypes = std::move(types);
+        sig.paramHasDefault = std::move(hasDefault);
+        sig.paramDefaults = std::move(defaults);
+        return sig;
+    }
+
     AstNode parseStruct() {
         size_t line = peek().line;
         if (!match(TokenType::Struct)) {
@@ -774,6 +908,9 @@ private:
         std::string sname = nameTok.value;
         if (sname == "main") {
             throw std::runtime_error("Invalid struct name 'main' at line " + std::to_string(line));
+        }
+        if (shapeNames_.count(sname)) {
+            throw std::runtime_error("Duplicate type name '" + sname + "' at line " + std::to_string(line));
         }
         structNames_.insert(sname);
         structFieldNames_[sname];
@@ -848,6 +985,9 @@ private:
         std::string ename = nameTok.value;
         if (ename == "main") {
             throw std::runtime_error("Invalid enum name 'main' at line " + std::to_string(line));
+        }
+        if (shapeNames_.count(ename)) {
+            throw std::runtime_error("Duplicate type name '" + ename + "' at line " + std::to_string(line));
         }
         enumNames_.insert(ename);
         if (!match(TokenType::LBrace)) {
@@ -1146,6 +1286,45 @@ private:
         return !s.empty() && s.find('.') == std::string::npos;
     }
 
+    // struct:Name written before `shape Name` is that shape.
+    std::string retagShapeStr(const std::string& t) const {
+        if (t.empty() || shapeNames_.empty() || t.find("struct:") == std::string::npos) return t;
+        std::string out;
+        for (size_t i = 0; i < t.size();) {
+            if (t.compare(i, 7, "struct:") == 0) {
+                size_t k = i + 7;
+                while (k < t.size()) {
+                    unsigned char c = (unsigned char)t[k];
+                    if (std::isalnum(c) || c == '_' || t[k] == '.') k++;
+                    else break;
+                }
+                std::string name = t.substr(i + 7, k - (i + 7));
+                if (shapeNames_.count(name)) out += "shape:" + name;
+                else out += t.substr(i, k - i);
+                i = k;
+            } else {
+                out += t[i++];
+            }
+        }
+        return out;
+    }
+
+    void retagShapeNode(AstNode& n) {
+        n.declType = retagShapeStr(n.declType);
+        n.fnReturnType = retagShapeStr(n.fnReturnType);
+        n.receiverType = retagShapeStr(n.receiverType);
+        for (std::string& p : n.paramTypes) p = retagShapeStr(p);
+        if ((n.type == AstNode::Type::ExprNew || n.type == AstNode::Type::ExprSizeof) && !n.value.empty()) {
+            n.value = retagShapeStr(n.value);
+        }
+        for (AstNode& c : n.children) retagShapeNode(c);
+        for (AstNode& d : n.paramDefaults) retagShapeNode(d);
+    }
+
+    void retagShapes(std::vector<AstNode>& ast) {
+        for (AstNode& n : ast) retagShapeNode(n);
+    }
+
     bool ownsName(const std::string& s) const {
         return ownFns_.count(s) || ownStructs_.count(s) || ownEnums_.count(s) || ownGlobals_.count(s);
     }
@@ -1156,7 +1335,8 @@ private:
         for (size_t i = 0; i < t.size();) {
             size_t n = 0;
             const std::set<std::string>* set = nullptr;
-            if (t.compare(i, 7, "struct:") == 0) { n = 7; set = &ownStructs_; }
+            if (t.compare(i, 6, "shape:") == 0) { n = 6; set = &ownShapes_; }
+            else if (t.compare(i, 7, "struct:") == 0) { n = 7; set = &ownStructs_; }
             else if (t.compare(i, 5, "enum:") == 0) { n = 5; set = &ownEnums_; }
             if (!set) { out += t[i++]; continue; }
             size_t k = i + n;
@@ -1166,9 +1346,16 @@ private:
                 else break;
             }
             std::string name = t.substr(i + n, k - (i + n));
-            out += t.substr(i, n);
-            if (bareName(name) && set->count(name)) out += filePrefix_ + "." + name;
-            else out += name;
+            // A use parsed before this file's shape was written is still
+            // struct:Name. It names the shape, so the prefix lands on shape:.
+            if (bareName(name) && ownShapes_.count(name) &&
+                (set == &ownShapes_ || set == &ownStructs_)) {
+                out += "shape:" + filePrefix_ + "." + name;
+            } else {
+                out += t.substr(i, n);
+                if (bareName(name) && set->count(name)) out += filePrefix_ + "." + name;
+                else out += name;
+            }
             i = k;
         }
         return out;
@@ -1274,6 +1461,7 @@ private:
         ownStructs_.clear();
         ownEnums_.clear();
         ownGlobals_.clear();
+        ownShapes_.clear();
         for (AstNode& n : ast) {
             if (foreignFile(n)) continue;
             if (n.type == AstNode::Type::MainFunction) {
@@ -1287,6 +1475,9 @@ private:
                 n.value = filePrefix_ + "." + n.value;
             } else if (n.type == AstNode::Type::EnumDef && bareName(n.value)) {
                 ownEnums_.insert(n.value);
+                n.value = filePrefix_ + "." + n.value;
+            } else if (n.type == AstNode::Type::ShapeDef && bareName(n.value)) {
+                ownShapes_.insert(n.value);
                 n.value = filePrefix_ + "." + n.value;
             } else if (n.type == AstNode::Type::Variable && bareName(n.value)) {
                 ownGlobals_.insert(n.value);

@@ -83,6 +83,29 @@ STRUCTS
     let p: *Point = &pts[0];
     Value-initialized (fields zeroed / empty string). No initializer list.
 
+SHAPES
+  shape Drawable {
+    fn draw();
+    fn width(): int;
+  }
+  - A shape names functions. It is not a value: it cannot be a field, a let,
+    a return, or a list. A function takes it:
+      fn paint(d: Drawable) { d.draw(); io.println(d.width()); }
+    paint accepts any struct that has those functions, with the same arguments
+    and the same return. The call is that struct's own function. Button and
+    Panel each get their own copy of paint; there is no shared table.
+  - A pointer parameter is *Drawable. The struct is the caller's. A plain
+    Drawable is a copy, as a struct parameter is.
+  - Inside the function, only the shape's functions are available. A field
+    the struct happens to have is not.
+  - The functions in the shape are names and types, ended with a semicolon.
+    The struct writes the body. Leave the return type off for void; write
+    : int (or whatever it returns) otherwise. A shape may be written later
+    in the file, like a struct.
+  - A shape from an included file is that file's name: lib.Drawable.
+  - A function that takes a shape is not a value you can pass around. The
+    struct is chosen at the call.
+
 ENUMS
   enum Name {
     VariantA;

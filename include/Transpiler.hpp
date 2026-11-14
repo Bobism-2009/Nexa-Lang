@@ -640,6 +640,22 @@ public:
                 }
                 enumFirstVariant_[node.value] = node.paramNames[0];
                 enumCppNames_[node.value] = preserveNames_ ? cppSafeName(node.value) : ("__nexa_E" + std::to_string(enumId++));
+            } else if (node.type == AstNode::Type::ShapeDef) {
+                if (!typeNames.insert(node.value).second) {
+                    throw std::runtime_error("Duplicate type name '" + node.value + "'");
+                }
+                std::vector<ShapeSig> sigs;
+                for (const AstNode& meth : node.children) {
+                    if (meth.type != AstNode::Type::Function) continue;
+                    ShapeSig sig;
+                    sig.name = meth.value;
+                    for (size_t i = 0; i < meth.paramNames.size(); i++) {
+                        sig.paramTypes.push_back(canonicalParamType(meth, i));
+                    }
+                    sig.ret = inferReturnNexaType(meth);
+                    sigs.push_back(std::move(sig));
+                }
+                shapes_[node.value] = std::move(sigs);
             }
         }
         bool needsString = false;
@@ -896,6 +912,9 @@ public:
         // This has to happen before the first signature goes out, which is a struct's
         // in-body method declaration: a declaration and its out-of-line definition have to
         // agree, and C++ says so with "does not match any declaration".
+        // Before any struct is emitted: a method parameter that names a shape
+        // would otherwise fail while writing the C++ type.
+        semCheckShapePlaces();
         analyzeParamPassing();
 
         // A struct that keys a map needs an order (std::map sorts its keys): field by
@@ -1142,6 +1161,10 @@ public:
         // stray break/continue here, while a Nexa file and line are still attached to the
         // AST. Anything that survives this is the C++ backend's problem.
         checkSemantics();
+        // A shape parameter is compiled once per struct that is actually passed.
+        // Nothing here runs unless the program wrote a shape, and a function
+        // that is never called is left out entirely.
+        discoverShapes();
         for (const auto& kv : globalNexaDecl_) {
             if (isStructDeclType(kv.second)) {
                 varStructScopes_[0][kv.first] = structNameFromDecl(kv.second);
@@ -1179,27 +1202,42 @@ public:
                     wroteAnyProto = true;
                     continue;
                 }
-                std::string cppName = cppFnNameForAstIndex(astIdx);
-                bool hasValRet = false, hasVoidRet = false;
-                stmtsClassifyReturns(node.children, hasValRet, hasVoidRet);
-                std::string retCpp;
-                if (!node.fnReturnType.empty()) {
-                    if (node.fnReturnType == "void") retCpp = "void";
-                    else                              retCpp = nexaTypeToCpp(node.fnReturnType);
-                } else {
-                    retCpp = hasValRet ? "int" : "void";
+                const std::vector<ShapeSpec>* shapeSpecs = nullptr;
+                size_t specCount = 1;
+                if (fnHasShapeParams(node)) {
+                    shapeSpecs = shapeSpecsForAst(astIdx);
+                    if (!shapeSpecs) continue;
+                    specCount = shapeSpecs->size();
                 }
-                out << (buildDll_ ? "extern \"C\" NEXA_EXPORT " : "static ") << retCpp << " " << cppName << "(";
-                for (size_t i = 0; i < node.paramNames.size(); i++) {
-                    if (i > 0) out << ", ";
-                    std::string nexaT = "int";
-                    if (i < node.paramTypes.size() && !node.paramTypes[i].empty()) {
-                        nexaT = canonicalParamType(node, i);
+                for (size_t spi = 0; spi < specCount; ++spi) {
+                    if (shapeSpecs) {
+                        specAst_ = &node;
+                        specTypes_ = (*shapeSpecs)[spi].types;
                     }
-                    out << (buildDll_ ? dllExportParamCpp(nexaT) : paramSigCpp(node, i));
+                    std::string cppName = shapeSpecs ? (*shapeSpecs)[spi].cppName : cppFnNameForAstIndex(astIdx);
+                    bool hasValRet = false, hasVoidRet = false;
+                    stmtsClassifyReturns(node.children, hasValRet, hasVoidRet);
+                    std::string retCpp;
+                    if (!node.fnReturnType.empty()) {
+                        if (node.fnReturnType == "void") retCpp = "void";
+                        else                              retCpp = nexaTypeToCpp(node.fnReturnType);
+                    } else {
+                        retCpp = hasValRet ? "int" : "void";
+                    }
+                    out << ((buildDll_ && !shapeSpecs) ? "extern \"C\" NEXA_EXPORT " : "static ") << retCpp << " " << cppName << "(";
+                    for (size_t i = 0; i < node.paramNames.size(); i++) {
+                        if (i > 0) out << ", ";
+                        std::string nexaT = "int";
+                        if (i < node.paramTypes.size() && !node.paramTypes[i].empty()) {
+                            nexaT = canonicalParamType(node, i);
+                        }
+                        out << (buildDll_ ? dllExportParamCpp(nexaT) : paramSigCpp(node, i));
+                    }
+                    out << ");\n";
+                    wroteAnyProto = true;
+                    specAst_ = nullptr;
+                    specTypes_.clear();
                 }
-                out << ");\n";
-                wroteAnyProto = true;
             }
             if (wroteAnyProto) out << "\n";
         }
@@ -1229,7 +1267,19 @@ public:
             }
             if (node.type == AstNode::Type::Function) {
                 if (node.isExtern) continue;
-                std::string cppName = cppFnNameForAstIndex(astIdx);
+                const std::vector<ShapeSpec>* shapeSpecs = nullptr;
+                size_t specCount = 1;
+                if (fnHasShapeParams(node)) {
+                    shapeSpecs = shapeSpecsForAst(astIdx);
+                    if (!shapeSpecs) continue;
+                    specCount = shapeSpecs->size();
+                }
+                for (size_t spi = 0; spi < specCount; ++spi) {
+                if (shapeSpecs) {
+                    specAst_ = &node;
+                    specTypes_ = (*shapeSpecs)[spi].types;
+                }
+                std::string cppName = shapeSpecs ? (*shapeSpecs)[spi].cppName : cppFnNameForAstIndex(astIdx);
                 bool hasValRet = false, hasVoidRet = false;
                 stmtsClassifyReturns(node.children, hasValRet, hasVoidRet);
                 if (hasValRet && hasVoidRet) {
@@ -1256,7 +1306,7 @@ public:
                     voidFn = !hasValRet;
                     retCpp = hasValRet ? "int" : "void";
                 }
-                out << (buildDll_ ? "extern \"C\" NEXA_EXPORT " : "static ") << retCpp << " " << cppName << "(";
+                out << ((buildDll_ && !shapeSpecs) ? "extern \"C\" NEXA_EXPORT " : "static ") << retCpp << " " << cppName << "(";
                 std::map<std::string, std::string> varMap = globalVarMap;
                 int varIdx = 0;
                 std::vector<std::pair<std::string, std::string>> dllStringParams;
@@ -1297,8 +1347,9 @@ public:
                 }
                 varStructPush();
                 for (size_t i = 0; i < node.paramNames.size(); i++) {
-                    if (i < node.paramTypes.size() && isStructDeclType(node.paramTypes[i])) {
-                        varStructDeclare(node.paramNames[i], structNameFromDecl(node.paramTypes[i]));
+                    std::string pt = canonicalParamType(node, i);
+                    if (isStructDeclType(pt)) {
+                        varStructDeclare(node.paramNames[i], structNameFromDecl(pt));
                     }
                 }
                 nexaDeclStack_.push_back(globalNexaDecl_);
@@ -1317,6 +1368,9 @@ public:
                 varStructPop();
                 emitImplicitFnTail(out, node, hasValRet);
                 out << "}\n\n";
+                specAst_ = nullptr;
+                specTypes_.clear();
+                }
                 continue;
             }
             if (node.type == AstNode::Type::MainFunction) {
@@ -1827,6 +1881,26 @@ private:
     std::map<std::string, std::string> enumFirstVariant_;
     mutable std::vector<std::map<std::string, std::string>> varStructScopes_;
     std::map<std::string, std::map<std::string, const AstNode*>> structMethods_;
+
+    // A shape names functions. It is not a C++ type. Each struct passed for
+    // one gets its own copy of the function, so the call is the struct's method.
+    struct ShapeSig {
+        std::string name;
+        std::vector<std::string> paramTypes;
+        std::string ret;
+    };
+    std::map<std::string, std::vector<ShapeSig>> shapes_;
+    struct ShapeSpec {
+        std::vector<std::string> types;
+        std::string cppName;
+    };
+    std::map<size_t, std::vector<ShapeSpec>> shapeSpecs_;
+    std::set<std::string> shapeSpecSeen_;
+    // While a specialized copy is emitted, that function's parameter types
+    // read as the struct that was passed. Null for every other function, so a
+    // program with no shape is emitted exactly as before.
+    const AstNode* specAst_ = nullptr;
+    std::vector<std::string> specTypes_;
     mutable std::string methodSelfType_;
     int deferSeq_ = 0;   // unique names for defer guards
 
@@ -1844,6 +1918,10 @@ private:
     std::vector<std::map<std::string, std::string>> nexaDeclStack_;
 
     std::string canonicalParamType(const AstNode& fn, size_t i) const {
+        if (specAst_ == &fn && i < specTypes_.size()) {
+            const std::string& t = specTypes_[i];
+            return t.empty() ? "int" : t;
+        }
         if (i >= fn.paramTypes.size()) return "int";
         const std::string& pt = fn.paramTypes[i];
         return pt.empty() ? "int" : pt;
@@ -2431,7 +2509,12 @@ private:
             slot = s;
         }
         if (n != 1) return "";
-        return fnTypeFromFnAst(ast_[fnOverloadSlots_[slot].astIndex]);
+        const AstNode& fn = ast_[fnOverloadSlots_[slot].astIndex];
+        if (fnHasShapeParams(fn)) {
+            throw std::runtime_error("'" + name +
+                "' takes a shape, so the struct is chosen at the call; it cannot be passed as a value");
+        }
+        return fnTypeFromFnAst(fn);
     }
 
     size_t uniqueNamedFnSlot(const std::string& name, const std::string& useFile = "") const {
@@ -2445,6 +2528,10 @@ private:
         }
         if (n != 1) {
             throw std::runtime_error("Cannot use overloaded function '" + name + "' as a value");
+        }
+        if (fnHasShapeParams(ast_[fnOverloadSlots_[slot].astIndex])) {
+            throw std::runtime_error("'" + name +
+                "' takes a shape, so the struct is chosen at the call; it cannot be passed as a value");
         }
         return slot;
     }
@@ -2467,6 +2554,312 @@ private:
         return modules_.hasCppHeader() && !hasNexaFnNamed(name);
     }
 
+    static bool isShapeType(const std::string& t) {
+        return t.size() >= 6 && t.compare(0, 6, "shape:") == 0;
+    }
+    static std::string shapeNameFromDecl(const std::string& t) { return t.substr(6); }
+
+    // A parameter may be a shape, or a pointer to one. Anything wrapped
+    // further (a list, a map, a Result) is a value, and a shape is not one.
+    bool isShapeFormal(const std::string& t) const {
+        std::string u = t;
+        if (isPointerType(u)) {
+            u = pointerPointeeType(u);
+            if (isPointerType(u)) return false;
+        }
+        return isShapeType(u);
+    }
+    std::string shapeFormalName(const std::string& formal) const {
+        std::string u = isPointerType(formal) ? pointerPointeeType(formal) : formal;
+        return isShapeType(u) ? shapeNameFromDecl(u) : formal;
+    }
+    std::string shapeMentioned(const std::string& t) const {
+        size_t p = t.find("shape:");
+        if (p == std::string::npos) return "";
+        size_t b = p + 6, e = b;
+        while (e < t.size() && (std::isalnum((unsigned char)t[e]) || t[e] == '_' || t[e] == '.')) e++;
+        return t.substr(b, e - b);
+    }
+    bool fnHasShapeParams(const AstNode& fn) const {
+        if (shapes_.empty()) return false;
+        for (const std::string& t : fn.paramTypes) {
+            if (t.find("shape:") != std::string::npos) return true;
+        }
+        return false;
+    }
+    const ShapeSig* findShapeSig(const std::string& shape, const std::string& method) const {
+        auto it = shapes_.find(shape);
+        if (it == shapes_.end()) return nullptr;
+        for (const ShapeSig& sig : it->second) {
+            if (sig.name == method) return &sig;
+        }
+        return nullptr;
+    }
+
+    // Empty when the struct has every function the shape names, with the same
+    // arguments and the same return. Otherwise a sentence that says what is missing.
+    std::string structShapeFail(const std::string& structName, const std::string& shapeName) const {
+        auto sh = shapes_.find(shapeName);
+        if (sh == shapes_.end()) return "unknown shape '" + shapeName + "'";
+        auto methods = structMethods_.find(structName);
+        for (const ShapeSig& sig : sh->second) {
+            const AstNode* m = nullptr;
+            if (methods != structMethods_.end()) {
+                auto mit = methods->second.find(sig.name);
+                if (mit != methods->second.end()) m = mit->second;
+            }
+            if (!m) return structName + " has no " + sig.name + "() for " + shapeName;
+            if (m->paramNames.size() != sig.paramTypes.size()) {
+                return structName + "." + sig.name + "() does not match " + shapeName + "." + sig.name + "()";
+            }
+            for (size_t i = 0; i < sig.paramTypes.size(); i++) {
+                std::string got = canonicalParamType(*m, i);
+                if (got != sig.paramTypes[i]) {
+                    return structName + "." + sig.name + "() takes " + got + ", " +
+                           shapeName + "." + sig.name + "() takes " + sig.paramTypes[i];
+                }
+            }
+            std::string ret = inferReturnNexaType(*m);
+            if (ret != sig.ret) {
+                return structName + "." + sig.name + "() returns " + ret + ", " +
+                       shapeName + "." + sig.name + "() returns " + sig.ret;
+            }
+        }
+        return "";
+    }
+
+    // True when a shape parameter accepts this argument. A failing struct sets
+    // fail; a formal that is not a shape returns false and leaves fail alone.
+    bool shapeArgMatches(const std::string& formal, const std::string& actual, std::string& fail) const {
+        if (!isShapeFormal(formal)) return false;
+        const bool fptr = isPointerType(formal);
+        const bool aptr = isPointerType(actual);
+        const std::string shape = shapeFormalName(formal);
+        if (fptr != aptr) {
+            std::string a = aptr ? pointerPointeeType(actual) : actual;
+            if (isStructDeclType(a)) {
+                const std::string sn = structNameFromDecl(a);
+                fail = fptr ? (sn + " is a struct, and " + shape + " takes a pointer")
+                            : (sn + " is a pointer, and " + shape + " takes the struct");
+            }
+            return false;
+        }
+        std::string a = aptr ? pointerPointeeType(actual) : actual;
+        if (!isStructDeclType(a)) {
+            if (!actual.empty()) fail = shape + " takes a struct, not " + actual;
+            return false;
+        }
+        std::string why = structShapeFail(structNameFromDecl(a), shape);
+        if (!why.empty()) {
+            fail = why;
+            return false;
+        }
+        return true;
+    }
+
+    size_t slotForAst(size_t astIdx) const {
+        for (size_t s = 0; s < fnOverloadSlots_.size(); ++s) {
+            if (fnOverloadSlots_[s].astIndex == astIdx) return s;
+        }
+        return static_cast<size_t>(-1);
+    }
+    const std::vector<ShapeSpec>* shapeSpecsForAst(size_t astIdx) const {
+        size_t slot = slotForAst(astIdx);
+        if (slot == static_cast<size_t>(-1)) return nullptr;
+        auto it = shapeSpecs_.find(slot);
+        if (it == shapeSpecs_.end() || it->second.empty()) return nullptr;
+        return &it->second;
+    }
+    // The type as it was written, never the struct substituted for this copy.
+    // A call inside a specialized function still names the shape on the callee.
+    std::string writtenParamType(const AstNode& fn, size_t i) const {
+        if (i >= fn.paramTypes.size() || fn.paramTypes[i].empty()) return "int";
+        return fn.paramTypes[i];
+    }
+    std::vector<std::string> shapeSubstTypes(const AstNode& fn, const std::vector<std::string>& argT) const {
+        std::vector<std::string> types;
+        for (size_t i = 0; i < fn.paramNames.size(); i++) {
+            std::string formal = writtenParamType(fn, i);
+            if (isShapeFormal(formal) && i < argT.size()) types.push_back(argT[i]);
+            else types.push_back(formal);
+        }
+        return types;
+    }
+    static std::string concreteTag(const std::string& t) {
+        std::string u = t;
+        std::string p;
+        if (isPointerType(u)) {
+            p = "p_";
+            u = pointerPointeeType(u);
+        }
+        if (isStructDeclType(u)) return p + structNameFromDecl(u);
+        return p + u;
+    }
+    std::string shapeSpecCppName(size_t slot, const AstNode& fn, const std::vector<std::string>& types) const {
+        if (preserveNames_) {
+            std::string n = cppSafeName(fn.value);
+            for (size_t i = 0; i < types.size(); i++) {
+                std::string formal = (i < fn.paramTypes.size() && !fn.paramTypes[i].empty()) ? fn.paramTypes[i] : "int";
+                if (!isShapeFormal(formal)) continue;
+                n += "__";
+                n += cppSafeName(concreteTag(types[i]));
+            }
+            return n;
+        }
+        size_t k = 0;
+        auto it = shapeSpecs_.find(slot);
+        if (it != shapeSpecs_.end()) k = it->second.size();
+        return "__nexa_fn_" + std::to_string(slot) + "s" + std::to_string(k);
+    }
+    const ShapeSpec* findShapeSpec(size_t slot, const std::vector<std::string>& types) const {
+        auto it = shapeSpecs_.find(slot);
+        if (it == shapeSpecs_.end()) return nullptr;
+        for (const ShapeSpec& sp : it->second) {
+            if (sp.types == types) return &sp;
+        }
+        return nullptr;
+    }
+
+    void discoverFunction(const AstNode& fn) {
+        for (const AstNode& d : fn.paramDefaults) discoverNode(d);
+        nexaDeclStack_.push_back({});
+        if (fn.type == AstNode::Type::MainFunction) {
+            for (const std::string& p : fn.paramNames) semDeclare(p, "[]string");
+        } else {
+            for (size_t i = 0; i < fn.paramNames.size(); i++) semDeclare(fn.paramNames[i], canonicalParamType(fn, i));
+            if (!fn.receiverType.empty()) semDeclare("self", fn.receiverType);
+        }
+        discoverStmts(fn.children);
+        nexaDeclStack_.pop_back();
+    }
+    void discoverSpecialized(const AstNode& fn, const std::vector<std::string>& types) {
+        nexaDeclStack_.push_back({});
+        for (size_t i = 0; i < fn.paramNames.size() && i < types.size(); i++) semDeclare(fn.paramNames[i], types[i]);
+        if (!fn.receiverType.empty()) semDeclare("self", fn.receiverType);
+        discoverStmts(fn.children);
+        nexaDeclStack_.pop_back();
+    }
+    void noteShapeCall(const AstNode& e) {
+        bool any = false;
+        for (const FnOverloadSlot& sl : fnOverloadSlots_) {
+            if (sl.name == e.value && fnHasShapeParams(ast_[sl.astIndex])) { any = true; break; }
+        }
+        if (!any) return;
+        std::vector<std::string> argT;
+        argT.reserve(e.children.size());
+        for (const AstNode& a : e.children) argT.push_back(inferExprNexaType(a));
+        size_t slot = 0;
+        try {
+            slot = resolveOverload(e.value, argT, e.srcFile);
+        } catch (const std::runtime_error& ex) {
+            semError(e, ex.what());
+        }
+        const AstNode& fn = ast_[fnOverloadSlots_[slot].astIndex];
+        if (!fnHasShapeParams(fn)) return;
+        std::vector<std::string> types = shapeSubstTypes(fn, argT);
+        std::string key = std::to_string(slot);
+        for (const std::string& t : types) { key.push_back('\n'); key += t; }
+        if (!shapeSpecSeen_.insert(key).second) return;
+        shapeSpecs_[slot].push_back(ShapeSpec{types, shapeSpecCppName(slot, fn, types)});
+        for (const AstNode& d : fn.paramDefaults) discoverNode(d);
+        discoverSpecialized(fn, types);
+    }
+    void discoverShapes() {
+        if (shapes_.empty()) return;
+        nexaDeclStack_.clear();
+        nexaDeclStack_.push_back(globalNexaDecl_);
+        for (const AstNode& node : ast_) {
+            if (node.type == AstNode::Type::Variable) {
+                for (const AstNode& c : node.children) discoverNode(c);
+            } else if (node.type == AstNode::Type::Function && !node.isExtern &&
+                       node.receiverType.empty() && !fnHasShapeParams(node)) {
+                discoverFunction(node);
+            } else if (node.type == AstNode::Type::MainFunction) {
+                discoverFunction(node);
+            } else if (node.type == AstNode::Type::StructDef) {
+                for (const AstNode& d : node.paramDefaults) discoverNode(d);
+                for (const AstNode& m : node.children) {
+                    if (m.type == AstNode::Type::Function && !fnHasShapeParams(m)) discoverFunction(m);
+                }
+            }
+        }
+        nexaDeclStack_.clear();
+        specAst_ = nullptr;
+        specTypes_.clear();
+    }
+
+    void discoverStmts(const std::vector<AstNode>& stmts) {
+        nexaDeclStack_.push_back({});
+        for (const AstNode& s : stmts) discoverNode(s);
+        nexaDeclStack_.pop_back();
+    }
+    void discoverNode(const AstNode& n) {
+        if (n.type == AstNode::Type::Block || n.type == AstNode::Type::SwitchCase) {
+            discoverStmts(n.children);
+            return;
+        }
+        if (n.type == AstNode::Type::Variable) {
+            for (const AstNode& c : n.children) discoverNode(c);
+            semDeclare(n.value, nexaDeclFromVariableAst(n));
+            return;
+        }
+        if (n.type == AstNode::Type::ExprLambda) {
+            nexaDeclStack_.push_back({});
+            for (size_t i = 0; i < n.paramNames.size(); i++) {
+                semDeclare(n.paramNames[i], i < n.paramTypes.size() && !n.paramTypes[i].empty() ? n.paramTypes[i] : "int");
+            }
+            discoverStmts(n.children);
+            nexaDeclStack_.pop_back();
+            return;
+        }
+        if (n.type == AstNode::Type::For) {
+            if (!n.children.empty()) discoverNode(n.children[0]);
+            nexaDeclStack_.push_back({});
+            if (!n.value.empty()) semDeclare(n.value, "int");
+            if (n.children.size() > 1) {
+                if (n.children[1].type == AstNode::Type::Block) discoverStmts(n.children[1].children);
+                else discoverNode(n.children[1]);
+            }
+            nexaDeclStack_.pop_back();
+            return;
+        }
+        if (n.type == AstNode::Type::ForIn) {
+            if (!n.children.empty()) discoverNode(n.children[0]);
+            std::string collT = n.children.empty() ? std::string() : inferExprNexaType(n.children[0]);
+            std::string keyT = "int";
+            std::string valT = "int";
+            if (nexaIsSliceType(collT)) keyT = nexaSliceElem(collT);
+            else if (nexaIsMapType(collT)) nexaSplitMapType(collT, keyT, valT);
+            else if (collT == "string") keyT = "string";
+            nexaDeclStack_.push_back({});
+            if (!n.value.empty()) semDeclare(n.value, keyT);
+            if (!n.initValue.empty()) semDeclare(n.initValue, valT);
+            if (n.children.size() > 1) {
+                if (n.children[1].type == AstNode::Type::Block) discoverStmts(n.children[1].children);
+                else discoverNode(n.children[1]);
+            }
+            nexaDeclStack_.pop_back();
+            return;
+        }
+        if (n.type == AstNode::Type::TryCatch) {
+            if (!n.children.empty()) {
+                if (n.children[0].type == AstNode::Type::Block) discoverStmts(n.children[0].children);
+                else discoverNode(n.children[0]);
+            }
+            nexaDeclStack_.push_back({});
+            if (!n.value.empty()) semDeclare(n.value, "string");
+            if (n.children.size() > 1) {
+                if (n.children[1].type == AstNode::Type::Block) discoverStmts(n.children[1].children);
+                else discoverNode(n.children[1]);
+            }
+            nexaDeclStack_.pop_back();
+            return;
+        }
+        for (const AstNode& c : n.children) discoverNode(c);
+        for (const AstNode& d : n.paramDefaults) discoverNode(d);
+        if (n.type == AstNode::Type::FnCall && n.initValue != "." && n.initValue != "->") noteShapeCall(n);
+    }
+
     size_t resolveOverload(const std::string& name,
                            const std::vector<std::string>& actualArgTypes,
                            const std::string& useFile = "") const {
@@ -2474,6 +2867,7 @@ private:
         std::vector<size_t> compat;
         bool hidden = false;
         bool sawVisible = false;
+        std::string shapeFail;
         for (size_t s = 0; s < fnOverloadSlots_.size(); ++s) {
             const FnOverloadSlot& sl = fnOverloadSlots_[s];
             if (sl.name != name) continue;
@@ -2488,14 +2882,17 @@ private:
             bool ok = true;
             const size_t chk = k < sl.paramTypes.size() ? k : sl.paramTypes.size();
             for (size_t i = 0; i < chk; ++i) {
-                if (!typesMatchForOverload(sl.paramTypes[i], actualArgTypes[i])) {
-                    ok = false;
-                    break;
-                }
+                if (typesMatchForOverload(sl.paramTypes[i], actualArgTypes[i])) continue;
+                std::string why;
+                if (shapeArgMatches(sl.paramTypes[i], actualArgTypes[i], why)) continue;
+                if (!why.empty() && shapeFail.empty()) shapeFail = why;
+                ok = false;
+                break;
             }
             if (ok) compat.push_back(s);
         }
         if (compat.empty()) {
+            if (!shapeFail.empty()) throw std::runtime_error(shapeFail);
             if (hidden && !sawVisible) {
                 throw std::runtime_error("'" + name + "' is in another file; call it by that file's name");
             }
@@ -3103,6 +3500,10 @@ private:
                                 if (nexaSplitMapType(recvT, k, v)) return "[]" + v;
                             }
                         }
+                        if (isShapeType(recvT)) {
+                            const ShapeSig* sig = findShapeSig(shapeNameFromDecl(recvT), e.value);
+                            if (sig) return sig->ret;
+                        }
                         if (isStructDeclType(recvT)) {
                             std::string sn = structNameFromDecl(recvT);
                             auto sit = structMethods_.find(sn);
@@ -3699,6 +4100,16 @@ private:
         const FnOverloadSlot& sl = fnOverloadSlots_[slot];
         const AstNode& fn = ast_[sl.astIndex];
         std::string name = cppFnUseName(slot);
+        if (fnHasShapeParams(fn)) {
+            const ShapeSpec* sp = findShapeSpec(slot, shapeSubstTypes(fn, argT));
+            if (!sp) {
+                std::string msg = "'" + e.value + "' has no compiled form for this struct";
+                if (!e.srcFile.empty()) msg = e.srcFile + ": " + msg;
+                if (e.line != 0) msg += " at line " + std::to_string(e.line);
+                throw std::runtime_error(msg);
+            }
+            name = (preserveNames_ ? "::" : "") + sp->cppName;
+        }
         std::string s = name + "(";
         size_t emitCount = fn.paramNames.size();
         if (fn.isVariadic && e.children.size() > emitCount) emitCount = e.children.size();
@@ -4136,6 +4547,52 @@ private:
         for (const AstNode& n : ast_) visit(n);
     }
 
+    // A shape names functions. It can be a parameter, and nothing else: not a
+    // field, not a let, not a return, not a list of them.
+    void semCheckShapePlaces() {
+        if (shapes_.empty()) return;
+        auto ban = [&](const std::string& t, const AstNode& at) {
+            const std::string name = shapeMentioned(t);
+            if (!name.empty()) semError(at, name + " names functions, so it is not a value you can store");
+        };
+        std::function<void(const AstNode&)> visit = [&](const AstNode& n) {
+            if (n.type == AstNode::Type::Variable) ban(n.declType, n);
+            if (n.type == AstNode::Type::StructDef) {
+                for (const std::string& ft : n.paramTypes) ban(ft, n);
+            }
+            if (n.type == AstNode::Type::Function && !n.receiverType.empty()) {
+                for (const std::string& pt : n.paramTypes) {
+                    const std::string name = shapeMentioned(pt);
+                    if (!name.empty()) {
+                        semError(n, "a method takes one struct; write a function to take " + name);
+                    }
+                }
+                ban(n.fnReturnType, n);
+            }
+            if (n.type == AstNode::Type::Function && n.receiverType.empty()) {
+                ban(n.fnReturnType, n);
+                for (size_t i = 0; i < n.paramTypes.size(); i++) {
+                    const std::string& pt = n.paramTypes[i];
+                    if (shapeMentioned(pt).empty()) continue;
+                    if (!isShapeFormal(pt)) ban(pt, n);
+                    if (i < n.paramHasDefault.size() && n.paramHasDefault[i]) {
+                        semError(n, "a shape parameter has no default; the struct is chosen at the call");
+                    }
+                }
+            }
+            if (n.type == AstNode::Type::ShapeDef) {
+                for (const AstNode& m : n.children) {
+                    for (const std::string& pt : m.paramTypes) {
+                        if (!shapeMentioned(pt).empty()) semError(m, "a shape's functions take concrete types");
+                    }
+                    if (!shapeMentioned(m.fnReturnType).empty()) semError(m, "a shape's functions return concrete types");
+                }
+            }
+            for (const AstNode& c : n.children) visit(c);
+        };
+        for (const AstNode& n : ast_) visit(n);
+    }
+
     void checkSemantics() {
         semNameChecks_ = !modules_.hasInlineCpp();
         if (semNameChecks_) {
@@ -4150,6 +4607,7 @@ private:
         semLoopDepth_ = 0;
         semSwitchDepth_ = 0;
         if (semNameChecks_) semCheckTypeNames();
+        semCheckShapePlaces();
 
         std::set<std::string> seenGlobals;
         for (const AstNode& n : ast_) {
@@ -4448,6 +4906,12 @@ private:
         if (e.children.empty()) return;
         std::string recv = inferExprNexaType(e.children[0]);
         if (isPointerType(recv)) recv = pointerPointeeType(recv);
+        if (!shapes_.empty() && isShapeType(recv)) {
+            AstNode& n = const_cast<AstNode&>(e);
+            n.type = AstNode::Type::FnCall;
+            n.initValue = ".";
+            return;
+        }
         if (!isStructDeclType(recv)) return;
         auto mit = structMethods_.find(structNameFromDecl(recv));
         if (mit == structMethods_.end() || mit->second.find(e.value) == mit->second.end()) return;
@@ -4637,6 +5101,28 @@ private:
             case AstNode::Type::ExprCall:
                 for (const AstNode& c : e.children) semExpr(c);
                 semCheckSliceAlgo(e);
+                if (!shapes_.empty() && e.type == AstNode::Type::FnCall &&
+                    (e.initValue == "." || e.initValue == "->") && !e.children.empty()) {
+                    std::string recvT = inferExprNexaType(e.children[0]);
+                    if (isPointerType(recvT)) recvT = pointerPointeeType(recvT);
+                    if (isShapeType(recvT)) {
+                        const std::string shape = shapeNameFromDecl(recvT);
+                        const ShapeSig* sig = findShapeSig(shape, e.value);
+                        if (!sig) semError(e, shape + " has no " + e.value + "()");
+                        if (e.children.size() - 1 != sig->paramTypes.size()) {
+                            semError(e, shape + "." + e.value + "() takes " +
+                                            std::to_string(sig->paramTypes.size()) + " arguments");
+                        }
+                        for (size_t i = 0; i < sig->paramTypes.size(); i++) {
+                            const std::string got = inferExprNexaType(e.children[i + 1]);
+                            if (!got.empty() && got != sig->paramTypes[i] &&
+                                !typesMatchForOverload(sig->paramTypes[i], got)) {
+                                semError(e, shape + "." + e.value + "() takes " + sig->paramTypes[i] +
+                                                ", and this is " + got);
+                            }
+                        }
+                    }
+                }
                 break;
             case AstNode::Type::ExprAdd:
                 for (const AstNode& c : e.children) semExpr(c);
@@ -5544,6 +6030,9 @@ private:
         semExpr(base);
         std::string baseT = inferExprNexaType(base);
         if (isPointerType(baseT)) baseT = pointerPointeeType(baseT);
+        if (isShapeType(baseT)) {
+            semError(e, shapeNameFromDecl(baseT) + " names functions, so it has no field '" + e.value + "'");
+        }
         if (!isStructDeclType(baseT)) return;  // not a known Nexa struct: no opinion
         const std::string sname = structNameFromDecl(baseT);
         auto fields = structFields_.find(sname);
@@ -5663,6 +6152,10 @@ private:
         return "int";
     }
     std::string nexaTypeToCpp(const std::string& t) const {
+        if (isShapeType(t) || (isPointerType(t) && isShapeType(pointerPointeeType(t)))) {
+            const std::string n = isShapeType(t) ? shapeNameFromDecl(t) : shapeNameFromDecl(pointerPointeeType(t));
+            throw std::runtime_error(n + " names functions, so it is not a value you can store");
+        }
         if (isPointerType(t)) {
             return nexaTypeToCpp(pointerPointeeType(t)) + "*";
         }
