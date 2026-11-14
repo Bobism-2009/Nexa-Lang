@@ -162,6 +162,14 @@ FUNCTIONS
       and Result[T] are the places the name can stand.
     - A method cannot name a type. Write a function.
     - A program that never writes [T] is unchanged.
+    struct Slot[T] { value: T; ok: bool; }
+    struct Pair[A, B] { a: A; b: B; }
+    - Slot of an int and Slot of a string are two structs. The field is that
+      struct's own field. A method on Slot is part of the same copy. A method
+      still cannot name a type of its own.
+    - Write Slot[int] where a type is named and nothing gives T a value.
+      Slot { value: 3, ok: true } takes T from the fields.
+    - A program that never writes [T] on a struct is unchanged.
 
   - Return type inferred: int if any `return expr;` appears (including inside if/while/for), else void
   - Returning anything else needs the type written: fn name(a: int): string { ... }. Returning a

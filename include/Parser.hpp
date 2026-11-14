@@ -123,7 +123,7 @@ struct AstNode {
     bool isArrowMember = false; // for ExprMember: true = ptr->field, false = value.field
     std::string arraySize = ""; // for Variable: size for fixed array, e.g. "4080"
     std::string fnReturnType = ""; // Function / MainFunction: explicit ": type" before `{`; empty = infer from returns
-    std::vector<std::string> typeParams; // Function: names in fn first[T], empty when the function names no type
+    std::vector<std::string> typeParams; // fn first[T] or struct Slot[T]; empty when the name takes no type
     bool isExtern = false;         // Function: true = extern fn (C linkage declaration, no body)
     bool isVariadic = false;       // Function: true = trailing ... (C varargs)
     std::string receiverType = ""; // Function: "struct:Point" when this is a method inside a struct
@@ -398,7 +398,10 @@ private:
     // is not in here, so a '{' after it is still not part of the value.
     std::map<std::string, std::map<std::string, std::vector<std::pair<std::string, std::string>>>> enumFields_;
     std::set<std::string> shapeNames_;
-    // Type names of the function currently being parsed (fn first[T]).
+    // struct Slot[T] remembers T so a later Slot[int] is that struct.
+    // A struct with no [T] is not here, so a '[' after its name is still a fixed array.
+    std::map<std::string, std::vector<std::string>> structTypeParams_;
+    // Type names of the function or struct currently being parsed.
     // Empty for every other type, so a program with no [T] parses as before.
     std::set<std::string> typeParamScope_;
     // Recursive-descent depth across expressions and statement bodies combined.
@@ -516,6 +519,40 @@ private:
         return false;
     }
 
+    // Slot[int] or Pair[int, string]. A '[' that starts with a number is a fixed
+    // array (let buf: Point[8]), so this is only called when the next token is a type.
+    std::string parseTypeArgs() {
+        if (!match(TokenType::LBracket)) {
+            throw std::runtime_error("Expected '[' at line " + std::to_string(peek().line));
+        }
+        if (peek().type == TokenType::RBracket) {
+            throw std::runtime_error("Expected a type name at line " + std::to_string(peek().line));
+        }
+        std::string s = "[";
+        for (;;) {
+            s += parseTypeName();
+            if (match(TokenType::Comma) && peek().type != TokenType::RBracket) {
+                s += ",";
+                continue;
+            }
+            break;
+        }
+        if (!match(TokenType::RBracket)) {
+            throw std::runtime_error("Expected ']' after the type name at line " + std::to_string(peek().line));
+        }
+        s += "]";
+        return s;
+    }
+
+    // struct:Name, or struct:Name[T, U] when the name is given types.
+    std::string structTypeWithArgs(const std::string& name) {
+        if (peek().type == TokenType::LBracket && pos_ + 1 < tokens_.size() &&
+            tokens_[pos_ + 1].type != TokenType::Number) {
+            return "struct:" + name + parseTypeArgs();
+        }
+        return "struct:" + name;
+    }
+
     std::string parseTypeName() {
         // Pointer types: *int, **char, *Point, etc. (prefix *, like Go / systems style)
         if (match(TokenType::Star)) {
@@ -608,7 +645,7 @@ private:
             std::string q = v + "." + part.value;
             if (shapeNames_.count(q)) return "shape:" + q;
             if (enumNames_.count(q)) return "enum:" + q;
-            return "struct:" + q;
+            return structTypeWithArgs(q);
         }
         if (v == "map") {
             if (!match(TokenType::LBracket)) {
@@ -650,7 +687,7 @@ private:
         if (shapeNames_.count(v)) return "shape:" + v;
         if (enumNames_.count(v)) return "enum:" + v;
         if (typeParamScope_.count(v)) return "typevar:" + v;
-        return "struct:" + v;
+        return structTypeWithArgs(v);
     }
 
     void noteEnumPayload(const AstNode& n) {
@@ -670,6 +707,7 @@ private:
         structNames_.insert(n.value);
         std::set<std::string>& fields = structFieldNames_[n.value];
         for (const std::string& f : n.paramNames) fields.insert(f);
+        if (!n.typeParams.empty()) structTypeParams_[n.value] = n.typeParams;
     }
 
     // Struct types a module brings with it. HttpResponse, HttpServer and
@@ -940,6 +978,11 @@ private:
         }
         structNames_.insert(sname);
         structFieldNames_[sname];
+        std::vector<std::string> typeParams;
+        if (peek().type == TokenType::LBracket) {
+            typeParams = parseTypeParams(line);
+            structTypeParams_[sname] = typeParams;
+        }
         if (!match(TokenType::LBrace)) {
             throw std::runtime_error("Expected '{' at line " + std::to_string(peek().line));
         }
@@ -998,6 +1041,8 @@ private:
         if (!match(TokenType::RBrace)) {
             throw std::runtime_error("Expected '}' at end of struct at line " + std::to_string(peek().line));
         }
+        node.typeParams = std::move(typeParams);
+        if (!node.typeParams.empty()) typeParamScope_.clear();
         match(TokenType::Semicolon);
         return node;
     }
@@ -1467,7 +1512,16 @@ private:
             case AstNode::Type::AssnIndex:
             case AstNode::Type::IncPost:
             case AstNode::Type::DecPost:
-            case AstNode::Type::ExprStructLit:
+            case AstNode::Type::ExprStructLit: {
+                // Slot[int] is the struct Slot, so the file's name lands on Slot.
+                size_t br = n.value.find('[');
+                std::string base = br == std::string::npos ? n.value : n.value.substr(0, br);
+                if (bareName(base) && !locals.count(base) && ownsName(base)) {
+                    n.value = filePrefix_ + "." + base +
+                              (br == std::string::npos ? std::string() : n.value.substr(br));
+                }
+                break;
+            }
             case AstNode::Type::ExprEnumLit:
                 take(n.value);
                 break;
@@ -1816,7 +1870,9 @@ private:
         fnNode.paramDefaults = std::move(defaults);
         fnNode.typeParams = std::move(typeParams);
         fnNode.children = parseBlock();
-        typeParamScope_.clear();
+        // A method keeps the struct's type names (struct Slot[T] { fn get(): T }).
+        // A function clears the names it wrote itself.
+        if (!typeParams.empty()) typeParamScope_.clear();
         if (!match(TokenType::RBrace)) {
             throw std::runtime_error("Expected '}' at line " + std::to_string(peek().line));
         }
@@ -2193,12 +2249,18 @@ private:
             sname += "." + part.value;
             advance();
         }
+        if (peek().type == TokenType::LBracket) {
+            sname += parseTypeArgs();
+        }
         if (!match(TokenType::LBrace)) {
             throw std::runtime_error("Expected '{' after struct name at line " + std::to_string(peek().line));
         }
         AstNode node{AstNode::Type::ExprStructLit, sname, {}};
         std::set<std::string> seen;
-        auto fieldsIt = structFieldNames_.find(sname);
+        std::string fieldKey = sname;
+        size_t argAt = sname.find('[');
+        if (argAt != std::string::npos) fieldKey = sname.substr(0, argAt);
+        auto fieldsIt = structFieldNames_.find(fieldKey);
         while (peek().type != TokenType::RBrace) {
             if (peek().type == TokenType::Eof) {
                 throw std::runtime_error("Unclosed struct literal starting at line " + std::to_string(line));

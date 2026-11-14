@@ -12,6 +12,7 @@
 #include <set>
 #include <functional>
 #include <vector>
+#include <deque>
 #include <cctype>
 #include <limits>
 #include <optional>
@@ -585,6 +586,9 @@ public:
         structFieldOrder_.clear();
         structFieldDefaults_.clear();
         structCppNames_.clear();
+        genericStructs_.clear();
+        structInst_.clear();
+        structLitApplied_.clear();
         enumCppNames_.clear();
         enumVariants_.clear();
         enumPayload_.clear();
@@ -625,6 +629,12 @@ public:
             if (node.type == AstNode::Type::StructDef) {
                 if (!typeNames.insert(node.value).second) {
                     throw std::runtime_error("Duplicate type name '" + node.value + "'");
+                }
+                // struct Slot[T] is a pattern. Slot[int] is the struct, made
+                // later, once something names int. The pattern itself is not emitted.
+                if (!node.typeParams.empty()) {
+                    genericStructs_[node.value] = &node;
+                    continue;
                 }
                 for (size_t i = 0; i < node.paramNames.size(); i++) {
                     structFields_[node.value][node.paramNames[i]] = node.paramTypes[i];
@@ -675,6 +685,8 @@ public:
                 shapes_[node.value] = std::move(sigs);
             }
         }
+        structId_ = structId;
+        if (!genericStructs_.empty()) materializeGenericStructs();
         bool needsString = false;
         bool needsCstr = false;
         bool needsCstdlib = false;
@@ -979,9 +991,11 @@ public:
         std::map<std::string, const AstNode*> structByName;
         std::map<std::string, const AstNode*> enumByName;
         for (const AstNode& node : ast_) {
-            if (node.type == AstNode::Type::StructDef) structByName[node.value] = &node;
-            else if (node.type == AstNode::Type::EnumDef) enumByName[node.value] = &node;
+            if (node.type == AstNode::Type::StructDef) {
+                if (node.typeParams.empty()) structByName[node.value] = &node;
+            } else if (node.type == AstNode::Type::EnumDef) enumByName[node.value] = &node;
         }
+        for (const AstNode& node : structInst_) structByName[node.value] = &node;
         std::set<std::string> structDone, enumDone, structForward;
         std::vector<std::string> structStack;
         std::set<std::string> structStackSet;
@@ -1232,9 +1246,11 @@ public:
         };
 
         for (const AstNode& node : ast_) {
-            if (node.type == AstNode::Type::StructDef) emitStructNamed(node.value);
-            else if (node.type == AstNode::Type::EnumDef) emitEnumNamed(node.value);
+            if (node.type == AstNode::Type::StructDef) {
+                if (node.typeParams.empty()) emitStructNamed(node.value);
+            } else if (node.type == AstNode::Type::EnumDef) emitEnumNamed(node.value);
         }
+        for (const AstNode& node : structInst_) emitStructNamed(node.value);
 
         varStructScopes_.clear();
         varStructScopes_.push_back({});
@@ -1759,7 +1775,13 @@ public:
             GlobalScope g{&globalVarMap, &globalVarIsString, &globalVarIsConst, &globalVarIsFloat,
                           &globalVarIsChar, &globalVarIsBool, &globalVarIsEnum};
             for (const AstNode& node : ast_) {
-                if (node.type != AstNode::Type::StructDef) continue;
+                if (node.type != AstNode::Type::StructDef || !node.typeParams.empty()) continue;
+                std::string cppName = structCppNames_.at(node.value);
+                for (const AstNode& meth : node.children) {
+                    if (meth.type == AstNode::Type::Function) emitStructMethodBody(out, meth, cppName, &g);
+                }
+            }
+            for (const AstNode& node : structInst_) {
                 std::string cppName = structCppNames_.at(node.value);
                 for (const AstNode& meth : node.children) {
                     if (meth.type == AstNode::Type::Function) emitStructMethodBody(out, meth, cppName, &g);
@@ -2004,6 +2026,12 @@ private:
     mutable std::vector<PayloadFrame> payloadSem_;
     mutable std::vector<std::map<std::string, std::string>> varStructScopes_;
     std::map<std::string, std::map<std::string, const AstNode*>> structMethods_;
+    // struct Slot[T] lives here, not in structCppNames_. Each Slot[int] is a
+    // copy in structInst_, and a program with no [T] on a struct leaves both empty.
+    std::map<std::string, const AstNode*> genericStructs_;
+    std::deque<AstNode> structInst_;
+    mutable std::map<const AstNode*, std::string> structLitApplied_;
+    int structId_ = 0;
 
     // A shape names functions. It is not a C++ type. Each struct passed for
     // one gets its own copy of the function, so the call is the struct's method.
@@ -2464,9 +2492,15 @@ private:
             if (n.type == AstNode::Type::Function && !n.isExtern) {
                 fns.push_back({&n, false, {}});
             } else if (n.type == AstNode::Type::StructDef) {
+                if (!n.typeParams.empty()) continue;
                 for (const AstNode& m : n.children) {
                     if (m.type == AstNode::Type::Function) fns.push_back({&m, false, {}});
                 }
+            }
+        }
+        for (const AstNode& n : structInst_) {
+            for (const AstNode& m : n.children) {
+                if (m.type == AstNode::Type::Function) fns.push_back({&m, false, {}});
             }
         }
         for (PassFn& f : fns) {
@@ -2931,6 +2965,20 @@ private:
             }
             return unifyType(fr.empty() ? "int" : fr, ar.empty() ? "int" : ar, b, fail);
         }
+        // struct Slot[T] against Slot[int]: the name matches, and each type is unified.
+        if (formal.compare(0, 7, "struct:") == 0 && actual.compare(0, 7, "struct:") == 0 &&
+            formal.find('[') != std::string::npos && actual.find('[') != std::string::npos) {
+            std::string fb, ab;
+            std::vector<std::string> fa, aa;
+            if (splitAppliedStruct(formal.substr(7), fb, fa) &&
+                splitAppliedStruct(actual.substr(7), ab, aa) &&
+                fb == ab && fa.size() == aa.size()) {
+                for (size_t i = 0; i < fa.size(); i++) {
+                    if (!unifyType(fa[i], aa[i], b, fail)) return false;
+                }
+                return true;
+            }
+        }
         fail = formal + " and " + actual;
         return false;
     }
@@ -3052,7 +3100,7 @@ private:
             for (const AstNode& n : ast_) {
                 if (fnHasTypeParams(n)) { anyType = true; break; }
             }
-            if (!anyType) return;
+            if (!anyType && structInst_.empty()) return;
         }
         nexaDeclStack_.clear();
         nexaDeclStack_.push_back(globalNexaDecl_);
@@ -3065,10 +3113,16 @@ private:
             } else if (node.type == AstNode::Type::MainFunction) {
                 discoverFunction(node);
             } else if (node.type == AstNode::Type::StructDef) {
+                if (!node.typeParams.empty()) continue;
                 for (const AstNode& d : node.paramDefaults) discoverNode(d);
                 for (const AstNode& m : node.children) {
                     if (m.type == AstNode::Type::Function && !fnHasShapeParams(m) && !fnHasTypeParams(m)) discoverFunction(m);
                 }
+            }
+        }
+        for (const AstNode& node : structInst_) {
+            for (const AstNode& m : node.children) {
+                if (m.type == AstNode::Type::Function) discoverFunction(m);
             }
         }
         nexaDeclStack_.clear();
@@ -3719,8 +3773,13 @@ private:
                 if (enIt != enumCppNames_.end()) return "enum:" + e.value;
                 return "int";
             }
-            case AstNode::Type::ExprStructLit:
+            case AstNode::Type::ExprStructLit: {
+                if (!structLitApplied_.empty()) {
+                    auto it = structLitApplied_.find(&e);
+                    if (it != structLitApplied_.end()) return "struct:" + it->second;
+                }
                 return std::string("struct:") + e.value;
+            }
             case AstNode::Type::ExprEnumLit:
                 return std::string("enum:") + e.value;
             case AstNode::Type::ExprLambda:
@@ -4687,7 +4746,12 @@ private:
                 return;
             }
             case AstNode::Type::ExprStructLit: {
-                auto sit = structFields_.find(n.value);
+                std::string litName = n.value;
+                if (!structLitApplied_.empty()) {
+                    auto it = structLitApplied_.find(&n);
+                    if (it != structLitApplied_.end()) litName = it->second;
+                }
+                auto sit = structFields_.find(litName);
                 for (size_t i = 0; i < n.children.size(); i++) {
                     std::string field;
                     if (i < n.paramNames.size() && sit != structFields_.end()) {
@@ -4910,6 +4974,349 @@ private:
         for (const AstNode& n : ast_) visit(n);
     }
 
+    static std::string genericStructSpell(const AstNode& tmpl) {
+        std::string s = tmpl.value + "[";
+        for (size_t i = 0; i < tmpl.typeParams.size(); i++) {
+            if (i) s += ", ";
+            s += tmpl.typeParams[i];
+        }
+        s += "]";
+        return s;
+    }
+
+    static bool splitAppliedStruct(const std::string& applied, std::string& base,
+                                   std::vector<std::string>& args) {
+        size_t br = applied.find('[');
+        if (br == std::string::npos || applied.empty() || applied.back() != ']') return false;
+        base = applied.substr(0, br);
+        args.clear();
+        int depth = 0;
+        size_t start = br + 1;
+        for (size_t i = br + 1; i < applied.size(); i++) {
+            char c = applied[i];
+            if (c == '[') depth++;
+            else if (c == ']') {
+                if (depth == 0) {
+                    if (i > start) args.push_back(applied.substr(start, i - start));
+                    return !base.empty() && !args.empty();
+                }
+                depth--;
+            } else if (c == ',' && depth == 0) {
+                args.push_back(applied.substr(start, i - start));
+                start = i + 1;
+            }
+        }
+        return false;
+    }
+
+    // Slot { value: 3 } binds T from the fields. Slot[int] { ... } is already bound.
+    std::string inferStructLitApp(const AstNode& lit, const std::map<std::string, std::string>& subst,
+                                  std::string& fail) const {
+        fail.clear();
+        const std::string& written = lit.value;
+        size_t br = written.find('[');
+        if (br != std::string::npos) {
+            std::string t = "struct:" + written;
+            if (!subst.empty()) substTypeStr(t, subst);
+            if (t.find("typevar:") != std::string::npos) {
+                size_t p = t.find("typevar:");
+                size_t b = p + 8, e = b;
+                while (e < t.size() && (std::isalnum((unsigned char)t[e]) || t[e] == '_')) e++;
+                fail = t.substr(b, e - b) + " has no value to take its type from";
+                return "";
+            }
+            return t.substr(7);
+        }
+        auto git = genericStructs_.find(written);
+        if (git == genericStructs_.end()) return written;
+        const AstNode& tmpl = *git->second;
+        std::map<std::string, std::string> binds;
+        for (size_t i = 0; i < lit.paramNames.size(); i++) {
+            std::string formal;
+            for (size_t f = 0; f < tmpl.paramNames.size(); f++) {
+                if (tmpl.paramNames[f] != lit.paramNames[i]) continue;
+                formal = (f < tmpl.paramTypes.size() && !tmpl.paramTypes[f].empty()) ? tmpl.paramTypes[f] : "int";
+                break;
+            }
+            if (formal.empty() || formal.find("typevar:") == std::string::npos) continue;
+            std::string actual = (i < lit.children.size()) ? inferExprNexaType(lit.children[i]) : std::string("int");
+            if (!subst.empty()) substTypeStr(actual, subst);
+            if (!unifyType(formal, actual, binds, fail)) {
+                if (fail.empty()) fail = lit.paramNames[i] + " is " + formal + " and " + actual;
+                return "";
+            }
+        }
+        for (const std::string& p : tmpl.typeParams) {
+            if (!binds.count(p)) {
+                fail = p + " has no value to take its type from";
+                return "";
+            }
+        }
+        std::string app = written + "[";
+        for (size_t i = 0; i < tmpl.typeParams.size(); i++) {
+            if (i) app += ",";
+            app += binds[tmpl.typeParams[i]];
+        }
+        app += "]";
+        return app;
+    }
+
+    std::string structLitUseName(const AstNode& e) const {
+        if (!structLitApplied_.empty()) {
+            auto it = structLitApplied_.find(&e);
+            if (it != structLitApplied_.end()) return it->second;
+        }
+        if (!genericStructs_.empty() && e.value.find('[') == std::string::npos &&
+            genericStructs_.count(e.value)) {
+            std::string why;
+            std::string app = inferStructLitApp(e, {}, why);
+            if (app.empty()) throw std::runtime_error(why.empty() ? std::string("Unknown struct type: ") + e.value : why);
+            return app;
+        }
+        return e.value;
+    }
+
+    // Turn every Slot[int] the program actually uses into a struct. Slot[T]
+    // itself is not emitted. A program that never writes [T] on a struct
+    // never calls this, and its structs are numbered and emitted as before.
+    void materializeGenericStructs() {
+        struct Pending {
+            const AstNode* call;
+            std::vector<std::string> argT;
+        };
+        std::vector<Pending> pending;
+        std::set<std::string> building;
+        const AstNode* at = nullptr;
+
+        std::function<void(const std::string&)> ensureApp;
+        std::function<void(const std::string&)> noteType;
+        std::function<void(const AstNode&, const std::map<std::string, std::string>&)> scanAny;
+
+        noteType = [&](const std::string& t) {
+            if (t.find("struct:") == std::string::npos) return;
+            for (size_t i = 0; i < t.size();) {
+                if (t.compare(i, 7, "struct:") != 0) { ++i; continue; }
+                size_t b = i + 7, e = b;
+                while (e < t.size() && (std::isalnum((unsigned char)t[e]) || t[e] == '_' || t[e] == '.')) e++;
+                const std::string base = t.substr(b, e - b);
+                if (e < t.size() && t[e] == '[') {
+                    int depth = 0;
+                    size_t a = e;
+                    do {
+                        if (t[a] == '[') depth++;
+                        else if (t[a] == ']') depth--;
+                        a++;
+                    } while (depth > 0 && a < t.size());
+                    std::string applied = t.substr(b, a - b);
+                    if (applied.find("typevar:") == std::string::npos) ensureApp(applied);
+                    i = e + 1;
+                    continue;
+                }
+                auto git = genericStructs_.find(base);
+                if (git != genericStructs_.end()) {
+                    const AstNode& where = at ? *at : *git->second;
+                    semError(where, base + " names a type; write " + genericStructSpell(*git->second));
+                }
+                i = e;
+            }
+        };
+        auto noteTypeSub = [&](std::string t, const std::map<std::string, std::string>& subst) {
+            if (!subst.empty() && t.find("typevar:") != std::string::npos) substTypeStr(t, subst);
+            noteType(t);
+        };
+        ensureApp = [&](const std::string& applied) {
+            if (structCppNames_.count(applied) || !building.insert(applied).second) return;
+            std::string base;
+            std::vector<std::string> args;
+            if (!splitAppliedStruct(applied, base, args)) {
+                throw std::runtime_error("Unknown struct type: " + applied);
+            }
+            auto git = genericStructs_.find(base);
+            if (git == genericStructs_.end()) {
+                if (!at) throw std::runtime_error(base + " does not name a type");
+                semError(*at, base + " does not name a type");
+            }
+            const AstNode& tmpl = *git->second;
+            if (args.size() != tmpl.typeParams.size()) {
+                if (!at) {
+                    throw std::runtime_error(base + " names " + std::to_string(tmpl.typeParams.size()) +
+                                              (tmpl.typeParams.size() == 1 ? " type" : " types"));
+                }
+                semError(*at, base + " names " + std::to_string(tmpl.typeParams.size()) +
+                                  (tmpl.typeParams.size() == 1 ? " type" : " types"));
+            }
+            for (const std::string& a : args) {
+                if (a.find("typevar:") != std::string::npos) {
+                    building.erase(applied);
+                    return;
+                }
+            }
+            std::map<std::string, std::string> subst;
+            for (size_t i = 0; i < tmpl.typeParams.size(); i++) subst[tmpl.typeParams[i]] = args[i];
+            AstNode copy = tmpl;
+            substTypeTree(copy, subst);
+            copy.value = applied;
+            copy.typeParams.clear();
+            for (AstNode& m : copy.children) {
+                if (m.type == AstNode::Type::Function) m.receiverType = "struct:" + applied;
+            }
+            structInst_.push_back(std::move(copy));
+            AstNode& node = structInst_.back();
+            for (size_t i = 0; i < node.paramNames.size(); i++) {
+                structFields_[applied][node.paramNames[i]] =
+                    (i < node.paramTypes.size() && !node.paramTypes[i].empty()) ? node.paramTypes[i] : "int";
+                if (i < node.paramHasDefault.size() && node.paramHasDefault[i]) {
+                    structFieldDefaults_[applied][node.paramNames[i]] = &node.paramDefaults[i];
+                }
+            }
+            structFieldOrder_[applied] = node.paramNames;
+            for (AstNode& m : node.children) {
+                if (m.type == AstNode::Type::Function) structMethods_[applied][m.value] = &m;
+            }
+            structCppNames_[applied] = preserveNames_
+                ? cppSafeName(typeFileTag("struct:" + applied))
+                : ("__nexa_S" + std::to_string(structId_++));
+            for (const std::string& ft : node.paramTypes) noteType(ft);
+            for (const AstNode& m : node.children) {
+                if (m.type != AstNode::Type::Function) continue;
+                for (const std::string& pt : m.paramTypes) noteType(pt);
+                noteType(m.fnReturnType);
+                scanAny(m, {});
+            }
+        };
+        auto namedTypeParam = [&](const std::string& name) {
+            for (const AstNode& n : ast_) {
+                if (n.type == AstNode::Type::Function && n.value == name && fnHasTypeParams(n)) return true;
+            }
+            return false;
+        };
+        scanAny = [&](const AstNode& n, const std::map<std::string, std::string>& subst) {
+            const AstNode* saved = at;
+            at = &n;
+            if (n.type == AstNode::Type::Function && fnHasTypeParams(n) && subst.empty()) {
+                at = saved;
+                return;
+            }
+            if (n.type == AstNode::Type::StructDef && !n.typeParams.empty() && subst.empty()) {
+                at = saved;
+                return;
+            }
+            if (n.type == AstNode::Type::Function || n.type == AstNode::Type::MainFunction) {
+                nexaDeclStack_.push_back({});
+                if (n.type == AstNode::Type::MainFunction) {
+                    for (const std::string& p : n.paramNames) {
+                        if (!nexaDeclStack_.empty()) nexaDeclStack_.back()[p] = "[]string";
+                    }
+                } else {
+                    for (size_t i = 0; i < n.paramNames.size(); i++) {
+                        std::string t = canonicalParamType(n, i);
+                        if (!subst.empty()) substTypeStr(t, subst);
+                        noteType(t);
+                        if (!nexaDeclStack_.empty()) nexaDeclStack_.back()[n.paramNames[i]] = t;
+                    }
+                    if (!n.receiverType.empty()) {
+                        std::string r = n.receiverType;
+                        if (!subst.empty()) substTypeStr(r, subst);
+                        noteType(r);
+                        if (!nexaDeclStack_.empty()) nexaDeclStack_.back()["self"] = r;
+                    }
+                    noteTypeSub(n.fnReturnType, subst);
+                }
+                for (const AstNode& c : n.children) scanAny(c, subst);
+                nexaDeclStack_.pop_back();
+                at = saved;
+                return;
+            }
+            if (n.type == AstNode::Type::Block || n.type == AstNode::Type::SwitchCase) {
+                nexaDeclStack_.push_back({});
+                for (const AstNode& c : n.children) scanAny(c, subst);
+                nexaDeclStack_.pop_back();
+                at = saved;
+                return;
+            }
+            if (n.type == AstNode::Type::Variable) {
+                for (const AstNode& c : n.children) scanAny(c, subst);
+                std::string t = n.declType;
+                if (t.empty()) t = n.children.empty() ? std::string("int") : inferExprNexaType(n.children[0]);
+                if (!subst.empty() && t.find("typevar:") != std::string::npos) substTypeStr(t, subst);
+                noteType(t);
+                if (!nexaDeclStack_.empty()) nexaDeclStack_.back()[n.value] = t.empty() ? std::string("int") : t;
+                at = saved;
+                return;
+            }
+            if (n.type == AstNode::Type::ExprStructLit) {
+                for (const AstNode& c : n.children) scanAny(c, subst);
+                std::string why;
+                std::string app = inferStructLitApp(n, subst, why);
+                if (app.empty()) semError(n, why.empty() ? "Unknown struct type: " + n.value : why);
+                if (subst.empty() && app.find('[') != std::string::npos) structLitApplied_[&n] = app;
+                if (app.find('[') != std::string::npos && app.find("typevar:") == std::string::npos) ensureApp(app);
+                at = saved;
+                return;
+            }
+            if (n.type == AstNode::Type::FnCall && n.initValue != "." && n.initValue != "->") {
+                for (const AstNode& c : n.children) scanAny(c, subst);
+                if (namedTypeParam(n.value)) {
+                    Pending p;
+                    p.call = &n;
+                    for (const AstNode& c : n.children) {
+                        std::string t = inferExprNexaType(c);
+                        if (!subst.empty() && t.find("typevar:") != std::string::npos) substTypeStr(t, subst);
+                        p.argT.push_back(std::move(t));
+                    }
+                    pending.push_back(std::move(p));
+                }
+                at = saved;
+                return;
+            }
+            noteTypeSub(n.declType, subst);
+            noteTypeSub(n.fnReturnType, subst);
+            noteTypeSub(n.receiverType, subst);
+            for (const std::string& pt : n.paramTypes) noteTypeSub(pt, subst);
+            for (const AstNode& c : n.children) scanAny(c, subst);
+            for (const AstNode& d : n.paramDefaults) scanAny(d, subst);
+            at = saved;
+        };
+
+        nexaDeclStack_.clear();
+        nexaDeclStack_.push_back({});
+        for (const AstNode& n : ast_) scanAny(n, {});
+        nexaDeclStack_.pop_back();
+
+        buildFnOverloadTableAndInitGlobalNexaDecl();
+        nexaDeclStack_.clear();
+        nexaDeclStack_.push_back(globalNexaDecl_);
+
+        std::set<std::pair<const AstNode*, std::string>> seenCall;
+        std::map<const AstNode*, std::set<std::string>> seenSpec;
+        for (size_t pi = 0; pi < pending.size(); pi++) {
+            const Pending& p = pending[pi];
+            std::string joined;
+            for (const std::string& t : p.argT) { joined += t; joined.push_back('\n'); }
+            if (!seenCall.insert({p.call, joined}).second) continue;
+            size_t slot = 0;
+            try {
+                slot = resolveOverload(p.call->value, p.argT, p.call->srcFile);
+            } catch (const std::runtime_error& ex) {
+                semError(*p.call, ex.what());
+            }
+            const AstNode& fn = ast_[fnOverloadSlots_[slot].astIndex];
+            if (!fnHasTypeParams(fn)) continue;
+            std::map<std::string, std::string> subst;
+            std::string why;
+            if (!unifyFn(fn, p.argT, subst, why)) semError(*p.call, why);
+            std::string sk;
+            for (const auto& kv : subst) sk += kv.first + "=" + kv.second + "\n";
+            if (!seenSpec[ &fn ].insert(sk).second) continue;
+            at = p.call;
+            for (size_t i = 0; i < fn.paramNames.size(); i++) noteTypeSub(canonicalParamType(fn, i), subst);
+            noteTypeSub(fn.fnReturnType, subst);
+            scanAny(fn, subst);
+        }
+        nexaDeclStack_.clear();
+        at = nullptr;
+    }
+
     // A type name is chosen by the arguments. It has no default, and it is
     // not also a shape. A program that names no type never enters here.
     void semCheckTypeParams() {
@@ -4968,9 +5375,15 @@ private:
             if (n.type == AstNode::Type::Function || n.type == AstNode::Type::MainFunction) {
                 semFunction(n);
             } else if (n.type == AstNode::Type::StructDef) {
+                if (!n.typeParams.empty()) continue;
                 for (const AstNode& m : n.children) {
                     if (m.type == AstNode::Type::Function) semFunction(m);
                 }
+            }
+        }
+        for (const AstNode& n : structInst_) {
+            for (const AstNode& m : n.children) {
+                if (m.type == AstNode::Type::Function) semFunction(m);
             }
         }
         nexaDeclStack_.clear();
@@ -6664,6 +7077,10 @@ private:
             std::string n = t.substr(7);
             auto it = structCppNames_.find(n);
             if (it != structCppNames_.end()) return it->second;
+            auto git = genericStructs_.find(n);
+            if (git != genericStructs_.end()) {
+                throw std::runtime_error(n + " names a type; write " + genericStructSpell(*git->second));
+            }
             if (modules_.hasCppHeader()) return n;
             throw std::runtime_error("Unknown struct type: " + n);
         }
@@ -7084,7 +7501,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             if (isPointerType(t)) t = pointerPointeeType(t);
             return isStructDeclType(t) ? structNameFromDecl(t) : std::string();
         }
-        if (e.type == AstNode::Type::ExprStructLit) return e.value;
+        if (e.type == AstNode::Type::ExprStructLit) return structLitUseName(e);
         if (e.type == AstNode::Type::ExprArrayIndex) {
             std::string t = inferExprNexaType(e);
             if (isPointerType(t)) {
@@ -9428,21 +9845,22 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                                  const std::map<std::string, bool>* varIsFloat,
                                  const std::map<std::string, bool>* varIsChar,
                                  const std::map<std::string, bool>* varIsBool) {
-        auto oit = structFieldOrder_.find(e.value);
+        const std::string litName = structLitUseName(e);
+        auto oit = structFieldOrder_.find(litName);
         if (oit == structFieldOrder_.end()) {
-            throw std::runtime_error("Unknown struct type: " + e.value);
+            throw std::runtime_error("Unknown struct type: " + litName);
         }
         std::map<std::string, const AstNode*> provided;
         for (size_t i = 0; i < e.paramNames.size(); i++) {
             if (i < e.children.size()) provided[e.paramNames[i]] = &e.children[i];
         }
-        const auto& fields = structFields_[e.value];
+        const auto& fields = structFields_[litName];
         for (const auto& kv : provided) {
             if (!fields.count(kv.first)) {
-                throw std::runtime_error("Unknown field '" + kv.first + "' in " + e.value);
+                throw std::runtime_error("Unknown field '" + kv.first + "' in " + litName);
             }
         }
-        std::string s = nexaTypeToCpp("struct:" + e.value) + "{";
+        std::string s = nexaTypeToCpp("struct:" + litName) + "{";
         const std::vector<std::string>& order = oit->second;
         for (size_t i = 0; i < order.size(); i++) {
             if (i) s += ", ";
@@ -9451,7 +9869,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 // Omitted: use the field's declared default if it has one, else zero-init.
                 // (An explicit `{}` here would override the struct's default member
                 // initializer, so a defaulted field must emit its default expression.)
-                auto dit = structFieldDefaults_.find(e.value);
+                auto dit = structFieldDefaults_.find(litName);
                 const AstNode* def = nullptr;
                 if (dit != structFieldDefaults_.end()) {
                     auto fit = dit->second.find(order[i]);
