@@ -145,8 +145,9 @@ inline bool nexaIsNumericIntType(const std::string& t) {
     return nexaIsIntegerType(t) && t != "char";
 }
 
-// float is 64-bit (a C double); float32 is a real 32-bit float (a C float).
-// Everything that asks "is this a floating-point value" asks this.
+// float / float64 are 64-bit (a C double); float32 is a real 32-bit float (a C float).
+// float64 is accepted and stored as float, so the widths read as a pair. Everything
+// that asks "is this a floating-point value" asks this.
 inline bool nexaIsFloatType(const std::string& t) {
     return t == "float" || t == "float32";
 }
@@ -674,7 +675,7 @@ private:
         if (v == "size_t") return "size_t";
         if (v == "string") return "string";
         if (v == "bool") return "bool";
-        if (v == "float") return "float";
+        if (v == "float" || v == "float64") return "float";
         if (v == "float32") return "float32";
         if (v == "char") return "char";
         if (v == "void") return "void";
@@ -760,7 +761,7 @@ private:
         }
         const std::string& v = t.value;
         if (v == "int" || v == "short" || v == "long" || v == "size_t" ||
-            v == "float" || v == "float32" || v == "char" || v == "bool" || v == "string" ||
+            v == "float" || v == "float64" || v == "float32" || v == "char" || v == "bool" || v == "string" ||
             v == "void" || v == "unsigned" || v == "map" || v == "Json" || v == "json" ||
             v == "Result" || v == "result") {
             return true;
@@ -1912,7 +1913,7 @@ private:
 
     static bool isBuiltinTypeName(const std::string& v) {
         return v == "int" || v == "short" || v == "long" || v == "size_t" || v == "string" ||
-               v == "bool" || v == "float" || v == "float32" || v == "char" || v == "void" ||
+               v == "bool" || v == "float" || v == "float64" || v == "float32" || v == "char" || v == "void" ||
                v == "unsigned" || v == "map" || v == "Result" || v == "result" ||
                v == "Json" || v == "json";
     }
@@ -3548,12 +3549,15 @@ private:
             if (t1.type == TokenType::Identifier && t2.type == TokenType::RParen) {
                 const std::string& tn = t1.value;
                 if (tn == "int" || tn == "short" || tn == "long" || tn == "size_t" ||
-                    tn == "float" || tn == "float32" || tn == "char" || tn == "bool" || tn == "string") {
+                    tn == "float" || tn == "float64" || tn == "float32" || tn == "char" ||
+                    tn == "bool" || tn == "string") {
                     advance();  // (
                     advance();  // type
                     advance();  // )
                     AstNode inner = parseUnary();
-                    return {AstNode::Type::ExprCast, tn, {std::move(inner)}};
+                    // float64 is float: the cast keeps one spelling in the AST.
+                    const std::string castTo = (tn == "float64") ? "float" : tn;
+                    return {AstNode::Type::ExprCast, castTo, {std::move(inner)}};
                 }
             }
             // (unsigned char|int|short|long)x

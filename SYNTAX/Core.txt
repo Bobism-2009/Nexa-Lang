@@ -284,8 +284,9 @@ VARIABLES
     bool:   let ok = true;  let flag: bool = false;  let b: bool;
             As text -- printed, joined with +, in an f-string -- a bool is true
             or false, never 1 or 0; comparisons and fns returning bool too.
-    float:  let pi = 3.14;  let x: float = 2.5;  let f: float;
-            64-bit (a C double). A literal like 2.5 is a float.
+    float / float64:  let pi = 3.14;  let x: float = 2.5;  let y: float64 = 2.5;
+            64-bit (a C double). The two names are the same type. A literal like
+            2.5 is a float.
     float32: let v: float32 = 0.5;  (float32)x
             A real 32-bit float (a C float): half the memory, the type graphics,
             audio and file formats use, and about 7 significant digits to float's

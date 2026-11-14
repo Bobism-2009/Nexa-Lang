@@ -1,0 +1,12 @@
+// float64 is the same type as float: both are 64-bit. float32 stays 32-bit.
+#include <std/io>
+
+fn main() {
+    let a: float64 = 1.5;
+    let b: float = 2.5;
+    let c: float32 = 0.5;
+    io.println((float64)3);
+    io.println(a + b);
+    io.println(c);
+    io.println(bits(a) == bits(b - 1.0));
+}
