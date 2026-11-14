@@ -1706,6 +1706,9 @@ private:
     };
     std::vector<FnOverloadSlot> fnOverloadSlots_;
     std::map<std::string, std::string> globalNexaDecl_;
+    // Bare file-scope names belong to one file. A name with a dot is already
+    // the included file's, so it is not listed here.
+    std::map<std::string, std::string> fileScopeFile_;
     std::vector<std::map<std::string, std::string>> nexaDeclStack_;
 
     std::string canonicalParamType(const AstNode& fn, size_t i) const {
@@ -2277,27 +2280,36 @@ private:
         return nexaMakeFnType(params, inferReturnNexaType(fn));
     }
 
-    std::string uniqueNamedFnType(const std::string& name) const {
+    // A bare name is the file it was written in. prefix.name is named outright,
+    // and an extern fn is a C symbol, so both are visible from every file.
+    bool sameFileScope(const std::string& name, const std::string& useFile) const {
+        if (useFile.empty() || name.find('.') != std::string::npos) return true;
+        auto it = fileScopeFile_.find(name);
+        if (it == fileScopeFile_.end() || it->second.empty()) return true;
+        return it->second == useFile;
+    }
+
+    std::string uniqueNamedFnType(const std::string& name, const std::string& useFile = "") const {
         int n = 0;
         size_t slot = 0;
         for (size_t s = 0; s < fnOverloadSlots_.size(); ++s) {
-            if (fnOverloadSlots_[s].name == name) {
-                n++;
-                slot = s;
-            }
+            if (fnOverloadSlots_[s].name != name) continue;
+            if (!ast_[fnOverloadSlots_[s].astIndex].isExtern && !sameFileScope(name, useFile)) continue;
+            n++;
+            slot = s;
         }
         if (n != 1) return "";
         return fnTypeFromFnAst(ast_[fnOverloadSlots_[slot].astIndex]);
     }
 
-    size_t uniqueNamedFnSlot(const std::string& name) const {
+    size_t uniqueNamedFnSlot(const std::string& name, const std::string& useFile = "") const {
         int n = 0;
         size_t slot = 0;
         for (size_t s = 0; s < fnOverloadSlots_.size(); ++s) {
-            if (fnOverloadSlots_[s].name == name) {
-                n++;
-                slot = s;
-            }
+            if (fnOverloadSlots_[s].name != name) continue;
+            if (!ast_[fnOverloadSlots_[s].astIndex].isExtern && !sameFileScope(name, useFile)) continue;
+            n++;
+            slot = s;
         }
         if (n != 1) {
             throw std::runtime_error("Cannot use overloaded function '" + name + "' as a value");
@@ -2324,12 +2336,20 @@ private:
     }
 
     size_t resolveOverload(const std::string& name,
-                           const std::vector<std::string>& actualArgTypes) const {
+                           const std::vector<std::string>& actualArgTypes,
+                           const std::string& useFile = "") const {
         const size_t k = actualArgTypes.size();
         std::vector<size_t> compat;
+        bool hidden = false;
+        bool sawVisible = false;
         for (size_t s = 0; s < fnOverloadSlots_.size(); ++s) {
             const FnOverloadSlot& sl = fnOverloadSlots_[s];
             if (sl.name != name) continue;
+            if (!ast_[sl.astIndex].isExtern && !sameFileScope(name, useFile)) {
+                hidden = true;
+                continue;
+            }
+            sawVisible = true;
             const bool variadic = ast_[sl.astIndex].isVariadic;
             if (k < sl.minArgs) continue;
             if (!variadic && k > sl.paramTypes.size()) continue;
@@ -2344,6 +2364,9 @@ private:
             if (ok) compat.push_back(s);
         }
         if (compat.empty()) {
+            if (hidden && !sawVisible) {
+                throw std::runtime_error("'" + name + "' is in another file; call it by that file's name");
+            }
             std::string msg = "No matching overload for '" + name + "'(";
             for (size_t i = 0; i < actualArgTypes.size(); ++i) {
                 if (i) msg += ", ";
@@ -2439,6 +2462,17 @@ private:
     // A name a Nexa program may use that C++ reserves (`fn double`, `let long`) gets
     // a trailing underscore under --preserve-names; other names are kept as written.
     static std::string cppSafeName(const std::string& n) {
+        // An included file's name is prefix.name. The dot is the Nexa spelling;
+        // C++ gets a double underscore so it cannot collide with prefix_name.
+        if (n.find('.') != std::string::npos) {
+            std::string s;
+            s.reserve(n.size() + 4);
+            for (char c : n) {
+                if (c == '.') s += "__";
+                else s += c;
+            }
+            return s;
+        }
         return isCppKeyword(n) || isCLibraryName(n) ? n + "_" : n;
     }
 
@@ -2852,7 +2886,7 @@ private:
             case AstNode::Type::ExprVarRef: {
                 std::string t = lookupNexaDecl(e.value);
                 if (!t.empty()) return t;
-                std::string fnT = uniqueNamedFnType(e.value);
+                std::string fnT = uniqueNamedFnType(e.value, e.srcFile);
                 if (!fnT.empty()) return fnT;
                 auto enIt = enumCppNames_.find(e.value);
                 if (enIt != enumCppNames_.end()) return "enum:" + e.value;
@@ -2973,7 +3007,7 @@ private:
                 std::vector<std::string> argT;
                 argT.reserve(e.children.size());
                 for (const AstNode& a : e.children) argT.push_back(inferExprNexaType(a));
-                size_t slot = resolveOverload(e.value, argT);
+                size_t slot = resolveOverload(e.value, argT, e.srcFile);
                 return inferReturnNexaType(ast_[fnOverloadSlots_[slot].astIndex]);
             }
             // Integer operands keep their width through an operation: `long + 1` is a long,
@@ -3518,7 +3552,7 @@ private:
         std::vector<std::string> argT;
         argT.reserve(e.children.size());
         for (const AstNode& a : e.children) argT.push_back(inferExprNexaType(a));
-        size_t slot = resolveOverload(e.value, argT);
+        size_t slot = resolveOverload(e.value, argT, e.srcFile);
         const FnOverloadSlot& sl = fnOverloadSlots_[slot];
         const AstNode& fn = ast_[sl.astIndex];
         std::string name = cppFnUseName(slot);
@@ -3557,6 +3591,7 @@ private:
     void buildFnOverloadTableAndInitGlobalNexaDecl() {
         fnOverloadSlots_.clear();
         globalNexaDecl_.clear();
+        fileScopeFile_.clear();
         // "Every executable must have exactly one fn main()" (SYNTAX/Core.txt). Without
         // this the only complaint came from clang++, as a C++ redefinition error.
         size_t mainCount = 0;
@@ -3581,6 +3616,7 @@ private:
                     throw std::runtime_error("Duplicate function overload '" + slot.name + "'");
                 }
             }
+            if (!n.isExtern && n.value.find('.') == std::string::npos) fileScopeFile_[n.value] = n.srcFile;
             fnOverloadSlots_.push_back(std::move(slot));
         }
         nexaDeclStack_.clear();
@@ -3590,6 +3626,7 @@ private:
             std::string t = nexaDeclFromVariableAst(node);
             nexaDeclStack_.back()[node.value] = t;
             globalNexaDecl_[node.value] = t;
+            if (node.value.find('.') == std::string::npos) fileScopeFile_[node.value] = node.srcFile;
         }
         nexaDeclStack_.clear();
     }
@@ -3936,7 +3973,7 @@ private:
         auto check = [&](const std::string& t, const AstNode& at) {
             for (size_t p = t.find("struct:"); p != std::string::npos; p = t.find("struct:", p + 1)) {
                 size_t b = p + 7, e = b;
-                while (e < t.size() && (std::isalnum((unsigned char)t[e]) || t[e] == '_')) e++;
+                while (e < t.size() && (std::isalnum((unsigned char)t[e]) || t[e] == '_' || t[e] == '.')) e++;
                 const std::string name = t.substr(b, e - b);
                 if (name.empty() || structs.count(name) || (e < t.size() && t[e] == ':')) continue;
                 auto it = nexaName.find(name);
@@ -5332,6 +5369,15 @@ private:
 
     void semCheckNameUse(const AstNode& at, const std::string& name) {
         if (!semNameChecks_ || name.empty()) return;
+        if (!sameFileScope(name, at.srcFile)) {
+            bool local = false;
+            for (size_t i = 1; i < nexaDeclStack_.size(); ++i) {
+                if (nexaDeclStack_[i].count(name)) { local = true; break; }
+            }
+            if (!local) {
+                semError(at, "'" + name + "' is in another file; use that file's name");
+            }
+        }
         if (!lookupNexaDecl(name).empty()) return;
         if (name == "self" || name == "null" || name == "true" || name == "false") return;
         if (hasNexaFnNamed(name)) return;          // a function used as a value
@@ -9454,8 +9500,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (e.value == "self" && !methodSelfType_.empty()) return "(*this)";
                 auto it = varMap.find(e.value);
                 if (it != varMap.end()) return it->second;
-                if (lookupNexaDecl(e.value).empty() && !uniqueNamedFnType(e.value).empty()) {
-                    return cppFnUseName(uniqueNamedFnSlot(e.value));
+                if (lookupNexaDecl(e.value).empty() && !uniqueNamedFnType(e.value, e.srcFile).empty()) {
+                    return cppFnUseName(uniqueNamedFnSlot(e.value, e.srcFile));
                 }
                 return e.value;
             }

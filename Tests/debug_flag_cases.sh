@@ -246,7 +246,7 @@ cat > "$WORK/twofile.nxa" <<'NXA'
 
 fn main() {
     let v = 5;
-    io.println("triple=", lib_triple(v));
+    io.println("triple=", lib.lib_triple(v));
 }
 NXA
 

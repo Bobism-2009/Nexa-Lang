@@ -355,7 +355,7 @@ printf '%s' 'fn helper(): int {
 printf '%s' '#include <std/io>
 #include "helper.nxa"
 fn main() {
-    io.println(helper());
+    io.println(helper.helper());
 }
 ' > "$WORK/entry.nxa"
 out=$("$NEXAC" "$WORK/entry.nxa" --source "$WORK/entry.cpp" 2>&1)

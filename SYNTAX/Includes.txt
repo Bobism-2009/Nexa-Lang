@@ -99,3 +99,16 @@ FILE INCLUDES (quotes)
   - Paths are relative to the file containing the #include
   - Circular includes are prevented
   - Included files can have their own #includes
+  - An included file keeps its own names. From outside it is the file's name:
+      #include "net.nxa"          net.load(), net.Config
+      #include "lib/util.nxa"     util.load()
+    Inside net.nxa the same function is just load(), and its Config is just Config.
+    The file you compile keeps bare names, so its own load() is not net.load().
+    An included file does not see those bare names. A helper both files use
+    lives in a third file they both include.
+    Two included files can both declare load and Config. Give one a name when
+    the file names would clash, or when the name is already a module (io, gfx, ...):
+      #include "net.nxa" as wire
+    A package include is the same: #include <pkg/module> is module.load(),
+    and #include <pkg/module> as wire names it wire.
+    An included file cannot declare fn main.

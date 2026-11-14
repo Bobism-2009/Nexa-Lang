@@ -284,14 +284,21 @@ public:
     Parser(std::vector<Token> tokens, Modules& modules,
            const std::string& currentFilePath = "",
            std::set<std::string>* includedFiles = nullptr,
-           const std::vector<std::string>* packagePaths = nullptr)
+           const std::vector<std::string>* packagePaths = nullptr,
+           const std::string& filePrefix = "",
+           std::map<std::string, std::string>* filePrefixes = nullptr)
         : tokens_(std::move(tokens)), modules_(modules), pos_(0),
           currentFilePath_(currentFilePath), includedFiles_(includedFiles),
-          packagePaths_(packagePaths) {}
+          packagePaths_(packagePaths), filePrefix_(filePrefix),
+          filePrefixes_(filePrefixes) {
+        if (!filePrefixes_) filePrefixes_ = &ownedPrefixes_;
+    }
 
     std::vector<AstNode> parse() {
         try {
-            return parseProgram();
+            std::vector<AstNode> ast = parseProgram();
+            if (!filePrefix_.empty()) qualifyIncluded(ast);
+            return ast;
         } catch (const std::runtime_error& e) {
             const std::string msg = e.what();
             if (!currentFilePath_.empty() && msg.find(currentFilePath_) == std::string::npos) {
@@ -361,6 +368,13 @@ private:
     std::string currentFilePath_;
     std::set<std::string>* includedFiles_;
     const std::vector<std::string>* packagePaths_;
+    // An included .nxa is named by its file (or by `as`), so its functions,
+    // structs, enums and globals are prefix.name. The entry file has no prefix
+    // and its names stay bare. The map is shared across every nested include.
+    std::string filePrefix_;
+    std::map<std::string, std::string> ownedPrefixes_;
+    std::map<std::string, std::string>* filePrefixes_;
+    std::set<std::string> ownFns_, ownStructs_, ownEnums_, ownGlobals_;
     std::set<std::string> structNames_;
     std::map<std::string, std::set<std::string>> structFieldNames_;
     std::set<std::string> enumNames_;
@@ -561,6 +575,17 @@ private:
             }
             return "cpp:" + v;
         }
+        if (isFilePrefix(v) && peek().type == TokenType::Dot) {
+            advance();
+            const Token& part = peek();
+            if (part.type != TokenType::Identifier) {
+                throw std::runtime_error("Expected a name after '" + v + ".' at line " + std::to_string(part.line));
+            }
+            advance();
+            std::string q = v + "." + part.value;
+            if (enumNames_.count(q)) return "enum:" + q;
+            return "struct:" + q;
+        }
         if (v == "map") {
             if (!match(TokenType::LBracket)) {
                 throw std::runtime_error("Expected '[' after map at line " + std::to_string(peek().line));
@@ -649,6 +674,10 @@ private:
         if (t.type == TokenType::Fn) return true;
         if (t.type != TokenType::Identifier) return false;
         if (p + 1 < tokens_.size() && tokens_[p + 1].type == TokenType::ColonColon) return true;
+        if (isFilePrefix(t.value) && p + 2 < tokens_.size() &&
+            tokens_[p + 1].type == TokenType::Dot && tokens_[p + 2].type == TokenType::Identifier) {
+            return true;
+        }
         const std::string& v = t.value;
         if (v == "int" || v == "short" || v == "long" || v == "size_t" ||
             v == "float" || v == "float32" || v == "char" || v == "bool" || v == "string" ||
@@ -947,6 +976,16 @@ private:
         }
         advance();
         AstNode cur{AstNode::Type::ExprVarRef, nameTok.value, {}};
+        if (isFilePrefix(nameTok.value) && peek().type == TokenType::Dot) {
+            advance();
+            const Token& part = peek();
+            if (part.type != TokenType::Identifier) {
+                throw std::runtime_error("Expected a name after '" + nameTok.value + ".' at line " +
+                                         std::to_string(part.line));
+            }
+            advance();
+            cur.value = nameTok.value + "." + part.value;
+        }
         while (peek().type == TokenType::Dot || peek().type == TokenType::Arrow) {
             bool arrow = peek().type == TokenType::Arrow;
             advance();
@@ -967,6 +1006,10 @@ private:
             return parseExprStatement();
         }
         if (cur.type != AstNode::Type::ExprMember) {
+            if (cur.type == AstNode::Type::ExprVarRef && cur.value.find('.') != std::string::npos) {
+                pos_ = start;
+                return parseAssignment();
+            }
             throw std::runtime_error("Expected member assignment (e.g. obj.field = ... or ptr->field = ...) at line " + std::to_string(line));
         }
         std::string op = "=";
@@ -1033,6 +1076,226 @@ private:
         return out;
     }
 
+    static bool isNexaIdent(const std::string& s) {
+        if (s.empty() || !(std::isalpha((unsigned char)s[0]) || s[0] == '_')) return false;
+        for (unsigned char c : s) {
+            if (!(std::isalnum(c) || c == '_')) return false;
+        }
+        return true;
+    }
+
+    // Names a file must not take: they are already how a std module is called.
+    static bool isStdCallPrefix(const std::string& s) {
+        static const std::set<std::string> p = {
+            "io", "os", "file", "dll", "random", "math", "crypto", "http", "tcp", "udp",
+            "json", "time", "thread", "gfx", "gfx3d", "physics", "ui", "term",
+        };
+        return p.count(s) != 0;
+    }
+
+    static std::string trimEdge(std::string s) {
+        size_t a = 0;
+        while (a < s.size() && (s[a] == ' ' || s[a] == '\t' || s[a] == '\r')) a++;
+        size_t b = s.size();
+        while (b > a && (s[b - 1] == ' ' || s[b - 1] == '\t' || s[b - 1] == '\r')) b--;
+        return s.substr(a, b - a);
+    }
+
+    // The name after `#include "f.nxa" as name`, or empty when the line stops at the path.
+    std::string includeAlias(const std::string& raw, size_t endDelim, size_t line) {
+        std::string rest = trimEdge(raw.substr(endDelim + 1));
+        if (rest.empty()) return "";
+        if (rest.size() < 3 || rest.compare(0, 3, "as ") != 0) {
+            throw std::runtime_error("Expected 'as name' after the include path at line " + std::to_string(line));
+        }
+        std::string name = trimEdge(rest.substr(3));
+        if (!isNexaIdent(name)) {
+            throw std::runtime_error("'" + name + "' is not a name an included file can take at line " +
+                                     std::to_string(line));
+        }
+        return name;
+    }
+
+    void claimFilePrefix(const std::string& prefix, const std::string& absPath, size_t line) {
+        if (!isNexaIdent(prefix)) {
+            throw std::runtime_error("'" + prefix +
+                "' is not a name an included file can take; write #include \"...\" as name at line " +
+                std::to_string(line));
+        }
+        if (isStdCallPrefix(prefix)) {
+            throw std::runtime_error("'" + prefix +
+                "' is already a module; write #include \"...\" as name at line " + std::to_string(line));
+        }
+        auto it = filePrefixes_->find(prefix);
+        if (it != filePrefixes_->end() && it->second != absPath) {
+            throw std::runtime_error("'" + prefix + "' already names " + it->second +
+                "; include one of them as a different name at line " + std::to_string(line));
+        }
+        (*filePrefixes_)[prefix] = absPath;
+    }
+
+    bool isFilePrefix(const std::string& s) const {
+        return filePrefixes_ && filePrefixes_->count(s) != 0;
+    }
+
+    bool foreignFile(const AstNode& n) const {
+        return !n.srcFile.empty() && n.srcFile != currentFilePath_;
+    }
+
+    static bool bareName(const std::string& s) {
+        return !s.empty() && s.find('.') == std::string::npos;
+    }
+
+    bool ownsName(const std::string& s) const {
+        return ownFns_.count(s) || ownStructs_.count(s) || ownEnums_.count(s) || ownGlobals_.count(s);
+    }
+
+    std::string qualifyTypeStr(const std::string& t) const {
+        if (t.empty() || filePrefix_.empty()) return t;
+        std::string out;
+        for (size_t i = 0; i < t.size();) {
+            size_t n = 0;
+            const std::set<std::string>* set = nullptr;
+            if (t.compare(i, 7, "struct:") == 0) { n = 7; set = &ownStructs_; }
+            else if (t.compare(i, 5, "enum:") == 0) { n = 5; set = &ownEnums_; }
+            if (!set) { out += t[i++]; continue; }
+            size_t k = i + n;
+            while (k < t.size()) {
+                unsigned char c = (unsigned char)t[k];
+                if (std::isalnum(c) || c == '_' || t[k] == '.') k++;
+                else break;
+            }
+            std::string name = t.substr(i + n, k - (i + n));
+            out += t.substr(i, n);
+            if (bareName(name) && set->count(name)) out += filePrefix_ + "." + name;
+            else out += name;
+            i = k;
+        }
+        return out;
+    }
+
+    void rewriteTypeFields(AstNode& n) {
+        n.declType = qualifyTypeStr(n.declType);
+        n.fnReturnType = qualifyTypeStr(n.fnReturnType);
+        n.receiverType = qualifyTypeStr(n.receiverType);
+        for (std::string& p : n.paramTypes) p = qualifyTypeStr(p);
+        if ((n.type == AstNode::Type::ExprNew || n.type == AstNode::Type::ExprSizeof) && !n.value.empty()) {
+            n.value = qualifyTypeStr(n.value);
+        }
+    }
+
+    void rewriteUse(AstNode& n, const std::set<std::string>& locals) {
+        auto take = [&](std::string& s) {
+            if (!bareName(s) || locals.count(s) || !ownsName(s)) return;
+            s = filePrefix_ + "." + s;
+        };
+        switch (n.type) {
+            case AstNode::Type::FnCall:
+                if (n.initValue != ".") take(n.value);
+                break;
+            case AstNode::Type::ExprVarRef:
+            case AstNode::Type::Assignment:
+            case AstNode::Type::AssnAdd:
+            case AstNode::Type::AssnSub:
+            case AstNode::Type::AssnMul:
+            case AstNode::Type::AssnDiv:
+            case AstNode::Type::AssnMod:
+            case AstNode::Type::AssnBitAnd:
+            case AstNode::Type::AssnBitOr:
+            case AstNode::Type::AssnBitXor:
+            case AstNode::Type::AssnShl:
+            case AstNode::Type::AssnShr:
+            case AstNode::Type::AssnIndex:
+            case AstNode::Type::IncPost:
+            case AstNode::Type::DecPost:
+            case AstNode::Type::ExprStructLit:
+                take(n.value);
+                break;
+            case AstNode::Type::SwitchCase:
+                if (n.caseIsEnum) take(n.value);
+                break;
+            default:
+                break;
+        }
+    }
+
+    void rewriteNode(AstNode& n, const std::set<std::string>& locals) {
+        rewriteTypeFields(n);
+        rewriteUse(n, locals);
+        if (n.type == AstNode::Type::Function || n.type == AstNode::Type::ExprLambda) {
+            for (AstNode& d : n.paramDefaults) rewriteNode(d, locals);
+            std::set<std::string> inner = locals;
+            for (const std::string& p : n.paramNames) inner.insert(p);
+            rewriteStmtList(n.children, inner);
+            return;
+        }
+        if (n.type == AstNode::Type::Block || n.type == AstNode::Type::SwitchCase) {
+            rewriteStmtList(n.children, locals);
+            return;
+        }
+        if (n.type == AstNode::Type::For) {
+            if (!n.children.empty()) rewriteNode(n.children[0], locals);
+            std::set<std::string> inner = locals;
+            if (!n.value.empty()) inner.insert(n.value);
+            for (size_t i = 1; i < n.children.size(); i++) rewriteNode(n.children[i], inner);
+            return;
+        }
+        if (n.type == AstNode::Type::ForIn) {
+            if (!n.children.empty()) rewriteNode(n.children[0], locals);
+            std::set<std::string> inner = locals;
+            if (!n.value.empty()) inner.insert(n.value);
+            if (!n.initValue.empty()) inner.insert(n.initValue);
+            for (size_t i = 1; i < n.children.size(); i++) rewriteNode(n.children[i], inner);
+            return;
+        }
+        if (n.type == AstNode::Type::TryCatch) {
+            if (!n.children.empty()) rewriteNode(n.children[0], locals);
+            std::set<std::string> inner = locals;
+            if (!n.value.empty()) inner.insert(n.value);
+            for (size_t i = 1; i < n.children.size(); i++) rewriteNode(n.children[i], inner);
+            return;
+        }
+        for (AstNode& c : n.children) rewriteNode(c, locals);
+        for (AstNode& d : n.paramDefaults) rewriteNode(d, locals);
+    }
+
+    void rewriteStmtList(std::vector<AstNode>& stmts, std::set<std::string> locals) {
+        for (AstNode& s : stmts) {
+            if (foreignFile(s)) continue;
+            rewriteNode(s, locals);
+            if (s.type == AstNode::Type::Variable && bareName(s.value)) locals.insert(s.value);
+        }
+    }
+
+    // Give this included file its own names. Nested includes are already named
+    // and are left alone; their srcFile is the other file.
+    void qualifyIncluded(std::vector<AstNode>& ast) {
+        ownFns_.clear();
+        ownStructs_.clear();
+        ownEnums_.clear();
+        ownGlobals_.clear();
+        for (AstNode& n : ast) {
+            if (foreignFile(n)) continue;
+            if (n.type == AstNode::Type::MainFunction) {
+                throw std::runtime_error(currentFilePath_ + ": an included file cannot declare fn main");
+            }
+            if (n.type == AstNode::Type::Function && !n.isExtern && n.receiverType.empty() && bareName(n.value)) {
+                ownFns_.insert(n.value);
+                n.value = filePrefix_ + "." + n.value;
+            } else if (n.type == AstNode::Type::StructDef && bareName(n.value)) {
+                ownStructs_.insert(n.value);
+                n.value = filePrefix_ + "." + n.value;
+            } else if (n.type == AstNode::Type::EnumDef && bareName(n.value)) {
+                ownEnums_.insert(n.value);
+                n.value = filePrefix_ + "." + n.value;
+            } else if (n.type == AstNode::Type::Variable && bareName(n.value)) {
+                ownGlobals_.insert(n.value);
+                n.value = filePrefix_ + "." + n.value;
+            }
+        }
+        rewriteStmtList(ast, {});
+    }
+
     std::vector<AstNode> parseInclude() {
         const Token& t = advance();
         std::string raw = t.value;
@@ -1089,7 +1352,11 @@ private:
                         in.close();
                         Lexer lexer(buf.str(), absPath);
                         std::vector<Token> subTokens = lexer.tokenize();
-                        Parser subParser(std::move(subTokens), modules_, absPath, includedFiles_, packagePaths_);
+                        std::string alias = includeAlias(raw, angleEnd, t.line);
+                        std::string prefix = alias.empty() ? std::filesystem::path(absPath).stem().string() : alias;
+                        claimFilePrefix(prefix, absPath, t.line);
+                        Parser subParser(std::move(subTokens), modules_, absPath, includedFiles_, packagePaths_,
+                                         prefix, filePrefixes_);
                         return subParser.parse();
                     }
                 }
@@ -1134,7 +1401,11 @@ private:
             in.close();
             Lexer lexer(buf.str(), absPath);
             std::vector<Token> subTokens = lexer.tokenize();
-            Parser subParser(std::move(subTokens), modules_, absPath, includedFiles_, packagePaths_);
+            std::string alias = includeAlias(raw, quoteEnd, t.line);
+            std::string prefix = alias.empty() ? std::filesystem::path(absPath).stem().string() : alias;
+            claimFilePrefix(prefix, absPath, t.line);
+            Parser subParser(std::move(subTokens), modules_, absPath, includedFiles_, packagePaths_,
+                             prefix, filePrefixes_);
             return subParser.parse();
         }
         throw std::runtime_error("Invalid #include at line " + std::to_string(t.line));
@@ -1585,8 +1856,15 @@ private:
 
     bool looksLikeStructLiteral() const {
         if (peek().type != TokenType::Identifier) return false;
-        if (!structNames_.count(peek().value)) return false;
-        return pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::LBrace;
+        if (structNames_.count(peek().value) &&
+            pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::LBrace) {
+            return true;
+        }
+        if (!isFilePrefix(peek().value) || pos_ + 3 >= tokens_.size()) return false;
+        return tokens_[pos_ + 1].type == TokenType::Dot &&
+               tokens_[pos_ + 2].type == TokenType::Identifier &&
+               tokens_[pos_ + 3].type == TokenType::LBrace &&
+               structNames_.count(peek().value + "." + tokens_[pos_ + 2].value) != 0;
     }
 
     AstNode parseStructLiteral() {
@@ -1597,6 +1875,16 @@ private:
         std::string sname = nameTok.value;
         size_t line = nameTok.line;
         advance();
+        if (isFilePrefix(sname) && peek().type == TokenType::Dot) {
+            advance();
+            const Token& part = peek();
+            if (part.type != TokenType::Identifier) {
+                throw std::runtime_error("Expected a struct name after '" + sname + ".' at line " +
+                                         std::to_string(part.line));
+            }
+            sname += "." + part.value;
+            advance();
+        }
         if (!match(TokenType::LBrace)) {
             throw std::runtime_error("Expected '{' after struct name at line " + std::to_string(peek().line));
         }
@@ -1703,7 +1991,17 @@ private:
     }
 
     AstNode parseFnCallExpr() {
-        std::string name = parseCppQualifiedName();
+        std::string name;
+        if (peek().type == TokenType::Identifier && isFilePrefix(peek().value) &&
+            pos_ + 2 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::Dot &&
+            tokens_[pos_ + 2].type == TokenType::Identifier) {
+            name = peek().value + "." + tokens_[pos_ + 2].value;
+            advance();
+            advance();
+            advance();
+        } else {
+            name = parseCppQualifiedName();
+        }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
         }
@@ -2043,6 +2341,16 @@ private:
         }
         advance();
         std::string name = nameTok.value;
+        if (isFilePrefix(name) && peek().type == TokenType::Dot) {
+            advance();
+            const Token& part = peek();
+            if (part.type != TokenType::Identifier) {
+                throw std::runtime_error("Expected a name after '" + name + ".' at line " + std::to_string(part.line));
+            }
+            name += ".";
+            name += part.value;
+            advance();
+        }
         AstNode::Type assnType = AstNode::Type::Assignment;
         if (match(TokenType::Assign)) {
             assnType = AstNode::Type::Assignment;
@@ -2066,6 +2374,15 @@ private:
             assnType = AstNode::Type::AssnShl;
         } else if (match(TokenType::ShrAssign)) {
             assnType = AstNode::Type::AssnShr;
+        } else if (name.find('.') != std::string::npos &&
+                   (peek().type == TokenType::PlusPlus || peek().type == TokenType::MinusMinus)) {
+            bool isInc = match(TokenType::PlusPlus);
+            if (!isInc) match(TokenType::MinusMinus);
+            if (!match(TokenType::Semicolon)) {
+                throw std::runtime_error("Expected ';' after " + std::string(isInc ? "++" : "--") + " at line " +
+                                         std::to_string(peek().line));
+            }
+            return {isInc ? AstNode::Type::IncPost : AstNode::Type::DecPost, name, {}};
         } else {
             throw std::runtime_error("Expected '=', compound assignment (e.g. '+=', '&=', '<<=') at line " + std::to_string(peek().line));
         }
@@ -3156,6 +3473,17 @@ private:
             AstNode n{AstNode::Type::ExprBits, name, {std::move(arg)}};
             n.line = line;
             return applyIndexAndDotPostfix(std::move(n));
+        }
+        if (peek().type == TokenType::Identifier && isFilePrefix(peek().value) &&
+            pos_ + 2 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::Dot &&
+            tokens_[pos_ + 2].type == TokenType::Identifier) {
+            const std::string q = peek().value + "." + tokens_[pos_ + 2].value;
+            const bool call = pos_ + 3 < tokens_.size() && tokens_[pos_ + 3].type == TokenType::LParen;
+            if (call) return applyIndexAndDotPostfix(parseFnCallExpr());
+            advance();
+            advance();
+            advance();
+            return applyIndexAndDotPostfix({AstNode::Type::ExprVarRef, q, {}});
         }
         if (looksLikeQualifiedFnCall() ||
             (peek().type == TokenType::Identifier && pos_ + 1 < tokens_.size() &&
