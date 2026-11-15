@@ -110,9 +110,13 @@ TYPE ALIASES
   type Id = int;
   type Bag = map[string]Option[int];
   type SlotInt = Slot[int];
+  type Dict[T] = map[string]T;
+  type Pair[A, B] = map[A]B;
   - Id is still an int. Bag is still that map. The short name is for writing;
     the program means the type on the right.
-  - Write the alias before you use it. It does not take [T] of its own.
+  - Dict[int] is map[string]int. Write the types in the brackets; the name
+    without them is not a type.
+  - Write the alias before you use it.
   - `type` is a word only in this place, so os.type and a variable named type
     are unchanged.
   - A program that never writes type is unchanged.

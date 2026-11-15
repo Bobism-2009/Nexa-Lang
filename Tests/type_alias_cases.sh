@@ -141,13 +141,75 @@ expect_has "a name that names itself" \
 fn main(): int { return 0; }' \
 "names itself"
 
-expect_has "an alias does not take types" \
+expect_has "a plain alias does not take types" \
 'type Id = int;
 fn main(): int {
     let a: Id[int];
     return 0;
 }' \
 "does not take"
+
+run_eq "a short name that takes a type" \
+'#include <std/io>
+type Dict[T] = map[string]T;
+fn main(): int {
+    let d: Dict[int];
+    d["a"] = 4;
+    io.println(d["a"]);
+    return 0;
+}' "4"
+
+run_eq "two type names on an alias" \
+'#include <std/io>
+type Pair[A, B] = map[A]B;
+fn main(): int {
+    let p: Pair[string, int];
+    p["x"] = 7;
+    io.println(p["x"]);
+    return 0;
+}' "7"
+
+printf '%s\n' \
+'type Dict[T] = map[string]T;
+fn show(d: Dict[int]): int { return d["a"]; }' > "$WORK/lib.nxa"
+printf '%s\n' \
+'#include <std/io>
+#include "lib.nxa"
+fn main(): int {
+    let d: lib.Dict[int];
+    d["a"] = 5;
+    io.println(lib.show(d));
+    return 0;
+}' > "$WORK/app.nxa"
+out=$("$NEXAC" "$WORK/app.nxa" -o "$WORK/app" 2>&1)
+if [ $? -ne 0 ]; then
+    bad "included generic alias" "$out"
+else
+    bin="$WORK/app"
+    [ -f "$bin" ] || bin="$WORK/app.exe"
+    got=$(printf '%s' "$("$bin" 2>&1)" | tr -d '\r')
+    if [ "$got" = "5" ]; then
+        ok "an included alias that takes a type"
+    else
+        bad "included generic alias" "$got"
+    fi
+fi
+
+expect_has "a generic alias needs its types" \
+'type Dict[T] = map[string]T;
+fn main(): int {
+    let d: Dict;
+    return 0;
+}' \
+"names 1 type"
+
+expect_has "the wrong number of types on an alias" \
+'type Dict[T] = map[string]T;
+fn main(): int {
+    let d: Dict[int, string];
+    return 0;
+}' \
+"names 1 type"
 
 if [ $FAIL -ne 0 ]; then
     echo "type_alias_cases: $FAIL failure(s)"

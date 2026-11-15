@@ -365,9 +365,10 @@ public:
             } else if (t.type == TokenType::Identifier && t.value == "type" &&
                        pos_ + 2 < tokens_.size() &&
                        tokens_[pos_ + 1].type == TokenType::Identifier &&
-                       tokens_[pos_ + 2].type == TokenType::Assign) {
+                       (tokens_[pos_ + 2].type == TokenType::Assign ||
+                        tokens_[pos_ + 2].type == TokenType::LBracket)) {
                 // `type` is a word only here, so os.type and a variable named
-                // type still parse as they always have.
+                // type still parse as they always have. type Dict[T] = ... too.
                 ast.push_back(parseTypeAlias());
             } else if (t.type == TokenType::Let) {
                 ast.push_back(parseVariable());
@@ -418,6 +419,12 @@ private:
     // type Id = int: Id stands for int everywhere a type is written. Expanded
     // here so the rest of the compiler never sees the alias.
     std::map<std::string, std::string> typeAliases_;
+    // type Dict[T] = map[string]T: Dict[int] expands to map[string]int here.
+    struct GenericTypeAlias {
+        std::vector<std::string> typeParams;
+        std::string body;
+    };
+    std::map<std::string, GenericTypeAlias> genericTypeAliases_;
     std::string definingAlias_;
     // Variant -> fields, only for a variant that holds some. A plain Color.Red
     // is not in here, so a '{' after it is still not part of the value.
@@ -681,6 +688,7 @@ private:
             }
             advance();
             std::string q = v + "." + part.value;
+            if (genericTypeAliases_.count(q)) return expandGenericAliasAt(q, t.line);
             if (typeAliases_.count(q)) {
                 if (peek().type == TokenType::LBracket && pos_ + 1 < tokens_.size() &&
                     tokens_[pos_ + 1].type != TokenType::Number) {
@@ -730,6 +738,7 @@ private:
             }
             return "json";
         }
+        if (genericTypeAliases_.count(v)) return expandGenericAliasAt(v, t.line);
         if (typeAliases_.count(v)) {
             if (peek().type == TokenType::LBracket && pos_ + 1 < tokens_.size() &&
                 tokens_[pos_ + 1].type != TokenType::Number) {
@@ -798,7 +807,8 @@ private:
             }
             else if (n.type == AstNode::Type::ShapeDef) shapeNames_.insert(n.value);
             else if (n.type == AstNode::Type::TypeAlias && !n.isPrivate) {
-                typeAliases_[n.value] = n.declType;
+                if (n.typeParams.empty()) typeAliases_[n.value] = n.declType;
+                else genericTypeAliases_[n.value] = GenericTypeAlias{n.typeParams, n.declType};
             }
         }
     }
@@ -815,7 +825,8 @@ private:
         if (n.type == TokenType::Identifier && n.value == "type" &&
             pos_ + 3 < tokens_.size() &&
             tokens_[pos_ + 2].type == TokenType::Identifier &&
-            tokens_[pos_ + 3].type == TokenType::Assign) {
+            (tokens_[pos_ + 3].type == TokenType::Assign ||
+             tokens_[pos_ + 3].type == TokenType::LBracket)) {
             return true;
         }
         if (n.type == TokenType::Identifier && n.value == "shape" &&
@@ -886,7 +897,8 @@ private:
             return true;
         }
         return structNames_.count(v) != 0 || enumNames_.count(v) != 0 || shapeNames_.count(v) != 0 ||
-               typeAliases_.count(v) != 0 || typeParamScope_.count(v) != 0;
+               typeAliases_.count(v) != 0 || genericTypeAliases_.count(v) != 0 ||
+               typeParamScope_.count(v) != 0;
     }
 
     bool looksLikeType() const {
@@ -981,7 +993,7 @@ private:
             throw std::runtime_error("Invalid shape name 'main' at line " + std::to_string(line));
         }
         if (structNames_.count(sname) || enumNames_.count(sname) || shapeNames_.count(sname) ||
-            typeAliases_.count(sname)) {
+            typeAliases_.count(sname) || genericTypeAliases_.count(sname)) {
             throw std::runtime_error("Duplicate type name '" + sname + "' at line " + std::to_string(line));
         }
         shapeNames_.insert(sname);
@@ -1094,7 +1106,7 @@ private:
         if (sname == "main") {
             throw std::runtime_error("Invalid struct name 'main' at line " + std::to_string(line));
         }
-        if (shapeNames_.count(sname) || typeAliases_.count(sname)) {
+        if (shapeNames_.count(sname) || typeAliases_.count(sname) || genericTypeAliases_.count(sname)) {
             throw std::runtime_error("Duplicate type name '" + sname + "' at line " + std::to_string(line));
         }
         structNames_.insert(sname);
@@ -1197,7 +1209,7 @@ private:
         if (ename == "main") {
             throw std::runtime_error("Invalid enum name 'main' at line " + std::to_string(line));
         }
-        if (shapeNames_.count(ename) || typeAliases_.count(ename)) {
+        if (shapeNames_.count(ename) || typeAliases_.count(ename) || genericTypeAliases_.count(ename)) {
             throw std::runtime_error("Duplicate type name '" + ename + "' at line " + std::to_string(line));
         }
         enumNames_.insert(ename);
@@ -1278,8 +1290,66 @@ private:
         return node;
     }
 
-    // type Id = int; Id is that type wherever a type is written. The name is
-    // expanded here, so a program that never writes type is unchanged later.
+    // Replace typevar:P in an alias body with the type given for P.
+    static std::string substAliasTypeVars(std::string body,
+                                          const std::vector<std::string>& params,
+                                          const std::vector<std::string>& args) {
+        for (size_t i = 0; i < params.size() && i < args.size(); i++) {
+            const std::string from = "typevar:" + params[i];
+            size_t p = 0;
+            while ((p = body.find(from, p)) != std::string::npos) {
+                const size_t e = p + from.size();
+                if (e < body.size() && (std::isalnum((unsigned char)body[e]) || body[e] == '_')) {
+                    p = e;
+                    continue;
+                }
+                body.replace(p, from.size(), args[i]);
+                p += args[i].size();
+            }
+        }
+        return body;
+    }
+
+    std::vector<std::string> parseTypeArgList(size_t line) {
+        if (!match(TokenType::LBracket)) {
+            throw std::runtime_error("Expected '[' at line " + std::to_string(line));
+        }
+        if (peek().type == TokenType::RBracket) {
+            throw std::runtime_error("Expected a type name at line " + std::to_string(peek().line));
+        }
+        std::vector<std::string> args;
+        for (;;) {
+            args.push_back(parseTypeName());
+            if (!match(TokenType::Comma) || peek().type == TokenType::RBracket) break;
+        }
+        if (!match(TokenType::RBracket)) {
+            throw std::runtime_error("Expected ']' after the type name at line " + std::to_string(peek().line));
+        }
+        return args;
+    }
+
+    std::string expandGenericAliasAt(const std::string& name, size_t line) {
+        auto it = genericTypeAliases_.find(name);
+        if (it == genericTypeAliases_.end()) {
+            throw std::runtime_error("'" + name + "' is not a type at line " + std::to_string(line));
+        }
+        const GenericTypeAlias& g = it->second;
+        if (peek().type != TokenType::LBracket || pos_ + 1 >= tokens_.size() ||
+            tokens_[pos_ + 1].type == TokenType::Number) {
+            throw std::runtime_error("'" + name + "' names " + std::to_string(g.typeParams.size()) +
+                (g.typeParams.size() == 1 ? " type" : " types") + "; write " + name + "[...] at line " +
+                std::to_string(line));
+        }
+        std::vector<std::string> args = parseTypeArgList(line);
+        if (args.size() != g.typeParams.size()) {
+            throw std::runtime_error("'" + name + "' names " + std::to_string(g.typeParams.size()) +
+                (g.typeParams.size() == 1 ? " type" : " types") + " at line " + std::to_string(line));
+        }
+        return substAliasTypeVars(g.body, g.typeParams, args);
+    }
+
+    // type Id = int; type Dict[T] = map[string]T. The name is expanded here, so
+    // a program that never writes type is unchanged later.
     AstNode parseTypeAlias() {
         size_t line = peek().line;
         if (peek().type != TokenType::Identifier || peek().value != "type") {
@@ -1299,8 +1369,12 @@ private:
             throw std::runtime_error("'" + name + "' is already a type at line " + std::to_string(line));
         }
         if (structNames_.count(name) || enumNames_.count(name) || shapeNames_.count(name) ||
-            typeAliases_.count(name)) {
+            typeAliases_.count(name) || genericTypeAliases_.count(name)) {
             throw std::runtime_error("Duplicate type name '" + name + "' at line " + std::to_string(line));
+        }
+        std::vector<std::string> typeParams;
+        if (peek().type == TokenType::LBracket) {
+            typeParams = parseTypeParams(line);
         }
         if (!match(TokenType::Assign)) {
             throw std::runtime_error("Expected '=' after the type name at line " + std::to_string(peek().line));
@@ -1311,18 +1385,25 @@ private:
             ty = parseTypeName();
         } catch (...) {
             definingAlias_.clear();
+            if (!typeParams.empty()) typeParamScope_.clear();
             throw;
         }
         definingAlias_.clear();
+        if (!typeParams.empty()) typeParamScope_.clear();
         if (ty == "void") {
             throw std::runtime_error("a type name cannot be void at line " + std::to_string(line));
         }
         if (!match(TokenType::Semicolon)) {
             throw std::runtime_error("Expected ';' after the type at line " + std::to_string(peek().line));
         }
-        typeAliases_[name] = ty;
+        if (typeParams.empty()) {
+            typeAliases_[name] = ty;
+        } else {
+            genericTypeAliases_[name] = GenericTypeAlias{typeParams, ty};
+        }
         AstNode node{AstNode::Type::TypeAlias, name, {}};
         node.declType = std::move(ty);
+        node.typeParams = std::move(typeParams);
         node.line = line;
         node.srcFile = currentFilePath_;
         return node;
@@ -1823,13 +1904,18 @@ private:
             } else if (n.type == AstNode::Type::TypeAlias && bareName(n.value)) {
                 ownAliases_.insert(n.value);
                 // Uses already expanded to the real type. The alias name itself
-                // is prefixed so the parent can write lib.Id.
+                // is prefixed so the parent can write lib.Id or lib.Dict[int].
                 std::string old = n.value;
                 n.value = filePrefix_ + "." + n.value;
                 auto it = typeAliases_.find(old);
                 if (it != typeAliases_.end()) {
                     typeAliases_[n.value] = it->second;
                     typeAliases_.erase(it);
+                }
+                auto git = genericTypeAliases_.find(old);
+                if (git != genericTypeAliases_.end()) {
+                    genericTypeAliases_[n.value] = std::move(git->second);
+                    genericTypeAliases_.erase(git);
                 }
             } else if (n.type == AstNode::Type::Variable && bareName(n.value)) {
                 ownGlobals_.insert(n.value);
@@ -2120,6 +2206,7 @@ private:
                 throw std::runtime_error("Expected a type name at line " + std::to_string(t.line));
             }
             if (isBuiltinTypeName(t.value) || typeAliases_.count(t.value) ||
+                genericTypeAliases_.count(t.value) ||
                 structNames_.count(t.value) || enumNames_.count(t.value) || shapeNames_.count(t.value)) {
                 throw std::runtime_error("'" + t.value + "' is already a type at line " + std::to_string(t.line));
             }
