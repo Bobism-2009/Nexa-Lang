@@ -127,7 +127,8 @@ struct AstNode {
     std::vector<std::string> typeParams; // fn first[T], struct Slot[T], or enum Option[T]; empty when none
     bool isExtern = false;         // Function: true = extern fn (C linkage declaration, no body)
     bool isVariadic = false;       // Function: true = trailing ... (C varargs)
-    bool isPrivate = false;        // top-level priv: visible only in the file that wrote it
+    bool isPrivate = false;        // top-level priv, or a priv method / (with paramIsPrivate) field
+    std::vector<bool> paramIsPrivate; // StructDef: true when field i was written priv
     std::string receiverType = ""; // Function: "struct:Point" when this is a method inside a struct
     // Source provenance, stamped by the parser on statements and on primary expressions.
     // Semantic checks that run after parsing (Transpiler::checkSemantics) report through
@@ -1111,6 +1112,19 @@ private:
             if (peek().type == TokenType::Eof) {
                 throw std::runtime_error("Unclosed struct body starting at line " + std::to_string(line));
             }
+            // priv fn / priv field: only before a method or a field name:type.
+            // A field named priv is still `priv: int` (colon right after).
+            bool memberPriv = false;
+            if (peek().type == TokenType::Identifier && peek().value == "priv" &&
+                pos_ + 1 < tokens_.size()) {
+                const Token& n = tokens_[pos_ + 1];
+                if (n.type == TokenType::Fn ||
+                    (n.type == TokenType::Identifier && pos_ + 2 < tokens_.size() &&
+                     tokens_[pos_ + 2].type == TokenType::Colon)) {
+                    advance();
+                    memberPriv = true;
+                }
+            }
             if (peek().type == TokenType::Fn) {
                 AstNode meth = parseFunction();
                 if (meth.value == "self") {
@@ -1127,6 +1141,7 @@ private:
                         std::to_string(line));
                 }
                 meth.receiverType = "struct:" + sname;
+                meth.isPrivate = memberPriv;
                 node.children.push_back(std::move(meth));
                 continue;
             }
@@ -1139,6 +1154,7 @@ private:
             }
             advance();
             node.paramNames.push_back(fieldTok.value);
+            node.paramIsPrivate.push_back(memberPriv);
             structFieldNames_[sname].insert(fieldTok.value);
             if (!match(TokenType::Colon)) {
                 throw std::runtime_error("Expected ':' after field name at line " + std::to_string(peek().line));

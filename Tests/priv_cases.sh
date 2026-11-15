@@ -127,6 +127,99 @@ expect_has "main cannot be priv" \
 'priv fn main(): int { return 0; }' \
 "fn main cannot be priv"
 
+run_eq "a priv field is usable in its file" \
+'#include <std/io>
+struct Counter {
+    priv count: int;
+    fn bump() { self.count = self.count + 1; }
+    fn get(): int { return self.count; }
+}
+fn main(): int {
+    let c = Counter { count: 3 };
+    c.bump();
+    io.println(c.get());
+    return 0;
+}' "4"
+
+printf '%s\n' \
+'struct Counter {
+    priv count: int = 0;
+    fn bump() { self.count = self.count + 1; }
+    fn get(): int { return self.count; }
+    priv fn reset() { self.count = 0; }
+}' > "$WORK/counter.nxa"
+printf '%s\n' \
+'#include <std/io>
+#include "counter.nxa"
+fn main(): int {
+    let c = counter.Counter {};
+    c.bump();
+    io.println(c.get());
+    return 0;
+}' > "$WORK/counter_app.nxa"
+out=$("$NEXAC" "$WORK/counter_app.nxa" -o "$WORK/counter_app" 2>&1)
+if [ $? -ne 0 ]; then
+    bad "public methods through include" "$out"
+else
+    bin="$WORK/counter_app"
+    [ -f "$bin" ] || bin="$WORK/counter_app.exe"
+    got=$(printf '%s' "$("$bin" 2>&1)" | tr -d '\r')
+    if [ "$got" = "1" ]; then
+        ok "public methods see a priv field"
+    else
+        bad "public methods through include" "$got"
+    fi
+fi
+
+printf '%s\n' \
+'#include "counter.nxa"
+fn main(): int {
+    let c = counter.Counter {};
+    return c.count;
+}' > "$WORK/counter_bad.nxa"
+out=$("$NEXAC" "$WORK/counter_bad.nxa" --source "$WORK/counter_bad.cpp" 2>&1)
+if [ $? -eq 0 ]; then
+    bad "outside cannot read priv field" "NexaC accepted it"
+else
+    case $out in
+        *"private on Counter"*) ok "outside cannot read a private field" ;;
+        *) bad "outside cannot read priv field" "$out" ;;
+    esac
+fi
+
+printf '%s\n' \
+'#include "counter.nxa"
+fn main(): int {
+    let c = counter.Counter {};
+    c.reset();
+    return 0;
+}' > "$WORK/counter_meth.nxa"
+out=$("$NEXAC" "$WORK/counter_meth.nxa" --source "$WORK/counter_meth.cpp" 2>&1)
+if [ $? -eq 0 ]; then
+    bad "outside cannot call priv method" "NexaC accepted it"
+else
+    case $out in
+        *"private on Counter"*) ok "outside cannot call a private method" ;;
+        *) bad "outside cannot call priv method" "$out" ;;
+    esac
+fi
+
+printf '%s\n' \
+'#include "counter.nxa"
+fn main(): int {
+    let c = counter.Counter { count: 9 };
+    return 0;
+}' > "$WORK/counter_lit.nxa"
+out=$("$NEXAC" "$WORK/counter_lit.nxa" --source "$WORK/counter_lit.cpp" 2>&1)
+if [ $? -eq 0 ]; then
+    bad "outside cannot set priv field in literal" "NexaC accepted it"
+else
+    case $out in
+        *"private on Counter"*) ok "outside cannot set a private field in a literal" ;;
+        *) bad "outside cannot set priv field in literal" "$out" ;;
+    esac
+fi
+
 if [ $FAIL -ne 0 ]; then
     echo "priv_cases: $FAIL failure(s)"
     exit 1

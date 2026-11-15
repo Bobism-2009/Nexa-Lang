@@ -124,11 +124,19 @@ PRIVACY
   priv type Id = int;
   priv shape Drawable { fn draw(); }
   priv let secret = 1;
+  struct Counter {
+    priv count: int;
+    fn bump() { self.count = self.count + 1; }
+    priv fn reset() { self.count = 0; }
+  }
   - A priv name is only for the file that wrote it. An include that declares
     priv fn hide keeps hide() inside that file; from outside, lib.hide is an
     error.
-  - `priv` is a word only before a top-level declaration. A program that never
-    writes priv is unchanged.
+  - A priv field or method is only for the file that wrote the struct. Methods
+    and other code in that file may use it; from outside, p.count and p.reset()
+    are errors. A priv method does not count toward a shape.
+  - `priv` is a word only before a top-level declaration, or before a field or
+    method inside a struct. A program that never writes priv is unchanged.
 
 ENUMS
   enum Name {

@@ -120,3 +120,5 @@ FILE INCLUDES (quotes)
     A type alias is lib.Id. It still means the type on the right.
     A name written priv stays inside that file. From outside, lib.helper is an
     error: helper is private to lib. Inside the file it is still just helper().
+    A priv field or method on a struct is the same: from outside, p.count is an
+    error when count was written priv in that file.

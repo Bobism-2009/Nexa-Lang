@@ -599,6 +599,8 @@ public:
         enumOrder_.clear();
         enumFirstVariant_.clear();
         privateDeclFile_.clear();
+        structDefFile_.clear();
+        privateStructMembers_.clear();
         std::set<std::string> typeNames;
         int structId = 0;
         int enumId = 0;
@@ -649,6 +651,7 @@ public:
                     genericStructs_[node.value] = &node;
                     continue;
                 }
+                noteStructPrivMembers(node);
                 for (size_t i = 0; i < node.paramNames.size(); i++) {
                     structFields_[node.value][node.paramNames[i]] = node.paramTypes[i];
                     if (i < node.paramHasDefault.size() && node.paramHasDefault[i]) {
@@ -2102,6 +2105,10 @@ private:
     std::map<std::string, std::string> fileScopeFile_;
     // priv name -> file that wrote it. Only that file may use the name.
     std::map<std::string, std::string> privateDeclFile_;
+    // struct name -> file that wrote the struct (for priv fields/methods).
+    std::map<std::string, std::string> structDefFile_;
+    // struct name -> priv field or method names. Only structDefFile_ may use them.
+    std::map<std::string, std::set<std::string>> privateStructMembers_;
     std::vector<std::map<std::string, std::string>> nexaDeclStack_;
 
     std::string canonicalParamType(const AstNode& fn, size_t i) const {
@@ -2706,6 +2713,54 @@ private:
         return "'" + name + "' is private to that file";
     }
 
+    void noteStructPrivMembers(const AstNode& node) {
+        structDefFile_[node.value] = node.srcFile;
+        auto& priv = privateStructMembers_[node.value];
+        for (size_t i = 0; i < node.paramNames.size(); i++) {
+            if (i < node.paramIsPrivate.size() && node.paramIsPrivate[i]) {
+                priv.insert(node.paramNames[i]);
+            }
+        }
+        for (const AstNode& meth : node.children) {
+            if (meth.type == AstNode::Type::Function && meth.isPrivate) {
+                priv.insert(meth.value);
+            }
+        }
+        if (priv.empty()) privateStructMembers_.erase(node.value);
+    }
+
+    // A priv field or method is only for the file that wrote the struct.
+    bool sameStructMemberScope(const std::string& structName, const std::string& member,
+                               const std::string& useFile) const {
+        auto pit = privateStructMembers_.find(structName);
+        if (pit == privateStructMembers_.end() || !pit->second.count(member)) return true;
+        auto fit = structDefFile_.find(structName);
+        const std::string& defFile = (fit != structDefFile_.end()) ? fit->second : std::string();
+        if (useFile.empty()) return defFile.empty();
+        return defFile.empty() || defFile == useFile;
+    }
+
+    std::string privateStructMemberMessage(const std::string& structName, const std::string& member) const {
+        size_t d = structName.find('.');
+        if (d != std::string::npos && d + 1 < structName.size()) {
+            return "'" + member + "' is private on " + structName.substr(d + 1);
+        }
+        return "'" + member + "' is private on " + structName;
+    }
+
+    void semCheckStructMemberPriv(const AstNode& at, const std::string& structName,
+                                  const std::string& member) const {
+        std::string use = at.srcFile;
+        // AssnMember targets and some postfix nodes are not stamped; the
+        // enclosing statement's file (semLoc_) is the file that wrote them.
+        if (use.empty() && semLoc_) use = semLoc_->srcFile;
+        if (sameStructMemberScope(structName, member, use)) return;
+        // A method of this struct may always use its own priv fields and methods.
+        const std::string selfT = lookupNexaDecl("self");
+        if (isStructDeclType(selfT) && structNameFromDecl(selfT) == structName) return;
+        semError(at, privateStructMemberMessage(structName, member));
+    }
+
     std::string uniqueNamedFnType(const std::string& name, const std::string& useFile = "") const {
         int n = 0;
         size_t slot = 0;
@@ -2823,7 +2878,9 @@ private:
                 auto mit = methods->second.find(sig.name);
                 if (mit != methods->second.end()) m = mit->second;
             }
-            if (!m) return structName + " has no " + sig.name + "() for " + shapeName;
+            if (!m || m->isPrivate) {
+                return structName + " has no " + sig.name + "() for " + shapeName;
+            }
             if (m->paramNames.size() != sig.paramTypes.size()) {
                 return structName + "." + sig.name + "() does not match " + shapeName + "." + sig.name + "()";
             }
@@ -5346,6 +5403,7 @@ private:
                 }
             }
             structFieldOrder_[applied] = node.paramNames;
+            noteStructPrivMembers(node);
             for (AstNode& m : node.children) {
                 if (m.type == AstNode::Type::Function) structMethods_[applied][m.value] = &m;
             }
@@ -6164,11 +6222,13 @@ private:
             case AstNode::Type::ExprCall:
                 for (const AstNode& c : e.children) semExpr(c);
                 semCheckSliceAlgo(e);
-                if (!shapes_.empty() && e.type == AstNode::Type::FnCall &&
-                    (e.initValue == "." || e.initValue == "->") && !e.children.empty()) {
+                if ((e.initValue == "." || e.initValue == "->") && !e.children.empty()) {
                     std::string recvT = inferExprNexaType(e.children[0]);
                     if (isPointerType(recvT)) recvT = pointerPointeeType(recvT);
-                    if (isShapeType(recvT)) {
+                    if (isStructDeclType(recvT)) {
+                        semCheckStructMemberPriv(e, structNameFromDecl(recvT), e.value);
+                    }
+                    if (!shapes_.empty() && e.type == AstNode::Type::FnCall && isShapeType(recvT)) {
                         const std::string shape = shapeNameFromDecl(recvT);
                         const ShapeSig* sig = findShapeSig(shape, e.value);
                         if (!sig) semError(e, shape + " has no " + e.value + "()");
@@ -6187,6 +6247,14 @@ private:
                     }
                 }
                 break;
+            case AstNode::Type::ExprStructLit: {
+                for (const AstNode& c : e.children) semExpr(c);
+                const std::string litName = structLitUseName(e);
+                for (const std::string& f : e.paramNames) {
+                    semCheckStructMemberPriv(e, litName, f);
+                }
+                break;
+            }
             case AstNode::Type::ExprAdd:
                 for (const AstNode& c : e.children) semExpr(c);
                 semCheckConcatOperands(e);
@@ -7146,9 +7214,15 @@ private:
         const std::string sname = structNameFromDecl(baseT);
         auto fields = structFields_.find(sname);
         if (fields == structFields_.end()) return;
-        if (fields->second.count(e.value)) return;
+        if (fields->second.count(e.value)) {
+            semCheckStructMemberPriv(e, sname, e.value);
+            return;
+        }
         auto methods = structMethods_.find(sname);
-        if (methods != structMethods_.end() && methods->second.count(e.value)) return;
+        if (methods != structMethods_.end() && methods->second.count(e.value)) {
+            semCheckStructMemberPriv(e, sname, e.value);
+            return;
+        }
         semError(e, "Struct '" + sname + "' has no field '" + e.value + "'");
     }
 
