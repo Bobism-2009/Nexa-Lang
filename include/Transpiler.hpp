@@ -3101,6 +3101,22 @@ private:
                 return false;
             }
         }
+        // T: Drawable — the bound type must be a struct that has the shape's functions.
+        for (size_t i = 0; i < fn.typeParams.size(); i++) {
+            if (i >= fn.typeParamBounds.size() || fn.typeParamBounds[i].empty()) continue;
+            const std::string& shape = fn.typeParamBounds[i];
+            std::string actual = b[fn.typeParams[i]];
+            if (isPointerType(actual)) actual = pointerPointeeType(actual);
+            if (!isStructDeclType(actual)) {
+                fail = fn.typeParams[i] + " is " + actual + ", and " + shape + " needs a struct";
+                return false;
+            }
+            const std::string why = structShapeFail(structNameFromDecl(actual), shape);
+            if (!why.empty()) {
+                fail = why;
+                return false;
+            }
+        }
         return true;
     }
     std::vector<std::string> appliedParamTypes(const AstNode& fn,
@@ -3969,6 +3985,10 @@ private:
                                 std::string k, v;
                                 if (nexaSplitMapType(recvT, k, v)) return "[]" + v;
                             }
+                        }
+                        if (isTypeVar(recvT)) {
+                            auto bit = semTypeParamBound_.find(typeVarName(recvT));
+                            if (bit != semTypeParamBound_.end()) recvT = "shape:" + bit->second;
                         }
                         if (isShapeType(recvT)) {
                             const ShapeSig* sig = findShapeSig(shapeNameFromDecl(recvT), e.value);
@@ -5736,6 +5756,8 @@ private:
     }
 
     mutable const AstNode* semLoc_ = nullptr;  // nearest node that carries a source location
+    // While semFunction runs: type param name -> shape bound (T: Drawable).
+    mutable std::map<std::string, std::string> semTypeParamBound_;
     int semLoopDepth_ = 0;
     int semSwitchDepth_ = 0;
     bool semNameChecks_ = true;
@@ -5761,6 +5783,13 @@ private:
     void semFunction(const AstNode& fn) {
         if (fn.isExtern) return;
         nexaDeclStack_.push_back({});
+        auto savedBounds = semTypeParamBound_;
+        semTypeParamBound_.clear();
+        for (size_t i = 0; i < fn.typeParams.size(); i++) {
+            if (i < fn.typeParamBounds.size() && !fn.typeParamBounds[i].empty()) {
+                semTypeParamBound_[fn.typeParams[i]] = fn.typeParamBounds[i];
+            }
+        }
         if (fn.type == AstNode::Type::MainFunction) {
             // fn main(argv) receives the command line as []string.
             for (const std::string& p : fn.paramNames) semDeclare(p, "[]string");
@@ -5780,6 +5809,7 @@ private:
         semLoopDepth_ = savedLoop;
         semSwitchDepth_ = savedSwitch;
         nexaDeclStack_.pop_back();
+        semTypeParamBound_ = std::move(savedBounds);
     }
 
     // A type NexaC defines, as opposed to one a C/C++ header or inline_cpp brings in.
@@ -6027,6 +6057,10 @@ private:
         if (e.children.empty()) return;
         std::string recv = inferExprNexaType(e.children[0]);
         if (isPointerType(recv)) recv = pointerPointeeType(recv);
+        if (isTypeVar(recv)) {
+            auto bit = semTypeParamBound_.find(typeVarName(recv));
+            if (bit != semTypeParamBound_.end()) recv = "shape:" + bit->second;
+        }
         if (!shapes_.empty() && isShapeType(recv)) {
             AstNode& n = const_cast<AstNode&>(e);
             n.type = AstNode::Type::FnCall;
@@ -6227,6 +6261,14 @@ private:
                     if (isPointerType(recvT)) recvT = pointerPointeeType(recvT);
                     if (isStructDeclType(recvT)) {
                         semCheckStructMemberPriv(e, structNameFromDecl(recvT), e.value);
+                    }
+                    // T: Drawable — inside the template, T is still a type name; its
+                    // methods are the shape's until a call picks the struct.
+                    if (isTypeVar(recvT) && e.type == AstNode::Type::FnCall) {
+                        auto bit = semTypeParamBound_.find(typeVarName(recvT));
+                        if (bit != semTypeParamBound_.end()) {
+                            recvT = "shape:" + bit->second;
+                        }
                     }
                     if (!shapes_.empty() && e.type == AstNode::Type::FnCall && isShapeType(recvT)) {
                         const std::string shape = shapeNameFromDecl(recvT);
@@ -7185,6 +7227,10 @@ private:
         semExpr(base);
         std::string baseT = inferExprNexaType(base);
         if (isPointerType(baseT)) baseT = pointerPointeeType(baseT);
+        if (isTypeVar(baseT)) {
+            auto bit = semTypeParamBound_.find(typeVarName(baseT));
+            if (bit != semTypeParamBound_.end()) baseT = "shape:" + bit->second;
+        }
         if (isShapeType(baseT)) {
             semError(e, shapeNameFromDecl(baseT) + " names functions, so it has no field '" + e.value + "'");
         }

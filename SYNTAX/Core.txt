@@ -105,6 +105,10 @@ SHAPES
   - A shape from an included file is that file's name: lib.Drawable.
   - A function that takes a shape is not a value you can pass around. The
     struct is chosen at the call.
+  - A type name may name a shape: fn paint[T: Drawable](x: T) { x.draw(); }.
+    T is still a type — you can return it — and every call must give a struct
+    that has Drawable's functions. Inside the function, only those functions
+    are available on a value of type T.
 
 TYPE ALIASES
   type Id = int;

@@ -125,6 +125,8 @@ struct AstNode {
     std::string arraySize = ""; // for Variable: size for fixed array, e.g. "4080"
     std::string fnReturnType = ""; // Function / MainFunction: explicit ": type" before `{`; empty = infer from returns
     std::vector<std::string> typeParams; // fn first[T], struct Slot[T], or enum Option[T]; empty when none
+    // fn paint[T: Drawable]: parallel to typeParams; empty string = no shape bound.
+    std::vector<std::string> typeParamBounds;
     bool isExtern = false;         // Function: true = extern fn (C linkage declaration, no body)
     bool isVariadic = false;       // Function: true = trailing ... (C varargs)
     bool isPrivate = false;        // top-level priv, or a priv method / (with paramIsPrivate) field
@@ -2123,8 +2125,9 @@ private:
             throw std::runtime_error("Use fn main() for entry point at line " + std::to_string(line));
         }
         std::vector<std::string> typeParams;
+        std::vector<std::string> typeParamBounds;
         if (peek().type == TokenType::LBracket) {
-            typeParams = parseTypeParams(line);
+            typeParams = parseTypeParams(line, &typeParamBounds);
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
@@ -2180,6 +2183,7 @@ private:
         fnNode.paramHasDefault = std::move(hasDefault);
         fnNode.paramDefaults = std::move(defaults);
         fnNode.typeParams = std::move(typeParams);
+        fnNode.typeParamBounds = std::move(typeParamBounds);
         fnNode.children = parseBlock();
         // A method keeps the struct's type names (struct Slot[T] { fn get(): T }).
         // A function clears the names it wrote itself.
@@ -2191,7 +2195,8 @@ private:
     }
 
     // fn first[T] and fn put[K, V]. The names are types until the function ends.
-    std::vector<std::string> parseTypeParams(size_t line) {
+    // When boundsOut is set, T: Drawable is allowed (functions only).
+    std::vector<std::string> parseTypeParams(size_t line, std::vector<std::string>* boundsOut = nullptr) {
         if (!match(TokenType::LBracket)) {
             throw std::runtime_error("Expected '[' at line " + std::to_string(line));
         }
@@ -2199,6 +2204,7 @@ private:
             throw std::runtime_error("Expected a type name at line " + std::to_string(peek().line));
         }
         std::vector<std::string> names;
+        if (boundsOut) boundsOut->clear();
         typeParamScope_.clear();
         for (;;) {
             const Token& t = peek();
@@ -2215,6 +2221,34 @@ private:
             }
             names.push_back(t.value);
             advance();
+            std::string bound;
+            if (match(TokenType::Colon)) {
+                if (!boundsOut) {
+                    throw std::runtime_error("a type bound is only for a function at line " +
+                        std::to_string(peek().line));
+                }
+                const Token& s = peek();
+                if (s.type != TokenType::Identifier) {
+                    throw std::runtime_error("Expected a shape after ':' at line " + std::to_string(s.line));
+                }
+                advance();
+                std::string sname = s.value;
+                if (isFilePrefix(sname) && peek().type == TokenType::Dot) {
+                    advance();
+                    const Token& part = peek();
+                    if (part.type != TokenType::Identifier) {
+                        throw std::runtime_error("Expected a name after '" + sname + ".' at line " +
+                            std::to_string(part.line));
+                    }
+                    advance();
+                    sname = sname + "." + part.value;
+                }
+                if (!shapeNames_.count(sname)) {
+                    throw std::runtime_error("'" + sname + "' is not a shape at line " + std::to_string(s.line));
+                }
+                bound = sname;
+            }
+            if (boundsOut) boundsOut->push_back(std::move(bound));
             if (!match(TokenType::Comma) || peek().type == TokenType::RBracket) break;
         }
         if (!match(TokenType::RBracket)) {

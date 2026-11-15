@@ -219,6 +219,52 @@ struct Box {
 fn main(): int { return 0; }' \
 "a method takes one struct"
 
+run_eq "a type name that names a shape" \
+'#include <std/io>
+shape Drawable {
+    fn draw();
+    fn width(): int;
+}
+struct Button {
+    w: int;
+    fn draw() { io.println("button"); }
+    fn width(): int { return self.w; }
+}
+fn paint[T: Drawable](x: T): T {
+    x.draw();
+    io.println(x.width());
+    return x;
+}
+fn main(): int {
+    let b = Button { w: 3 };
+    let c = paint(b);
+    io.println(c.width());
+    return 0;
+}' "button
+3
+3"
+
+expect_has "a bound needs the shape's functions" \
+'#include <std/io>
+shape Drawable { fn draw(); }
+struct Blank { n: int; }
+fn paint[T: Drawable](x: T) { x.draw(); }
+fn main(): int {
+    paint(Blank { n: 1 });
+    return 0;
+}' "has no draw() for Drawable"
+
+expect_has "a bound is only for a function" \
+'shape Drawable { fn draw(); }
+struct Slot[T: Drawable] { v: T; }
+fn main(): int { return 0; }' \
+"a type bound is only for a function"
+
+expect_has "a bound needs a shape" \
+'fn paint[T: int](x: T) { }
+fn main(): int { return 0; }' \
+"is not a shape"
+
 if [ $FAIL -ne 0 ]; then
     echo "shape_cases: $FAIL failure(s)"
     exit 1
