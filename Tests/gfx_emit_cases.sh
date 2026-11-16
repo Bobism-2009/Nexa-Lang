@@ -1018,17 +1018,29 @@ else
     link_case "icon_path" '    let ok: int = gfx.icon("nope.png");'
     link_case "cursor_get" '    let c: int = gfx.cursor();'
     link_case "cursor_set" '    let c: int = gfx.cursor(0);'
-    link_case "audio" '    let ok: int = gfx.audio();'
-    link_case "sample" '    let n: int = gfx.sample(1);'
-    link_case "audio_queued" '    let n: int = gfx.audio_queued();'
-    link_case "audio_flush" '    let n: int = gfx.audio_flush();'
-    link_case "sound" '    let n: int = gfx.sound("nope.wav");'
-    link_case "play" '    let v: int = gfx.play(1);'
-    link_case "loop" '    let v: int = gfx.loop(1, 128);'
-    link_case "stop_all" '    let n: int = gfx.stop();'
-    link_case "stop_voice" '    let n: int = gfx.stop(1);'
-    link_case "volume_get" '    let n: int = gfx.volume();'
-    link_case "volume_set" '    let n: int = gfx.volume(128);'
+    # ALSA audio pulls <poll.h>, <sys/ioctl.h>, O_CLOEXEC, ESTRPIPE -- headers
+    # and errno values a Windows host CXX does not have. The X11 stub can fake
+    # the window path; it cannot fake a Linux sound card. Cover audio links on
+    # Linux only.
+    case "$(uname -s)" in
+        Linux*)
+            link_case "audio" '    let ok: int = gfx.audio();'
+            link_case "sample" '    let n: int = gfx.sample(1);'
+            link_case "audio_queued" '    let n: int = gfx.audio_queued();'
+            link_case "audio_flush" '    let n: int = gfx.audio_flush();'
+            link_case "sound" '    let n: int = gfx.sound("nope.wav");'
+            link_case "play" '    let v: int = gfx.play(1);'
+            link_case "loop" '    let v: int = gfx.loop(1, 128);'
+            link_case "stop_all" '    let n: int = gfx.stop();'
+            link_case "stop_voice" '    let n: int = gfx.stop(1);'
+            link_case "volume_get" '    let n: int = gfx.volume();'
+            link_case "volume_set" '    let n: int = gfx.volume(128);'
+            ;;
+        *)
+            echo "SKIP link audio: host is $(uname -s), ALSA needs a Linux CXX"
+            skips=$((skips + 1))
+            ;;
+    esac
     link_case "maxfps" '    gfx.maxfps(60);'
     link_case "maxfps_off" '    gfx.maxfps(0);'
 fi

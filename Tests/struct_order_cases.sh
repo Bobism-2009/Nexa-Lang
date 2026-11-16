@@ -119,6 +119,19 @@ fn main(): int {
     return 0;
 }' "9"
 
+run_eq "a method may take its own struct by value" \
+'#include <std/io>
+struct Point {
+    x: int;
+    fn span(other: Point): int { return self.x + other.x; }
+}
+fn main(): int {
+    let a = Point { x: 3 };
+    let b = Point { x: 4 };
+    io.println(a.span(b));
+    return 0;
+}' "7"
+
 printf '%s\n' 'struct Box { item: Item; }
 struct Item { n: int; }
 fn make(): Box {

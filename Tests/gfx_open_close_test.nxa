@@ -305,7 +305,9 @@ fn main() {
         gfx.close();
         return 58;
     }
-    if (gfx.width() != 8 || gfx.height() != 8 || gfx.scale() != 2) {
+    // Still the size last set by resize above -- borderless only takes the frame
+    // off; it must not change the framebuffer.
+    if (gfx.width() != 64 || gfx.height() != 48 || gfx.scale() != 1) {
         io.println("fail size after borderless");
         gfx.close();
         return 59;
@@ -334,7 +336,7 @@ fn main() {
         gfx.close();
         return 64;
     }
-    if (gfx.width() != 8 || gfx.height() != 8 || gfx.scale() != 2) {
+    if (gfx.width() != 64 || gfx.height() != 48 || gfx.scale() != 1) {
         io.println("fail size after ontop");
         gfx.close();
         return 65;
@@ -402,7 +404,7 @@ fn main() {
         return 75;
     }
     gfx.alpha(255);
-    if (gfx.width() != 8 || gfx.height() != 8 || gfx.scale() != 2) {
+    if (gfx.width() != 64 || gfx.height() != 48 || gfx.scale() != 1) {
         io.println("fail size after transparent");
         gfx.close();
         return 76;

@@ -1171,8 +1171,9 @@ public:
         };
         // behindPointer: the immediate pointee of a pointer may be incomplete.
         // valueComplete: a by-value struct must be finished. A method's return
-        // type may name an unfinished struct; a field, a parameter, a slice,
-        // a map or a Result may not.
+        // type may name an unfinished struct; a field, a parameter of another
+        // type, a slice, a map or a Result may not. A method may take its own
+        // struct by value (Point::span(Point)) — that is not a field cycle.
         std::function<void(const std::string&, bool, bool, std::map<std::string, bool>&,
                            std::vector<std::string>&, std::vector<std::string>&, std::set<std::string>&)> noteType;
         noteType = [&](const std::string& t, bool behindPointer, bool valueComplete,
@@ -1257,7 +1258,10 @@ public:
             for (const std::string& ft : node.paramTypes) consider(ft, true);
             for (const AstNode& meth : node.children) {
                 if (meth.type != AstNode::Type::Function) continue;
-                for (const std::string& pt : meth.paramTypes) consider(pt, true);
+                for (const std::string& pt : meth.paramTypes) {
+                    if (isStructDeclType(pt) && structNameFromDecl(pt) == name) continue;
+                    consider(pt, true);
+                }
                 consider(meth.fnReturnType, false);
             }
             for (const std::string& e : enumDeps) emitEnumNamed(e);

@@ -290,6 +290,31 @@ static void nexaRefreshWindowsCompilerPath();
 #endif
 static bool nexaHasPython();
 
+// An MSVC-targeted clang (the official LLVM Windows build) cannot drive Nexa's
+// MinGW-shaped flags or the file/gfx helpers. Skip it so a machine with both
+// LLVM and MinGW still builds the way MinGW alone does.
+static bool nexaWindowsCxxIsMsvcClang(const char* cxx) {
+#ifdef _WIN32
+    std::string name = cxx ? cxx : "";
+    if (name.find("clang") == std::string::npos) return false;
+    std::string cmd = "\"";
+    cmd += cxx;
+    cmd += "\" -dumpmachine 2>nul";
+    FILE* f = _popen(cmd.c_str(), "r");
+    if (!f) return false;
+    char buf[128] = {};
+    if (!fgets(buf, sizeof(buf), f)) {
+        _pclose(f);
+        return false;
+    }
+    _pclose(f);
+    return std::strstr(buf, "msvc") != nullptr;
+#else
+    (void)cxx;
+    return false;
+#endif
+}
+
 // On Windows native: find clang, g++, or gcc (MinGW/MSYS2). Returns compiler name or empty.
 static std::string findWindowsCxxNative() {
 #ifdef _WIN32
@@ -301,13 +326,31 @@ static std::string findWindowsCxxNative() {
         if (*env) return env;
     }
     nexaRefreshWindowsCompilerPath();
-    const char* candidates[] = {"clang++", "clang", "g++", "gcc"};
+    // `where` lists every match; take the first non-MSVC clang so a machine with
+    // both the official LLVM build and llvm-mingw still gets the gnu one.
+    {
+        FILE* w = _popen("where clang++ 2>nul", "r");
+        if (w) {
+            char line[1024];
+            while (fgets(line, sizeof(line), w)) {
+                size_t n = std::strlen(line);
+                while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[--n] = 0;
+                if (n == 0) continue;
+                if (nexaWindowsCxxIsMsvcClang(line)) continue;
+                _pclose(w);
+                return line;
+            }
+            _pclose(w);
+        }
+    }
+    const char* candidates[] = {"clang", "g++", "gcc"};
     for (const char* cxx : candidates) {
         std::string cmd = "where ";
         cmd += cxx;
         cmd += " >nul 2>&1";
-        if (std::system(cmd.c_str()) == 0)
-            return cxx;
+        if (std::system(cmd.c_str()) != 0) continue;
+        if (nexaWindowsCxxIsMsvcClang(cxx)) continue;
+        return cxx;
     }
     return "";
 #else
@@ -512,6 +555,8 @@ static std::string nexaFindExeUnder(const std::filesystem::path& root, const cha
 
 // Pick up winget/LLVM/MinGW locations that `where` misses (legacy C:\mingw64 vs WinGet Packages).
 // Cheap on the common path: WinGet Links + known dirs. Recurse Packages only if still missing.
+// llvm-mingw (gnu) must win over the official LLVM Windows build (msvc): slim
+// binaries and the file/gfx helpers are shaped for the MinGW runtime.
 static void nexaRefreshWindowsCompilerPath() {
     const char* la = std::getenv("LOCALAPPDATA");
     const char* pf = std::getenv("ProgramFiles");
@@ -533,10 +578,30 @@ static void nexaRefreshWindowsCompilerPath() {
     nexaAddDirIfExe("C:\\tools\\winlibs\\mingw64\\bin", "g++.exe");
     nexaAddDirIfExe("C:\\msys64\\ucrt64\\bin", "g++.exe");
     nexaAddDirIfExe("C:\\msys64\\mingw64\\bin", "g++.exe");
-    if (la && la[0] && !nexaCmdExists("g++") && !nexaCmdExists("clang++") && !nexaCmdExists("g++.exe")) {
+    if (la && la[0]) {
         std::filesystem::path pkgs = std::filesystem::path(la) / "Microsoft" / "WinGet" / "Packages";
-        nexaScanForExe(pkgs, "g++.exe", 5);
-        if (!nexaCmdExists("g++") && !nexaCmdExists("g++.exe")) nexaScanForExe(pkgs, "clang++.exe", 5);
+        // Always look for llvm-mingw's clang even when g++ is already on PATH:
+        // findWindowsCxxNative prefers a non-msvc clang, and this is where it lives.
+        // Skip dirs whose path does not say mingw -- those are MSVC-targeted builds.
+        std::error_code ec;
+        if (std::filesystem::exists(pkgs, ec)) {
+            for (std::filesystem::directory_iterator it(pkgs, ec), end; it != end && !ec; it.increment(ec)) {
+                if (!it->is_directory(ec)) continue;
+                const std::string pkg = it->path().string();
+                std::string lower = pkg;
+                for (char& c : lower) c = (char)std::tolower((unsigned char)c);
+                if (lower.find("mingw") == std::string::npos) continue;
+                std::string gnu = nexaFindExeUnder(it->path(), "clang++.exe", 4);
+                if (!gnu.empty()) {
+                    nexaPrependProcessPath(gnu);
+                    break;
+                }
+            }
+        }
+        if (!nexaCmdExists("g++") && !nexaCmdExists("clang++") && !nexaCmdExists("g++.exe")) {
+            nexaScanForExe(pkgs, "g++.exe", 5);
+            if (!nexaCmdExists("g++") && !nexaCmdExists("g++.exe")) nexaScanForExe(pkgs, "clang++.exe", 5);
+        }
     }
 }
 
@@ -1406,38 +1471,26 @@ extern "C" __NEXA_W void __cxa_guard_abort(long long*) { pthread_mutex_unlock(&_
 
 // __nexa_to_string, which std::to_string( calls are rewritten to on Windows (see
 // nexaRewriteToString): libc++ keeps std::to_string in the prebuilt object the slimming
-// keeps out. Shared by both slim preambles.
-static const char* kNexaToStringHelpers = R"NEXASLIM(#include <charconv>
-#include <cstdio>
+// keeps out. Always emitted when the rewrite runs — including under libstdc++ and an
+// MSVC-targeted clang — so a machine with both LLVM and MinGW still builds. snprintf
+// rather than to_chars: MSVC's clang ships <charconv> without a usable to_chars.
+static const char* kNexaToStringHelpers = R"NEXASLIM(#include <cstdio>
 #include <string>
-#if !defined(__GLIBCXX__)
-// Integers through std::to_chars: header-only, cannot throw, and the same table-driven
-// conversion std::to_string itself uses, so this is no slower.
-template <class __T> static std::string __nexa_to_string_i(__T __v) {
-    char __b[24];
-    const std::to_chars_result __r = std::to_chars(__b, __b + sizeof(__b), __v);
-    return std::string(__b, __r.ptr);
-}
-[[maybe_unused]] static std::string __nexa_to_string(int __v) { return __nexa_to_string_i(__v); }
-[[maybe_unused]] static std::string __nexa_to_string(long __v) { return __nexa_to_string_i(__v); }
-[[maybe_unused]] static std::string __nexa_to_string(long long __v) { return __nexa_to_string_i(__v); }
-[[maybe_unused]] static std::string __nexa_to_string(unsigned __v) { return __nexa_to_string_i(__v); }
-[[maybe_unused]] static std::string __nexa_to_string(unsigned long __v) { return __nexa_to_string_i(__v); }
-[[maybe_unused]] static std::string __nexa_to_string(unsigned long long __v) { return __nexa_to_string_i(__v); }
-[[maybe_unused]] static std::string __nexa_to_string(long double __v) {
-    const int __n = std::snprintf(nullptr, 0, "%Lf", __v);
+template <class __T> static std::string __nexa_to_string_i(const char* __fmt, __T __v) {
+    const int __n = std::snprintf(nullptr, 0, __fmt, __v);
     std::string __s(__n > 0 ? (size_t)__n : 0, '\0');
-    if (__n > 0) std::snprintf(&__s[0], (size_t)__n + 1, "%Lf", __v);
+    if (__n > 0) std::snprintf(&__s[0], (size_t)__n + 1, __fmt, __v);
     return __s;
 }
-[[maybe_unused]] static std::string __nexa_to_string(double __v) {
-    const int __n = std::snprintf(nullptr, 0, "%f", __v);
-    std::string __s(__n > 0 ? (size_t)__n : 0, '\0');
-    if (__n > 0) std::snprintf(&__s[0], (size_t)__n + 1, "%f", __v);
-    return __s;
-}
+[[maybe_unused]] static std::string __nexa_to_string(int __v) { return __nexa_to_string_i("%d", __v); }
+[[maybe_unused]] static std::string __nexa_to_string(long __v) { return __nexa_to_string_i("%ld", __v); }
+[[maybe_unused]] static std::string __nexa_to_string(long long __v) { return __nexa_to_string_i("%lld", __v); }
+[[maybe_unused]] static std::string __nexa_to_string(unsigned __v) { return __nexa_to_string_i("%u", __v); }
+[[maybe_unused]] static std::string __nexa_to_string(unsigned long __v) { return __nexa_to_string_i("%lu", __v); }
+[[maybe_unused]] static std::string __nexa_to_string(unsigned long long __v) { return __nexa_to_string_i("%llu", __v); }
+[[maybe_unused]] static std::string __nexa_to_string(long double __v) { return __nexa_to_string_i("%Lf", __v); }
+[[maybe_unused]] static std::string __nexa_to_string(double __v) { return __nexa_to_string_i("%f", __v); }
 [[maybe_unused]] static std::string __nexa_to_string(float __v) { return __nexa_to_string((double)__v); }
-#endif
 )NEXASLIM";
 
 // A program that does throw keeps the exception runtime, but not everything around it. The
@@ -1686,11 +1739,23 @@ static NexaSanitizer nexaProbeSanitizer(const std::string& cxx, const std::strin
         if (!probe) return NexaSanitizer::None;
         probe << "int main() { return 0; }\n";
     }
+#ifdef _WIN32
+    // llvm-mingw's ASan (and often UBSan) links against a DLL that sits next
+    // to clang++. The probe can see that DLL via the PATH we prepended, but a
+    // later `./prog.exe` from a shell usually cannot -- exit 127. Prefer trap
+    // mode, which needs no runtime library.
+    const NexaSanitizer levels[] = {
+        NexaSanitizer::UndefinedTrap,
+        NexaSanitizer::Undefined,
+        NexaSanitizer::AddressUndefined,
+    };
+#else
     const NexaSanitizer levels[] = {
         NexaSanitizer::AddressUndefined,
         NexaSanitizer::Undefined,
         NexaSanitizer::UndefinedTrap,
     };
+#endif
     NexaSanitizer chosen = NexaSanitizer::None;
     for (NexaSanitizer level : levels) {
 #ifdef _WIN32
@@ -3602,34 +3667,39 @@ int main(int argc, char* argv[]) {
         }
 
         if (ret != 0) {
-            std::string fallback;
 #ifdef _WIN32
+            // clang++ is preferred when LLVM and MinGW are both installed, but an
+            // MSVC-targeted clang cannot compile the helpers that need libstdc++
+            // (std::to_chars). Walk every remaining candidate until one links.
             const char* next[] = {"clang++", "clang", "g++", "gcc"};
             for (const char* n : next) {
-                if (std::string(n) != cxx) {
-                    std::string cmd = "where ";
-                    cmd += n;
-                    cmd += " >nul 2>&1";
-                    if (std::system(cmd.c_str()) == 0) {
-                        fallback = n;
-                        break;
-                    }
-                }
-            }
-            if (!fallback.empty()) std::cout << "[Nexa] " << cxx << " failed, retrying with " << fallback << "...\n";
-#else
-            if (!targetFlags.empty()) {
-                fallback = findMingwCxx();
-                if (!fallback.empty()) std::cout << "[Nexa] clang++ failed, retrying with mingw-g++...\n";
-            }
-#endif
-            if (!fallback.empty()) {
-                cxx = fallback;
-                targetFlags = "";
+                if (ret == 0) break;
+                if (std::string(n) == cxx) continue;
+                std::string probe = "where ";
+                probe += n;
+                probe += " >nul 2>&1";
+                if (std::system(probe.c_str()) != 0) continue;
+                if (nexaWindowsCxxIsMsvcClang(n)) continue;
+                std::cout << "[Nexa] " << cxx << " failed, retrying with " << n << "...\n";
                 std::cout.flush();
+                cxx = n;
+                targetFlags = "";
                 std::string cmd2 = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, linkGfx3d, noExceptions, noRtti, debugBuild, linkInputs);
                 ret = std::system(cmd2.c_str());
             }
+#else
+            if (!targetFlags.empty()) {
+                std::string fallback = findMingwCxx();
+                if (!fallback.empty()) {
+                    std::cout << "[Nexa] clang++ failed, retrying with mingw-g++...\n";
+                    cxx = fallback;
+                    targetFlags = "";
+                    std::cout.flush();
+                    std::string cmd2 = nexaBuildCompileCmd(cxx, targetFlags, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, linkGfx3d, noExceptions, noRtti, debugBuild, linkInputs);
+                    ret = std::system(cmd2.c_str());
+                }
+            }
+#endif
         }
 
         // Debug builds keep the generated C++: the binary's DWARF refers to it by path, so
