@@ -143,6 +143,8 @@ PRIVACY
   - A priv field or method is only for the file that wrote the struct. Methods
     and other code in that file may use it; from outside, p.count and p.reset()
     are errors. A priv method does not count toward a shape.
+  - A public declaration cannot name a priv type. fn show(s: Secret) is an
+    error when Secret is priv; a priv field or priv method may still use it.
   - `priv` is a word only before a top-level declaration, or before a field or
     method inside a struct. A program that never writes priv is unchanged.
 

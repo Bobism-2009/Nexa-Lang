@@ -220,6 +220,40 @@ else
     esac
 fi
 
+expect_has "public fn cannot take a priv type" \
+'priv struct Secret { n: int; }
+fn show(s: Secret): int { return s.n; }
+fn main(): int { return 0; }' \
+"cannot appear in public"
+
+expect_has "public field cannot be a priv type" \
+'priv struct Secret { n: int; }
+struct Box { s: Secret; }
+fn main(): int { return 0; }' \
+"cannot appear in public"
+
+run_eq "a priv field may hold a priv type" \
+'#include <std/io>
+priv struct Secret { n: int; }
+struct Box {
+    priv s: Secret;
+    fn get(): int { return self.s.n; }
+}
+fn main(): int {
+    let b = Box { s: Secret { n: 4 } };
+    io.println(b.get());
+    return 0;
+}' "4"
+
+expect_has "public method cannot return a priv type" \
+'priv struct Secret { n: int; }
+struct Box {
+    priv s: Secret;
+    fn get(): Secret { return self.s; }
+}
+fn main(): int { return 0; }' \
+"cannot appear in public"
+
 if [ $FAIL -ne 0 ]; then
     echo "priv_cases: $FAIL failure(s)"
     exit 1

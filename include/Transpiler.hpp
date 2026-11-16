@@ -2696,7 +2696,9 @@ private:
     bool sameFileScope(const std::string& name, const std::string& useFile) const {
         auto pit = privateDeclFile_.find(name);
         if (pit != privateDeclFile_.end()) {
-            if (useFile.empty()) return pit->second.empty();
+            // Empty useFile: method signatures and other nested nodes are often
+            // unstamped; treat as same-file. Cross-file uses carry a path.
+            if (useFile.empty()) return true;
             return pit->second.empty() || pit->second == useFile;
         }
         if (useFile.empty() || name.find('.') != std::string::npos) return true;
@@ -5018,6 +5020,81 @@ private:
         return std::string();
     }
 
+    // Names of Nexa types mentioned in a type string (struct:, enum:, shape:).
+    static void collectTaggedTypeNames(const std::string& t, std::vector<std::string>& out) {
+        auto scan = [&](const char* tag, size_t tagLen) {
+            for (size_t p = t.find(tag); p != std::string::npos; p = t.find(tag, p + 1)) {
+                size_t b = p + tagLen, e = b;
+                while (e < t.size() && (std::isalnum((unsigned char)t[e]) || t[e] == '_' || t[e] == '.')) e++;
+                if (b < e && !(e < t.size() && t[e] == ':')) out.push_back(t.substr(b, e - b));
+            }
+        };
+        scan("struct:", 7);
+        scan("enum:", 5);
+        scan("shape:", 6);
+    }
+
+    // A public declaration cannot name a priv type: that would open the private
+    // name through the public one. A priv field or priv method may still use it.
+    void semCheckPrivInPublic() {
+        if (privateDeclFile_.empty()) return;
+        auto refuse = [&](const AstNode& at, const std::string& typeName, const std::string& where) {
+            size_t d = typeName.find('.');
+            const std::string shown = (d != std::string::npos && d + 1 < typeName.size())
+                ? typeName.substr(d + 1) : typeName;
+            semError(at, "'" + shown + "' is private, so it cannot appear in public " + where);
+        };
+        auto checkType = [&](const std::string& t, const AstNode& at, const std::string& where) {
+            if (t.empty()) return;
+            std::vector<std::string> names;
+            collectTaggedTypeNames(t, names);
+            for (const std::string& name : names) {
+                if (privateDeclFile_.count(name)) refuse(at, name, where);
+            }
+        };
+        auto checkFnSig = [&](const AstNode& fn, const std::string& where) {
+            for (const std::string& pt : fn.paramTypes) checkType(pt, fn, where);
+            checkType(fn.fnReturnType, fn, where);
+            for (const std::string& b : fn.typeParamBounds) {
+                if (!b.empty() && privateDeclFile_.count(b)) refuse(fn, b, where);
+            }
+        };
+        for (const AstNode& n : ast_) {
+            if (n.isPrivate) continue;
+            if (n.type == AstNode::Type::Function || n.type == AstNode::Type::MainFunction) {
+                if (!n.receiverType.empty()) continue; // methods checked with their struct
+                checkFnSig(n, "'" + n.value + "'");
+            } else if (n.type == AstNode::Type::StructDef) {
+                for (size_t i = 0; i < n.paramNames.size(); i++) {
+                    if (i < n.paramIsPrivate.size() && n.paramIsPrivate[i]) continue;
+                    if (i < n.paramTypes.size()) {
+                        checkType(n.paramTypes[i], n, "field '" + n.paramNames[i] + "' of " + n.value);
+                    }
+                }
+                for (const AstNode& m : n.children) {
+                    if (m.type != AstNode::Type::Function || m.isPrivate) continue;
+                    checkFnSig(m, "'" + n.value + "." + m.value + "'");
+                }
+            } else if (n.type == AstNode::Type::EnumDef) {
+                for (const AstNode& v : n.children) {
+                    if (v.type != AstNode::Type::EnumVariant) continue;
+                    for (const std::string& pt : v.paramTypes) {
+                        checkType(pt, n, "variant " + n.value + "." + v.value);
+                    }
+                }
+            } else if (n.type == AstNode::Type::TypeAlias) {
+                checkType(n.declType, n, "type " + n.value);
+            } else if (n.type == AstNode::Type::ShapeDef) {
+                for (const AstNode& m : n.children) {
+                    if (m.type != AstNode::Type::Function) continue;
+                    checkFnSig(m, "shape " + n.value);
+                }
+            } else if (n.type == AstNode::Type::Variable) {
+                checkType(n.declType, n, "'" + n.value + "'");
+            }
+        }
+    }
+
     // A type name that is no struct, enum or built-in type. The parser reads any
     // unknown name as a struct -- a C/C++ header's types are written that way --
     // so only a program with no header or inline C++ (see semNameChecks_) can
@@ -5719,6 +5796,7 @@ private:
         semSwitchDepth_ = 0;
         if (semNameChecks_) semCheckTypeNames();
         semCheckShapePlaces();
+        semCheckPrivInPublic();
 
         std::set<std::string> seenGlobals;
         for (const AstNode& n : ast_) {
