@@ -50,6 +50,7 @@ STRUCTS
     let q: Point = p;       - copy from another value of the same struct type
     let r = Point { x: 1, y: 2 };   - struct literal (type inferred)
     let s: Point = Point { y: 4 };  - omitted fields take their default, else zero / empty
+    let Point { x, y } = p; - bind fields as locals (partial is fine; trailing comma ok)
   Field access (expression):  p.x   p.label
   Field assignment:           p.x = 10;   p.label += "suffix";
   Through pointer:            ptr->x   ptr->x = 10;   (same as (*ptr).x)

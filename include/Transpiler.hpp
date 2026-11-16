@@ -276,6 +276,7 @@ public:
                 case AstNode::Type::EnumVariant:
                 case AstNode::Type::ExprStructLit:
                 case AstNode::Type::ExprEnumLit:
+                case AstNode::Type::LetDestructure:
                     for (std::string& f : n.paramNames) fix(f);
                     break;
                 case AstNode::Type::ExprMember:
@@ -3431,6 +3432,22 @@ private:
             semDeclare(n.value, nexaDeclFromVariableAst(n));
             return;
         }
+        if (n.type == AstNode::Type::LetDestructure) {
+            for (const AstNode& c : n.children) discoverNode(c);
+            if (!n.children.empty()) {
+                const std::string rhsT = inferExprNexaType(n.children[0]);
+                if (isStructDeclType(rhsT)) {
+                    auto fields = structFields_.find(structNameFromDecl(rhsT));
+                    if (fields != structFields_.end()) {
+                        for (const std::string& f : n.paramNames) {
+                            auto it = fields->second.find(f);
+                            if (it != fields->second.end()) semDeclare(f, it->second);
+                        }
+                    }
+                }
+            }
+            return;
+        }
         if (n.type == AstNode::Type::ExprLambda) {
             nexaDeclStack_.push_back({});
             for (size_t i = 0; i < n.paramNames.size(); i++) {
@@ -6175,6 +6192,36 @@ private:
                 semDeclare(s.value, nexaDeclFromVariableAst(s));
                 break;
             }
+            case AstNode::Type::LetDestructure: {
+                if (s.children.empty()) semError(s, "Expected a value after '='");
+                for (const AstNode& c : s.children) semExpr(c);
+                const std::string rhsT = inferExprNexaType(s.children[0]);
+                std::string sn = s.value;
+                size_t br = sn.find('[');
+                if (br != std::string::npos) sn = sn.substr(0, br);
+                if (!isStructDeclType(rhsT) || structNameFromDecl(rhsT) != sn) {
+                    if (isStructDeclType(rhsT)) {
+                        semError(s, "this is a " + structNameFromDecl(rhsT) + ", not a " + sn);
+                    }
+                    semError(s, "let " + sn + " { ... } expects a " + sn);
+                }
+                const std::string applied = structNameFromDecl(rhsT);
+                auto fields = structFields_.find(applied);
+                if (fields == structFields_.end()) {
+                    semError(s, "Unknown struct type: " + applied);
+                }
+                for (const std::string& f : s.paramNames) {
+                    if (!fields->second.count(f)) {
+                        semError(s, "Struct '" + applied + "' has no field '" + f + "'");
+                    }
+                    semCheckStructMemberPriv(s, applied, f);
+                    if (!nexaDeclStack_.empty() && nexaDeclStack_.back().count(f)) {
+                        semError(s, "Redeclaration of '" + f + "' in the same scope");
+                    }
+                    semDeclare(f, fields->second.at(f));
+                }
+                break;
+            }
             case AstNode::Type::Block:
                 semBlock(s.children);
                 break;
@@ -8910,6 +8957,36 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                    const std::string& indent = "    ", bool inStringSwitchCase = false) {
         for (const AstNode& child : children) {
             LineMarkScope lineMark(lineDirectives_, out, child, indent);
+            if (child.type == AstNode::Type::LetDestructure) {
+                if (child.children.empty()) {
+                    throw std::runtime_error("let destructure has no value");
+                }
+                const std::string tmp = "__nexa_d" + std::to_string(varIdx++);
+                const std::string rhsT = inferExprNexaType(child.children[0]);
+                const std::string applied = isStructDeclType(rhsT) ? structNameFromDecl(rhsT) : child.value;
+                out << indent << nexaTypeToCpp("struct:" + applied) << " " << tmp << " = "
+                    << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool)
+                    << ";\n";
+                auto fields = structFields_.find(applied);
+                for (const std::string& f : child.paramNames) {
+                    std::string vname = preserveNames_ ? preservedVarName(f, varMap)
+                                                      : ("__nexa_var_" + std::to_string(varIdx++));
+                    std::string ft = (fields != structFields_.end() && fields->second.count(f))
+                        ? fields->second.at(f) : std::string("int");
+                    out << indent << nexaTypeToCpp(ft) << " " << vname << " = " << tmp << "."
+                        << f << ";\n";
+                    varMap[f] = vname;
+                    varIsString[f] = (ft == "string");
+                    varIsFloat[f] = nexaIsFloatType(ft);
+                    varIsChar[f] = (ft == "char");
+                    varIsBool[f] = (ft == "bool");
+                    varIsEnum[f] = isEnumDeclType(ft);
+                    varIsConst[f] = false;
+                    if (!nexaDeclStack_.empty()) nexaDeclStack_.back()[f] = ft;
+                    if (isStructDeclType(ft)) varStructDeclare(f, structNameFromDecl(ft));
+                }
+                continue;
+            }
             if (child.type == AstNode::Type::Variable) {
                 std::string vname = preserveNames_ ? preservedVarName(child.value, varMap) : ("__nexa_var_" + std::to_string(varIdx++));
                 // `let x = x + 1;` over an outer x reads the outer one: the new name takes

@@ -93,6 +93,7 @@ struct AstNode {
                       EnumVariant,   // one variant that holds fields; value = variant, paramNames/paramTypes = fields
                       ShapeDef,
                       TypeAlias,     // type Id = int; value = name, declType = the type it names
+                      LetDestructure, // let Point { x, y } = p; value = Point, paramNames = fields, children[0] = p
                       ExprMember,
                       AssnMember,
                       InlineCpp };
@@ -1804,7 +1805,8 @@ private:
                 take(n.value);
                 break;
             case AstNode::Type::ExprStructLit:
-            case AstNode::Type::ExprEnumLit: {
+            case AstNode::Type::ExprEnumLit:
+            case AstNode::Type::LetDestructure: {
                 // Slot[int] / Option[int]: the file's name lands on Slot / Option.
                 size_t br = n.value.find('[');
                 std::string base = br == std::string::npos ? n.value : n.value.substr(0, br);
@@ -1874,6 +1876,9 @@ private:
             if (foreignFile(s)) continue;
             rewriteNode(s, locals);
             if (s.type == AstNode::Type::Variable && bareName(s.value)) locals.insert(s.value);
+            if (s.type == AstNode::Type::LetDestructure) {
+                for (const std::string& f : s.paramNames) locals.insert(f);
+            }
         }
     }
 
@@ -7008,12 +7013,85 @@ private:
         return {AstNode::Type::ThreadJoin, "", {handleArg}};
     }
 
+    // let Point { x, y } = p; — Ident or file.Ident, then '{'.
+    bool looksLikeDestructure() const {
+        if (peek().type != TokenType::Identifier) return false;
+        size_t p = pos_ + 1;
+        if (p < tokens_.size() && tokens_[p].type == TokenType::Dot &&
+            p + 1 < tokens_.size() && tokens_[p + 1].type == TokenType::Identifier) {
+            p += 2;
+        }
+        return p < tokens_.size() && tokens_[p].type == TokenType::LBrace;
+    }
+
+    AstNode parseLetDestructure(size_t line) {
+        const Token& nameTok = peek();
+        if (nameTok.type != TokenType::Identifier) {
+            throw std::runtime_error("Expected a struct name at line " + std::to_string(nameTok.line));
+        }
+        advance();
+        std::string sname = nameTok.value;
+        if (isFilePrefix(sname) && peek().type == TokenType::Dot) {
+            advance();
+            const Token& part = peek();
+            if (part.type != TokenType::Identifier) {
+                throw std::runtime_error("Expected a name after '" + sname + ".' at line " +
+                    std::to_string(part.line));
+            }
+            advance();
+            sname = sname + "." + part.value;
+        }
+        if (peek().type == TokenType::LBracket) {
+            sname += parseTypeArgs();
+        }
+        if (!match(TokenType::LBrace)) {
+            throw std::runtime_error("Expected '{' after the struct name at line " +
+                std::to_string(peek().line));
+        }
+        AstNode node{AstNode::Type::LetDestructure, sname, {}};
+        node.line = line;
+        node.srcFile = currentFilePath_;
+        std::set<std::string> seen;
+        if (peek().type != TokenType::RBrace) {
+            for (;;) {
+                const Token& f = peek();
+                if (f.type != TokenType::Identifier) {
+                    throw std::runtime_error("Expected a field name at line " + std::to_string(f.line));
+                }
+                if (!seen.insert(f.value).second) {
+                    throw std::runtime_error("Duplicate field '" + f.value + "' at line " +
+                        std::to_string(f.line));
+                }
+                advance();
+                node.paramNames.push_back(f.value);
+                if (!match(TokenType::Comma) || peek().type == TokenType::RBrace) break;
+            }
+        }
+        if (node.paramNames.empty()) {
+            throw std::runtime_error("Expected a field name inside '{}' at line " + std::to_string(line));
+        }
+        if (!match(TokenType::RBrace)) {
+            throw std::runtime_error("Expected '}' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::Assign)) {
+            throw std::runtime_error("Expected '=' after the fields at line " + std::to_string(peek().line));
+        }
+        node.children.push_back(parseValueExpr());
+        if (!match(TokenType::Semicolon)) {
+            throw std::runtime_error("Expected ';' at line " + std::to_string(peek().line));
+        }
+        return node;
+    }
+
     AstNode parseVariable() {
         size_t line = peek().line;
         if (!match(TokenType::Let)) {
             throw std::runtime_error("Expected 'let' at line " + std::to_string(line));
         }
         bool isConstVar = match(TokenType::Const);
+        if (!isConstVar && looksLikeDestructure()) {
+            return parseLetDestructure(line);
+        }
         const Token& nameTok = peek();
         if (nameTok.type != TokenType::Identifier) {
             throw std::runtime_error("Expected variable name at line " + std::to_string(nameTok.line));
