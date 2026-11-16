@@ -601,6 +601,10 @@ public:
         privateDeclFile_.clear();
         structDefFile_.clear();
         privateStructMembers_.clear();
+        methodTypeSpecs_.clear();
+        methodTypeSpecSeen_.clear();
+        shapeSpecs_.clear();
+        shapeSpecSeen_.clear();
         std::set<std::string> typeNames;
         int structId = 0;
         int enumId = 0;
@@ -1380,6 +1384,21 @@ public:
             }
             if (wroteAnyProto) out << "\n";
         }
+        if (!methodTypeSpecs_.empty()) {
+            for (const MethodTypeSpec& sp : methodTypeSpecs_) {
+                AstNode rewritten = *sp.method;
+                substTypeTree(rewritten, sp.subst);
+                bool voidFn = false;
+                std::string retCpp = structMethodReturnCpp(rewritten, &voidFn);
+                const std::string& structCpp = structCppNames_.at(sp.structName);
+                out << "static " << retCpp << " " << sp.cppName << "(" << structCpp << "& __nexa_self";
+                for (size_t i = 0; i < rewritten.paramNames.size(); i++) {
+                    out << ", " << paramSigCpp(rewritten, i);
+                }
+                out << ");\n";
+            }
+            out << "\n";
+        }
         for (size_t astIdx = 0; astIdx < ast_.size(); ++astIdx) {
             const AstNode& node = ast_[astIdx];
             if (node.type == AstNode::Type::Include || node.type == AstNode::Type::CppHeaderInclude) {
@@ -1802,6 +1821,74 @@ public:
         {
             GlobalScope g{&globalVarMap, &globalVarIsString, &globalVarIsConst, &globalVarIsFloat,
                           &globalVarIsChar, &globalVarIsBool, &globalVarIsEnum};
+            for (const MethodTypeSpec& sp : methodTypeSpecs_) {
+                AstNode rewritten = *sp.method;
+                substTypeTree(rewritten, sp.subst);
+                bool voidFn = false;
+                std::string retCpp = structMethodReturnCpp(rewritten, &voidFn);
+                bool hasValRet = false, hasVoidRet = false;
+                stmtsClassifyReturns(rewritten.children, hasValRet, hasVoidRet);
+                const std::string& structCpp = structCppNames_.at(sp.structName);
+                out << retCpp << " " << sp.cppName << "(" << structCpp << "& __nexa_self";
+                std::map<std::string, std::string> varMap;
+                if (g.varMap) varMap = *g.varMap;
+                varMap["self"] = "__nexa_self";
+                for (size_t i = 0; i < rewritten.paramNames.size(); i++) {
+                    std::string pname = preserveNames_
+                        ? preservedVarName(rewritten.paramNames[i], varMap)
+                        : ("__nexa_param_" + std::to_string(i));
+                    out << ", " << paramSigCpp(rewritten, i) << " " << pname;
+                    varMap[rewritten.paramNames[i]] = pname;
+                }
+                out << ") {\n";
+                int varIdx = static_cast<int>(rewritten.paramNames.size());
+                std::map<std::string, bool> varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum;
+                if (g.isString) varIsString = *g.isString;
+                if (g.isConst) varIsConst = *g.isConst;
+                if (g.isFloat) varIsFloat = *g.isFloat;
+                if (g.isChar) varIsChar = *g.isChar;
+                if (g.isBool) varIsBool = *g.isBool;
+                if (g.isEnum) varIsEnum = *g.isEnum;
+                for (size_t i = 0; i < rewritten.paramNames.size(); i++) {
+                    const std::string& pt = canonicalParamType(rewritten, i);
+                    varIsString[rewritten.paramNames[i]] = (pt == "string");
+                    varIsFloat[rewritten.paramNames[i]] = nexaIsFloatType(pt);
+                    varIsChar[rewritten.paramNames[i]] = (pt == "char");
+                    varIsBool[rewritten.paramNames[i]] = (pt == "bool");
+                    varIsEnum[rewritten.paramNames[i]] = isEnumDeclType(pt);
+                }
+                varStructPush();
+                for (size_t i = 0; i < rewritten.paramNames.size(); i++) {
+                    if (isStructDeclType(canonicalParamType(rewritten, i))) {
+                        varStructDeclare(rewritten.paramNames[i],
+                                         structNameFromDecl(canonicalParamType(rewritten, i)));
+                    }
+                }
+                nexaDeclStack_.push_back(globalNexaDecl_);
+                for (size_t i = 0; i < rewritten.paramNames.size(); i++) {
+                    nexaDeclStack_.back()[rewritten.paramNames[i]] = canonicalParamType(rewritten, i);
+                }
+                nexaDeclStack_.back()["self"] = "struct:" + sp.structName;
+                varStructDeclare("self", sp.structName);
+                methodSelfType_ = "struct:" + sp.structName;
+                emitFnRet_ = voidFn ? EmitFnRet::VoidFn : EmitFnRet::IntFn;
+                tryFnRet_ = rewritten.fnReturnType;
+                tryFnName_ = rewritten.value;
+                tryInMain_ = false;
+                inferredIntFn_ = (rewritten.fnReturnType.empty() && hasValRet) ? rewritten.value : std::string();
+                emitBlockStatements(out, rewritten.children, varMap, varIdx, varIsString, varIsConst,
+                                    varIsFloat, varIsChar, varIsBool, varIsEnum);
+                emitFnRet_ = EmitFnRet::Main;
+                tryInMain_ = true;
+                tryFnRet_.clear();
+                tryFnName_.clear();
+                inferredIntFn_.clear();
+                methodSelfType_.clear();
+                nexaDeclStack_.pop_back();
+                varStructPop();
+                emitImplicitFnTail(out, rewritten, hasValRet);
+                out << "}\n\n";
+            }
             for (const AstNode& node : ast_) {
                 if (node.type != AstNode::Type::StructDef || !node.typeParams.empty()) continue;
                 std::string cppName = structCppNames_.at(node.value);
@@ -2084,6 +2171,17 @@ private:
     };
     std::map<size_t, std::vector<ShapeSpec>> shapeSpecs_;
     std::set<std::string> shapeSpecSeen_;
+    // A method that names a type (fn id[T]) is compiled once per T, as a free
+    // function with an explicit self. Empty when no method names a type.
+    struct MethodTypeSpec {
+        std::string structName;
+        const AstNode* method = nullptr;
+        std::vector<std::string> types;
+        std::string cppName;
+        std::map<std::string, std::string> subst;
+    };
+    std::vector<MethodTypeSpec> methodTypeSpecs_;
+    std::set<std::string> methodTypeSpecSeen_;
     // While a specialized copy is emitted, that function's parameter types
     // read as the struct that was passed. Null for every other function, so a
     // program with no shape is emitted exactly as before.
@@ -3219,11 +3317,74 @@ private:
         for (const AstNode& d : fn.paramDefaults) discoverNode(d);
         discoverSpecialized(fn, types);
     }
+    void noteMethodTypeCall(const AstNode& e) {
+        if (e.children.empty()) return;
+        std::string recvT = inferExprNexaType(e.children[0]);
+        if (isPointerType(recvT)) recvT = pointerPointeeType(recvT);
+        if (!isStructDeclType(recvT)) return;
+        const std::string sn = structNameFromDecl(recvT);
+        auto mit = structMethods_.find(sn);
+        if (mit == structMethods_.end()) return;
+        auto fit = mit->second.find(e.value);
+        if (fit == mit->second.end() || !fit->second) return;
+        const AstNode& meth = *fit->second;
+        if (!fnHasTypeParams(meth)) return;
+        std::vector<std::string> argT;
+        for (size_t i = 1; i < e.children.size(); i++) argT.push_back(inferExprNexaType(e.children[i]));
+        std::map<std::string, std::string> subst;
+        std::string why;
+        if (!unifyFn(meth, argT, subst, why)) semError(e, why);
+        std::vector<std::string> types = appliedParamTypes(meth, subst);
+        std::string key = sn;
+        key.push_back('\n');
+        key += meth.value;
+        for (const auto& kv : subst) {
+            key.push_back('\n');
+            key += kv.first;
+            key += "=";
+            key += kv.second;
+        }
+        if (!methodTypeSpecSeen_.insert(key).second) return;
+        std::string cppName;
+        if (preserveNames_) {
+            cppName = cppSafeName(sn) + "__" + cppSafeName(meth.value);
+            for (const std::string& p : meth.typeParams) {
+                auto it = subst.find(p);
+                cppName += "__";
+                cppName += cppSafeName(it == subst.end() ? p : typeFileTag(it->second));
+            }
+        } else {
+            cppName = "__nexa_M" + std::to_string(methodTypeSpecs_.size());
+        }
+        methodTypeSpecs_.push_back(MethodTypeSpec{sn, &meth, types, std::move(cppName), subst});
+        for (const AstNode& d : meth.paramDefaults) discoverNode(d);
+        discoverSpecialized(meth, types);
+    }
     void discoverShapes() {
         bool anyType = false;
         if (shapes_.empty()) {
             for (const AstNode& n : ast_) {
                 if (fnHasTypeParams(n)) { anyType = true; break; }
+                if (n.type == AstNode::Type::StructDef) {
+                    for (const AstNode& m : n.children) {
+                        if (m.type == AstNode::Type::Function && fnHasTypeParams(m)) {
+                            anyType = true;
+                            break;
+                        }
+                    }
+                }
+                if (anyType) break;
+            }
+            if (!anyType) {
+                for (const AstNode& n : structInst_) {
+                    for (const AstNode& m : n.children) {
+                        if (m.type == AstNode::Type::Function && fnHasTypeParams(m)) {
+                            anyType = true;
+                            break;
+                        }
+                    }
+                    if (anyType) break;
+                }
             }
             if (!anyType && structInst_.empty()) return;
         }
@@ -3325,6 +3486,7 @@ private:
         for (const AstNode& c : n.children) discoverNode(c);
         for (const AstNode& d : n.paramDefaults) discoverNode(d);
         if (n.type == AstNode::Type::FnCall && n.initValue != "." && n.initValue != "->") noteShapeCall(n);
+        if (n.type == AstNode::Type::FnCall && (n.initValue == "." || n.initValue == "->")) noteMethodTypeCall(n);
     }
 
     size_t resolveOverload(const std::string& name,
@@ -4002,7 +4164,24 @@ private:
                             if (sit != structMethods_.end()) {
                                 auto mit = sit->second.find(e.value);
                                 if (mit != sit->second.end() && mit->second) {
-                                    return inferReturnNexaType(*mit->second);
+                                    const AstNode& meth = *mit->second;
+                                    if (fnHasTypeParams(meth)) {
+                                        std::vector<std::string> argT;
+                                        for (size_t i = 1; i < e.children.size(); i++) {
+                                            argT.push_back(inferExprNexaType(e.children[i]));
+                                        }
+                                        std::map<std::string, std::string> subst;
+                                        std::string why;
+                                        if (unifyFn(meth, argT, subst, why)) {
+                                            std::string ret = meth.fnReturnType;
+                                            if (ret.empty()) ret = inferReturnNexaType(meth);
+                                            substTypeStr(ret, subst);
+                                            if (!ret.empty() && ret.find("typevar:") == std::string::npos) {
+                                                return ret;
+                                            }
+                                        }
+                                    }
+                                    return inferReturnNexaType(meth);
                                 }
                             }
                             // c.run(x) with run a field holding a closure: what the closure returns
@@ -4548,6 +4727,34 @@ private:
                 std::string sn = structNameFromDecl(recvBare);
                 auto sit = structMethods_.find(sn);
                 if (sit != structMethods_.end() && sit->second.count(e.value)) {
+                    const AstNode* meth = sit->second.at(e.value);
+                    if (meth && fnHasTypeParams(*meth)) {
+                        std::vector<std::string> argT;
+                        for (size_t i = 1; i < e.children.size(); i++) {
+                            argT.push_back(inferExprNexaType(e.children[i]));
+                        }
+                        std::map<std::string, std::string> subst;
+                        std::string why;
+                        if (!unifyFn(*meth, argT, subst, why)) throw std::runtime_error(why);
+                        std::vector<std::string> types = appliedParamTypes(*meth, subst);
+                        const MethodTypeSpec* sp = nullptr;
+                        for (const MethodTypeSpec& m : methodTypeSpecs_) {
+                            if (m.structName != sn || m.method != meth) continue;
+                            if (m.types == types) { sp = &m; break; }
+                        }
+                        if (!sp) {
+                            throw std::runtime_error("'" + sn + "." + e.value +
+                                "' has no compiled form for this type");
+                        }
+                        std::string selfArg = isPointerType(recvT) ? ("*" + recv) : recv;
+                        std::string s = sp->cppName + "(" + selfArg;
+                        for (size_t i = 1; i < e.children.size(); i++) {
+                            s += ", ";
+                            s += emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                        }
+                        s += ")";
+                        return s;
+                    }
                     // g.log(m) and g->log(m) with g a *Game: the method of what it points at
                     std::string s = recv + (isPointerType(recvT) ? "->" : ".") + e.value + "(";
                     for (size_t i = 1; i < e.children.size(); i++) {
@@ -6369,7 +6576,17 @@ private:
                 break;
             case AstNode::Type::ExprStructLit: {
                 for (const AstNode& c : e.children) semExpr(c);
-                const std::string litName = structLitUseName(e);
+                // Slot { value: v } inside fn make[T] still has T unbound; skip
+                // the priv-field check until a call picks the type.
+                std::string litName = e.value;
+                if (genericStructs_.count(e.value) && e.value.find('[') == std::string::npos) {
+                    std::string why;
+                    std::string app = inferStructLitApp(e, {}, why);
+                    if (app.empty()) break;
+                    litName = app;
+                } else if (!structLitApplied_.empty() || e.value.find('[') != std::string::npos) {
+                    litName = structLitUseName(e);
+                }
                 for (const std::string& f : e.paramNames) {
                     semCheckStructMemberPriv(e, litName, f);
                 }
@@ -8549,6 +8766,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
     }
 
     void emitStructMethodDecl(std::ostringstream& out, const AstNode& node) {
+        if (fnHasTypeParams(node)) return;
         std::string retCpp = structMethodReturnCpp(node, nullptr);
         out << "    " << retCpp << " " << node.value << "(";
         for (size_t i = 0; i < node.paramNames.size(); i++) {
@@ -8571,6 +8789,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
 
     void emitStructMethodBody(std::ostringstream& out, const AstNode& node, const std::string& cppStruct,
                               const GlobalScope* globals = nullptr) {
+        if (fnHasTypeParams(node)) return;
         bool voidFn = false;
         std::string retCpp = structMethodReturnCpp(node, &voidFn);
         bool hasValRet = false, hasVoidRet = false;
@@ -11637,7 +11856,11 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 return "__nexa_from_bits64(static_cast<unsigned long long>(" + x + "))";
             }
             case AstNode::Type::ExprVarRef: {
-                if (e.value == "self" && !methodSelfType_.empty()) return "(*this)";
+                if (e.value == "self" && !methodSelfType_.empty()) {
+                    auto sit = varMap.find("self");
+                    if (sit != varMap.end()) return sit->second;
+                    return "(*this)";
+                }
                 auto it = varMap.find(e.value);
                 if (it != varMap.end()) return it->second;
                 if (lookupNexaDecl(e.value).empty() && !uniqueNamedFnType(e.value, e.srcFile).empty()) {

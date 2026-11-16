@@ -144,12 +144,18 @@ fn main(): int {
     return 0;
 }' "T has no value to take its type from"
 
-expect_has "a method cannot name a type" \
-'struct Box {
+run_eq "a method that names a type" \
+'#include <std/io>
+struct Box {
+    n: int;
     fn id[T](x: T): T { return x; }
 }
-fn main(): int { return 0; }' \
-"a method cannot name a type"
+fn main(): int {
+    let b = Box { n: 1 };
+    io.println(b.id(4));
+    io.println(b.id("pen"));
+    return 0;
+}' "$(printf '4\npen')"
 
 expect_has "a type parameter has no default" \
 'fn id[T](x: T = 0): T { return x; }

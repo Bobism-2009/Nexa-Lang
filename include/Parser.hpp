@@ -1140,7 +1140,11 @@ private:
                 }
             }
             if (peek().type == TokenType::Fn) {
+                // A method that names a type temporarily replaces the struct's
+                // type names; put them back so a later field can still use T.
+                std::set<std::string> savedTypeParams = typeParamScope_;
                 AstNode meth = parseFunction();
+                typeParamScope_ = std::move(savedTypeParams);
                 if (meth.value == "self") {
                     throw std::runtime_error("Invalid method name 'self' at line " + std::to_string(line));
                 }
@@ -1149,10 +1153,6 @@ private:
                         throw std::runtime_error("Method '" + meth.value + "' collides with field '" + f +
                             "' at line " + std::to_string(line));
                     }
-                }
-                if (!meth.typeParams.empty()) {
-                    throw std::runtime_error("a method cannot name a type; write a function, at line " +
-                        std::to_string(line));
                 }
                 meth.receiverType = "struct:" + sname;
                 meth.isPrivate = memberPriv;
