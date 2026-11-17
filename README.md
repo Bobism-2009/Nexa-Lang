@@ -11,6 +11,13 @@ Current compiler version string: **0.1.16** (`NexaC --version`).
 | **Host tooling** | C++17 compiler on `PATH` |
 | **Syntax reference** | [`SYNTAX/`](SYNTAX/) (authoritative) |
 
+### What's new in 0.1.16
+
+- **Language:** `priv`, `type` aliases, shapes (`T: Drawable`), generics (`fn id[T]` / `struct Slot[T]`), destructuring (`let Point { x, y } = p`), `defer`, `float32` / `float64`, and `x in xs` membership.
+- **Modules:** `std/term`, richer `std/gfx` / `std/gfx3d` (shaders, fog, shadows, mirrors, pads), `std/physics` (soft bodies, cloth), and `std/ui` widgets.
+- **Includes:** each `.nxa` file keeps its own names (`net.load`); a bare name that exactly one included file exported resolves automatically for shared helpers.
+- **Tooling:** nexa-vscode **0.2.7** covers the new keywords and modules; Windows prefers llvm-mingw and keeps everyday programs under 64 KB.
+
 ---
 
 ## Requirements
