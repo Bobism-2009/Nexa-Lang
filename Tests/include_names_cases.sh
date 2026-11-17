@@ -164,6 +164,39 @@ else
     fi
 fi
 
+# A bare name that exactly one included file exported is rewritten for siblings.
+cat > "$WORK/shared.nxa" <<'EOF'
+let count = 1;
+fn bump(): int { count = count + 1; return count; }
+EOF
+cat > "$WORK/user.nxa" <<'EOF'
+fn twice(): int { bump(); return bump(); }
+EOF
+cat > "$WORK/auto.nxa" <<'EOF'
+#include <std/io>
+#include "shared.nxa"
+#include "user.nxa"
+fn main(): int {
+    io.println(user.twice());
+    io.println(shared.count);
+    return 0;
+}
+EOF
+out=$("$NEXAC" "$WORK/auto.nxa" -o "$WORK/auto" 2>&1)
+if [ $? -ne 0 ]; then
+    bad "auto" "$out"
+else
+    bin="$WORK/auto"
+    [ -f "$bin" ] || bin="$WORK/auto.exe"
+    got=$(printf '%s' "$("$bin" 2>&1)" | tr -d '\r')
+    want=$(printf '3\n3')
+    if [ "$got" = "$want" ]; then
+        ok "bare names from a shared include resolve"
+    else
+        bad "auto run" "$got"
+    fi
+fi
+
 if [ $FAIL -ne 0 ]; then
     echo "include_names_cases: $FAIL failure(s)"
     exit 1

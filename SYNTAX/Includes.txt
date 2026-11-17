@@ -104,8 +104,11 @@ FILE INCLUDES (quotes)
       #include "lib/util.nxa"     util.load()
     Inside net.nxa the same function is just load(), and its Config is just Config.
     The file you compile keeps bare names, so its own load() is not net.load().
-    An included file does not see those bare names. A helper both files use
-    lives in a third file they both include.
+    An included file does not see the entry file's bare names. A helper both files
+    use lives in a third file they both include; a bare name that exactly one
+    included file exported (load, Config, a global) is rewritten to that file's
+    name automatically, so shared helpers work without writing net.load() in every
+    other .nxa. If two included files export the same bare name, write the prefix.
     Two included files can both declare load and Config. Give one a name when
     the file names would clash, or when the name is already a module (io, gfx, ...):
       #include "net.nxa" as wire

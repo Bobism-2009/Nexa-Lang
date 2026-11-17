@@ -303,12 +303,14 @@ public:
            std::set<std::string>* includedFiles = nullptr,
            const std::vector<std::string>* packagePaths = nullptr,
            const std::string& filePrefix = "",
-           std::map<std::string, std::string>* filePrefixes = nullptr)
+           std::map<std::string, std::string>* filePrefixes = nullptr,
+           std::map<std::string, std::string>* sharedExports = nullptr)
         : tokens_(std::move(tokens)), modules_(modules), pos_(0),
           currentFilePath_(currentFilePath), includedFiles_(includedFiles),
           packagePaths_(packagePaths), filePrefix_(filePrefix),
-          filePrefixes_(filePrefixes) {
+          filePrefixes_(filePrefixes), sharedExports_(sharedExports) {
         if (!filePrefixes_) filePrefixes_ = &ownedPrefixes_;
+        if (!sharedExports_) sharedExports_ = &ownedExports_;
     }
 
     std::vector<AstNode> parse() {
@@ -320,6 +322,10 @@ public:
             // the names are still the ones this file wrote.
             if (!shapeNames_.empty()) retagShapes(ast);
             if (!filePrefix_.empty()) qualifyIncluded(ast);
+            // After every include has registered prefix.name exports, rewrite
+            // bare uses (state.L written as L, workspace.fn as fn) in one pass
+            // so include order does not matter and shared helpers work.
+            if (filePrefix_.empty()) rewriteImportedUses(ast);
             return ast;
         } catch (const std::runtime_error& e) {
             const std::string msg = e.what();
@@ -389,9 +395,21 @@ public:
             } else {
                 throw std::runtime_error(unexpectedToken(t));
             }
-            for (size_t i = stampFrom; i < ast.size(); ++i) stampSourceLoc(ast[i], stmtLine);
+            for (size_t i = stampFrom; i < ast.size(); ++i) {
+                stampSourceLoc(ast[i], stmtLine);
+                if (filePrefix_.empty()) noteEntryOwns(ast[i]);
+            }
         }
         return ast;
+    }
+
+    void noteEntryOwns(const AstNode& n) {
+        if (n.type == AstNode::Type::Function || n.type == AstNode::Type::MainFunction ||
+            n.type == AstNode::Type::Variable || n.type == AstNode::Type::StructDef ||
+            n.type == AstNode::Type::EnumDef || n.type == AstNode::Type::ShapeDef ||
+            n.type == AstNode::Type::TypeAlias) {
+            if (bareName(n.value)) entryOwns_.insert(n.value);
+        }
     }
 
 private:
@@ -411,10 +429,16 @@ private:
     const std::vector<std::string>* packagePaths_;
     // An included .nxa is named by its file (or by `as`), so its functions,
     // structs, enums and globals are prefix.name. The entry file has no prefix
-    // and its names stay bare. The map is shared across every nested include.
+    // and its names stay bare. The maps are shared across every nested include.
     std::string filePrefix_;
     std::map<std::string, std::string> ownedPrefixes_;
     std::map<std::string, std::string>* filePrefixes_;
+    // bare name -> "prefix.name" for every included declaration. Empty value
+    // means two files exported the same bare name (ambiguous; leave the use).
+    std::map<std::string, std::string> ownedExports_;
+    std::map<std::string, std::string>* sharedExports_;
+    // Names the entry file itself declared (bare). They win over exports.
+    std::set<std::string> entryOwns_;
     std::set<std::string> ownFns_, ownStructs_, ownEnums_, ownGlobals_, ownShapes_, ownAliases_;
     std::set<std::string> structNames_;
     std::map<std::string, std::set<std::string>> structFieldNames_;
@@ -1725,7 +1749,7 @@ private:
     }
 
     std::string qualifyTypeStr(const std::string& t) const {
-        if (t.empty() || filePrefix_.empty()) return t;
+        if (t.empty()) return t;
         std::string out;
         for (size_t i = 0; i < t.size();) {
             size_t n = 0;
@@ -1743,13 +1767,21 @@ private:
             std::string name = t.substr(i + n, k - (i + n));
             // A use parsed before this file's shape was written is still
             // struct:Name. It names the shape, so the prefix lands on shape:.
-            if (bareName(name) && ownShapes_.count(name) &&
+            if (bareName(name) && ownShapes_.count(name) && !filePrefix_.empty() &&
                 (set == &ownShapes_ || set == &ownStructs_)) {
                 out += "shape:" + filePrefix_ + "." + name;
             } else {
                 out += t.substr(i, n);
-                if (bareName(name) && set->count(name)) out += filePrefix_ + "." + name;
-                else out += name;
+                if (bareName(name) && !filePrefix_.empty() && set->count(name)) {
+                    out += filePrefix_ + "." + name;
+                } else if (bareName(name) && sharedExports_) {
+                    // Snap in buffer.nxa -> state.Snap when state exported it.
+                    auto it = sharedExports_->find(name);
+                    if (it != sharedExports_->end() && !it->second.empty()) out += it->second;
+                    else out += name;
+                } else {
+                    out += name;
+                }
             }
             i = k;
         }
@@ -1766,11 +1798,32 @@ private:
         }
     }
 
-    void rewriteUse(AstNode& n, const std::set<std::string>& locals) {
-        auto take = [&](std::string& s) {
-            if (!bareName(s) || locals.count(s) || !ownsName(s)) return;
+    void noteSharedExport(const std::string& bare, const std::string& qualified) {
+        if (!sharedExports_ || bare.empty() || qualified.empty()) return;
+        auto it = sharedExports_->find(bare);
+        if (it == sharedExports_->end()) {
+            (*sharedExports_)[bare] = qualified;
+        } else if (it->second != qualified) {
+            it->second = "";  // ambiguous across two included files
+        }
+    }
+
+    // Resolve a bare name to prefix.name when this file owns it, or when exactly
+    // one included file exported it. Entry-file names and locals stay bare.
+    void takeQualifiedName(std::string& s, const std::set<std::string>& locals) const {
+        if (!bareName(s) || locals.count(s)) return;
+        if (ownsName(s) && !filePrefix_.empty()) {
             s = filePrefix_ + "." + s;
-        };
+            return;
+        }
+        if (entryOwns_.count(s)) return;
+        if (!sharedExports_) return;
+        auto it = sharedExports_->find(s);
+        if (it != sharedExports_->end() && !it->second.empty()) s = it->second;
+    }
+
+    void rewriteUse(AstNode& n, const std::set<std::string>& locals) {
+        auto take = [&](std::string& s) { takeQualifiedName(s, locals); };
         switch (n.type) {
             case AstNode::Type::FnCall:
                 if (n.initValue != ".") take(n.value);
@@ -1780,9 +1833,8 @@ private:
                 size_t br = n.value.find('[');
                 if (br != std::string::npos) {
                     std::string base = n.value.substr(0, br);
-                    if (bareName(base) && !locals.count(base) && ownsName(base)) {
-                        n.value = filePrefix_ + "." + base + n.value.substr(br);
-                    }
+                    takeQualifiedName(base, locals);
+                    n.value = base + n.value.substr(br);
                     break;
                 }
                 take(n.value);
@@ -1810,20 +1862,16 @@ private:
                 // Slot[int] / Option[int]: the file's name lands on Slot / Option.
                 size_t br = n.value.find('[');
                 std::string base = br == std::string::npos ? n.value : n.value.substr(0, br);
-                if (bareName(base) && !locals.count(base) && ownsName(base)) {
-                    n.value = filePrefix_ + "." + base +
-                              (br == std::string::npos ? std::string() : n.value.substr(br));
-                }
+                takeQualifiedName(base, locals);
+                n.value = base + (br == std::string::npos ? std::string() : n.value.substr(br));
                 break;
             }
             case AstNode::Type::SwitchCase:
                 if (n.caseIsEnum) {
                     size_t br = n.value.find('[');
                     std::string base = br == std::string::npos ? n.value : n.value.substr(0, br);
-                    if (bareName(base) && !locals.count(base) && ownsName(base)) {
-                        n.value = filePrefix_ + "." + base +
-                                  (br == std::string::npos ? std::string() : n.value.substr(br));
-                    }
+                    takeQualifiedName(base, locals);
+                    n.value = base + (br == std::string::npos ? std::string() : n.value.substr(br));
                 }
                 break;
             default:
@@ -1873,9 +1921,14 @@ private:
 
     void rewriteStmtList(std::vector<AstNode>& stmts, std::set<std::string> locals) {
         for (AstNode& s : stmts) {
-            if (foreignFile(s)) continue;
+            // Included nodes are rewritten here too: qualifyIncluded only
+            // renames declarations, then the entry file's rewriteImportedUses
+            // resolves every bare use once all exports are known.
             rewriteNode(s, locals);
             if (s.type == AstNode::Type::Variable && bareName(s.value)) locals.insert(s.value);
+            // Prefixed globals (state.L) still bind the local name for later
+            // statements in this list? No -- they are declarations, not locals.
+            // Loop vars and lets use bare names in the same file's body.
             if (s.type == AstNode::Type::LetDestructure) {
                 for (const std::string& f : s.paramNames) locals.insert(f);
             }
@@ -1883,7 +1936,8 @@ private:
     }
 
     // Give this included file its own names. Nested includes are already named
-    // and are left alone; their srcFile is the other file.
+    // and are left alone; their srcFile is the other file. Bare uses are
+    // rewritten later in rewriteImportedUses once every include has exported.
     void qualifyIncluded(std::vector<AstNode>& ast) {
         ownFns_.clear();
         ownStructs_.clear();
@@ -1898,22 +1952,32 @@ private:
             }
             if (n.type == AstNode::Type::Function && !n.isExtern && n.receiverType.empty() && bareName(n.value)) {
                 ownFns_.insert(n.value);
-                n.value = filePrefix_ + "." + n.value;
+                std::string q = filePrefix_ + "." + n.value;
+                noteSharedExport(n.value, q);
+                n.value = q;
             } else if (n.type == AstNode::Type::StructDef && bareName(n.value)) {
                 ownStructs_.insert(n.value);
-                n.value = filePrefix_ + "." + n.value;
+                std::string q = filePrefix_ + "." + n.value;
+                noteSharedExport(n.value, q);
+                n.value = q;
             } else if (n.type == AstNode::Type::EnumDef && bareName(n.value)) {
                 ownEnums_.insert(n.value);
-                n.value = filePrefix_ + "." + n.value;
+                std::string q = filePrefix_ + "." + n.value;
+                noteSharedExport(n.value, q);
+                n.value = q;
             } else if (n.type == AstNode::Type::ShapeDef && bareName(n.value)) {
                 ownShapes_.insert(n.value);
-                n.value = filePrefix_ + "." + n.value;
+                std::string q = filePrefix_ + "." + n.value;
+                noteSharedExport(n.value, q);
+                n.value = q;
             } else if (n.type == AstNode::Type::TypeAlias && bareName(n.value)) {
                 ownAliases_.insert(n.value);
                 // Uses already expanded to the real type. The alias name itself
                 // is prefixed so the parent can write lib.Id or lib.Dict[int].
                 std::string old = n.value;
-                n.value = filePrefix_ + "." + n.value;
+                std::string q = filePrefix_ + "." + n.value;
+                noteSharedExport(old, q);
+                n.value = q;
                 auto it = typeAliases_.find(old);
                 if (it != typeAliases_.end()) {
                     typeAliases_[n.value] = it->second;
@@ -1926,9 +1990,25 @@ private:
                 }
             } else if (n.type == AstNode::Type::Variable && bareName(n.value)) {
                 ownGlobals_.insert(n.value);
-                n.value = filePrefix_ + "." + n.value;
+                std::string q = filePrefix_ + "." + n.value;
+                noteSharedExport(n.value, q);
+                n.value = q;
             }
+            // Types written in this file (Config, Color) become prefix.Config.
+            rewriteTypeFields(n);
+            for (AstNode& c : n.children) rewriteTypeFieldsDeep(c);
+            for (AstNode& d : n.paramDefaults) rewriteTypeFieldsDeep(d);
         }
+    }
+
+    void rewriteTypeFieldsDeep(AstNode& n) {
+        rewriteTypeFields(n);
+        for (AstNode& c : n.children) rewriteTypeFieldsDeep(c);
+        for (AstNode& d : n.paramDefaults) rewriteTypeFieldsDeep(d);
+    }
+
+    // Entry file: rewrite every bare use that names an included declaration.
+    void rewriteImportedUses(std::vector<AstNode>& ast) {
         rewriteStmtList(ast, {});
     }
 
@@ -1992,7 +2072,7 @@ private:
                         std::string prefix = alias.empty() ? std::filesystem::path(absPath).stem().string() : alias;
                         claimFilePrefix(prefix, absPath, t.line);
                         Parser subParser(std::move(subTokens), modules_, absPath, includedFiles_, packagePaths_,
-                                         prefix, filePrefixes_);
+                                         prefix, filePrefixes_, sharedExports_);
                         return subParser.parse();
                     }
                 }
@@ -2041,7 +2121,7 @@ private:
             std::string prefix = alias.empty() ? std::filesystem::path(absPath).stem().string() : alias;
             claimFilePrefix(prefix, absPath, t.line);
             Parser subParser(std::move(subTokens), modules_, absPath, includedFiles_, packagePaths_,
-                             prefix, filePrefixes_);
+                             prefix, filePrefixes_, sharedExports_);
             return subParser.parse();
         }
         throw std::runtime_error("Invalid #include at line " + std::to_string(t.line));
