@@ -15,14 +15,14 @@ npm run compile
 **Windows (PowerShell):**
 
 ```powershell
-Copy-Item -Recurse nexa-vscode "$env:USERPROFILE\.cursor\extensions\nexac.nexa-0.2.2"
-# or: $env:USERPROFILE\.vscode\extensions\nexac.nexa-0.2.2
+Copy-Item -Recurse nexa-vscode "$env:USERPROFILE\.cursor\extensions\nexac.nexa-0.2.7"
+# or: $env:USERPROFILE\.vscode\extensions\nexac.nexa-0.2.7
 ```
 
 **macOS / Linux:**
 
 ```bash
-cp -r nexa-vscode ~/.cursor/extensions/nexac.nexa-0.2.0
+cp -r nexa-vscode ~/.cursor/extensions/nexac.nexa-0.2.7
 ```
 
 Reload the window (**Developer: Reload Window**).
@@ -40,8 +40,8 @@ Install via **Extensions: Install from VSIX...**.
 ## Features
 
 ### Language support
-- **Syntax highlighting** — keywords, types (`unsigned int`, `size_t`, pointers), `extern fn`, `null`, `->`, operators, std modules (`io`, `os`, `file`, `math`, `crypto`, `http`, …), structs, enums, strings/chars, `#include`
-- **Snippets** — `main`, `fn`, `extern`, `struct`, `enum`, `forin`, module includes, `inlinecpp`, etc.
+- **Syntax highlighting** — keywords (`priv`, `type`, `shape`, `defer`, `in`, …), types (`float32`/`float64`, `unsigned int`, pointers), generic `fn name[T]`, `extern fn`, `null`, `self`, operators, std modules (`io`, `os`, `file`, `term`, `gfx`, `gfx3d`, `ui`, …), structs, enums, type aliases, shapes, strings/chars, `#include`
+- **Snippets** — `main`, `fn`, `fngen`, `fnshape`, `type`, `shape`, `privfn`, `letdest`, `defer`, module includes, `inlinecpp`, etc.
 - **Bracket matching** and indent for `{}`, `case`/`default`
 
 ### IntelliSense

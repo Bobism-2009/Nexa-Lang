@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { maskComments } from "./nexaIndex";
 
 const MODULES =
-  "io|os|dll|file|random|math|crypto|http|tcp|time|thread";
+  "io|os|dll|file|random|math|crypto|http|tcp|udp|json|time|thread|term|gfx3d|gfx|ui";
 const MODULE_CALL = new RegExp(
   `\\b(${MODULES})\\.([A-Za-z_][A-Za-z0-9_]*)`,
   "g"
@@ -10,7 +10,7 @@ const MODULE_CALL = new RegExp(
 const INCLUDE_ANGLE = /^\s*(#include)\s*<([^>]+)>/;
 const INCLUDE_QUOTE = /^\s*(#include)\s*"([^"]+)"/;
 const STD_MODULES =
-  "io|os|dll|file|random|math|crypto|http|tcp|time|thread|inline";
+  "io|os|dll|file|random|math|crypto|network|json|time|thread|term|gfx3d|gfx|ui|inline";
 
 export const SEMANTIC_LEGEND = new vscode.SemanticTokensLegend(
   ["module", "member", "importKeyword", "importModule", "importPrefix"],

@@ -162,5 +162,113 @@
     "prefix": "sarr",
     "body": ["let ${1:pts}: ${2:Point}[${3:10}];"],
     "description": "Fixed-size stack array of structs"
+  },
+  "Nexa: defer": {
+    "prefix": "defer",
+    "body": ["defer ${1:cleanup};"],
+    "description": "Run a statement when the enclosing block exits"
+  },
+  "Nexa: defer block": {
+    "prefix": "deferb",
+    "body": ["defer {", "\t$0", "}"],
+    "description": "Run a block when the enclosing block exits"
+  },
+  "Nexa: if in": {
+    "prefix": "in",
+    "body": ["if (${1:x} in [${2:a, b}]) {", "\t$0", "}"],
+    "description": "True when x equals any of the listed values"
+  },
+  "Nexa: try": {
+    "prefix": "try",
+    "body": ["try {", "\t$0", "} catch (${1:e}) {", "\t", "}"],
+    "description": "try/catch; e is the thrown string"
+  },
+  "Nexa: float32": {
+    "prefix": "f32",
+    "body": ["let ${1:v}: float32 = ${2:0.0};"],
+    "description": "32-bit float"
+  },
+  "Nexa: include std/time": {
+    "prefix": "inctime",
+    "body": ["#include <std/time>"],
+    "description": "Time module"
+  },
+  "Nexa: include std/term": {
+    "prefix": "incterm",
+    "body": ["#include <std/term>"],
+    "description": "Terminal colour, cursor and keys"
+  },
+  "Nexa: include std/gfx": {
+    "prefix": "incgfx",
+    "body": ["#include <std/gfx>"],
+    "description": "Pixel window module"
+  },
+  "Nexa: include std/gfx3d": {
+    "prefix": "incgfx3d",
+    "body": ["#include <std/gfx3d>"],
+    "description": "3D window module"
+  },
+  "Nexa: include std/ui": {
+    "prefix": "incui",
+    "body": ["#include <std/ui>"],
+    "description": "Widgets on the gfx window"
+  },
+  "Nexa: type alias": {
+    "prefix": "type",
+    "body": ["type ${1:Name} = ${2:int};"],
+    "description": "Short name for a type"
+  },
+  "Nexa: type alias with params": {
+    "prefix": "typegen",
+    "body": ["type ${1:Dict}[${2:T}] = ${3:map[string]T};"],
+    "description": "Type alias that takes types, like Dict[T]"
+  },
+  "Nexa: shape": {
+    "prefix": "shape",
+    "body": [
+      "shape ${1:Drawable} {",
+      "\tfn ${2:draw}();",
+      "\tfn ${3:width}(): ${4:int};",
+      "}"
+    ],
+    "description": "Name the functions a type must have"
+  },
+  "Nexa: priv fn": {
+    "prefix": "privfn",
+    "body": ["priv fn ${1:helper}($2) {", "\t$0", "}"],
+    "description": "Function kept inside this file"
+  },
+  "Nexa: priv struct": {
+    "prefix": "privstruct",
+    "body": [
+      "priv struct ${1:Name} {",
+      "\t${2:field}: ${3:int};",
+      "}"
+    ],
+    "description": "Struct kept inside this file"
+  },
+  "Nexa: destructure let": {
+    "prefix": "letdest",
+    "body": ["let ${1:Point} { ${2:x}, ${3:y} } = ${4:p};"],
+    "description": "Bind a struct's fields as locals"
+  },
+  "Nexa: generic fn": {
+    "prefix": "fngen",
+    "body": ["fn ${1:id}[${2:T}](${3:x}: ${2:T}): ${2:T} {", "\treturn ${3:x};", "}"],
+    "description": "Function that names a type"
+  },
+  "Nexa: shape-bound fn": {
+    "prefix": "fnshape",
+    "body": [
+      "fn ${1:paint}[${2:T}: ${3:Drawable}](${4:x}: ${2:T}) {",
+      "\t${4:x}.${5:draw}();",
+      "}"
+    ],
+    "description": "Generic function that requires a shape"
+  },
+  "Nexa: float64": {
+    "prefix": "f64",
+    "body": ["let ${1:v}: float64 = ${2:0.0};"],
+    "description": "64-bit float (same as float)"
   }
 }

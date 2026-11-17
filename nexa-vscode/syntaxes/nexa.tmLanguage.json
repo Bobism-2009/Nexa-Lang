@@ -13,9 +13,12 @@
     { "include": "#inline-cpp" },
     { "include": "#struct-def" },
     { "include": "#enum-def" },
+    { "include": "#type-def" },
+    { "include": "#shape-def" },
     { "include": "#function-def" },
     { "include": "#keywords" },
     { "include": "#builtins" },
+    { "include": "#types" },
     { "include": "#operators" },
     { "include": "#punctuation" }
   ],
@@ -49,7 +52,7 @@
           "patterns": [
             {
               "name": "meta.import.std.nexa",
-              "match": "(std/)(io|os|dll|file|random|math|crypto|network|time|thread|inline)\\b",
+              "match": "(std/)(io|os|dll|file|random|math|crypto|network|json|time|thread|term|gfx3d|gfx|ui|inline)\\b",
               "captures": {
                 "1": { "name": "keyword.other.import.prefix.nexa" },
                 "2": { "name": "entity.name.namespace" }
@@ -206,6 +209,30 @@
         }
       ]
     },
+    "type-def": {
+      "patterns": [
+        {
+          "name": "meta.type.alias.nexa",
+          "match": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.nexa" },
+            "2": { "name": "entity.name.type.nexa" }
+          }
+        }
+      ]
+    },
+    "shape-def": {
+      "patterns": [
+        {
+          "name": "meta.shape.nexa",
+          "match": "\\b(shape)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.nexa" },
+            "2": { "name": "entity.name.type.shape.nexa" }
+          }
+        }
+      ]
+    },
     "function-def": {
       "patterns": [
         {
@@ -219,6 +246,15 @@
           }
         },
         {
+          "name": "meta.function.generic.nexa",
+          "match": "\\b(fn)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(\\[)",
+          "captures": {
+            "1": { "name": "keyword.control.nexa" },
+            "2": { "name": "entity.name.function.nexa" },
+            "3": { "name": "punctuation.definition.typeparameters.begin.nexa" }
+          }
+        },
+        {
           "name": "meta.function.nexa",
           "match": "\\b(fn)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(\\()",
           "captures": {
@@ -229,23 +265,39 @@
         }
       ]
     },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.nexa",
+          "match": "(?:\\[\\]\\s*)+(?:\\*\\s*)*(?:unsigned\\s+int|unsigned\\s+short|unsigned\\s+long|unsigned\\s+char|float64|float32|size_t|int|short|long|string|bool|float|char|void|[A-Z][A-Za-z0-9_]*)\\b"
+        },
+        {
+          "name": "storage.type.nexa",
+          "match": "\\b(?:Result|result|map)\\s*\\[\\s*(?:\\[\\]\\s*)*(?:\\*\\s*)*(?:unsigned\\s+int|unsigned\\s+short|unsigned\\s+long|unsigned\\s+char|float64|float32|size_t|int|short|long|string|bool|float|char|void|[A-Z][A-Za-z0-9_]*)\\s*\\]"
+        }
+      ]
+    },
     "keywords": {
       "patterns": [
         {
           "name": "storage.type.nexa",
-          "match": "\\b(unsigned\\s+int|unsigned\\s+short|unsigned\\s+long|unsigned\\s+char|int|short|long|size_t|string|bool|float|char|void)\\b"
+          "match": "\\b(unsigned\\s+int|unsigned\\s+short|unsigned\\s+long|unsigned\\s+char|int|short|long|size_t|string|bool|float64|float32|float|char|void)\\b"
         },
         {
           "name": "storage.type.pointer.nexa",
-          "match": "\\*+(?:int|string|char|void|float|bool|[A-Za-z_][A-Za-z0-9_]*)"
+          "match": "\\*+(?:float64|float32|int|string|char|void|float|bool|[A-Za-z_][A-Za-z0-9_]*)"
         },
         {
           "name": "keyword.control.nexa",
-          "match": "\\b(fn|extern|new|delete|sizeof|let|const|struct|enum|if|else|while|for|switch|case|default|return|break|continue|goto|try|catch|throw)\\b"
+          "match": "\\b(fn|extern|new|delete|sizeof|let|const|struct|enum|type|shape|priv|if|else|while|for|switch|case|default|return|break|continue|defer|goto|try|catch|throw|in)\\b"
         },
         {
           "name": "keyword.other.entry.nexa",
           "match": "\\b(main|__init__)\\b"
+        },
+        {
+          "name": "variable.language.self.nexa",
+          "match": "\\bself\\b"
         },
         {
           "name": "constant.language.null.nexa",
@@ -261,7 +313,7 @@
       "patterns": [
         {
           "name": "support.function.builtin.nexa",
-          "match": "\\b(len|trim)(?=\\s*\\()"
+          "match": "\\b(len|trim|bits|from_bits32|from_bits64)(?=\\s*\\()"
         },
         {
           "name": "support.function.builtin.nexa",
@@ -273,7 +325,7 @@
       "patterns": [
         {
           "name": "meta.module.access.nexa",
-          "match": "\\b(io|os|dll|file|random|math|crypto|http|tcp|udp|time|thread)\\.([a-zA-Z_][a-zA-Z0-9_]*)",
+          "match": "\\b(io|os|dll|file|random|math|crypto|http|tcp|udp|json|time|thread|term|gfx3d|gfx|ui)\\.([a-zA-Z_][a-zA-Z0-9_]*)",
           "captures": {
             "1": { "name": "entity.name.namespace" },
             "2": { "name": "entity.name.function" }
@@ -346,6 +398,10 @@
         {
           "name": "keyword.operator.logical.nexa",
           "match": "(?<!=)!(?!=)"
+        },
+        {
+          "name": "keyword.operator.ternary.nexa",
+          "match": "\\?"
         },
         {
           "name": "keyword.operator.assignment.nexa",
