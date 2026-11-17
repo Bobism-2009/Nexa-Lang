@@ -1999,6 +1999,10 @@ private:
             for (AstNode& c : n.children) rewriteTypeFieldsDeep(c);
             for (AstNode& d : n.paramDefaults) rewriteTypeFieldsDeep(d);
         }
+        // Own names first: a.load() inside a.nxa, even when b also exports load
+        // (sharedExports_ marks that bare name ambiguous). Cross-file bare uses
+        // of unique exports are filled in later by rewriteImportedUses.
+        rewriteStmtList(ast, {});
     }
 
     void rewriteTypeFieldsDeep(AstNode& n) {
@@ -2007,7 +2011,8 @@ private:
         for (AstNode& d : n.paramDefaults) rewriteTypeFieldsDeep(d);
     }
 
-    // Entry file: rewrite every bare use that names an included declaration.
+    // Entry file: rewrite remaining bare uses that uniquely name an included
+    // declaration (state.L written as L from editor.nxa).
     void rewriteImportedUses(std::vector<AstNode>& ast) {
         rewriteStmtList(ast, {});
     }
