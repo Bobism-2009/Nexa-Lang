@@ -1340,12 +1340,23 @@ void operator delete[](void* __p, std::size_t) noexcept { std::free(__p); }
 void operator delete(void* __p, const std::nothrow_t&) noexcept { std::free(__p); }
 void operator delete[](void* __p, const std::nothrow_t&) noexcept { std::free(__p); }
 extern "C" char* __cxa_demangle(const char*, char*, std::size_t*, int* __s) { if (__s) *__s = -2; return nullptr; }
+// Match libc++'s own verbose_abort.cpp: newer headers declare this between
+// _LIBCPP_BEGIN/END_EXPLICIT_ABI_ANNOTATIONS (which pop the abi_tag that
+// _LIBCPP_BEGIN_NAMESPACE_STD pushes). Defining it without that wrap adds an
+// abi_tag the declaration does not have → "cannot add 'abi_tag' attribute in a
+// redeclaration", and NexaC falls back from MinGW clang++ to g++.
 _LIBCPP_BEGIN_NAMESPACE_STD
+#if defined(_LIBCPP_BEGIN_EXPLICIT_ABI_ANNOTATIONS)
+_LIBCPP_BEGIN_EXPLICIT_ABI_ANNOTATIONS
+#endif
 [[noreturn]] void __libcpp_verbose_abort(const char* __m, ...) noexcept {
     std::fputs(__m, stderr);
     std::fputs("\n", stderr);
     std::abort();
 }
+#if defined(_LIBCPP_END_EXPLICIT_ABI_ANNOTATIONS)
+_LIBCPP_END_EXPLICIT_ABI_ANNOTATIONS
+#endif
 _LIBCPP_END_NAMESPACE_STD
 template class std::basic_string<char>;
 template class std::basic_string<wchar_t>;  // WinHTTP and the file APIs take wide text
@@ -2321,6 +2332,10 @@ static std::string nexaBuildCompileCmd(
         // return std::string; clang emits a pedantic warning that doesn't matter
         // (the whole pipeline is clang->clang, not C interop).
         cmd += " -Wno-return-type-c-linkage";
+        // Slim-runtime's __libcpp_verbose_abort sits in an EXPLICIT_ABI region
+        // under a NAMESPACE_STD push that never applies to a function; clang
+        // warns six times about the unused pragma attribute. Harmless, noisy.
+        cmd += " -Wno-pragma-clang-attribute";
     }
 #if defined(__aarch64__) || defined(__arm__)
     // ARM Linux makes a C char unsigned; a Nexa char is signed on every platform, so
