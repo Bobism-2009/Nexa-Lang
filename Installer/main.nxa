@@ -159,9 +159,9 @@ fn Install_Clang_Darwin() {
 
 fn Install_Toolchain_Windows(InstallDir: string, PathScope: string) {
     // NexaC emits GNU-style link flags (-static-libgcc, -Wl,--gc-sections, -lwinhttp).
-    // Stock LLVM.LLVM is often MSVC-target and fails alone — install MinGW g++ first, then clang.
-    // Do not upgrade packages that are already installed (NexaC version bumps should be fast).
-    // Discover the real bin dirs (WinGet Links / Packages / LLVM), not just legacy C:\mingw64.
+    // Official LLVM.LLVM is usually MSVC-target and is skipped; install llvm-mingw
+    // (MartinStorsjo.LLVM-MinGW.UCRT) which ships a MinGW-targeted clang++.
+    // Do not upgrade packages that are already installed.
     let script: string = R"WINPS(
 param(
   [string]$NexaCDir = "",
@@ -184,27 +184,72 @@ function Add-EnvPath([string]$dir, [string]$scope) {
   Write-Host "PATH += $dir ($scope)"
 }
 
+function Test-IsStoreShim([string]$path) {
+  if (-not $path) { return $true }
+  return ($path -match '(?i)\\WindowsApps\\')
+}
+
+function Test-IsMingwClang([string]$path) {
+  if (-not $path -or (Test-IsStoreShim $path)) { return $false }
+  $lower = $path.ToLowerInvariant()
+  if ($lower -match 'llvm-mingw|mingw') { return $true }
+  try {
+    $dm = & $path -dumpmachine 2>$null | Out-String
+    if ($dm -match '(?i)w64.*gnu|windows-gnu|mingw') { return $true }
+  } catch {}
+  return $false
+}
+
+function Find-MingwClang() {
+  $cands = New-Object System.Collections.Generic.List[string]
+  $pkgRoot = "$env:LOCALAPPDATA\Microsoft\WinGet\Packages"
+  if (Test-Path -LiteralPath $pkgRoot) {
+    Get-ChildItem -LiteralPath $pkgRoot -Directory -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -match '(?i)LLVM-MinGW|llvm-mingw|MartinStorsjo' } |
+      ForEach-Object {
+        Get-ChildItem -LiteralPath $_.FullName -Filter 'clang++.exe' -Recurse -ErrorAction SilentlyContinue |
+          Select-Object -First 3 | ForEach-Object { [void]$cands.Add($_.FullName) }
+      }
+  }
+  foreach ($c in @(
+    "$env:LOCALAPPDATA\Microsoft\WinGet\Links\clang++.exe",
+    "C:\msys64\clang64\bin\clang++.exe",
+    "C:\msys64\ucrt64\bin\clang++.exe",
+    "C:\msys64\mingw64\bin\clang++.exe"
+  )) {
+    if ($c -and (Test-Path -LiteralPath $c)) { [void]$cands.Add($c) }
+  }
+  $cmd = Get-Command 'clang++.exe' -ErrorAction SilentlyContinue
+  if ($cmd -and $cmd.Source) { [void]$cands.Add($cmd.Source) }
+  foreach ($c in $cands) {
+    if (Test-IsMingwClang $c) { return $c }
+  }
+  return $null
+}
+
 function Find-ToolExe([string]$name) {
   $cmd = Get-Command $name -ErrorAction SilentlyContinue
-  if ($cmd -and $cmd.Source -and (Test-Path -LiteralPath $cmd.Source)) { return $cmd.Source }
+  if ($cmd -and $cmd.Source -and (Test-Path -LiteralPath $cmd.Source) -and -not (Test-IsStoreShim $cmd.Source)) {
+    return $cmd.Source
+  }
   $cands = @(
     "$env:LOCALAPPDATA\Microsoft\WinGet\Links\$name",
-    "$env:LOCALAPPDATA\Programs\LLVM\bin\$name",
     "$env:LOCALAPPDATA\Programs\WinLibs\mingw64\bin\$name",
-    "${env:ProgramFiles}\LLVM\bin\$name",
-    "${env:ProgramFiles(x86)}\LLVM\bin\$name",
     "C:\mingw64\bin\$name",
     "C:\WinLibs\mingw64\bin\$name",
     "C:\tools\winlibs\mingw64\bin\$name",
     "C:\msys64\ucrt64\bin\$name",
-    "C:\msys64\mingw64\bin\$name"
+    "C:\msys64\mingw64\bin\$name",
+    "C:\msys64\clang64\bin\$name"
   )
   foreach ($c in $cands) {
     if ($c -and (Test-Path -LiteralPath $c)) { return $c }
   }
   $pkgRoot = "$env:LOCALAPPDATA\Microsoft\WinGet\Packages"
   if (Test-Path -LiteralPath $pkgRoot) {
-    $hit = Get-ChildItem -LiteralPath $pkgRoot -Filter $name -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    $hit = Get-ChildItem -LiteralPath $pkgRoot -Filter $name -Recurse -ErrorAction SilentlyContinue |
+      Where-Object { $_.FullName -notmatch '(?i)\\WindowsApps\\' } |
+      Select-Object -First 1
     if ($hit) { return $hit.FullName }
   }
   return $null
@@ -234,37 +279,43 @@ $links = "$env:LOCALAPPDATA\Microsoft\WinGet\Links"
 Add-EnvPath $links 'User'
 if ($links) { $env:Path = $links + ';' + $env:Path }
 
+$clang = Find-MingwClang
+if (-not $clang) {
+  Write-Host "MinGW clang++ not found; installing llvm-mingw (MartinStorsjo.LLVM-MinGW.UCRT)..."
+  [void](Install-WingetIfMissing 'MartinStorsjo.LLVM-MinGW.UCRT')
+  $clang = Find-MingwClang
+} else {
+  Write-Host "Using existing MinGW clang++: $clang (not reinstalling)"
+}
+
 $gpp = Find-ToolExe 'g++.exe'
 if (-not $gpp) {
-  Write-Host "g++ not found; installing MinGW only if the winget package is missing..."
-  if (-not (Install-WingetIfMissing 'BrechtSanders.WinLibs.POSIX.UCRT')) {
-    [void](Install-WingetIfMissing 'MSYS2.MSYS2')
+  # llvm-mingw usually provides g++ next to clang++; otherwise WinLibs as a backup.
+  if ($clang) {
+    $maybe = Join-Path ([IO.Path]::GetDirectoryName($clang)) 'g++.exe'
+    if (Test-Path -LiteralPath $maybe) { $gpp = $maybe }
   }
-  $gpp = Find-ToolExe 'g++.exe'
+  if (-not $gpp) {
+    Write-Host "g++ not found; installing WinLibs MinGW only if the winget package is missing..."
+    if (-not (Install-WingetIfMissing 'BrechtSanders.WinLibs.POSIX.UCRT')) {
+      [void](Install-WingetIfMissing 'MSYS2.MSYS2')
+    }
+    $gpp = Find-ToolExe 'g++.exe'
+  }
 } else {
   Write-Host "Using existing g++: $gpp (not reinstalling)"
 }
 
-$clang = Find-ToolExe 'clang++.exe'
-if (-not $clang) {
-  Write-Host "clang++ not found; installing LLVM only if the winget package is missing..."
-  [void](Install-WingetIfMissing 'LLVM.LLVM')
-  $clang = Find-ToolExe 'clang++.exe'
-} else {
-  Write-Host "Using existing clang++: $clang (not reinstalling)"
-}
-
-foreach ($exe in @($gpp, $clang)) {
-  if ($exe) { Add-EnvPath ([IO.Path]::GetDirectoryName($exe)) 'User' }
-}
+# Prefer the MinGW clang bin dir first so NexaC does not pick an MSVC-target clang.
+if ($clang) { Add-EnvPath ([IO.Path]::GetDirectoryName($clang)) 'User' }
+if ($gpp) { Add-EnvPath ([IO.Path]::GetDirectoryName($gpp)) 'User' }
 foreach ($d in @(
   'C:\mingw64\bin',
   'C:\WinLibs\mingw64\bin',
   'C:\tools\winlibs\mingw64\bin',
   'C:\msys64\ucrt64\bin',
   'C:\msys64\mingw64\bin',
-  "$env:ProgramFiles\LLVM\bin",
-  "$env:LOCALAPPDATA\Programs\LLVM\bin",
+  'C:\msys64\clang64\bin',
   $links
 )) {
   Add-EnvPath $d 'User'
@@ -279,7 +330,7 @@ if ($NexaCDir) {
     }
     let tmp: string = tmpDir + "\\nexa-install-toolchain.ps1";
     file.write(tmp, script);
-    io.println("Checking C++ toolchain (install missing only; never upgrade)...");
+    io.println("Checking C++ toolchain (llvm-mingw clang++; install missing only; never upgrade)...");
     os.system("powershell -NoProfile -ExecutionPolicy Bypass -File \"" + tmp + "\" -NexaCDir \"" + InstallDir + "\" -NexaPathScope " + PathScope);
 }
 
@@ -395,11 +446,11 @@ fn Install_System_Wide() {
         os.system("copy /Y \"" + Src + "\" \"C:\\Program Files\\NexaC\\nexac.exe\"");
         os.system("copy /Y \"" + Src + "\" \"C:\\Program Files\\NexaC\\nexapkg.exe\"");
         Register_Nxa_Registry_Windows_System("C:\\Program Files\\NexaC\\NexaC.exe");
-        io.println("Installing C++ toolchain (MinGW g++ + clang via winget)...");
+        io.println("Installing C++ toolchain (llvm-mingw clang++ via winget)...");
         Install_Toolchain_Windows("C:\\Program Files\\NexaC", "Machine");
         Add_To_Path_Windows_System("C:\\Program Files\\NexaC");
         io.println("NexaC installed to C:\\Program Files\\NexaC. Added to system PATH.");
-        io.println("Restart the terminal (or sign out/in) so g++/clang are on PATH, then run: NexaC --version");
+        io.println("Restart the terminal (or sign out/in) so clang++ is on PATH, then run: NexaC --version");
         }
         else {
             io.println("Error: Cannot find NexaC.exe. Run installer from folder containing NexaC.exe.");
@@ -469,11 +520,11 @@ fn Install_User() {
         os.system("copy /Y \"" + Src + "\" \"" + LocalAppData + "\\NexaC\\nexac.exe\"");
         os.system("copy /Y \"" + Src + "\" \"" + LocalAppData + "\\NexaC\\nexapkg.exe\"");
         Register_Nxa_Registry_Windows_User(ExePath);
-        io.println("Installing C++ toolchain (MinGW g++ + clang via winget)...");
+        io.println("Installing C++ toolchain (llvm-mingw clang++ via winget)...");
         Install_Toolchain_Windows(LocalAppData + "\\NexaC", "User");
         Add_To_Path_Windows_User(LocalAppData + "\\NexaC");
         io.println("NexaC installed to " + LocalAppData + "\\NexaC. Added to PATH.");
-        io.println("Restart the terminal (or sign out/in) so g++/clang are on PATH, then run: NexaC --version");
+        io.println("Restart the terminal (or sign out/in) so clang++ is on PATH, then run: NexaC --version");
         }
         else {
             io.println("Error: Cannot find NexaC.exe. Run installer from folder containing NexaC.exe.");

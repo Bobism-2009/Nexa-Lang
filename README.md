@@ -22,7 +22,7 @@ Current compiler version string: **0.1.16** (`NexaC --version`).
 
 ## Requirements
 
-- **Windows:** [LLVM/Clang](https://releases.llvm.org/) or **MinGW-w64** (`clang++` / `g++`) on your `PATH`. The installer finds winget-installed compilers (WinGet Links / Packages / LLVM) and only installs a package if it is missing — it will not upgrade tools you already have.
+- **Windows:** a **MinGW-targeted** `clang++` on your `PATH` — preferably [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) (`MartinStorsjo.LLVM-MinGW.UCRT` via winget). Official MSVC-target LLVM alone is not enough. The installer installs llvm-mingw when that MinGW clang++ is missing, and will not upgrade tools you already have.
 - **Linux:** `clang++` (or `g++`) and normal build tools. The installer / `make install-deps`
   installs compile-time packages only (compiler, git, X11 *headers/static libs*
   for `std/gfx`). It does **not** install the wasm toolchain. Executables embed
