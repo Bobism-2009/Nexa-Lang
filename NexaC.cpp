@@ -285,6 +285,7 @@ fn main() {
     return 0;
 }
 
+static void nexaPrependProcessPath(const std::string& dir);
 #ifdef _WIN32
 static void nexaRefreshWindowsCompilerPath();
 #endif
@@ -315,6 +316,26 @@ static bool nexaWindowsCxxIsMsvcClang(const char* cxx) {
 #endif
 }
 
+// Status lines used to print whatever `where` returned, which on Windows is a
+// full path (often the Store shim). Keep the spawn path correct, but label the
+// tool the way earlier releases did: "clang++", "g++", …
+static std::string nexaCxxDisplayName(const std::string& cxx) {
+    if (cxx.empty()) return cxx;
+    std::string base = cxx;
+    size_t slash = base.find_last_of("/\\");
+    if (slash != std::string::npos) base = base.substr(slash + 1);
+#ifdef _WIN32
+    if (base.size() > 4) {
+        std::string low = base;
+        for (char& c : low) c = (char)std::tolower((unsigned char)c);
+        if (low.size() >= 4 && low.compare(low.size() - 4, 4, ".exe") == 0) base.resize(base.size() - 4);
+        else if (low.size() >= 4 && low.compare(low.size() - 4, 4, ".cmd") == 0) base.resize(base.size() - 4);
+        else if (low.size() >= 4 && low.compare(low.size() - 4, 4, ".bat") == 0) base.resize(base.size() - 4);
+    }
+#endif
+    return base;
+}
+
 // On Windows native: find clang, g++, or gcc (MinGW/MSYS2). Returns compiler name or empty.
 static std::string findWindowsCxxNative() {
 #ifdef _WIN32
@@ -327,7 +348,9 @@ static std::string findWindowsCxxNative() {
     }
     nexaRefreshWindowsCompilerPath();
     // `where` lists every match; take the first non-MSVC clang so a machine with
-    // both the official LLVM build and llvm-mingw still gets the gnu one.
+    // both the official LLVM build and llvm-mingw still gets the gnu one. Put
+    // that directory first on PATH and return the bare name — same status line
+    // as before the absolute path leaked into "Compiling with …".
     {
         FILE* w = _popen("where clang++ 2>nul", "r");
         if (w) {
@@ -338,7 +361,10 @@ static std::string findWindowsCxxNative() {
                 if (n == 0) continue;
                 if (nexaWindowsCxxIsMsvcClang(line)) continue;
                 _pclose(w);
-                return line;
+                std::error_code ec;
+                std::filesystem::path p(line);
+                nexaPrependProcessPath(p.parent_path().string());
+                return "clang++";
             }
             _pclose(w);
         }
@@ -3382,7 +3408,8 @@ int main(int argc, char* argv[]) {
         std::string targetFlags;
         if (buildWasm) {
             const char* kindName = (wasmTool.kind == WasmKind::Emscripten) ? "Emscripten" : "WASI";
-            std::cout << "[Nexa] Compiling with " << wasmTool.cxx << " (" << kindName << " WASM)...\n";
+            std::cout << "[Nexa] Compiling with " << nexaCxxDisplayName(wasmTool.cxx)
+                      << " (" << kindName << " WASM)...\n";
         } else if (buildDll) {
 #ifdef _WIN32
             cxx = "clang++";
@@ -3396,7 +3423,7 @@ int main(int argc, char* argv[]) {
                 targetFlags = " -target x86_64-w64-mingw32";
             }
 #endif
-            std::cout << "[Nexa] Compiling with " << cxx << " (Windows DLL)...\n";
+            std::cout << "[Nexa] Compiling with " << nexaCxxDisplayName(cxx) << " (Windows DLL)...\n";
         } else if (buildShared) {
 #ifdef _WIN32
             cxx = "clang++";
@@ -3407,7 +3434,7 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
 #endif
-            std::cout << "[Nexa] Compiling with " << cxx << " (shared library)...\n";
+            std::cout << "[Nexa] Compiling with " << nexaCxxDisplayName(cxx) << " (shared library)...\n";
         } else if (buildStaticLib) {
 #ifdef _WIN32
             cxx = findWindowsCxxNative();
@@ -3422,7 +3449,7 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
 #endif
-            std::cout << "[Nexa] Compiling with " << cxx << " (static library)...\n";
+            std::cout << "[Nexa] Compiling with " << nexaCxxDisplayName(cxx) << " (static library)...\n";
         } else if (buildWin) {
 #ifdef _WIN32
             cxx = "clang++";
@@ -3436,7 +3463,7 @@ int main(int argc, char* argv[]) {
             if (cxx.find("clang") != std::string::npos) {
                 targetFlags = " -target x86_64-w64-mingw32";
             }
-            std::cout << "[Nexa] Compiling with " << cxx << " (Windows exe)...\n";
+            std::cout << "[Nexa] Compiling with " << nexaCxxDisplayName(cxx) << " (Windows exe)...\n";
 #endif
         } else {
 #ifdef _WIN32
@@ -3447,14 +3474,14 @@ int main(int argc, char* argv[]) {
                 std::cerr << "  - MinGW: https://www.mingw-w64.org/ or use MSYS2: msys2.org\n";
                 return 1;
             }
-            std::cout << "[Nexa] Compiling with " << cxx << "...\n";
+            std::cout << "[Nexa] Compiling with " << nexaCxxDisplayName(cxx) << "...\n";
 #else
             cxx = findUnixCxxNative();
             if (cxx.empty()) {
                 std::cerr << "[Nexa] Error: No C++ compiler found (clang++ or g++). Install one (e.g. `make install-deps`) or set NEXA_CXX.\n";
                 return 1;
             }
-            std::cout << "[Nexa] Compiling with " << cxx << "...\n";
+            std::cout << "[Nexa] Compiling with " << nexaCxxDisplayName(cxx) << "...\n";
 #endif
         }
 
@@ -3467,7 +3494,8 @@ int main(int argc, char* argv[]) {
         if (sanitizeThisBuild) {
             sanitizer = nexaProbeSanitizer(cxx, targetFlags);
             if (sanitizer != NexaSanitizer::AddressUndefined) {
-                std::cout << "[Nexa] Note: " << cxx << " cannot link AddressSanitizer here; falling back to "
+                std::cout << "[Nexa] Note: " << nexaCxxDisplayName(cxx)
+                          << " cannot link AddressSanitizer here; falling back to "
                           << nexaSanitizerLabel(sanitizer) << ".\n";
             }
         }
@@ -3695,7 +3723,7 @@ int main(int argc, char* argv[]) {
                 probe += " >nul 2>&1";
                 if (std::system(probe.c_str()) != 0) continue;
                 if (nexaWindowsCxxIsMsvcClang(n)) continue;
-                std::cout << "[Nexa] " << cxx << " failed, retrying with " << n << "...\n";
+                std::cout << "[Nexa] " << nexaCxxDisplayName(cxx) << " failed, retrying with " << n << "...\n";
                 std::cout.flush();
                 cxx = n;
                 targetFlags = "";
