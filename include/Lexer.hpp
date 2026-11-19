@@ -154,6 +154,11 @@ public:
                 tokens.push_back(scanNumber());
             } else if (isAlpha(c) || c == '_') {
                 Token id = scanIdentifier();
+                // After a dot, and / or / not are names: o.or(0) is a method, not ||.
+                if ((id.type == TokenType::And || id.type == TokenType::Or || id.type == TokenType::Not) &&
+                    !tokens.empty() && tokens.back().type == TokenType::Dot) {
+                    id.type = TokenType::Identifier;
+                }
                 if (id.type == TokenType::InlineCpp) {
                     size_t lineStart = id.line;
                     skipWhitespace();

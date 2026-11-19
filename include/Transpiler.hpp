@@ -584,6 +584,8 @@ public:
         // the program has been written out, so the line is filled in (or
         // dropped) then.
         out << kShowMarker << "\n";
+        // And __nexa_none_fail, if an Option's .value() is read; nothing otherwise.
+        out << kNoneMarker;
         std::vector<std::string> inlineCppHoisted;
         std::set<std::string> inlineCppSeen;
         for (const AstNode& node : ast_) walkAstForInlineCppIncludes(node, inlineCppHoisted, inlineCppSeen);
@@ -1989,7 +1991,13 @@ public:
         // it, on a Windows build, both are plain lines in a flat file and the
         // second goes. On a build where only one branch survives, only one copy
         // was ever there to keep.
-        std::string src = dedupUnconditionalIncludes(stripInactivePlatformGuards(out.str(), target_));
+        std::string src = out.str();
+        {
+            // Filled in before the dedup, so a line the marker sat in front of is read as itself.
+            const size_t at = src.find(kNoneMarker);
+            if (at != std::string::npos) src.replace(at, std::string(kNoneMarker).size(), needNoneFail_ ? kNoneRuntime : "");
+        }
+        src = dedupUnconditionalIncludes(stripInactivePlatformGuards(src, target_));
         {
             size_t at = src.find(kShowMarker);
             if (at != std::string::npos) src.replace(at, std::string(kShowMarker).size(), needShow_ ? kShowRuntime : "");
@@ -4144,6 +4152,19 @@ private:
                             if (e.value == "error") return "string";
                             if (e.value == "value") return nexaResultInner(recvT);
                         }
+                        {
+                            const std::string oen = optionEnumOf(recvT);
+                            if (!oen.empty()) {
+                                if (e.value == "is_some" || e.value == "is_none") return "bool";
+                                if (e.value == "value") return optionInner(oen);
+                                if (e.value == "or") {
+                                    // Some(1).or(2.5) is a float, as an int arm and a float arm are.
+                                    const std::string fb = e.children.size() > 1 ? inferExprNexaType(e.children[1]) : std::string();
+                                    const std::string j = fb.empty() ? std::string() : matchJoinTypes(optionInner(oen), fb);
+                                    return j.empty() ? optionInner(oen) : j;
+                                }
+                            }
+                        }
                         if (recvT == "json") {
                             if (e.value == "ok" || e.value == "is_null" || e.value == "is_bool" ||
                                 e.value == "is_number" || e.value == "is_string" || e.value == "is_array" ||
@@ -4525,8 +4546,12 @@ private:
             case AstNode::Type::CondAnd:
             case AstNode::Type::CondOr:
                 return "bool";
-            case AstNode::Type::ExprTry:
-                return e.children.empty() ? std::string() : nexaResultInner(inferExprNexaType(e.children[0]));
+            case AstNode::Type::ExprTry: {
+                if (e.children.empty()) return std::string();
+                const std::string rt = inferExprNexaType(e.children[0]);
+                const std::string oen = nexaIsResultType(rt) ? std::string() : optionEnumOf(rt);
+                return oen.empty() ? nexaResultInner(rt) : optionInner(oen);
+            }
             case AstNode::Type::ExprMatch: {
                 const MatchScrut ms = matchScrut(e);
                 std::string joined;
@@ -4611,6 +4636,45 @@ private:
                     return recv + "." + e.value + "()";
                 }
                 throw std::runtime_error("Unknown Result method '." + e.value + "()' (use .ok, .value, .error)");
+            }
+            if (const std::string oen = optionEnumOf(recvBare); !oen.empty()) {
+                // o.is_some(), o.is_none(), o.value(), o.or(fallback): the tag and the field,
+                // read in place. A plain name is read where it is; anything else is held once.
+                if (isPointerType(recvT)) recv = "(*" + recv + ")";
+                const std::string tag = std::to_string(enumVariantIndex(oen, "Some"));
+                const std::string fld = enumFieldCpp(oen, "Some", "value");
+                const std::string inner = optionInner(oen);
+                const bool plain = exprIsPlainPlace(e.children[0]);
+                auto held = [&](const std::string& body) {
+                    if (emitAtFileScope_) return "[]() { auto&& __o = " + recv + "; return " + body + "; }()";
+                    return "({ auto&& __o = " + recv + "; " + body + "; })";
+                };
+                if (e.value == "is_some" || e.value == "is_none") {
+                    if (e.children.size() != 1) throw std::runtime_error(e.value + " expects no arguments");
+                    return "(" + recv + ".__tag " + (e.value == "is_some" ? "==" : "!=") + " " + tag + ")";
+                }
+                if (e.value == "value") {
+                    if (e.children.size() != 1) throw std::runtime_error("value expects no arguments");
+                    needNoneFail_ = true;
+                    if (plain) return "(" + recv + ".__tag == " + tag + " ? " + recv + "." + fld + " : (__nexa_none_fail(), " + recv + "." + fld + "))";
+                    if (emitAtFileScope_) return "[]() { auto&& __o = " + recv + "; if (__o.__tag != " + tag + ") __nexa_none_fail(); return __o." + fld + "; }()";
+                    return "({ auto&& __o = " + recv + "; if (__o.__tag != " + tag + ") __nexa_none_fail(); __o." + fld + "; })";
+                }
+                if (e.value == "or") {
+                    if (e.children.size() != 2) throw std::runtime_error("or takes one value: o.or(fallback)");
+                    const std::string ft = inferExprNexaType(e.children[1]);
+                    if (matchJoinTypes(inner, ft).empty()) {
+                        throw std::runtime_error("or(...) is the value when the Option is None, so it is " +
+                            withArticle(nexaTypeForMessage(inner)) + ", as the Option holds; this is " +
+                            withArticle(nexaTypeForMessage(ft)) + (e.line ? " at line " + std::to_string(e.line) : std::string()));
+                    }
+                    std::string fb = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    if (inner == "string" && e.children[1].type == AstNode::Type::ExprStringLiteral) fb = "std::string(" + fb + ")";
+                    if (plain) return "(" + recv + ".__tag == " + tag + " ? " + recv + "." + fld + " : (" + fb + "))";
+                    return held("__o.__tag == " + tag + " ? __o." + fld + " : (" + fb + ")");
+                }
+                throw std::runtime_error("Unknown Option method '." + e.value + "()' (use .is_some, .is_none, .value, .or)" +
+                    (e.line ? " at line " + std::to_string(e.line) : std::string()));
             }
             if (recvBare == "json") {
                 auto arg = [&](size_t i) {
@@ -8132,6 +8196,23 @@ template <class __I> inline const char& __nexa_ix(const std::string& __s, __I __
     }
 
     static constexpr const char* kShowMarker = "// [nexa:show]";
+    // Option.value() on None: an exception a try/catch can catch when the program has
+    // one; otherwise say so and stop, as Result.value() on an error does.
+    mutable bool needNoneFail_ = false;
+    static constexpr const char* kNoneMarker = "// [nexa:none]";
+    static constexpr const char* kNoneRuntime = R"NEXA_NONE(#include <cstdio>
+#include <cstdlib>
+#include <stdexcept>
+[[noreturn]] static void __nexa_none_fail() {
+#if defined(__cpp_exceptions)
+    throw std::runtime_error("Option.value() on None");
+#else
+    std::fflush(stdout);
+    std::fputs("Option.value() on None\n", stderr);
+    std::abort();
+#endif
+}
+)NEXA_NONE";
     static constexpr const char* kShowRuntime = R"NEXA_SHOW(#include <cstdio>
 #include <map>
 #include <string>
@@ -10447,6 +10528,37 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             }
             out << indent << "}\n";
         }
+    }
+
+    // The enum behind an Option -- an Option with Some { value } and None, the built-in
+    // one or a program's own of that shape -- or "" for anything else. Its methods and
+    // ? read the tag and the value field directly.
+    std::string optionEnumOf(std::string t) const {
+        if (!isEnumDeclType(t)) {
+            if (nexaTypeAppBase(t) != "Option") return std::string();
+            t = "enum:" + t;
+        }
+        const std::string en = enumNameFromDecl(t);
+        if (nexaTypeAppBase(en) != "Option" || en.find('[') == std::string::npos) return std::string();
+        auto vs = enumVariants_.find(en);
+        if (vs == enumVariants_.end() || vs->second.size() != 2 || !vs->second.count("Some") || !vs->second.count("None")) {
+            return std::string();
+        }
+        const std::vector<EnumField> f = enumPayloadFields(en, "Some");
+        if (f.size() != 1 || f[0].name != "value" || !enumPayloadFields(en, "None").empty()) return std::string();
+        return en;
+    }
+    std::string optionInner(const std::string& en) const {
+        const std::vector<EnumField> f = enumPayloadFields(en, "Some");
+        return f.empty() ? std::string() : f[0].type;
+    }
+    // A name, or fields of one (a.b.c): reading it twice costs nothing and changes nothing.
+    static bool exprIsPlainPlace(const AstNode& e) {
+        if (e.type == AstNode::Type::ExprVarRef) return true;
+        if (e.type == AstNode::Type::ExprMember && !e.isArrowMember && e.children.size() == 1) {
+            return exprIsPlainPlace(e.children[0]);
+        }
+        return false;
     }
 
     // What a match looks at: its Nexa type; the enum, when it is one; whether it is a
@@ -12790,6 +12902,27 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 // gcc, the only compilers NexaC drives, both take it.
                 const std::string at = e.line ? " at line " + std::to_string(e.line) : std::string();
                 const std::string rt = inferExprNexaType(e.children[0]);
+                if (const std::string oen = nexaIsResultType(rt) ? std::string() : optionEnumOf(rt); !oen.empty()) {
+                    // o? : the value when the Option holds one; otherwise the function
+                    // returns None at once. It has to return an Option (of any type).
+                    const std::string fret = tryInMain_ ? std::string() : optionEnumOf(tryFnRet_);
+                    if (tryInMain_) {
+                        throw std::runtime_error("? passes a None up, and main cannot return one: "
+                            "take the Option apart with match, or use .or(fallback)" + at);
+                    }
+                    if (fret.empty()) {
+                        const std::string who = tryFnName_ == "a function literal" ? tryFnName_ : "function '" + tryFnName_ + "'";
+                        throw std::runtime_error("? passes a None up, so " + who +
+                            " has to return an Option: declare it : Option[...]" + at);
+                    }
+                    const std::string q = "__nexa_q" + std::to_string(tryCounter_++);
+                    const std::string inner = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    const std::string none = "{ " + nexaTypeToCpp("enum:" + fret) + " __n{}; __n.__tag = " +
+                        std::to_string(enumVariantIndex(fret, "None")) + "; return __n; }";
+                    return "({ auto " + q + " = (" + inner + "); if (" + q + ".__tag != " +
+                        std::to_string(enumVariantIndex(oen, "Some")) + ") " + none + " std::move(" + q + "." +
+                        enumFieldCpp(oen, "Some", "value") + "); })";
+                }
                 if (!nexaIsResultType(rt)) {
                     const bool vowel = !rt.empty() && std::string("aeiou").find(rt[0]) != std::string::npos;
                     throw std::runtime_error("? passes on the error of a Result, and this is " +

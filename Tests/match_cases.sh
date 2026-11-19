@@ -578,6 +578,82 @@ fn main() {
     match (f()) { Some { a, b } => { } None => { } }
 }' "Some holds one value: write Some { name }"
 
+run_eq "Option methods and ?" \
+'#include <std/io>
+struct Box { o: Option[int]; }
+fn find(xs: []int, want: int): Option[int] {
+    for (i, len(xs)) {
+        if (xs[i] == want) { return Some(i); }
+    }
+    return None;
+}
+fn name_of(id: int): Option[string] {
+    if (id == 1) { return Some("ann"); }
+    return None;
+}
+fn both(xs: []int, a: int, b: int): Option[int] {
+    let i = find(xs, a)?;
+    let j = find(xs, b)?;
+    return Some(i + j);
+}
+fn shout(id: int): Option[string] {
+    return Some(name_of(id)?.upper() + "!");
+}
+let global_hit = find([1, 2, 3], 3).or(-1);
+fn main() {
+    let xs = [4, 8, 15, 16];
+    let hit = find(xs, 15);
+    let miss = find(xs, 99);
+    io.println(hit.is_some(), " ", hit.is_none(), " ", miss.is_some(), " ", miss.is_none());
+    io.println(hit.value(), " ", hit.or(0), " ", miss.or(-1), " ", hit.or(0.5));
+    io.println(find(xs, 8).value() + find(xs, 16).or(100));
+    io.println(name_of(1).or("nobody") + " " + name_of(2).or("nobody"));
+    io.println(both(xs, 4, 16).or(-1), " ", both(xs, 4, 99).or(-1));
+    io.println(shout(1).or("?"), " ", shout(2).or("?"));
+    let b = Box { o: Some(7) };
+    io.println(b.o.value() * 2, " ", global_hit);
+}' "true false false true
+2 2 -1 2
+4
+ann nobody
+3 -1
+ANN! ?
+14 2"
+
+run_eq "value() on None is caught by a try" \
+'#include <std/io>
+fn f(): Option[int] { return None; }
+fn main() {
+    try {
+        io.println(f().value());
+    } catch (e) {
+        io.println("caught: " + e);
+    }
+}' "caught: Option.value() on None"
+
+expect_has "? on an Option needs an Option to return" '#include <std/io>
+fn f(): Option[int] { return Some(1); }
+fn r(): Result[int] { let v = f()?; return ok(v); }
+fn main() { }' "? passes a None up, so function 'r' has to return an Option"
+
+expect_has "? on an Option in main is refused" '#include <std/io>
+fn f(): Option[int] { return Some(1); }
+fn main() { let v = f()?; }' "main cannot return one"
+
+expect_has "or(...) matches the Option's type" '#include <std/io>
+fn f(): Option[int] { return Some(1); }
+fn main() { io.println(f().or("x")); }' "so it is an int, as the Option holds; this is a string"
+
+printf '%s
+' '#include <std/io>
+fn f(): Option[int] { return Some(1); }
+fn main() { io.println(f().or(0), f().is_some()); }' > "$WORK/nv.nxa"
+if "$NEXAC" "$WORK/nv.nxa" --source "$WORK/nv.cpp" >/dev/null 2>&1 && ! grep -q __nexa_none_fail "$WORK/nv.cpp"; then
+    ok "an Option without .value() brings no helper"
+else
+    bad "an Option without .value() brings no helper" "__nexa_none_fail is in the C++"
+fi
+
 # -- slicing: match is code in place, nothing ahead of main --
 
 prelude_eq "match brings no helpers, headers or types" \

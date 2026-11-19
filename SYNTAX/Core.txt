@@ -799,11 +799,32 @@ OPTION (Option[T])
                            alone is an error: an Option of what?
   Some { v } =>          - a match arm: the Option holds a value, named v here
   None =>                - a match arm: it holds nothing
+  o.is_some()            - true if it holds a value
+  o.is_none()            - true if it holds nothing
+  o.value()              - the value. On None: an exception, when the program has
+                           a try/catch to catch it; otherwise the program prints
+                           "Option.value() on None" to stderr and stops. Check
+                           o.is_some() first, or use .or.
+  o.or(fallback)         - the value, or fallback when it holds nothing. The
+                           fallback is the Option's type (an int Option takes a
+                           float fallback and gives a float). It is only worked
+                           out when it is needed.
+  expr?                  - the value when expr holds one; when it is None, the
+                           function returns None at once. So
+
+                             fn both(xs: []int, a: int, b: int): Option[int] {
+                                 return Some(find(xs, a)? + find(xs, b)?);
+                             }
+
+                           finds both or gives None. The function has to return
+                           an Option (of any type). In main there is nothing to
+                           pass a None up to: use match or .or there.
 
   The long forms still work: Option.Some { value: x }, Option.None and the arm
   Option.Some { value } =>. A program that declares its own Option keeps it,
   a fn Some keeps Some(x) a call, and a variable named None stays a variable.
-  A program that never names Option, Some or None is unchanged.
+  A program that never names Option, Some or None is unchanged, and the stop
+  on None is in a program only when it calls .value().
 
 COMPILE-TIME CHECKS
   NexaC rejects these before it emits C++, with a "[Nexa] Error:" that names the
