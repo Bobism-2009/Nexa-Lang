@@ -129,8 +129,12 @@ MATCH
   - A variant with fields can destructure them: Shape.Circle { radius } =>
     binds radius as a local variable inside that arm's body
   - The wildcard _ matches any variant not named above
+  - Inside an arm the matched variable is that variant: Shape.Circle => s.radius
+    reads the field without destructuring it
   - Exhaustiveness: every variant of the enum must appear, or _ must be
-    present. A missing variant is a compile error.
+    present. A missing variant is a compile error, and so are two arms for
+    one variant, a field the variant does not hold, and an arm naming
+    another enum.
   - Works on both plain enums (enum Color { Red; Green; Blue; }) and
     payload enums (enum Shape { Circle { radius: float; }; Rect { ... }; })
   - Example:
@@ -151,6 +155,27 @@ MATCH
               io.println("other");
           }
       }
+
+MATCH AS A VALUE
+  let v = match (expr) { Enum.Variant => value, Enum.Variant { f } => value, _ => value };
+  A match can stand anywhere a value can: after let or return, in a call,
+  inside a +, in a condition.
+  - Each arm is Pattern => one value, the arms separated by commas (a comma
+    after the last is fine). An arm cannot hold a { block }; use the
+    statement form above to run statements.
+  - Every arm gives the same type. An int arm and a float arm give a float;
+    a string arm and an int arm are an error.
+  - The same patterns, destructuring and exhaustiveness rules as the statement.
+  - The matched value is computed once, even when it is a call.
+  - Example:
+      fn area(s: Shape): float {
+          return match (s) {
+              Shape.Circle { radius } => radius * radius * 3.14159,
+              Shape.Rect { w, h } => w * h,
+              Shape.Point => 0,
+          };
+      }
+      io.println("shape: " + match (s) { Shape.Point => "dot", _ => "solid" });
 
 LOOPS
   for (i, n) { ... }       - loop i from 0 to n-1

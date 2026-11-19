@@ -97,6 +97,8 @@ struct AstNode {
                       MatchExpr,     // match (expr) { arms }; children[0] = scrutinee, children[1..] = MatchArm
                       MatchArm,      // Enum.Variant { fields } => { body }; caseIsEnum = true, value = enum, initValue = variant
                                      // _ => { body } (wildcard); value = "_"
+                      ExprMatch,     // let a = match (expr) { Enum.Variant => value, ... }; children as MatchExpr,
+                                     // each MatchArm holds one child: its value
                       ExprMember,
                       AssnMember,
                       InlineCpp };
@@ -512,6 +514,11 @@ private:
         }
         if (e.type == AstNode::Type::ExprTernary && e.children.size() >= 3) {
             return exprProducesString(e.children[1]) || exprProducesString(e.children[2]);
+        }
+        if (e.type == AstNode::Type::ExprMatch) {
+            for (size_t i = 1; i < e.children.size(); i++) {
+                if (!e.children[i].children.empty() && exprProducesString(e.children[i].children[0])) return true;
+            }
         }
         return false;
     }
@@ -3484,6 +3491,70 @@ private:
         AstNode matchNode{AstNode::Type::MatchExpr, "", {expr}};
         while (pos_ < tokens_.size() && peek().type != TokenType::RBrace) {
             AstNode arm{AstNode::Type::MatchArm, "", {}};
+            parseMatchPattern(arm);
+            if (!match(TokenType::FatArrow)) {
+                throw std::runtime_error("Expected '=>' in match arm at line " + std::to_string(peek().line));
+            }
+            if (!match(TokenType::LBrace)) {
+                throw std::runtime_error("Expected '{' after '=>' in match arm at line " + std::to_string(peek().line));
+            }
+            arm.children = parseSwitchBody();
+            if (!match(TokenType::RBrace)) {
+                throw std::runtime_error("Expected '}' at end of match arm at line " + std::to_string(peek().line));
+            }
+            matchNode.children.push_back(arm);
+        }
+        if (!match(TokenType::RBrace)) {
+            throw std::runtime_error("Expected '}' at end of match at line " + std::to_string(peek().line));
+        }
+        return matchNode;
+    }
+
+    // match used as a value: let area = match (s) { Shape.Circle { r } => r * r, _ => 0.0 };
+    // Each arm is Pattern => expr, the arms separated by commas (a trailing one is fine).
+    AstNode parseMatchValue() {
+        size_t line = peek().line;
+        if (!match(TokenType::Match)) {
+            throw std::runtime_error("Expected 'match' at line " + std::to_string(line));
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after match at line " + std::to_string(peek().line));
+        }
+        AstNode expr = parseValueExpr();
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::LBrace)) {
+            throw std::runtime_error("Expected '{' at line " + std::to_string(peek().line));
+        }
+        AstNode matchNode{AstNode::Type::ExprMatch, "", {expr}};
+        stampSourceLoc(matchNode, line);
+        while (pos_ < tokens_.size() && peek().type != TokenType::RBrace) {
+            AstNode arm{AstNode::Type::MatchArm, "", {}};
+            parseMatchPattern(arm);
+            if (!match(TokenType::FatArrow)) {
+                throw std::runtime_error("Expected '=>' in match arm at line " + std::to_string(peek().line));
+            }
+            if (peek().type == TokenType::LBrace) {
+                throw std::runtime_error("a match that gives a value takes one value per arm (Shape.Circle { r } => r * r), "
+                    "not a { block }; to run statements in an arm, write the match as a statement, at line " +
+                    std::to_string(peek().line));
+            }
+            arm.children.push_back(parseValueExpr());
+            matchNode.children.push_back(arm);
+            if (!match(TokenType::Comma)) break;
+        }
+        if (!match(TokenType::RBrace)) {
+            throw std::runtime_error("Expected ',' or '}' after a match arm's value at line " + std::to_string(peek().line));
+        }
+        if (matchNode.children.size() < 2) {
+            throw std::runtime_error("a match that gives a value needs at least one arm at line " + std::to_string(line));
+        }
+        return matchNode;
+    }
+
+    // Enum.Variant, Enum.Variant { field1, field2 }, or _ -- the left side of a match arm.
+    void parseMatchPattern(AstNode& arm) {
             if (peek().type == TokenType::Identifier && peek().value == "_") {
                 // wildcard arm: _ => { body }
                 advance();
@@ -3524,22 +3595,6 @@ private:
             } else {
                 throw std::runtime_error("Expected Enum.Variant or _ in match arm at line " + std::to_string(peek().line));
             }
-            if (!match(TokenType::FatArrow)) {
-                throw std::runtime_error("Expected '=>' in match arm at line " + std::to_string(peek().line));
-            }
-            if (!match(TokenType::LBrace)) {
-                throw std::runtime_error("Expected '{' after '=>' in match arm at line " + std::to_string(peek().line));
-            }
-            arm.children = parseSwitchBody();
-            if (!match(TokenType::RBrace)) {
-                throw std::runtime_error("Expected '}' at end of match arm at line " + std::to_string(peek().line));
-            }
-            matchNode.children.push_back(arm);
-        }
-        if (!match(TokenType::RBrace)) {
-            throw std::runtime_error("Expected '}' at end of match at line " + std::to_string(peek().line));
-        }
-        return matchNode;
     }
 
     std::vector<AstNode> parseSwitchBody() {
@@ -4217,6 +4272,9 @@ private:
     }
 
     AstNode parseFactorInner() {
+        if (peek().type == TokenType::Match) {
+            return parseMatchValue();
+        }
         if (peek().type == TokenType::Fn) {
             return parsePostfixCalls(parseLambda());
         }
@@ -4525,7 +4583,8 @@ private:
             argTok.type == TokenType::Star || argTok.type == TokenType::BitAnd ||
             argTok.type == TokenType::Minus || argTok.type == TokenType::Not ||
             argTok.type == TokenType::BitNot || argTok.type == TokenType::New ||
-            argTok.type == TokenType::Sizeof || argTok.type == TokenType::LBracket) {
+            argTok.type == TokenType::Sizeof || argTok.type == TokenType::LBracket ||
+            argTok.type == TokenType::Match) {
             result.children.push_back(parseValueExpr());
             while (match(TokenType::Comma)) {
                 result.children.push_back(parseValueExpr());

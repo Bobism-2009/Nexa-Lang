@@ -14,7 +14,8 @@
 #   size       Windows and Linux: an everyday program -- strings, a slice, a map,
 #              an f-string, a Result, io.to_int, io.parse_int / parse_float /
 #              to_float, io.eprintln, time.unix / format, a thread.mutex, a defer, float32 and
-#              bits, std/math, all of std/random, the std/file extras and std/term colour -- is under 64KB, and prints
+#              bits, std/math, all of std/random, the std/file extras, std/term colour and an
+#              enum taken apart by match (as a statement and as a value) -- is under 64KB, and prints
 #              exactly what the same program built without the slimming
 #              (NEXA_NO_SLIM=1) prints. It does not include std/gfx3d, so the
 #              generated C++ carries no Vulkan runtime.
@@ -80,6 +81,12 @@ struct Item {
     qty: int = 1;
 }
 
+enum Shape {
+    Circle { r: float; };
+    Box { w: int; h: int; };
+    Dot;
+}
+
 fn parse(s: string): Result[int] {
     let n = io.to_int(s);
     if (n == 0 && s != "0") { return err("not a number: " + s); }
@@ -127,6 +134,14 @@ fn main() {
                file.size(nowhere), " ", file.modified(nowhere), " ", file.remove_all(nowhere));
     let when: long = 1000000000;
     io.println(time.format_utc("%F %T", when), " ", time.unix() > when, " ", time.month(when));
+    let shapes = [Shape.Circle { r: 1.5 }, Shape.Box { w: 2, h: sum }, Shape.Dot];
+    for (s in shapes) {
+        let area = match (s) { Shape.Circle { r } => r * r * 3.0, Shape.Box { w, h } => w * h, _ => 0 };
+        match (s) {
+            Shape.Box { w } => { io.println("box ", w, " ", area); }
+            _ => { io.println(match (s) { Shape.Dot => "dot", _ => "round" }, " ", area); }
+        }
+    }
 }
 EOF
 

@@ -7,7 +7,7 @@
 set -u
 NEXAC="${1:-./NexaC}"
 case "$NEXAC" in
-    /*) ;;
+    /*|[A-Za-z]:*) ;;
     *) NEXAC="$(pwd)/$NEXAC" ;;
 esac
 WORK=$(mktemp -d 2>/dev/null || mktemp -d -t nexamatch)
@@ -215,6 +215,130 @@ fn main() {
     }
 }' \
 "not red"
+
+# -- match as a value --
+
+SHAPE='enum Shape {
+    Circle { radius: float; };
+    Rect { w: float; h: float; };
+    Point;
+}'
+
+run_eq "value: payload arms take fields apart" "#include <std/io>
+$SHAPE
+fn area(s: Shape): float {
+    return match (s) {
+        Shape.Circle { radius } => radius * radius * 3.0,
+        Shape.Rect { w, h } => w * h,
+        Shape.Point => 0,
+    };
+}
+fn main() {
+    io.println(area(Shape.Circle { radius: 2.0 }), \" \", area(Shape.Rect { w: 2.0, h: 5.0 }), \" \", area(Shape.Point));
+}" "12 10 0"
+
+run_eq "value: plain enum, strings and _" '#include <std/io>
+enum Color { Red; Green; Blue; }
+fn name(c: Color): string {
+    return match (c) { Color.Red => "red", Color.Green => "green", _ => "other" };
+}
+fn main() {
+    let c: Color = Color.Blue;
+    let k = match (c) { Color.Red => 1, Color.Green => 2, Color.Blue => 3 };
+    io.println(name(Color.Red) + " " + name(c) + " " + k);
+}' "red other 3"
+
+run_eq "value: in a call, a concat, a condition and a slice" '#include <std/io>
+enum Op { Add { n: int; }; Neg; }
+fn twice(x: int): int { return x * 2; }
+fn main() {
+    let ops = [Op.Add { n: 3 }, Op.Neg];
+    let acc = 1;
+    for (o in ops) { acc = match (o) { Op.Add { n } => acc + n, Op.Neg => -acc }; }
+    let xs = [match (ops[0]) { Op.Add { n } => n, _ => 0 }, 5];
+    if (match (ops[1]) { Op.Neg => true, _ => false }) {
+        io.println(acc, " ", xs, " ", twice(match (ops[0]) { Op.Add { n } => n, _ => 0 }),
+                   " op: " + match (ops[1]) { Op.Neg => "neg", _ => "add" });
+    }
+}' "-4 [3, 5] 6 op: neg"
+
+run_eq "value: the scrutinee is read once" '#include <std/io>
+enum Op { Add { n: int; }; Neg; }
+let calls = 0;
+fn next(): Op { calls += 1; return Op.Add { n: 7 }; }
+fn main() {
+    let v = match (next()) { Op.Add { n } => n + 1, Op.Neg => 0 };
+    io.println(v, " ", calls);
+}' "8 1"
+
+run_eq "value: nested, and in a global let" '#include <std/io>
+enum Color { Red; Blue; }
+let g = match (Color.Blue) { Color.Red => 1, _ => 2 };
+fn main() {
+    let c = Color.Red;
+    let d = Color.Blue;
+    io.println(g + match (c) { Color.Red => match (d) { Color.Blue => 10, _ => 20 }, _ => 30 });
+}' "12"
+
+run_eq "an arm reads the scrutinee as its variant" '#include <std/io>
+enum Op { Add { n: int; }; Neg; }
+fn main() {
+    let o = Op.Add { n: 4 };
+    io.println(match (o) { Op.Add => o.n + 1, _ => 0 });
+    match (o) {
+        Op.Add => { io.println("n=", o.n); }
+        _ => { }
+    }
+}' "5
+n=4"
+
+expect_has "value: a { block } arm is refused" "#include <std/io>
+$SHAPE
+fn main() {
+    let s = Shape.Point;
+    let a = match (s) { Shape.Point => { 1 }, _ => 2 };
+}" "not a { block }"
+
+expect_has "value: arms of different types" "#include <std/io>
+$SHAPE
+fn main() {
+    let s = Shape.Point;
+    let a = match (s) { Shape.Point => 1, _ => \"x\" };
+}" "the Shape.Point arm gives int, and the _ arm gives string"
+
+expect_has "value: a missing variant is an error" "#include <std/io>
+$SHAPE
+fn main() {
+    let s = Shape.Point;
+    let a = match (s) { Shape.Point => 1, Shape.Rect => 2 };
+}" "missing variant 'Circle'"
+
+expect_has "an unknown field is refused" "#include <std/io>
+$SHAPE
+fn main() {
+    let s = Shape.Point;
+    match (s) { Shape.Circle { nope } => { } _ => { } }
+}" "Shape.Circle has no field 'nope' (its fields: radius)"
+
+expect_has "an arm naming another enum is refused" "#include <std/io>
+$SHAPE
+enum Color { Red; Blue; }
+fn main() {
+    let s = Shape.Point;
+    let a = match (s) { Color.Red => 1, _ => 2 };
+}" "the arm Color.Red names Color, but this match looks at a Shape"
+
+expect_has "two arms for one variant are refused" "#include <std/io>
+$SHAPE
+fn main() {
+    let s = Shape.Point;
+    let a = match (s) { Shape.Point => 1, Shape.Point => 2, _ => 3 };
+}" "two arms for Shape.Point"
+
+expect_has "match on a non-enum is refused" '#include <std/io>
+fn main() {
+    let a = match (5) { _ => 1 };
+}' "match looks at an enum's variants, and this is an int"
 
 # -- slicing: match-free programs are unchanged --
 
