@@ -1,0 +1,22 @@
+#include <std/io>
+
+// A float joined into text prints the same short way wherever it comes from:
+// a name, a call, an index, a ?: or a match.
+
+enum Size { Small; Big; }
+
+fn f(): float { return 12.0; }
+
+fn main() {
+    let a = f();
+    let xs = [1.5, 2.25];
+    let b = true;
+    let s = Size.Big;
+    io.println("name " + a);
+    io.println("call " + f());
+    let t = "let " + f();
+    io.println(t);
+    io.println("index " + xs[1] + " ternary " + (b ? 0.5 : 2.0));
+    io.println("match " + match (s) { Size.Small => 1.0, Size.Big => 2.5 });
+    io.println("int " + 3 + " len " + len(xs));
+}

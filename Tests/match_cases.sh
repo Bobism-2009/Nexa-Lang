@@ -53,18 +53,23 @@ expect_has() {
     esac
 }
 
-source_eq() {
+# The C++ ahead of main() -- headers, runtime helpers, types -- is the same for
+# both programs: what the first one uses brings no code of its own.
+prelude_eq() {
     label=$1
-    src_a=$2
-    src_b=$3
-    printf '%s\n' "$src_a" > "$WORK/a.nxa"
-    printf '%s\n' "$src_b" > "$WORK/b.nxa"
-    "$NEXAC" "$WORK/a.nxa" --source "$WORK/a.cpp" 2>/dev/null
-    "$NEXAC" "$WORK/b.nxa" --source "$WORK/b.cpp" 2>/dev/null
-    if diff -q "$WORK/a.cpp" "$WORK/b.cpp" >/dev/null 2>&1; then
+    printf '%s\n' "$2" > "$WORK/a.nxa"
+    printf '%s\n' "$3" > "$WORK/b.nxa"
+    if ! "$NEXAC" "$WORK/a.nxa" --source "$WORK/a.cpp" >/dev/null 2>&1 ||
+       ! "$NEXAC" "$WORK/b.nxa" --source "$WORK/b.cpp" >/dev/null 2>&1; then
+        bad "$label" "NexaC refused a program"
+        return
+    fi
+    sed '/^int main/,$d' "$WORK/a.cpp" > "$WORK/a.pre"
+    sed '/^int main/,$d' "$WORK/b.cpp" > "$WORK/b.pre"
+    if [ -s "$WORK/a.pre" ] && cmp -s "$WORK/a.pre" "$WORK/b.pre"; then
         ok "$label"
     else
-        bad "$label" "C++ output differs"
+        bad "$label" "the C++ before main() differs"
     fi
 }
 
@@ -340,16 +345,25 @@ fn main() {
     let a = match (5) { _ => 1 };
 }' "match looks at an enum's variants, and this is an int"
 
-# -- slicing: match-free programs are unchanged --
+# -- slicing: match is code in place, nothing ahead of main --
 
-source_eq "no-match program unchanged" \
+prelude_eq "match brings no helpers, headers or types" \
 '#include <std/io>
+enum Shape { Circle { r: int; }; Dot; }
 fn main() {
-    io.println("hello");
+    let s = Shape.Circle { r: 2 };
+    let a = match (s) { Shape.Circle { r } => r, _ => 0 };
+    match (s) {
+        Shape.Dot => { io.println("dot"); }
+        _ => { io.println(a); }
+    }
 }' \
 '#include <std/io>
+enum Shape { Circle { r: int; }; Dot; }
 fn main() {
-    io.println("hello");
+    let s = Shape.Circle { r: 2 };
+    let a = 0;
+    if (a == 0) { io.println(a); }
 }'
 
 echo ""

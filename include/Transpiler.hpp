@@ -11099,7 +11099,9 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                               const std::map<std::string, bool>* varIsFloat,
                               const std::map<std::string, bool>* varIsChar,
                               const std::map<std::string, bool>* varIsBool) {
-        // A closure's body is a function body even in a global let.
+        // A closure in a global let has no locals around it to capture, and C++ refuses
+        // a capture-default ([&]) at file scope; its body is still a function body.
+        const bool atFileScope = emitAtFileScope_;
         struct FileScopeOff {
             bool& f; bool was;
             explicit FileScopeOff(bool& flag) : f(flag), was(flag) { f = false; }
@@ -11160,7 +11162,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         mainRetType_ = savedMainRet;
         varStructPop();
         nexaDeclStack_.pop_back();
-        return nexaTypeToCpp(ty) + "([&](" + sig + ") -> " + nexaTypeToCpp(ret) + " {\n" + body.str() + "})";
+        return nexaTypeToCpp(ty) + (atFileScope ? "([](" : "([&](") + sig + ") -> " + nexaTypeToCpp(ret) + " {\n" + body.str() + "})";
     }
 
     // C++ precedence tier of a Nexa binary node, higher binds tighter.
@@ -13197,7 +13199,9 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         if (child.type == AstNode::Type::FnCall && inferExprNexaType(child) == "string") {
             return emitExpr(child, varMap, pStr, pFl, pCh, pBo);
         }
-        if (exprIsFloat(child, varIsFloat)) {
+        // A float from a call, an index or a ?: as well as from a name: "x " + f() prints
+        // 12 as `let a = f(); "x " + a` does, not std::to_string's 12.000000.
+        if (exprIsFloat(child, varIsFloat) || nexaIsFloatType(inferExprNexaType(child))) {
             return "__nexa_f2s(" + emitExpr(child, varMap, pStr, pFl, pCh, pBo) + ")";
         }
         if (exprIsChar(child, varIsChar)) {

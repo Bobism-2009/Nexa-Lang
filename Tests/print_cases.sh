@@ -9,7 +9,7 @@ set -u
 
 NEXAC="${1:-./NexaC}"
 case "$NEXAC" in
-    /*) ;;
+    /*|[A-Za-z]:*) ;;
     *) NEXAC="$(pwd)/$NEXAC" ;;
 esac
 WORK=$(mktemp -d 2>/dev/null || mktemp -d -t nexaprint)

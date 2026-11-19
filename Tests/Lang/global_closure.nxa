@@ -1,0 +1,18 @@
+#include <std/io>
+
+// A closure in a global let: file scope has no locals to capture, and C++
+// refuses [&] there, so it is emitted capture-free and reads globals directly.
+
+enum Op { Add { n: int; }; Neg; }
+
+let base = 3;
+let scale = fn(x: int): int { return x * 10 + base; };
+let pick = fn(o: Op): int { return match (o) { Op.Add { n } => n, Op.Neg => -1 }; };
+
+fn main() {
+    io.println(scale(2));
+    io.println(pick(Op.Add { n: 7 }), " ", pick(Op.Neg));
+    let k = 5;
+    let local = fn(x: int): int { return x + k; };
+    io.println(local(1));
+}
