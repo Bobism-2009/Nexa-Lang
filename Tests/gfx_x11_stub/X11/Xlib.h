@@ -247,6 +247,7 @@ extern Display* XOpenDisplay(const char* name);
 extern int XCloseDisplay(Display* d);
 extern int XInitThreads(void);
 extern int XFlush(Display* d);
+extern int XFree(void* data);
 extern int XSync(Display* d, Bool discard);
 extern int XPending(Display* d);
 extern int XNextEvent(Display* d, XEvent* e);

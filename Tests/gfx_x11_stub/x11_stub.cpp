@@ -352,6 +352,7 @@ Display* XOpenDisplay(const char* name) {
 int XCloseDisplay(Display* d) { (void)d; return 0; }
 int XInitThreads(void) { return 1; }
 int XFlush(Display* d) { (void)d; return 0; }
+int XFree(void* data) { (void)data; return 1; }
 int XSync(Display* d, Bool discard) { (void)d; (void)discard; return 0; }
 int XPending(Display* d) { (void)d; return nexa_stub_head != nexa_stub_tail; }
 int XNextEvent(Display* d, XEvent* e) {
