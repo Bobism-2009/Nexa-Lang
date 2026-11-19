@@ -291,6 +291,7 @@ public:
                     break;
                 case AstNode::Type::MatchArm:
                     if (n.caseIsEnum) fix(n.initValue);
+                    for (AstNode& d : n.paramDefaults) walk(d);  // its guard
                     break;
                 default:
                     break;
@@ -564,6 +565,7 @@ public:
                 if (nexaIsResultType(pt) || pt.find("Result[") != std::string::npos) cppUsage.result = true;
             }
             for (const AstNode& c : n.children) detectCppUsage(c);
+            if (n.type == AstNode::Type::MatchArm) for (const AstNode& d : n.paramDefaults) detectCppUsage(d);
         };
         for (const AstNode& node : ast_) detectCppUsage(node);
 
@@ -924,6 +926,7 @@ public:
             }
             if (n.type == AstNode::Type::Defer) needsDefer = true;
             for (const AstNode& c : n.children) checkNeedsContainers(c);
+            if (n.type == AstNode::Type::MatchArm) for (const AstNode& d : n.paramDefaults) checkNeedsContainers(d);
         };
         for (const AstNode& node : ast_) checkNeedsContainers(node);
         if (needsString && moduleCppIncludes.find("#include <string>\n") == std::string::npos) out << "#include <string>\n";
@@ -3436,6 +3439,7 @@ private:
     }
     void discoverNode(const AstNode& n) {
         if (n.type == AstNode::Type::Block || n.type == AstNode::Type::SwitchCase || n.type == AstNode::Type::MatchArm) {
+            for (const AstNode& d : n.paramDefaults) discoverNode(d);  // a match arm's values and guard
             discoverStmts(n.children);
             return;
         }
@@ -4524,10 +4528,10 @@ private:
             case AstNode::Type::ExprTry:
                 return e.children.empty() ? std::string() : nexaResultInner(inferExprNexaType(e.children[0]));
             case AstNode::Type::ExprMatch: {
-                const std::string en = e.children.empty() ? std::string() : matchScrutineeEnum(e.children[0]);
+                const MatchScrut ms = matchScrut(e);
                 std::string joined;
                 for (size_t i = 1; i < e.children.size(); i++) {
-                    const std::string t = inferMatchArmType(en, e.children[i], matchScrutineeVar(e));
+                    const std::string t = inferMatchArmType(ms, e.children[i]);
                     if (t.empty()) continue;
                     joined = joined.empty() ? t : matchJoinTypes(joined, t);
                 }
@@ -5174,6 +5178,7 @@ private:
                 stampNode(n.children[0], "", fnRet);
                 for (size_t i = 1; i < n.children.size(); i++) {
                     for (const AstNode& v : n.children[i].children) stampNode(v, want, fnRet);
+                    if (const AstNode* g = matchArmGuard(n.children[i])) stampNode(*g, "", fnRet);
                 }
                 return;
             }
@@ -5879,6 +5884,7 @@ private:
             }
             if (n.type == AstNode::Type::Block || n.type == AstNode::Type::SwitchCase || n.type == AstNode::Type::MatchArm) {
                 nexaDeclStack_.push_back({});
+                for (const AstNode& d : n.paramDefaults) scanAny(d, subst, "");  // a match arm's values and guard
                 for (const AstNode& c : n.children) scanAny(c, subst, want);
                 nexaDeclStack_.pop_back();
                 at = saved;
@@ -6338,22 +6344,16 @@ private:
             }
             case AstNode::Type::MatchExpr: {
                 if (!s.children.empty()) semExpr(s.children[0]);
-                const std::string scrutEn = s.children.empty() ? std::string() : matchScrutineeEnum(s.children[0]);
-                semCheckMatchArms(s, scrutEn);
-                const bool semPayload = !scrutEn.empty() && enumHasPayload(scrutEn);
+                const MatchScrut ms = matchScrut(s);
+                semCheckMatchArms(s, ms);
                 for (size_t i = 1; i < s.children.size(); i++) {
                     if (s.children[i].type != AstNode::Type::MatchArm) continue;
                     const AstNode& arm = s.children[i];
-                    nexaDeclStack_.push_back({});
                     // In an arm the scrutinee is that variant: s.radius reads, as in a case.
-                    const bool bind = semPayload && arm.caseIsEnum;
-                    if (bind) {
-                        payloadSem_.push_back(PayloadFrame{matchScrutineeVar(s), "", scrutEn, arm.initValue});
-                        declareMatchArmFields(scrutEn, arm);
-                    }
+                    openMatchArm(ms, arm);
+                    semMatchGuard(arm);
                     for (const AstNode& st : arm.children) semStmt(st);
-                    if (bind) payloadSem_.pop_back();
-                    nexaDeclStack_.pop_back();
+                    closeMatchArm(ms, arm);
                 }
                 break;
             }
@@ -6625,17 +6625,18 @@ private:
             case AstNode::Type::ExprMatch: {
                 if (e.children.empty()) break;
                 semExpr(e.children[0]);
-                const std::string en = matchScrutineeEnum(e.children[0]);
-                semCheckMatchArms(e, en);
+                const MatchScrut ms = matchScrut(e);
+                semCheckMatchArms(e, ms);
                 std::string first;
                 size_t firstArm = 0;
                 for (size_t i = 1; i < e.children.size(); i++) {
                     const AstNode& arm = e.children[i];
                     if (arm.children.empty()) continue;
-                    openMatchArm(en, arm, matchScrutineeVar(e));
+                    openMatchArm(ms, arm);
+                    semMatchGuard(arm);
                     semExpr(arm.children[0]);
                     const std::string t = inferExprNexaType(arm.children[0]);
-                    closeMatchArm(en, arm);
+                    closeMatchArm(ms, arm);
                     if (first.empty()) { first = t; firstArm = i; continue; }
                     if (matchJoinTypes(first, t).empty()) {
                         semError(arm.children[0], "every arm of a match gives the same type of value: the " +
@@ -10410,52 +10411,85 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         }
     }
 
-    // The enum a match looks at, or "" when what it looks at is not an enum.
-    std::string matchScrutineeEnum(const AstNode& scrut) const {
-        std::string t = inferExprNexaType(scrut);
+    // What a match looks at: its Nexa type; the enum, when it is one; whether it is a
+    // Result or a plain value (an int, char, string or bool); and the variable's name when
+    // it is one, so s.radius reads inside a Shape.Circle arm.
+    struct MatchScrut {
+        std::string type, en, var;
+        bool result = false;
+        bool value = false;
+    };
+    MatchScrut matchScrut(const AstNode& m) const {
+        MatchScrut ms;
+        if (m.children.empty()) return ms;
+        const AstNode& scrut = m.children[0];
+        ms.type = inferExprNexaType(scrut);
         if (scrut.type == AstNode::Type::ExprVarRef) {
+            ms.var = scrut.value;
             const std::string d = lookupNexaDecl(scrut.value);
-            if (!d.empty()) t = d;
+            if (!d.empty()) ms.type = d;
         }
-        return isEnumDeclType(t) ? enumNameFromDecl(t) : std::string();
+        if (isEnumDeclType(ms.type)) ms.en = enumNameFromDecl(ms.type);
+        else if (nexaIsResultType(ms.type)) ms.result = true;
+        else ms.value = nexaIsIntegerType(ms.type) || ms.type == "string" || ms.type == "bool";
+        return ms;
     }
 
-    // Declares the fields an arm takes apart (Shape.Circle { radius }) in the innermost scope.
-    void declareMatchArmFields(const std::string& en, const AstNode& arm) const {
-        if (en.empty() || nexaDeclStack_.empty()) return;
-        for (const std::string& fn : arm.paramNames) {
-            std::string ftype = "int";
-            for (const EnumField& ef : enumPayloadFields(en, arm.initValue)) {
-                if (ef.name == fn) { ftype = ef.type; break; }
+    static bool matchArmIsWild(const AstNode& arm) {
+        return arm.value == "_" && !arm.caseIsEnum && !arm.armIsLiteral;
+    }
+    static bool matchArmIsResult(const AstNode& arm) {
+        return !arm.caseIsEnum && !arm.armIsLiteral && (arm.value == "Ok" || arm.value == "Err");
+    }
+    static const AstNode* matchArmGuard(const AstNode& arm) {
+        return arm.armHasGuard && !arm.paramDefaults.empty() ? &arm.paramDefaults.back() : nullptr;
+    }
+    static size_t matchArmLiteralCount(const AstNode& arm) {
+        if (!arm.armIsLiteral) return 0;
+        return arm.paramDefaults.size() - (arm.armHasGuard ? 1 : 0);
+    }
+
+    // A name an arm binds, its Nexa type, and the member of the matched value it reads
+    // (empty when the field does not exist; the semantic pass reports that).
+    struct MatchBind { std::string name, type, member; };
+    std::vector<MatchBind> matchArmBinds(const MatchScrut& ms, const AstNode& arm) const {
+        std::vector<MatchBind> out;
+        if (arm.caseIsEnum && !ms.en.empty()) {
+            const std::vector<EnumField> fields = enumPayloadFields(ms.en, arm.initValue);
+            for (const std::string& fn : arm.paramNames) {
+                MatchBind b{fn, "int", ""};
+                for (const EnumField& ef : fields) {
+                    if (ef.name == fn) { b.type = ef.type; b.member = enumFieldCpp(ms.en, arm.initValue, fn); break; }
+                }
+                out.push_back(b);
             }
-            nexaDeclStack_.back()[fn] = ftype;
+        } else if (matchArmIsResult(arm) && ms.result && !arm.paramNames.empty()) {
+            if (arm.value == "Ok") out.push_back({arm.paramNames[0], nexaResultInner(ms.type), "_value"});
+            else out.push_back({arm.paramNames[0], "string", "_error"});
         }
+        return out;
     }
 
-    static std::string matchScrutineeVar(const AstNode& m) {
-        return !m.children.empty() && m.children[0].type == AstNode::Type::ExprVarRef ? m.children[0].value : std::string();
-    }
-
-    // The scope an arm is read in: its destructured fields, and -- when the arm names a
+    // The scope an arm is read in: the names it binds, and -- when the arm names a
     // variant that holds fields -- the scrutinee as that variant, so s.radius reads.
-    bool matchArmIsVariant(const std::string& en, const AstNode& arm) const {
-        return arm.caseIsEnum && !en.empty() && enumHasPayload(en);
+    bool matchArmIsVariant(const MatchScrut& ms, const AstNode& arm) const {
+        return arm.caseIsEnum && !ms.en.empty() && enumHasPayload(ms.en);
     }
-    void openMatchArm(const std::string& en, const AstNode& arm, const std::string& scrutVar) const {
+    void openMatchArm(const MatchScrut& ms, const AstNode& arm) const {
         nexaDeclStack_.push_back({});
-        if (arm.caseIsEnum) declareMatchArmFields(en, arm);
-        if (matchArmIsVariant(en, arm)) payloadSem_.push_back(PayloadFrame{scrutVar, "", en, arm.initValue});
+        for (const MatchBind& b : matchArmBinds(ms, arm)) nexaDeclStack_.back()[b.name] = b.type;
+        if (matchArmIsVariant(ms, arm)) payloadSem_.push_back(PayloadFrame{ms.var, "", ms.en, arm.initValue});
     }
-    void closeMatchArm(const std::string& en, const AstNode& arm) const {
-        if (matchArmIsVariant(en, arm)) payloadSem_.pop_back();
+    void closeMatchArm(const MatchScrut& ms, const AstNode& arm) const {
+        if (matchArmIsVariant(ms, arm)) payloadSem_.pop_back();
         nexaDeclStack_.pop_back();
     }
 
-    std::string inferMatchArmType(const std::string& en, const AstNode& arm, const std::string& scrutVar) const {
+    std::string inferMatchArmType(const MatchScrut& ms, const AstNode& arm) const {
         if (arm.children.empty()) return std::string();
-        openMatchArm(en, arm, scrutVar);
+        openMatchArm(ms, arm);
         std::string t = inferExprNexaType(arm.children[0]);
-        closeMatchArm(en, arm);
+        closeMatchArm(ms, arm);
         return t;
     }
 
@@ -10472,90 +10506,203 @@ static std::string __nexa_show(const std::map<K, V>& m) {
     }
 
     static std::string matchArmLabel(const AstNode& arm) {
-        return arm.value == "_" ? std::string("_") : arm.value + "." + arm.initValue;
+        if (arm.caseIsEnum) return arm.value + "." + arm.initValue;
+        return arm.value;
     }
 
-    // What every match checks, the statement and the value alike: it looks at an enum,
-    // each arm names one of that enum's variants and fields, and together they cover it.
-    void semCheckMatchArms(const AstNode& m, const std::string& en) {
-        if (m.children.empty()) return;
-        if (en.empty()) {
-            const std::string t = inferExprNexaType(m.children[0]);
-            const std::string shown = nexaTypeForMessage(t);
-            semError(m, "match looks at an enum's variants, and this is " + (shown.empty() ? std::string("not an enum") :
-                (std::string("aeiou").find(shown[0]) != std::string::npos ? "an " : "a ") + shown));
+    static std::string withArticle(const std::string& shown) {
+        if (shown.empty()) return "something else";
+        return (std::string("aeiou").find(shown[0]) != std::string::npos ? "an " : "a ") + shown;
+    }
+
+    // A literal pattern's value, to find two arms for the same one: 3, -3, 'a', "a", true.
+    static std::string matchLiteralKey(const AstNode& lit) {
+        if (lit.type == AstNode::Type::ExprSub && lit.children.size() == 2) return "-" + lit.children[1].value;
+        return lit.value;
+    }
+
+    // An arm's guard is a condition, read where the arm's names are in scope.
+    void semMatchGuard(const AstNode& arm) {
+        const AstNode* g = matchArmGuard(arm);
+        if (!g) return;
+        semExpr(*g);
+        const std::string t = inferExprNexaType(*g);
+        if (nexaIsResultType(t) || t == "json" || nexaIsSliceType(t) || nexaIsMapType(t)) {
+            semError(*g, "an arm's if guard is a condition, and this is " + withArticle(nexaTypeForMessage(t)));
         }
-        std::set<std::string> covered;
+    }
+
+    // What every match checks, the statement and the value alike: each arm fits what the
+    // match looks at, no arm is hidden behind an earlier one, and together they cover it.
+    // An arm with an if guard covers nothing, since its guard may not hold.
+    void semCheckMatchArms(const AstNode& m, const MatchScrut& ms) {
+        if (m.children.empty()) return;
+        const std::string looksAt = withArticle(nexaTypeForMessage(ms.type));
+        if (ms.en.empty() && !ms.result && !ms.value) {
+            semError(m, "match looks at an enum, a Result, or an int, char, string or bool, and this is " + looksAt);
+        }
+        const bool isChar = ms.type == "char" || ms.type == "unsigned char";
+        std::set<std::string> covered, guardedOnly;
         bool wild = false;
         for (size_t i = 1; i < m.children.size(); i++) {
             const AstNode& arm = m.children[i];
             if (arm.type != AstNode::Type::MatchArm) continue;
-            if (arm.value == "_") {
-                if (wild) semError(m, "match has two _ arms");
-                wild = true;
+            const bool guarded = arm.armHasGuard;
+            if (wild) {
+                if (matchArmIsWild(arm)) semError(m, "match has two _ arms");
+                semError(m, "the arm " + matchArmLabel(arm) + " comes after _, which takes everything, so it never runs");
+            }
+            if (matchArmIsWild(arm)) {
+                if (!guarded) wild = true;
                 continue;
             }
-            if (arm.value != en && nexaTypeAppBase(arm.value) != nexaTypeAppBase(en)) {
-                semError(m, "the arm " + matchArmLabel(arm) + " names " + arm.value + ", but this match looks at a " + en);
-            }
-            auto vsIt = enumVariants_.find(en);
-            if (vsIt == enumVariants_.end() || !vsIt->second.count(arm.initValue)) {
-                semError(m, en + " has no variant '" + arm.initValue + "'");
-            }
-            if (!covered.insert(arm.initValue).second) {
-                semError(m, "match has two arms for " + en + "." + arm.initValue + "; only the first would run");
-            }
-            const std::vector<EnumField> fields = enumPayloadFields(en, arm.initValue);
-            for (const std::string& fn : arm.paramNames) {
-                bool found = false;
-                for (const EnumField& ef : fields) found = found || ef.name == fn;
-                if (!found) {
-                    std::string have;
-                    for (const EnumField& ef : fields) have += (have.empty() ? "" : ", ") + ef.name;
-                    semError(m, en + "." + arm.initValue + " has no field '" + fn + "'" +
-                        (have.empty() ? std::string(" (it holds no fields)") : " (its fields: " + have + ")"));
+            std::vector<std::string> keys;  // what this arm covers
+            if (arm.caseIsEnum) {
+                if (ms.en.empty()) {
+                    semError(m, "the arm " + matchArmLabel(arm) + " names an enum variant, but this match looks at " + looksAt);
                 }
-            }
-        }
-        if (!wild) {
-            auto ordIt = enumOrder_.find(en);
-            if (ordIt != enumOrder_.end()) {
-                for (const std::string& v : ordIt->second) {
-                    if (!covered.count(v)) {
-                        semError(m, "match is not exhaustive: missing variant '" + v + "' of '" + en + "'");
+                if (arm.value != ms.en && nexaTypeAppBase(arm.value) != nexaTypeAppBase(ms.en)) {
+                    semError(m, "the arm " + matchArmLabel(arm) + " names " + arm.value + ", but this match looks at a " + ms.en);
+                }
+                auto vsIt = enumVariants_.find(ms.en);
+                if (vsIt == enumVariants_.end() || !vsIt->second.count(arm.initValue)) {
+                    semError(m, ms.en + " has no variant '" + arm.initValue + "'");
+                }
+                const std::vector<EnumField> fields = enumPayloadFields(ms.en, arm.initValue);
+                for (const std::string& fn : arm.paramNames) {
+                    bool found = false;
+                    for (const EnumField& ef : fields) found = found || ef.name == fn;
+                    if (!found) {
+                        std::string have;
+                        for (const EnumField& ef : fields) have += (have.empty() ? "" : ", ") + ef.name;
+                        semError(m, ms.en + "." + arm.initValue + " has no field '" + fn + "'" +
+                            (have.empty() ? std::string(" (it holds no fields)") : " (its fields: " + have + ")"));
                     }
                 }
+                keys.push_back(arm.initValue);
+            } else if (matchArmIsResult(arm)) {
+                if (!ms.result) {
+                    semError(m, "the arm " + arm.value + " is for a Result, but this match looks at " + looksAt);
+                }
+                if (arm.paramNames.size() > 1) {
+                    semError(m, arm.value + " holds one " + (arm.value == "Ok" ? "value" : "error text") +
+                        ": write " + arm.value + " { name }");
+                }
+                if (arm.value == "Ok" && !arm.paramNames.empty() && nexaResultInner(ms.type) == "void") {
+                    semError(m, "Ok of a Result[void] holds no value: write Ok =>");
+                }
+                keys.push_back(arm.value);
+            } else if (arm.armIsLiteral) {
+                if (!ms.value) {
+                    semError(m, "the arm " + arm.value + " is a value, but this match looks at " + looksAt);
+                }
+                for (size_t k = 0; k < matchArmLiteralCount(arm); k++) {
+                    const AstNode& lit = arm.paramDefaults[k];
+                    const std::string lt = lit.type == AstNode::Type::ExprStringLiteral ? "string" :
+                        lit.type == AstNode::Type::ExprCharLiteral ? "char" :
+                        lit.type == AstNode::Type::ExprBoolLiteral ? "bool" : "int";
+                    const bool fits = ms.type == "string" ? lt == "string" : ms.type == "bool" ? lt == "bool" :
+                        isChar ? lt == "char" : lt == "int";
+                    if (!fits) {
+                        semError(m, "the arm " + arm.value + " is " + withArticle(lt) + ", but this match looks at " + looksAt);
+                    }
+                    keys.push_back(matchLiteralKey(lit));
+                }
             }
+            for (const std::string& k : keys) {
+                if (covered.count(k)) {
+                    semError(m, "match has two arms for " + matchArmLabel(arm) + "; only the first would run");
+                }
+            }
+            for (const std::string& k : keys) (guarded ? guardedOnly : covered).insert(k);
         }
+        if (wild) return;
+        auto missing = [&](const std::string& what, const std::string& key) {
+            semError(m, "match is not exhaustive: missing " + what +
+                (guardedOnly.count(key) ? std::string(" (an arm with an if guard does not count: its guard may not hold)")
+                                        : std::string()));
+        };
+        if (!ms.en.empty()) {
+            auto ordIt = enumOrder_.find(ms.en);
+            if (ordIt != enumOrder_.end()) {
+                for (const std::string& v : ordIt->second) {
+                    if (!covered.count(v)) missing("variant '" + v + "' of '" + ms.en + "'", v);
+                }
+            }
+        } else if (ms.result) {
+            if (!covered.count("Ok")) missing("Ok", "Ok");
+            if (!covered.count("Err")) missing("Err", "Err");
+        } else if (ms.type == "bool") {
+            if (!covered.count("true")) missing("true", "true");
+            if (!covered.count("false")) missing("false", "false");
+        } else {
+            semError(m, "match is not exhaustive: " + looksAt + " has more values than its arms name, so it needs a _ arm");
+        }
+    }
+
+    // The C++ test for one arm against the matched value sw: the variant's tag, Ok or Err,
+    // the values (sw == 3 || sw == 4), then && the guard. "" when the arm takes everything.
+    std::string matchArmTest(const MatchScrut& ms, const AstNode& arm, const std::string& sw,
+                             const std::map<std::string, std::string>& varMap,
+                             const std::map<std::string, bool>* varIsString,
+                             const std::map<std::string, bool>* varIsFloat,
+                             const std::map<std::string, bool>* varIsChar,
+                             const std::map<std::string, bool>* varIsBool) {
+        std::string t;
+        if (arm.caseIsEnum) {
+            if (enumHasPayload(ms.en)) t = sw + ".__tag == " + std::to_string(enumVariantIndex(ms.en, arm.initValue));
+            else t = sw + " == " + enumCppNames_.at(ms.en) + "::" + arm.initValue;
+        } else if (matchArmIsResult(arm)) {
+            t = arm.value == "Ok" ? sw + "._ok" : "!" + sw + "._ok";
+        } else if (arm.armIsLiteral) {
+            const size_t n = matchArmLiteralCount(arm);
+            for (size_t k = 0; k < n; k++) {
+                if (k) t += " || ";
+                t += sw + " == " + emitExpr(arm.paramDefaults[k], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+            }
+            if (n > 1) t = "(" + t + ")";
+        }
+        if (const AstNode* g = matchArmGuard(arm)) {
+            const std::string gc = emitCond(*g, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+            t = t.empty() ? gc : t + " && (" + gc + ")";
+        }
+        return t;
+    }
+
+    // How the matched value is held: a string by const reference, so a "text" scrutinee
+    // compares as text rather than as a pointer; anything else as it comes.
+    static std::string matchHoldDecl(const MatchScrut& ms) {
+        return ms.type == "string" ? "const std::string& " : "auto&& ";
     }
 
     // let a = match (s) { Shape.Circle { r } => r * r, _ => 0.0 } as one C++ expression:
     //   ({ auto&& __nexa_m0 = s; (__nexa_m0.__tag == 0) ? (r * r) : (0.0); })
-    // The scrutinee is read once; the arms are a chain of ?: on its tag, the last arm
+    // The scrutinee is read once; the arms are a chain of ?: on their tests, the last arm
     // (or _) the final else -- the semantic pass has already proved the arms cover it.
     std::string emitMatchValue(const AstNode& e, const std::map<std::string, std::string>& varMap,
                                const std::map<std::string, bool>* varIsString,
                                const std::map<std::string, bool>* varIsFloat,
                                const std::map<std::string, bool>* varIsChar,
                                const std::map<std::string, bool>* varIsBool) {
-        const std::string en = matchScrutineeEnum(e.children[0]);
-        if (en.empty()) throw std::runtime_error("match requires an enum scrutinee");
-        const bool payload = enumHasPayload(en);
+        const MatchScrut ms = matchScrut(e);
+        if (ms.en.empty() && !ms.result && !ms.value) throw std::runtime_error("match requires an enum, a Result, or an int, char, string or bool");
+        const bool payload = !ms.en.empty() && enumHasPayload(ms.en);
         const bool isStr = inferExprNexaType(e) == "string";
         const std::string sw = "__nexa_m" + std::to_string(matchValueSeq_++);
-        const std::string scrutVar = e.children[0].type == AstNode::Type::ExprVarRef ? e.children[0].value : std::string();
         const std::string scrut = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
         static const std::map<std::string, bool> kNone;
-        std::vector<std::pair<std::string, std::string>> arms;  // condition, value
+        std::vector<std::pair<std::string, std::string>> arms;  // test, value
         std::string wildValue;
         bool haveWild = false;
-        for (size_t i = 1; i < e.children.size(); i++) {
+        for (size_t i = 1; i < e.children.size() && !haveWild; i++) {
             const AstNode& arm = e.children[i];
             if (arm.type != AstNode::Type::MatchArm || arm.children.empty()) continue;
-            std::string v;
-            openMatchArm(en, arm, scrutVar);
-            if (payload && arm.caseIsEnum) payloadEmit_.push_back(PayloadFrame{scrutVar, sw, en, arm.initValue});
-            if (arm.paramNames.empty()) {
+            std::string v, test;
+            openMatchArm(ms, arm);
+            if (payload && arm.caseIsEnum) payloadEmit_.push_back(PayloadFrame{ms.var, sw, ms.en, arm.initValue});
+            const std::vector<MatchBind> binds = matchArmBinds(ms, arm);
+            if (binds.empty()) {
+                test = matchArmTest(ms, arm, sw, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 v = emitExpr(arm.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             } else {
                 std::map<std::string, std::string> vm = varMap;
@@ -10563,30 +10710,25 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 std::map<std::string, bool> vf = varIsFloat ? *varIsFloat : kNone;
                 std::map<std::string, bool> vc = varIsChar ? *varIsChar : kNone;
                 std::map<std::string, bool> vb = varIsBool ? *varIsBool : kNone;
-                for (const std::string& fn : arm.paramNames) {
-                    const std::string ft = lookupNexaDecl(fn);
-                    vm[fn] = sw + "." + enumFieldCpp(en, arm.initValue, fn);
-                    vs[fn] = ft == "string";
-                    vf[fn] = nexaIsFloatType(ft);
-                    vc[fn] = ft == "char";
-                    vb[fn] = ft == "bool";
+                for (const MatchBind& b : binds) {
+                    vm[b.name] = sw + "." + b.member;
+                    vs[b.name] = b.type == "string";
+                    vf[b.name] = nexaIsFloatType(b.type);
+                    vc[b.name] = b.type == "char";
+                    vb[b.name] = b.type == "bool";
                 }
+                test = matchArmTest(ms, arm, sw, vm, &vs, &vf, &vc, &vb);
                 v = emitExpr(arm.children[0], vm, &vs, &vf, &vc, &vb);
             }
             if (payload && arm.caseIsEnum) payloadEmit_.pop_back();
-            closeMatchArm(en, arm);
+            closeMatchArm(ms, arm);
             if (isStr && arm.children[0].type == AstNode::Type::ExprStringLiteral) v = "std::string(" + v + ")";
-            if (arm.value == "_") {
-                if (!haveWild) { wildValue = v; haveWild = true; }
+            if (test.empty()) {
+                wildValue = v;
+                haveWild = true;
                 continue;
             }
-            std::string cond;
-            if (payload) {
-                cond = sw + ".__tag == " + std::to_string(enumVariantIndex(en, arm.initValue));
-            } else {
-                cond = sw + " == " + enumCppNames_.at(en) + "::" + arm.initValue;
-            }
-            arms.push_back({cond, v});
+            arms.push_back({test, v});
         }
         if (!haveWild) {
             if (arms.empty()) throw std::runtime_error("match has no arms");
@@ -10596,62 +10738,31 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         std::string chain;
         for (const auto& a : arms) chain += "(" + a.first + ") ? (" + a.second + ") : ";
         chain += "(" + wildValue + ")";
+        const std::string hold = matchHoldDecl(ms) + sw + " = " + scrut + "; " + (arms.empty() ? "(void)" + sw + "; " : std::string());
         // File scope has no ({ }); a lambda that captures nothing reads the globals directly.
-        if (emitAtFileScope_) return "[]() { auto&& " + sw + " = " + scrut + "; return " + chain + "; }()";
-        return "({ auto&& " + sw + " = " + scrut + "; " + chain + "; })";
+        if (emitAtFileScope_) return "[]() { " + hold + "return " + chain + "; }()";
+        return "({ " + hold + chain + "; })";
     }
 
+    // The statement: the matched value held once, then an if / else if chain over the
+    // arms in order. A break or continue in an arm is the enclosing loop's.
     void emitMatch(std::ostringstream& out, const AstNode& node,
                    std::map<std::string, std::string>& varMap, int& varIdx,
                    std::map<std::string, bool>& varIsString, std::map<std::string, bool>& varIsConst,
                    std::map<std::string, bool>& varIsFloat, std::map<std::string, bool>& varIsChar,
                    std::map<std::string, bool>& varIsBool, std::map<std::string, bool>& varIsEnum,
                    const std::string& indent) {
-        std::string expr = emitExpr(node.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
-        // Resolve scrutinee enum type
-        std::string scrutEn;
-        std::string scrutVar;
-        std::string t = inferExprNexaType(node.children[0]);
-        if (node.children[0].type == AstNode::Type::ExprVarRef) {
-            scrutVar = node.children[0].value;
-            const std::string d = lookupNexaDecl(scrutVar);
-            if (!d.empty()) t = d;
-        }
-        if (isEnumDeclType(t)) scrutEn = enumNameFromDecl(t);
-        if (scrutEn.empty()) {
-            throw std::runtime_error("match requires an enum scrutinee");
-        }
-        const bool hasPayload = enumHasPayload(scrutEn);
+        const MatchScrut ms = matchScrut(node);
+        if (ms.en.empty() && !ms.result && !ms.value) throw std::runtime_error("match requires an enum, a Result, or an int, char, string or bool");
+        const std::string expr = emitExpr(node.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+        const bool payload = !ms.en.empty() && enumHasPayload(ms.en);
         const std::string sw = "__nexa_sw_" + std::to_string(varIdx++);
-        const bool lvalue = node.children[0].type == AstNode::Type::ExprVarRef;
-        out << indent << "{\n";
-        if (hasPayload) {
-            out << indent << "    " << (lvalue ? "auto& " : "auto ") << sw << " = " << expr << ";\n";
-            out << indent << "    switch (" << sw << ".__tag) {\n";
-        } else {
-            out << indent << "    switch (" << expr << ") {\n";
-        }
+        std::ostringstream body;
+        bool first = true, tested = false;
         for (size_t i = 1; i < node.children.size(); i++) {
             const AstNode& arm = node.children[i];
             if (arm.type != AstNode::Type::MatchArm) continue;
-            if (arm.value == "_") {
-                out << indent << "    default: {\n";
-            } else {
-                if (arm.value != scrutEn && nexaTypeAppBase(arm.value) != nexaTypeAppBase(scrutEn)) {
-                    throw std::runtime_error("Unknown enum '" + arm.value + "' in match arm");
-                }
-                auto vsIt = enumVariants_.find(scrutEn);
-                if (vsIt == enumVariants_.end() || !vsIt->second.count(arm.initValue)) {
-                    throw std::runtime_error("Unknown enum variant '" + arm.initValue + "' for '" + scrutEn + "'");
-                }
-                if (hasPayload) {
-                    out << indent << "    case " << enumVariantIndex(scrutEn, arm.initValue) << ": {\n";
-                } else {
-                    auto enIt = enumCppNames_.find(scrutEn);
-                    out << indent << "    case " << enIt->second << "::" << arm.initValue << ": {\n";
-                }
-            }
-            // Save and bind destructured fields
+            // Bind the arm's names, saving whatever they named outside it.
             struct Hold {
                 bool hadM = false; std::string map;
                 bool hadS = false, s = false, hadF = false, f = false, hadC = false, c = false;
@@ -10660,45 +10771,43 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             };
             std::vector<std::pair<std::string, Hold>> saved;
             // Pushed even with no { fields }: s.radius in the arm reads the variant's field.
-            const bool bind = hasPayload && arm.caseIsEnum &&
-                (arm.value == scrutEn || nexaTypeAppBase(arm.value) == nexaTypeAppBase(scrutEn));
-            if (bind) {
-                payloadEmit_.push_back(PayloadFrame{scrutVar, sw, scrutEn, arm.initValue});
-                for (const std::string& fn : arm.paramNames) {
-                    // Find the field's type from enumPayload_
-                    std::string ftype = "int";
-                    for (const EnumField& ef : enumPayloadFields(scrutEn, arm.initValue)) {
-                        if (ef.name == fn) { ftype = ef.type; break; }
-                    }
-                    Hold h;
-                    auto mit = varMap.find(fn);
-                    if (mit != varMap.end()) { h.hadM = true; h.map = mit->second; }
-                    auto take = [](std::map<std::string, bool>& m, const std::string& n, bool& had, bool& v) {
-                        auto it = m.find(n);
-                        if (it != m.end()) { had = true; v = it->second; }
-                    };
-                    take(varIsString, fn, h.hadS, h.s);
-                    take(varIsFloat, fn, h.hadF, h.f);
-                    take(varIsChar, fn, h.hadC, h.c);
-                    take(varIsBool, fn, h.hadB, h.b);
-                    take(varIsEnum, fn, h.hadE, h.e);
-                    if (!nexaDeclStack_.empty()) {
-                        auto dit = nexaDeclStack_.back().find(fn);
-                        if (dit != nexaDeclStack_.back().end()) { h.hadD = true; h.decl = dit->second; }
-                        nexaDeclStack_.back()[fn] = ftype;
-                    }
-                    varMap[fn] = sw + "." + enumFieldCpp(scrutEn, arm.initValue, fn);
-                    varIsString[fn] = ftype == "string";
-                    varIsFloat[fn] = nexaIsFloatType(ftype);
-                    varIsChar[fn] = ftype == "char";
-                    varIsBool[fn] = ftype == "bool";
-                    varIsEnum[fn] = isEnumDeclType(ftype);
-                    saved.push_back({fn, h});
+            const bool bindVariant = payload && arm.caseIsEnum;
+            if (bindVariant) payloadEmit_.push_back(PayloadFrame{ms.var, sw, ms.en, arm.initValue});
+            for (const MatchBind& mb : matchArmBinds(ms, arm)) {
+                const std::string& fn = mb.name;
+                Hold h;
+                auto mit = varMap.find(fn);
+                if (mit != varMap.end()) { h.hadM = true; h.map = mit->second; }
+                auto take = [](std::map<std::string, bool>& m, const std::string& n, bool& had, bool& v) {
+                    auto it = m.find(n);
+                    if (it != m.end()) { had = true; v = it->second; }
+                };
+                take(varIsString, fn, h.hadS, h.s);
+                take(varIsFloat, fn, h.hadF, h.f);
+                take(varIsChar, fn, h.hadC, h.c);
+                take(varIsBool, fn, h.hadB, h.b);
+                take(varIsEnum, fn, h.hadE, h.e);
+                if (!nexaDeclStack_.empty()) {
+                    auto dit = nexaDeclStack_.back().find(fn);
+                    if (dit != nexaDeclStack_.back().end()) { h.hadD = true; h.decl = dit->second; }
+                    nexaDeclStack_.back()[fn] = mb.type;
                 }
+                varMap[fn] = sw + "." + mb.member;
+                varIsString[fn] = mb.type == "string";
+                varIsFloat[fn] = nexaIsFloatType(mb.type);
+                varIsChar[fn] = mb.type == "char";
+                varIsBool[fn] = mb.type == "bool";
+                varIsEnum[fn] = isEnumDeclType(mb.type);
+                saved.push_back({fn, h});
             }
-            emitBlock(out, arm.children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "        ");
-            out << indent << "        break;\n";
-            if (bind) payloadEmit_.pop_back();
+            const std::string test = matchArmTest(ms, arm, sw, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+            if (!test.empty()) tested = true;
+            if (first) body << indent << "    " << (test.empty() ? std::string("{\n") : "if (" + test + ") {\n");
+            else body << (test.empty() ? std::string(" else {\n") : " else if (" + test + ") {\n");
+            first = false;
+            emitBlock(body, arm.children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "        ");
+            body << indent << "    }";
+            if (bindVariant) payloadEmit_.pop_back();
             for (auto it = saved.rbegin(); it != saved.rend(); ++it) {
                 const std::string& n = it->first;
                 const Hold& h = it->second;
@@ -10716,9 +10825,12 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     else nexaDeclStack_.back().erase(n);
                 }
             }
-            out << indent << "    }\n";
+            if (test.empty()) break;  // _ takes the rest; the semantic pass refused arms after it
         }
-        out << indent << "    }\n";
+        out << indent << "{\n";
+        out << indent << "    " << matchHoldDecl(ms) << sw << " = " << expr << ";\n";
+        if (!tested) out << indent << "    (void)" << sw << ";\n";
+        if (!first) out << body.str() << "\n";
         out << indent << "}\n";
     }
 

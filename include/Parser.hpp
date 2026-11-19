@@ -125,6 +125,10 @@ struct AstNode {
     bool isVarRef = false;      // for IoPrint/IoPrintln: true = print variable, false = print string
     bool caseIsString = false;  // for SwitchCase: true = case "str", false = case 42
     bool caseIsEnum = false;    // for SwitchCase: Enum.variant; value = enum name, initValue = variant
+    // MatchArm: the arm is literal values (3 | 4 =>, 'a' =>, "yes" =>), kept in paramDefaults; value is
+    // the pattern as written, for messages. An `if` guard, when written, is the last of paramDefaults.
+    bool armIsLiteral = false;
+    bool armHasGuard = false;
     bool isConst = false;       // for Variable: true = let const x = ...
     bool isFixedArray = false;  // for Variable: true = let x: type[size]; (fixed-size buffer)
     bool isArrowMember = false; // for ExprMember: true = ptr->field, false = value.field
@@ -3553,48 +3557,114 @@ private:
         return matchNode;
     }
 
-    // Enum.Variant, Enum.Variant { field1, field2 }, or _ -- the left side of a match arm.
+    // The left side of a match arm, then its optional guard:
+    //   _                          anything
+    //   Enum.Variant               that variant; Enum.Variant { f1, f2 } takes its fields apart
+    //   Ok / Err                   a Result; Ok { v } names its value, Err { e } its error text
+    //   1 | 2,  'a',  "yes",  true  those values (an int, char, string or bool match)
+    //   ... if cond                the arm only when cond holds too
     void parseMatchPattern(AstNode& arm) {
-            if (peek().type == TokenType::Identifier && peek().value == "_") {
-                // wildcard arm: _ => { body }
+        const size_t line = peek().line;
+        auto literal = [&](AstNode& out, std::string& shown) -> bool {
+            bool neg = false;
+            if (peek().type == TokenType::Minus && pos_ + 1 < tokens_.size() &&
+                (tokens_[pos_ + 1].type == TokenType::Number || tokens_[pos_ + 1].type == TokenType::Float)) {
                 advance();
-                arm.value = "_";
-            } else if (peek().type == TokenType::Identifier) {
-                // Enum.Variant or Enum.Variant { field1, field2 }
-                // Manual parsing — do NOT use parseFactor() here because it
-                // calls parseEnumPayloadLit() which consumes { field } as
-                // a payload literal (expecting fieldName: value syntax).
-                std::string enumName = peek().value;
-                advance();
-                if (!match(TokenType::Dot)) {
-                    throw std::runtime_error("match arm must be Enum.Variant or _ at line " + std::to_string(peek().line));
-                }
-                if (peek().type != TokenType::Identifier) {
-                    throw std::runtime_error("Expected variant name after '.' in match arm at line " + std::to_string(peek().line));
-                }
-                std::string variantName = peek().value;
-                advance();
-                arm.caseIsEnum = true;
-                arm.value = enumName;
-                arm.initValue = variantName;
-                // optional field destructuring: { field1, field2 }
-                if (peek().type == TokenType::LBrace) {
-                    advance();
-                    while (pos_ < tokens_.size() && peek().type != TokenType::RBrace) {
-                        if (peek().type != TokenType::Identifier) {
-                            throw std::runtime_error("Expected field name in match arm at line " + std::to_string(peek().line));
-                        }
-                        arm.paramNames.push_back(peek().value);
-                        advance();
-                        if (peek().type == TokenType::Comma) advance();
-                    }
-                    if (!match(TokenType::RBrace)) {
-                        throw std::runtime_error("Expected '}' after match arm fields at line " + std::to_string(peek().line));
-                    }
-                }
-            } else {
-                throw std::runtime_error("Expected Enum.Variant or _ in match arm at line " + std::to_string(peek().line));
+                neg = true;
             }
+            const Token& t = peek();
+            if (t.type == TokenType::Float) {
+                throw std::runtime_error("a float cannot be a match pattern: a float that prints as 0.3 may not equal 0.3, "
+                    "so compare it with if, at line " + std::to_string(t.line));
+            }
+            if (t.type == TokenType::Number) {
+                out = {AstNode::Type::ExprIntLiteral, t.value, {}};
+                shown = (neg ? "-" : "") + t.value;
+                if (neg) {
+                    AstNode zero{AstNode::Type::ExprIntLiteral, "0", {}};
+                    zero.initValue = "unary-minus";
+                    out = {AstNode::Type::ExprSub, "", {std::move(zero), std::move(out)}};
+                }
+            } else if (neg) {
+                return false;
+            } else if (t.type == TokenType::Char) {
+                out = {AstNode::Type::ExprCharLiteral, t.value, {}};
+                shown = "'" + t.value + "'";
+            } else if (t.type == TokenType::String) {
+                out = {AstNode::Type::ExprStringLiteral, t.value, {}};
+                shown = "\"" + t.value + "\"";
+            } else if (t.type == TokenType::True || t.type == TokenType::False) {
+                out = {AstNode::Type::ExprBoolLiteral, t.type == TokenType::True ? "true" : "false", {}};
+                shown = out.value;
+            } else {
+                return false;
+            }
+            advance();
+            return true;
+        };
+        // One name in braces: Ok { v }, Err { e }.
+        auto bindings = [&]() {
+            if (peek().type != TokenType::LBrace) return;
+            advance();
+            while (pos_ < tokens_.size() && peek().type != TokenType::RBrace) {
+                if (peek().type != TokenType::Identifier) {
+                    throw std::runtime_error("Expected field name in match arm at line " + std::to_string(peek().line));
+                }
+                arm.paramNames.push_back(peek().value);
+                advance();
+                if (peek().type == TokenType::Comma) advance();
+            }
+            if (!match(TokenType::RBrace)) {
+                throw std::runtime_error("Expected '}' after match arm fields at line " + std::to_string(peek().line));
+            }
+        };
+        AstNode lit;
+        std::string shown;
+        if (peek().type == TokenType::Identifier && peek().value == "_") {
+            advance();
+            arm.value = "_";
+        } else if (peek().type == TokenType::Identifier && (peek().value == "Ok" || peek().value == "Err") &&
+                   !(pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::Dot)) {
+            arm.value = peek().value;
+            advance();
+            bindings();
+        } else if (peek().type == TokenType::Identifier) {
+            // Enum.Variant or Enum.Variant { field1, field2 }. Parsed by hand: parseFactor()
+            // would read { field } as a payload literal (fieldName: value).
+            std::string enumName = peek().value;
+            advance();
+            if (!match(TokenType::Dot)) {
+                throw std::runtime_error("a match arm is Enum.Variant, Ok, Err, a value (1, 'a', \"yes\", true) or _, "
+                    "and '" + enumName + "' is none of them, at line " + std::to_string(line));
+            }
+            if (peek().type != TokenType::Identifier) {
+                throw std::runtime_error("Expected variant name after '.' in match arm at line " + std::to_string(peek().line));
+            }
+            std::string variantName = peek().value;
+            advance();
+            arm.caseIsEnum = true;
+            arm.value = enumName;
+            arm.initValue = variantName;
+            bindings();
+        } else if (literal(lit, shown)) {
+            arm.armIsLiteral = true;
+            arm.value = shown;
+            arm.paramDefaults.push_back(std::move(lit));
+            while (match(TokenType::BitOr)) {
+                if (!literal(lit, shown)) {
+                    throw std::runtime_error("Expected a value after '|' in match arm at line " + std::to_string(peek().line));
+                }
+                arm.value += " | " + shown;
+                arm.paramDefaults.push_back(std::move(lit));
+            }
+        } else {
+            throw std::runtime_error("a match arm is Enum.Variant, Ok, Err, a value (1, 'a', \"yes\", true) or _, at line " +
+                std::to_string(line));
+        }
+        if (match(TokenType::If)) {
+            arm.armHasGuard = true;
+            arm.paramDefaults.push_back(parseValueExpr());
+        }
     }
 
     std::vector<AstNode> parseSwitchBody() {

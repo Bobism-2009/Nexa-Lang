@@ -124,7 +124,8 @@ MATCH
       Enum.Variant { field1, field2 } => { stmts }
       _ => { stmts }
   }
-  Pattern matching on enum variants. Each arm is Enum.Variant => { body }.
+  Pattern matching on enum variants, a Result, or a value. Each arm is
+  Pattern => { body }; the first arm that fits runs.
   - Arms use => (fat arrow), not case/break
   - A variant with fields can destructure them: Shape.Circle { radius } =>
     binds radius as a local variable inside that arm's body
@@ -155,6 +156,60 @@ MATCH
               io.println("other");
           }
       }
+  - A break or continue in an arm is the enclosing loop's.
+  - An arm after an _ that has no guard never runs, and is an error.
+
+  PATTERNS
+    _                         anything
+    Enum.Variant              that variant; Enum.Variant { f1, f2 } binds its fields
+    Ok, Ok { v }              a Result that succeeded; v is its value
+    Err, Err { e }            a Result that failed; e is its error text
+    3,  -1,  1 | 2 | 3        an int (any width) equal to one of them
+    'a',  'a' | 'e'           a char
+    "go",  "go" | "run"       a string
+    true,  false              a bool
+
+      match (io.parse_int(s)) {
+          Ok { n } => { io.println("got " + n); }
+          Err { e } => { io.println("bad input: " + e); }
+      }
+      match (cmd) {
+          "go" | "run" => { start(); }
+          "stop" => { stop(); }
+          _ => { io.println("unknown command " + cmd); }
+      }
+
+    - Ok and Err name the one thing they hold whatever you like: Ok { n },
+      Err { why }. Ok of a Result[void] holds nothing: write Ok =>.
+    - A Result match needs an Ok arm and an Err arm, or _. A bool match needs
+      true and false, or _. Any other value needs _, for the values the arms
+      do not name. Two arms for the same value are an error.
+    - A value pattern is written out: a literal, not a name or a sum. A float
+      is not a pattern, since a float that prints as 0.3 may not equal 0.3;
+      compare it with if.
+    - The pattern's type is the matched value's: "go" cannot match an int,
+      and 65 cannot match a char.
+
+  GUARDS
+    Pattern if cond => ...
+    The arm runs when the pattern fits and cond holds; otherwise the arms
+    below it are tried. cond can read the names the pattern binds.
+
+      match (s) {
+          Shape.Circle { radius } if radius > 10.0 => { io.println("big"); }
+          Shape.Circle => { io.println("small"); }
+          _ => { io.println("not round"); }
+      }
+      match (n) {
+          _ if n < 0 => { io.println("negative"); }
+          0 => { io.println("zero"); }
+          _ => { io.println("positive"); }
+      }
+
+    - A guarded arm covers nothing for exhaustiveness, since its guard may not
+      hold: Shape.Circle if r > 10.0 still needs a Shape.Circle or _ after it.
+    - The guard is a condition by the usual rules (WHAT COUNTS AS TRUE): a
+      Result, slice or map is an error there.
 
 MATCH AS A VALUE
   let v = match (expr) { Enum.Variant => value, Enum.Variant { f } => value, _ => value };
@@ -165,7 +220,8 @@ MATCH AS A VALUE
     statement form above to run statements.
   - Every arm gives the same type. An int arm and a float arm give a float;
     a string arm and an int arm are an error.
-  - The same patterns, destructuring and exhaustiveness rules as the statement.
+  - The same patterns, guards, destructuring and exhaustiveness rules as the
+    statement: let label = match (n) { 0 => "none", 1 | 2 => "few", _ => "many" };
   - The matched value is computed once, even when it is a call.
   - Example:
       fn area(s: Shape): float {

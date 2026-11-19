@@ -15,6 +15,7 @@ Current compiler version string: **0.1.17** (`NexaC --version`).
 
 - **Language:** `match` expressions — pattern matching on enum variants with field destructuring (`Shape.Circle { radius } => { ... }`), exhaustiveness checking, and zero overhead for programs that don't use it.
 - **Language:** `match` gives a value — `let area = match (s) { Shape.Circle { r } => r * r * 3.14, _ => 0.0 };` — anywhere a value can stand. Arms may read the matched variable as their variant (`s.radius`), and unknown fields, duplicate arms and arms naming the wrong enum are compile errors.
+- **Language:** `match` on a `Result` (`Ok { v } => ...`, `Err { e } => ...`), on ints, chars, strings and bools (`0 => ...`, `1 | 2 => ...`, `"go" => ...`, `_ => ...`), and `if` guards on any arm (`Shape.Circle { r } if r > 10 => ...`). A `break` or `continue` in an arm now belongs to the enclosing loop.
 
 ### What's new in 0.1.16
 

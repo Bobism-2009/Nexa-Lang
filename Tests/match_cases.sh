@@ -340,10 +340,161 @@ fn main() {
     let a = match (s) { Shape.Point => 1, Shape.Point => 2, _ => 3 };
 }" "two arms for Shape.Point"
 
-expect_has "match on a non-enum is refused" '#include <std/io>
+expect_has "match on a float is refused" '#include <std/io>
 fn main() {
-    let a = match (5) { _ => 1 };
-}' "match looks at an enum's variants, and this is an int"
+    let f = 1.5;
+    let a = match (f) { _ => 1 };
+}' "match looks at an enum, a Result, or an int, char, string or bool, and this is a float"
+
+# -- Result: Ok { v } / Err { e } --
+
+run_eq "match on a Result, statement and value" \
+'#include <std/io>
+fn half(n: int): Result[int] {
+    if (n % 2 != 0) { return err("odd " + n); }
+    return ok(n / 2);
+}
+fn main() {
+    for (i in [4, 7]) {
+        match (half(i)) {
+            Ok { v } => { io.println("half " + v); }
+            Err { e } => { io.println("error: " + e); }
+        }
+    }
+    io.println(match (io.parse_int("12")) { Ok { n } => n + 1, Err => 0 });
+    let r = half(3);
+    io.println(match (r) { Ok => "fine", Err { e } => e });
+}' "half 2
+error: odd 7
+13
+odd 3"
+
+expect_has "a Result match needs Ok and Err" '#include <std/io>
+fn half(n: int): Result[int] { return ok(n); }
+fn main() {
+    let a = match (half(2)) { Ok { v } => v };
+}' "match is not exhaustive: missing Err"
+
+expect_has "Ok of a Result[void] binds nothing" '#include <std/io>
+fn check(): Result[void] { return ok(); }
+fn main() {
+    match (check()) { Ok { v } => { } Err => { } }
+}' "Ok of a Result[void] holds no value"
+
+expect_has "Ok on an enum is refused" "#include <std/io>
+$SHAPE
+fn main() {
+    let s = Shape.Point;
+    let a = match (s) { Ok => 1, _ => 2 };
+}" "the arm Ok is for a Result, but this match looks at a Shape"
+
+# -- values: int, char, string, bool --
+
+run_eq "match on ints, chars, strings and bools" \
+'#include <std/io>
+fn name(n: int): string {
+    return match (n) { 0 => "zero", 1 | 2 | 3 => "few", -1 => "minus one", _ => "many" };
+}
+fn main() {
+    io.println(name(0) + " " + name(2) + " " + name(-1) + " " + name(9));
+    let c = '"'"'e'"'"';
+    match (c) {
+        '"'"'a'"'"' | '"'"'e'"'"' => { io.println("vowel"); }
+        _ => { io.println("other"); }
+    }
+    let cmd = "stop";
+    match (cmd) {
+        "go" => { io.println("going"); }
+        "stop" => { io.println("stopping"); }
+        _ => { io.println("?"); }
+    }
+    io.println(match ("go") { "go" => 1, _ => 0 });
+    let on = false;
+    io.println(match (on) { true => "on", false => "off" });
+}' "zero few minus one many
+vowel
+stopping
+1
+off"
+
+expect_has "an int match needs _" '#include <std/io>
+fn main() {
+    let n = 2;
+    match (n) { 1 => { } 2 => { } }
+}' "it needs a _ arm"
+
+expect_has "a value of the wrong type is refused" '#include <std/io>
+fn main() {
+    let n = 2;
+    match (n) { "two" => { } _ => { } }
+}' "the arm \"two\" is a string, but this match looks at an int"
+
+expect_has "a float pattern is refused" '#include <std/io>
+fn main() {
+    let n = 2;
+    match (n) { 1.5 => { } _ => { } }
+}' "a float cannot be a match pattern"
+
+expect_has "an arm after _ is refused" '#include <std/io>
+fn main() {
+    let n = 2;
+    match (n) { _ => { } 1 => { } }
+}' "the arm 1 comes after _"
+
+# -- guards --
+
+run_eq "guards on variants, values and _" \
+'#include <std/io>
+enum Shape { Circle { r: int; }; Box { w: int; h: int; }; Dot; }
+fn size(s: Shape): string {
+    return match (s) {
+        Shape.Circle { r } if r > 10 => "big circle",
+        Shape.Circle => "circle",
+        Shape.Box { w, h } if w == h => "square",
+        Shape.Box => "box",
+        Shape.Dot => "dot",
+    };
+}
+fn main() {
+    io.println(size(Shape.Circle { r: 20 }) + " " + size(Shape.Circle { r: 2 }) + " " +
+        size(Shape.Box { w: 3, h: 3 }) + " " + size(Shape.Box { w: 3, h: 4 }) + " " + size(Shape.Dot));
+    let k = 7;
+    match (k) {
+        1 if k > 0 => { io.println("one"); }
+        _ if k > 5 => { io.println("over five"); }
+        _ => { io.println("five or less"); }
+    }
+}' "big circle circle square box dot
+over five"
+
+expect_has "a guarded arm covers nothing" "#include <std/io>
+$SHAPE
+fn main() {
+    let s = Shape.Point;
+    let a = match (s) { Shape.Point if true => 1, Shape.Circle => 2, Shape.Rect => 3 };
+}" "(an arm with an if guard does not count"
+
+expect_has "a guard is a condition" '#include <std/io>
+fn half(n: int): Result[int] { return ok(n); }
+fn main() {
+    let n = 2;
+    match (n) { _ if half(n) => { } _ => { } }
+}' "an arm's if guard is a condition, and this is a Result[int]"
+
+# -- break and continue in an arm are the loop's --
+
+run_eq "break in an arm leaves the loop" \
+'#include <std/io>
+fn main() {
+    let i = 0;
+    while (true) {
+        match (i) {
+            3 => { break; }
+            _ => { i = i + 1; }
+        }
+    }
+    io.println("stopped at " + i);
+}' "stopped at 3"
 
 # -- slicing: match is code in place, nothing ahead of main --
 

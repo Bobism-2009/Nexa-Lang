@@ -15,7 +15,8 @@
 #              an f-string, a Result, io.to_int, io.parse_int / parse_float /
 #              to_float, io.eprintln, time.unix / format, a thread.mutex, a defer, float32 and
 #              bits, std/math, all of std/random, the std/file extras, std/term colour and an
-#              enum taken apart by match (as a statement and as a value) -- is under 64KB, and prints
+#              enum taken apart by match (as a statement and as a value, with a guard), a match
+#              on a Result and on ints and strings -- is under 64KB, and prints
 #              exactly what the same program built without the slimming
 #              (NEXA_NO_SLIM=1) prints. It does not include std/gfx3d, so the
 #              generated C++ carries no Vulkan runtime.
@@ -138,8 +139,16 @@ fn main() {
     for (s in shapes) {
         let area = match (s) { Shape.Circle { r } => r * r * 3.0, Shape.Box { w, h } => w * h, _ => 0 };
         match (s) {
+            Shape.Box { w, h } if w == h => { io.println("square ", w); }
             Shape.Box { w } => { io.println("box ", w, " ", area); }
             _ => { io.println(match (s) { Shape.Dot => "dot", _ => "round" }, " ", area); }
+        }
+    }
+    for (w in words) {
+        match (twice(w)) {
+            Ok { v } if v > 10 => { io.println("big ", v); }
+            Ok { v } => { io.println(match (v) { -8 => "minus eight", 0 | 1 => "small", _ => "other" }); }
+            Err { e } => { io.println(match (w) { "x" => "an x", _ => "?" }, ": ", e); }
         }
     }
 }
