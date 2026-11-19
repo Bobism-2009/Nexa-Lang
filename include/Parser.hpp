@@ -94,6 +94,9 @@ struct AstNode {
                       ShapeDef,
                       TypeAlias,     // type Id = int; value = name, declType = the type it names
                       LetDestructure, // let Point { x, y } = p; value = Point, paramNames = fields, children[0] = p
+                      MatchExpr,     // match (expr) { arms }; children[0] = scrutinee, children[1..] = MatchArm
+                      MatchArm,      // Enum.Variant { fields } => { body }; caseIsEnum = true, value = enum, initValue = variant
+                                     // _ => { body } (wildcard); value = "_"
                       ExprMember,
                       AssnMember,
                       InlineCpp };
@@ -2455,6 +2458,8 @@ private:
                 }
             } else if (t.type == TokenType::Switch) {
                 stmts.push_back(parseSwitch());
+            } else if (t.type == TokenType::Match) {
+                stmts.push_back(parseMatch());
             } else if (t.type == TokenType::While) {
                 stmts.push_back(parseWhile());
             } else if (t.type == TokenType::For) {
@@ -3461,6 +3466,82 @@ private:
         return switchNode;
     }
 
+    AstNode parseMatch() {
+        size_t line = peek().line;
+        if (!match(TokenType::Match)) {
+            throw std::runtime_error("Expected 'match' at line " + std::to_string(line));
+        }
+        if (!match(TokenType::LParen)) {
+            throw std::runtime_error("Expected '(' after match at line " + std::to_string(peek().line));
+        }
+        AstNode expr = parseValueExpr();
+        if (!match(TokenType::RParen)) {
+            throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
+        }
+        if (!match(TokenType::LBrace)) {
+            throw std::runtime_error("Expected '{' at line " + std::to_string(peek().line));
+        }
+        AstNode matchNode{AstNode::Type::MatchExpr, "", {expr}};
+        while (pos_ < tokens_.size() && peek().type != TokenType::RBrace) {
+            AstNode arm{AstNode::Type::MatchArm, "", {}};
+            if (peek().type == TokenType::Identifier && peek().value == "_") {
+                // wildcard arm: _ => { body }
+                advance();
+                arm.value = "_";
+            } else if (peek().type == TokenType::Identifier) {
+                // Enum.Variant or Enum.Variant { field1, field2 }
+                // Manual parsing — do NOT use parseFactor() here because it
+                // calls parseEnumPayloadLit() which consumes { field } as
+                // a payload literal (expecting fieldName: value syntax).
+                std::string enumName = peek().value;
+                advance();
+                if (!match(TokenType::Dot)) {
+                    throw std::runtime_error("match arm must be Enum.Variant or _ at line " + std::to_string(peek().line));
+                }
+                if (peek().type != TokenType::Identifier) {
+                    throw std::runtime_error("Expected variant name after '.' in match arm at line " + std::to_string(peek().line));
+                }
+                std::string variantName = peek().value;
+                advance();
+                arm.caseIsEnum = true;
+                arm.value = enumName;
+                arm.initValue = variantName;
+                // optional field destructuring: { field1, field2 }
+                if (peek().type == TokenType::LBrace) {
+                    advance();
+                    while (pos_ < tokens_.size() && peek().type != TokenType::RBrace) {
+                        if (peek().type != TokenType::Identifier) {
+                            throw std::runtime_error("Expected field name in match arm at line " + std::to_string(peek().line));
+                        }
+                        arm.paramNames.push_back(peek().value);
+                        advance();
+                        if (peek().type == TokenType::Comma) advance();
+                    }
+                    if (!match(TokenType::RBrace)) {
+                        throw std::runtime_error("Expected '}' after match arm fields at line " + std::to_string(peek().line));
+                    }
+                }
+            } else {
+                throw std::runtime_error("Expected Enum.Variant or _ in match arm at line " + std::to_string(peek().line));
+            }
+            if (!match(TokenType::FatArrow)) {
+                throw std::runtime_error("Expected '=>' in match arm at line " + std::to_string(peek().line));
+            }
+            if (!match(TokenType::LBrace)) {
+                throw std::runtime_error("Expected '{' after '=>' in match arm at line " + std::to_string(peek().line));
+            }
+            arm.children = parseSwitchBody();
+            if (!match(TokenType::RBrace)) {
+                throw std::runtime_error("Expected '}' at end of match arm at line " + std::to_string(peek().line));
+            }
+            matchNode.children.push_back(arm);
+        }
+        if (!match(TokenType::RBrace)) {
+            throw std::runtime_error("Expected '}' at end of match at line " + std::to_string(peek().line));
+        }
+        return matchNode;
+    }
+
     std::vector<AstNode> parseSwitchBody() {
         std::vector<AstNode> stmts;
         while (pos_ < tokens_.size()) {
@@ -3497,6 +3578,8 @@ private:
                 }
             } else if (t.type == TokenType::Switch) {
                 stmts.push_back(parseSwitch());
+            } else if (t.type == TokenType::Match) {
+                stmts.push_back(parseMatch());
             } else if (t.type == TokenType::While) {
                 stmts.push_back(parseWhile());
             } else if (t.type == TokenType::For) {

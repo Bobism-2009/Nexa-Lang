@@ -32,6 +32,7 @@ enum class TokenType {
     Catch,
     Throw,
     Switch,
+    Match,
     Struct,
     Enum,
     Case,
@@ -53,6 +54,7 @@ enum class TokenType {
     Semicolon,
     Dot,
     Arrow,
+    FatArrow,
     Ellipsis,
     Comma,
     Colon,
@@ -212,6 +214,9 @@ public:
                 pos_++;
             } else if (c == '=' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '=') {
                 tokens.push_back({TokenType::Equals, "==", line_});
+                pos_ += 2;
+            } else if (c == '=' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '>') {
+                tokens.push_back({TokenType::FatArrow, "=>", line_});
                 pos_ += 2;
             } else if (c == '=') {
                 tokens.push_back({TokenType::Assign, "=", line_});
@@ -679,6 +684,7 @@ private:
         else if (value == "catch") type = TokenType::Catch;
         else if (value == "throw") type = TokenType::Throw;
         else if (value == "switch") type = TokenType::Switch;
+        else if (value == "match") type = TokenType::Match;
         else if (value == "struct") type = TokenType::Struct;
         else if (value == "enum") type = TokenType::Enum;
         else if (value == "case") type = TokenType::Case;

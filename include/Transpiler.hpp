@@ -289,6 +289,9 @@ public:
                 case AstNode::Type::SwitchCase:
                     if (n.caseIsEnum) fix(n.initValue);  // case Mode.virtual:
                     break;
+                case AstNode::Type::MatchArm:
+                    if (n.caseIsEnum) fix(n.initValue);
+                    break;
                 default:
                     break;
             }
@@ -3427,7 +3430,7 @@ private:
         nexaDeclStack_.pop_back();
     }
     void discoverNode(const AstNode& n) {
-        if (n.type == AstNode::Type::Block || n.type == AstNode::Type::SwitchCase) {
+        if (n.type == AstNode::Type::Block || n.type == AstNode::Type::SwitchCase || n.type == AstNode::Type::MatchArm) {
             discoverStmts(n.children);
             return;
         }
@@ -5851,7 +5854,7 @@ private:
                 at = saved;
                 return;
             }
-            if (n.type == AstNode::Type::Block || n.type == AstNode::Type::SwitchCase) {
+            if (n.type == AstNode::Type::Block || n.type == AstNode::Type::SwitchCase || n.type == AstNode::Type::MatchArm) {
                 nexaDeclStack_.push_back({});
                 for (const AstNode& c : n.children) scanAny(c, subst, want);
                 nexaDeclStack_.pop_back();
@@ -6308,6 +6311,58 @@ private:
                     }
                 }
                 semSwitchDepth_--;
+                break;
+            }
+            case AstNode::Type::MatchExpr: {
+                if (!s.children.empty()) semExpr(s.children[0]);
+                std::string scrutEn;
+                if (!s.children.empty()) {
+                    std::string t = inferExprNexaType(s.children[0]);
+                    if (s.children[0].type == AstNode::Type::ExprVarRef) {
+                        const std::string d = lookupNexaDecl(s.children[0].value);
+                        if (!d.empty()) t = d;
+                    }
+                    if (isEnumDeclType(t)) scrutEn = enumNameFromDecl(t);
+                }
+                const bool semPayload = !scrutEn.empty() && enumHasPayload(scrutEn);
+                std::set<std::string> coveredVariants;
+                bool hasWild = false;
+                for (size_t i = 1; i < s.children.size(); i++) {
+                    if (s.children[i].type != AstNode::Type::MatchArm) continue;
+                    const AstNode& arm = s.children[i];
+                    if (arm.value == "_") {
+                        hasWild = true;
+                    } else if (arm.caseIsEnum && !scrutEn.empty()) {
+                        coveredVariants.insert(arm.initValue);
+                    }
+                    nexaDeclStack_.push_back({});
+                    const bool bind = semPayload && arm.caseIsEnum && !arm.paramNames.empty() &&
+                        (arm.value == scrutEn || nexaTypeAppBase(arm.value) == nexaTypeAppBase(scrutEn));
+                    if (bind) {
+                        payloadSem_.push_back(PayloadFrame{"", "", scrutEn, arm.initValue});
+                        for (const std::string& fn : arm.paramNames) {
+                            std::string ftype = "int";
+                            for (const EnumField& ef : enumPayloadFields(scrutEn, arm.initValue)) {
+                                if (ef.name == fn) { ftype = ef.type; break; }
+                            }
+                            semDeclare(fn, ftype);
+                        }
+                    }
+                    for (const AstNode& st : arm.children) semStmt(st);
+                    if (bind) payloadSem_.pop_back();
+                    nexaDeclStack_.pop_back();
+                }
+                // Exhaustiveness check
+                if (!hasWild && !scrutEn.empty()) {
+                    auto ordIt = enumOrder_.find(scrutEn);
+                    if (ordIt != enumOrder_.end()) {
+                        for (const std::string& v : ordIt->second) {
+                            if (!coveredVariants.count(v)) {
+                                semError(s, "match is not exhaustive: missing variant '" + v + "' of '" + scrutEn + "'");
+                            }
+                        }
+                    }
+                }
                 break;
             }
             case AstNode::Type::TryCatch: {
@@ -9812,6 +9867,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 emitIfElse(out, child, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent, inStringSwitchCase);
             } else if (child.type == AstNode::Type::Switch) {
                 emitSwitch(out, child, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent, inStringSwitchCase);
+            } else if (child.type == AstNode::Type::MatchExpr) {
+                emitMatch(out, child, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent);
             } else if (child.type == AstNode::Type::While) {
                 std::string cond = emitCond(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 out << indent << "while (" << cond << ") {\n";
@@ -10329,6 +10386,126 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             }
             out << indent << "}\n";
         }
+    }
+
+    void emitMatch(std::ostringstream& out, const AstNode& node,
+                   std::map<std::string, std::string>& varMap, int& varIdx,
+                   std::map<std::string, bool>& varIsString, std::map<std::string, bool>& varIsConst,
+                   std::map<std::string, bool>& varIsFloat, std::map<std::string, bool>& varIsChar,
+                   std::map<std::string, bool>& varIsBool, std::map<std::string, bool>& varIsEnum,
+                   const std::string& indent) {
+        std::string expr = emitExpr(node.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+        // Resolve scrutinee enum type
+        std::string scrutEn;
+        std::string scrutVar;
+        std::string t = inferExprNexaType(node.children[0]);
+        if (node.children[0].type == AstNode::Type::ExprVarRef) {
+            scrutVar = node.children[0].value;
+            const std::string d = lookupNexaDecl(scrutVar);
+            if (!d.empty()) t = d;
+        }
+        if (isEnumDeclType(t)) scrutEn = enumNameFromDecl(t);
+        if (scrutEn.empty()) {
+            throw std::runtime_error("match requires an enum scrutinee");
+        }
+        const bool hasPayload = enumHasPayload(scrutEn);
+        const std::string sw = "__nexa_sw_" + std::to_string(varIdx++);
+        const bool lvalue = node.children[0].type == AstNode::Type::ExprVarRef;
+        out << indent << "{\n";
+        if (hasPayload) {
+            out << indent << "    " << (lvalue ? "auto& " : "auto ") << sw << " = " << expr << ";\n";
+            out << indent << "    switch (" << sw << ".__tag) {\n";
+        } else {
+            out << indent << "    switch (" << expr << ") {\n";
+        }
+        for (size_t i = 1; i < node.children.size(); i++) {
+            const AstNode& arm = node.children[i];
+            if (arm.type != AstNode::Type::MatchArm) continue;
+            if (arm.value == "_") {
+                out << indent << "    default: {\n";
+            } else {
+                if (arm.value != scrutEn && nexaTypeAppBase(arm.value) != nexaTypeAppBase(scrutEn)) {
+                    throw std::runtime_error("Unknown enum '" + arm.value + "' in match arm");
+                }
+                auto vsIt = enumVariants_.find(scrutEn);
+                if (vsIt == enumVariants_.end() || !vsIt->second.count(arm.initValue)) {
+                    throw std::runtime_error("Unknown enum variant '" + arm.initValue + "' for '" + scrutEn + "'");
+                }
+                if (hasPayload) {
+                    out << indent << "    case " << enumVariantIndex(scrutEn, arm.initValue) << ": {\n";
+                } else {
+                    auto enIt = enumCppNames_.find(scrutEn);
+                    out << indent << "    case " << enIt->second << "::" << arm.initValue << ": {\n";
+                }
+            }
+            // Save and bind destructured fields
+            struct Hold {
+                bool hadM = false; std::string map;
+                bool hadS = false, s = false, hadF = false, f = false, hadC = false, c = false;
+                bool hadB = false, b = false, hadE = false, e = false, hadD = false;
+                std::string decl;
+            };
+            std::vector<std::pair<std::string, Hold>> saved;
+            const bool bind = hasPayload && arm.caseIsEnum && !arm.paramNames.empty() &&
+                (arm.value == scrutEn || nexaTypeAppBase(arm.value) == nexaTypeAppBase(scrutEn));
+            if (bind) {
+                payloadEmit_.push_back(PayloadFrame{scrutVar, sw, scrutEn, arm.initValue});
+                for (const std::string& fn : arm.paramNames) {
+                    // Find the field's type from enumPayload_
+                    std::string ftype = "int";
+                    for (const EnumField& ef : enumPayloadFields(scrutEn, arm.initValue)) {
+                        if (ef.name == fn) { ftype = ef.type; break; }
+                    }
+                    Hold h;
+                    auto mit = varMap.find(fn);
+                    if (mit != varMap.end()) { h.hadM = true; h.map = mit->second; }
+                    auto take = [](std::map<std::string, bool>& m, const std::string& n, bool& had, bool& v) {
+                        auto it = m.find(n);
+                        if (it != m.end()) { had = true; v = it->second; }
+                    };
+                    take(varIsString, fn, h.hadS, h.s);
+                    take(varIsFloat, fn, h.hadF, h.f);
+                    take(varIsChar, fn, h.hadC, h.c);
+                    take(varIsBool, fn, h.hadB, h.b);
+                    take(varIsEnum, fn, h.hadE, h.e);
+                    if (!nexaDeclStack_.empty()) {
+                        auto dit = nexaDeclStack_.back().find(fn);
+                        if (dit != nexaDeclStack_.back().end()) { h.hadD = true; h.decl = dit->second; }
+                        nexaDeclStack_.back()[fn] = ftype;
+                    }
+                    varMap[fn] = sw + "." + enumFieldCpp(scrutEn, arm.initValue, fn);
+                    varIsString[fn] = ftype == "string";
+                    varIsFloat[fn] = nexaIsFloatType(ftype);
+                    varIsChar[fn] = ftype == "char";
+                    varIsBool[fn] = ftype == "bool";
+                    varIsEnum[fn] = isEnumDeclType(ftype);
+                    saved.push_back({fn, h});
+                }
+            }
+            emitBlock(out, arm.children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "        ");
+            out << indent << "        break;\n";
+            if (bind) payloadEmit_.pop_back();
+            for (auto it = saved.rbegin(); it != saved.rend(); ++it) {
+                const std::string& n = it->first;
+                const Hold& h = it->second;
+                if (h.hadM) varMap[n] = h.map; else varMap.erase(n);
+                auto put = [](std::map<std::string, bool>& m, const std::string& name, bool had, bool v) {
+                    if (had) m[name] = v; else m.erase(name);
+                };
+                put(varIsString, n, h.hadS, h.s);
+                put(varIsFloat, n, h.hadF, h.f);
+                put(varIsChar, n, h.hadC, h.c);
+                put(varIsBool, n, h.hadB, h.b);
+                put(varIsEnum, n, h.hadE, h.e);
+                if (!nexaDeclStack_.empty()) {
+                    if (h.hadD) nexaDeclStack_.back()[n] = h.decl;
+                    else nexaDeclStack_.back().erase(n);
+                }
+            }
+            out << indent << "    }\n";
+        }
+        out << indent << "    }\n";
+        out << indent << "}\n";
     }
 
     void emitIfElseTail(std::ostringstream& out, const AstNode& part,

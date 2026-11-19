@@ -1,0 +1,22 @@
+#include <std/io>
+
+enum Shape {
+    Circle { radius: float; };
+    Rect { w: float; h: float; };
+    Point;
+}
+
+fn main() {
+    let s: Shape = Shape.Circle { radius: 5.0 };
+    match (s) {
+        Shape.Circle { radius } => {
+            io.println("circle r=" + radius);
+        }
+        Shape.Rect { w, h } => {
+            io.println("rect " + w + "x" + h);
+        }
+        _ => {
+            io.println("other");
+        }
+    }
+}
