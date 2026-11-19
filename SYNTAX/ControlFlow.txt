@@ -118,6 +118,40 @@ SWITCH
   - Use break; to exit (C-style fall-through if omitted)
   - default is optional
 
+MATCH
+  match (expr) {
+      Enum.Variant => { stmts }
+      Enum.Variant { field1, field2 } => { stmts }
+      _ => { stmts }
+  }
+  Pattern matching on enum variants. Each arm is Enum.Variant => { body }.
+  - Arms use => (fat arrow), not case/break
+  - A variant with fields can destructure them: Shape.Circle { radius } =>
+    binds radius as a local variable inside that arm's body
+  - The wildcard _ matches any variant not named above
+  - Exhaustiveness: every variant of the enum must appear, or _ must be
+    present. A missing variant is a compile error.
+  - Works on both plain enums (enum Color { Red; Green; Blue; }) and
+    payload enums (enum Shape { Circle { radius: float; }; Rect { ... }; })
+  - Example:
+      enum Shape {
+          Circle { radius: float; };
+          Rect { w: float; h: float; };
+          Point;
+      }
+      let s = Shape.Circle { radius: 5.0 };
+      match (s) {
+          Shape.Circle { radius } => {
+              io.println("circle r=" + radius);
+          }
+          Shape.Rect { w, h } => {
+              io.println("rect " + w + "x" + h);
+          }
+          _ => {
+              io.println("other");
+          }
+      }
+
 LOOPS
   for (i, n) { ... }       - loop i from 0 to n-1
   for (x in arr) { ... }   - iterate each element of a slice

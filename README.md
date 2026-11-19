@@ -2,7 +2,7 @@
 
 **Nexa** is a small systems-friendly language with C++-like surface syntax. **NexaC** is its compiler: it parses `.nxa` files, transpiles to a single C++ translation unit, and invokes **clang++** (falling back to **g++** when clang is not installed) to produce a native executable or shared library. Set `NEXA_CXX` to force a specific compiler.
 
-Current compiler version string: **0.1.16** (`NexaC --version`).
+Current compiler version string: **0.1.17** (`NexaC --version`).
 
 | | |
 |---|---|
@@ -10,6 +10,10 @@ Current compiler version string: **0.1.16** (`NexaC --version`).
 | **Pipeline** | Nexa → C++ → native binary, or **`--wasm`** → WebAssembly |
 | **Host tooling** | C++17 compiler on `PATH` |
 | **Syntax reference** | [`SYNTAX/`](SYNTAX/) (authoritative) |
+
+### What's new in 0.1.17
+
+- **Language:** `match` expressions — pattern matching on enum variants with field destructuring (`Shape.Circle { radius } => { ... }`), exhaustiveness checking, and zero overhead for programs that don't use it.
 
 ### What's new in 0.1.16
 
