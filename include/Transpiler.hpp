@@ -5882,6 +5882,37 @@ private:
                 at = saved;
                 return;
             }
+            // The loop's names and a match arm's names have their types here too, so
+            // Some(it) in for (it in items) is an Option of an Item, not of an int.
+            if (n.type == AstNode::Type::ForIn) {
+                if (!n.children.empty()) scanAny(n.children[0], subst, "");
+                std::string collT = n.children.empty() ? std::string() : inferExprNexaType(n.children[0]);
+                if (!subst.empty() && collT.find("typevar:") != std::string::npos) substTypeStr(collT, subst);
+                std::string keyT = "int", valT = "int";
+                if (nexaIsSliceType(collT)) keyT = nexaSliceElem(collT);
+                else if (nexaIsMapType(collT)) nexaSplitMapType(collT, keyT, valT);
+                else if (collT == "string") keyT = "string";
+                nexaDeclStack_.push_back({});
+                nexaDeclStack_.back()[n.value] = keyT;
+                if (!n.initValue.empty()) nexaDeclStack_.back()[n.initValue] = valT;
+                for (size_t i = 1; i < n.children.size(); i++) scanAny(n.children[i], subst, want);
+                nexaDeclStack_.pop_back();
+                at = saved;
+                return;
+            }
+            if ((n.type == AstNode::Type::MatchExpr || n.type == AstNode::Type::ExprMatch) && !n.children.empty()) {
+                scanAny(n.children[0], subst, "");
+                const MatchScrut ms = matchScrut(n);
+                for (size_t i = 1; i < n.children.size(); i++) {
+                    const AstNode& arm = n.children[i];
+                    openMatchArm(ms, arm);
+                    for (const AstNode& d : arm.paramDefaults) scanAny(d, subst, "");
+                    for (const AstNode& c : arm.children) scanAny(c, subst, want);
+                    closeMatchArm(ms, arm);
+                }
+                at = saved;
+                return;
+            }
             if (n.type == AstNode::Type::Block || n.type == AstNode::Type::SwitchCase || n.type == AstNode::Type::MatchArm) {
                 nexaDeclStack_.push_back({});
                 for (const AstNode& d : n.paramDefaults) scanAny(d, subst, "");  // a match arm's values and guard
@@ -6500,6 +6531,13 @@ private:
         visit(init);
         const std::string t = known ? inferExprNexaType(init) : std::string();
         if (t.empty() || t == "void" || t == "null") {
+            if (init.type == AstNode::Type::ExprMember && !init.children.empty() &&
+                init.children[0].type == AstNode::Type::ExprVarRef && genericEnums_.count(init.children[0].value)) {
+                // let x = None: an Option of what? Nothing beside it says.
+                const std::string& en = init.children[0].value;
+                semError(v, "'" + v.value + "' is " + (std::string("aeiou").find((char)std::tolower((unsigned char)en[0])) != std::string::npos ? "an " : "a ") +
+                                en + ", and nothing says of what; write its type, as in let " + v.value + ": " + en + "[int] = ...");
+            }
             semError(v, "can't tell the type of '" + v.value + "' from the fields it reads; write it: let " + v.value +
                             ": T = ...");
         }
@@ -10456,10 +10494,19 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         std::vector<MatchBind> out;
         if (arm.caseIsEnum && !ms.en.empty()) {
             const std::vector<EnumField> fields = enumPayloadFields(ms.en, arm.initValue);
-            for (const std::string& fn : arm.paramNames) {
+            for (size_t k = 0; k < arm.paramNames.size(); k++) {
+                const std::string& fn = arm.paramNames[k];
                 MatchBind b{fn, "int", ""};
-                for (const EnumField& ef : fields) {
-                    if (ef.name == fn) { b.type = ef.type; b.member = enumFieldCpp(ms.en, arm.initValue, fn); break; }
+                if (arm.armPositional) {
+                    // Some { v }: v is the variant's first field, whatever it is called.
+                    if (k < fields.size()) {
+                        b.type = fields[k].type;
+                        b.member = enumFieldCpp(ms.en, arm.initValue, fields[k].name);
+                    }
+                } else {
+                    for (const EnumField& ef : fields) {
+                        if (ef.name == fn) { b.type = ef.type; b.member = enumFieldCpp(ms.en, arm.initValue, fn); break; }
+                    }
                 }
                 out.push_back(b);
             }
@@ -10569,7 +10616,11 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     semError(m, ms.en + " has no variant '" + arm.initValue + "'");
                 }
                 const std::vector<EnumField> fields = enumPayloadFields(ms.en, arm.initValue);
-                for (const std::string& fn : arm.paramNames) {
+                if (arm.armPositional && arm.paramNames.size() > fields.size()) {
+                    semError(m, fields.empty() ? arm.initValue + " holds no value: write " + arm.initValue + " =>"
+                                               : arm.initValue + " holds one value: write " + arm.initValue + " { name }");
+                }
+                for (const std::string& fn : arm.armPositional ? std::vector<std::string>() : arm.paramNames) {
                     bool found = false;
                     for (const EnumField& ef : fields) found = found || ef.name == fn;
                     if (!found) {

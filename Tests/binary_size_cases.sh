@@ -16,7 +16,7 @@
 #              to_float, io.eprintln, time.unix / format, a thread.mutex, a defer, float32 and
 #              bits, std/math, all of std/random, the std/file extras, std/term colour and an
 #              enum taken apart by match (as a statement and as a value, with a guard), a match
-#              on a Result and on ints and strings -- is under 64KB, and prints
+#              on a Result and on ints and strings, and an Option -- is under 64KB, and prints
 #              exactly what the same program built without the slimming
 #              (NEXA_NO_SLIM=1) prints. It does not include std/gfx3d, so the
 #              generated C++ carries no Vulkan runtime.
@@ -98,6 +98,13 @@ fn twice(s: string): Result[int] {
     return ok(parse(s)? * 2);
 }
 
+fn first_long(words: []string): Option[string] {
+    for (w in words) {
+        if (w.len() > 1) { return Some(w); }
+    }
+    return None;
+}
+
 fn main() {
     let items = [Item { name: "pen", qty: 3 }, Item { name: "cup", qty: 12 }, Item { name: "map" }];
     let totals: map[string]int;
@@ -151,6 +158,7 @@ fn main() {
             Err { e } => { io.println(match (w) { "x" => "an x", _ => "?" }, ": ", e); }
         }
     }
+    io.println(match (first_long(words)) { Some { w } => w, None => "none" });
 }
 EOF
 

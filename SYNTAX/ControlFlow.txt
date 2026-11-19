@@ -164,6 +164,8 @@ MATCH
     Enum.Variant              that variant; Enum.Variant { f1, f2 } binds its fields
     Ok, Ok { v }              a Result that succeeded; v is its value
     Err, Err { e }            a Result that failed; e is its error text
+    Some, Some { v }          an Option holding a value; v is the value
+    None                      an Option holding nothing
     3,  -1,  1 | 2 | 3        an int (any width) equal to one of them
     'a',  'a' | 'e'           a char
     "go",  "go" | "run"       a string
@@ -179,8 +181,9 @@ MATCH
           _ => { io.println("unknown command " + cmd); }
       }
 
-    - Ok and Err name the one thing they hold whatever you like: Ok { n },
-      Err { why }. Ok of a Result[void] holds nothing: write Ok =>.
+    - Ok, Err and Some name the one thing they hold whatever you like:
+      Ok { n }, Err { why }, Some { item }. Ok of a Result[void] holds nothing:
+      write Ok =>. An Option match needs Some and None, or _.
     - A Result match needs an Ok arm and an Err arm, or _. A bool match needs
       true and false, or _. Any other value needs _, for the values the arms
       do not name. Two arms for the same value are an error.

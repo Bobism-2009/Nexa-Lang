@@ -496,6 +496,88 @@ fn main() {
     io.println("stopped at " + i);
 }' "stopped at 3"
 
+# -- Option[T], built in: Some(x), None, and Some { v } / None arms --
+
+run_eq "built-in Option: Some, None and their arms" \
+'#include <std/io>
+struct Item { name: string; qty: int; }
+fn find(xs: []int, want: int): Option[int] {
+    for (i, len(xs)) {
+        if (xs[i] == want) { return Some(i); }
+    }
+    return None;
+}
+fn lookup(items: []Item, name: string): Option[Item] {
+    for (it in items) {
+        if (it.name == name) { return Some(it); }
+    }
+    return None;
+}
+fn show(o: Option[string]): string {
+    return match (o) { Some { s } => "got " + s, None => "nothing" };
+}
+fn main() {
+    let xs = [4, 8, 15, 16];
+    match (find(xs, 15)) {
+        Some { i } => { io.println("15 is at " + i); }
+        None => { io.println("no 15"); }
+    }
+    io.println(match (find(xs, 99)) { Some { i } => i, None => -1 });
+    let items = [Item { name: "pen", qty: 3 }, Item { name: "cup", qty: 12 }];
+    match (lookup(items, "cup")) {
+        Some { it } if it.qty > 10 => { io.println("lots of " + it.name); }
+        Some { it } => { io.println(it.qty); }
+        None => { io.println("none"); }
+    }
+    io.println(show(Some("hi")) + ", " + show(None));
+    let a: Option[float] = None;
+    io.println(match (a) { Some { v } => v, None => 0.5 });
+    let c = Option.Some { value: 7 };
+    io.println(match (c) { Option.Some { value } => value, Option.None => 0 });
+}' "15 is at 2
+-1
+lots of cup
+got hi, nothing
+0.5
+7"
+
+run_eq "a program that declares its own Option keeps it" \
+'#include <std/io>
+enum Option[T] { Some { value: T; }; Empty; }
+fn main() {
+    let a = Option.Some { value: 4 };
+    io.println(match (a) { Some { v } => v, Option.Empty => 0 });
+}' "4"
+
+run_eq "a fn Some, a variable None and a variant None are left alone" \
+'#include <std/io>
+enum Mode { None; Fast; }
+fn Some(x: int): int { return x + 100; }
+fn main() {
+    let None = 5;
+    let m = Mode.None;
+    io.println(Some(1) + None);
+    io.println(match (m) { Mode.None => "none", Mode.Fast => "fast" });
+}' "106
+none"
+
+expect_has "None needs its type" '#include <std/io>
+fn main() {
+    let x = None;
+}' "'x' is an Option, and nothing says of what; write its type, as in let x: Option[int] = ..."
+
+expect_has "an Option match needs None" '#include <std/io>
+fn f(): Option[int] { return Some(1); }
+fn main() {
+    match (f()) { Some { v } => { } }
+}' "match is not exhaustive: missing variant 'None'"
+
+expect_has "Some holds one value" '#include <std/io>
+fn f(): Option[int] { return Some(1); }
+fn main() {
+    match (f()) { Some { a, b } => { } None => { } }
+}' "Some holds one value: write Some { name }"
+
 # -- slicing: match is code in place, nothing ahead of main --
 
 prelude_eq "match brings no helpers, headers or types" \

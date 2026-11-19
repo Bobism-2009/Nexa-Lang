@@ -189,7 +189,8 @@ ENUMS
       let c = Option[string].None;
     Option of an int and Option of a string are two enums. Write Option[int]
     where a type is named and nothing gives T a value. A program that never
-    writes [T] on an enum is unchanged.
+    writes [T] on an enum is unchanged. (This Option is built in: see OPTION.
+    A program that writes its own, as here, uses its own.)
 
 FUNCTIONS
   fn name() { ... }           - No parameters, void return
@@ -770,6 +771,39 @@ RESULT (Result[T])
   Write `: Result[T]` on functions that return one (return type is not inferred
   as Result). Uninitialized `let r: Result[int];` starts as not-ok.
   `ok` and `err` are builtins.
+
+OPTION (Option[T])
+  A value that may be missing. Core type; no #include. It is the enum
+
+    enum Option[T] { Some { value: T; }; None; }
+
+  written for you, so everything an enum does, it does.
+
+    fn find(xs: []int, want: int): Option[int] {
+        for (i, len(xs)) {
+            if (xs[i] == want) { return Some(i); }
+        }
+        return None;
+    }
+
+    match (find(xs, 15)) {
+        Some { i } => { io.println("at " + i); }
+        None => { io.println("not there"); }
+    }
+    let at = match (find(xs, 15)) { Some { i } => i, None => -1 };
+
+  Some(x)                - an Option holding x; Option[typeof x]
+  None                   - an Option holding nothing. Its type comes from what it
+                           stands beside: the return type, the parameter, or the
+                           let's type (let o: Option[int] = None). let o = None
+                           alone is an error: an Option of what?
+  Some { v } =>          - a match arm: the Option holds a value, named v here
+  None =>                - a match arm: it holds nothing
+
+  The long forms still work: Option.Some { value: x }, Option.None and the arm
+  Option.Some { value } =>. A program that declares its own Option keeps it,
+  a fn Some keeps Some(x) a call, and a variable named None stays a variable.
+  A program that never names Option, Some or None is unchanged.
 
 COMPILE-TIME CHECKS
   NexaC rejects these before it emits C++, with a "[Nexa] Error:" that names the

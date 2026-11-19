@@ -280,6 +280,10 @@ public:
         hasCppHeader_ = true;
     }
 
+    // Some file names the built-in Option[T] (and declares no Option of its own), so
+    // the program gets enum Option[T] { Some { value: T; }; None; }.
+    bool builtinOption = false;
+
     // Every module the program included, by path. --target checks the std/
     // ones against what the target package says it can support.
     const std::set<std::string>& enabledModules() const {

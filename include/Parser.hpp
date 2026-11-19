@@ -129,6 +129,8 @@ struct AstNode {
     // the pattern as written, for messages. An `if` guard, when written, is the last of paramDefaults.
     bool armIsLiteral = false;
     bool armHasGuard = false;
+    // MatchArm: written Some { v } -- the names bind the variant's fields in order, not by name.
+    bool armPositional = false;
     bool isConst = false;       // for Variable: true = let const x = ...
     bool isFixedArray = false;  // for Variable: true = let x: type[size]; (fixed-size buffer)
     bool isArrowMember = false; // for ExprMember: true = ptr->field, false = value.field
@@ -322,9 +324,67 @@ public:
         if (!sharedExports_) sharedExports_ = &ownedExports_;
     }
 
+    // Option[T] is built in. A file that names Option -- or calls Some(x) -- and declares
+    // no Option of its own reads enum Option[T] { Some { value: T; }; None; } as if it
+    // were written first; the entry file then puts that enum in the program once. A
+    // program that never names it is unchanged. Some(x) stays a call when the file has
+    // a fn Some, and None stays a name when the file declares one.
+    static constexpr const char* kBuiltinOption = "enum Option[T] { Some { value: T; }; None; }";
+    void noteBuiltinOption() {
+        bool named = false, own = false, fnSome = false, nameNone = false;
+        for (size_t i = 0; i < tokens_.size(); i++) {
+            const Token& t = tokens_[i];
+            if (t.type != TokenType::Identifier) continue;
+            const TokenType prev = i ? tokens_[i - 1].type : TokenType::Eof;
+            const TokenType next = i + 1 < tokens_.size() ? tokens_[i + 1].type : TokenType::Eof;
+            if (t.value == "Option") {
+                named = true;
+                if (prev == TokenType::Enum || prev == TokenType::Struct ||
+                    (prev == TokenType::Identifier && tokens_[i - 1].value == "type")) own = true;
+            } else if (t.value == "Some") {
+                if (next == TokenType::LParen) named = true;
+                if (prev == TokenType::Fn) fnSome = true;
+            } else if (t.value == "None") {
+                if (prev != TokenType::Dot && next != TokenType::Dot && prev != TokenType::LBrace &&
+                    prev != TokenType::Semicolon && prev != TokenType::RBrace) named = true;  // not a variant: enum M { None; }
+                if (prev == TokenType::Let || prev == TokenType::Const || prev == TokenType::Fn ||
+                    ((prev == TokenType::LParen || prev == TokenType::Comma) && next == TokenType::Colon)) nameNone = true;
+            }
+        }
+        optionBuiltin_ = named && !own;
+        someBuiltin_ = optionBuiltin_ && !fnSome;
+        noneBuiltin_ = optionBuiltin_ && !nameNone;
+        if (optionBuiltin_) {
+            parseBuiltinOption();
+            modules_.builtinOption = true;
+        }
+    }
+    // Parses the built-in enum as this file's own: its fields are known to Option.Some { ... }.
+    AstNode parseBuiltinOption() {
+        std::vector<Token> saved = std::move(tokens_);
+        const size_t savedPos = pos_;
+        tokens_ = Lexer(kBuiltinOption).tokenize();
+        pos_ = 0;
+        AstNode node = parseEnum();
+        tokens_ = std::move(saved);
+        pos_ = savedPos;
+        return node;
+    }
+
     std::vector<AstNode> parse() {
         try {
+            noteBuiltinOption();
             std::vector<AstNode> ast = parseProgram();
+            if (filePrefix_.empty() && modules_.builtinOption) {
+                bool declared = false;
+                for (const AstNode& n : ast) {
+                    if ((n.type == AstNode::Type::EnumDef || n.type == AstNode::Type::StructDef) &&
+                        (n.value == "Option" || (n.value.size() > 7 && n.value.compare(n.value.size() - 7, 7, ".Option") == 0))) {
+                        declared = true;
+                    }
+                }
+                if (!declared) ast.insert(ast.begin(), parseBuiltinOption());
+            }
             // A shape may be named before it is written. Those uses parsed as
             // struct:Name; now that every shape is known, they become shape:Name.
             // This happens before an included file's names are prefixed, while
@@ -452,6 +512,11 @@ private:
     std::set<std::string> structNames_;
     std::map<std::string, std::set<std::string>> structFieldNames_;
     std::set<std::string> enumNames_;
+    // Option[T] is built in (see noteBuiltinOption): this file reads it, Some(x) is
+    // Option.Some { value: x }, and a bare None is Option.None.
+    bool optionBuiltin_ = false;
+    bool someBuiltin_ = false;
+    bool noneBuiltin_ = false;
     // type Id = int: Id stands for int everywhere a type is written. Expanded
     // here so the rest of the compiler never sees the alias.
     std::map<std::string, std::string> typeAliases_;
@@ -3561,6 +3626,7 @@ private:
     //   _                          anything
     //   Enum.Variant               that variant; Enum.Variant { f1, f2 } takes its fields apart
     //   Ok / Err                   a Result; Ok { v } names its value, Err { e } its error text
+    //   Some / None                an Option; Some { v } names its value
     //   1 | 2,  'a',  "yes",  true  those values (an int, char, string or bool match)
     //   ... if cond                the arm only when cond holds too
     void parseMatchPattern(AstNode& arm) {
@@ -3626,6 +3692,15 @@ private:
         } else if (peek().type == TokenType::Identifier && (peek().value == "Ok" || peek().value == "Err") &&
                    !(pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::Dot)) {
             arm.value = peek().value;
+            advance();
+            bindings();
+        } else if (peek().type == TokenType::Identifier && (peek().value == "Some" || peek().value == "None") &&
+                   !(pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::Dot)) {
+            // Some, Some { v } and None: Option.Some and Option.None, the one value named as you like.
+            arm.caseIsEnum = true;
+            arm.armPositional = true;
+            arm.value = "Option";
+            arm.initValue = peek().value;
             advance();
             bindings();
         } else if (peek().type == TokenType::Identifier) {
@@ -4527,6 +4602,39 @@ private:
             (peek().value == "ok" || peek().value == "err") &&
             pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::LParen) {
             return applyIndexAndDotPostfix(parseResultMake());
+        }
+        if (someBuiltin_ && peek().type == TokenType::Identifier && peek().value == "Some" &&
+            pos_ + 1 < tokens_.size() && tokens_[pos_ + 1].type == TokenType::LParen) {
+            // Some(x) is Option.Some { value: x }.
+            const size_t line = peek().line;
+            advance();
+            advance();
+            if (peek().type == TokenType::RParen) {
+                throw std::runtime_error("Some(...) holds one value: Some(x), at line " + std::to_string(line));
+            }
+            AstNode lit{AstNode::Type::ExprEnumLit, "Option", {}};
+            lit.initValue = "Some";
+            lit.line = line;
+            lit.srcFile = currentFilePath_;
+            lit.paramNames.push_back("value");
+            lit.children.push_back(parseValueExpr());
+            if (!match(TokenType::RParen)) {
+                throw std::runtime_error("Some(...) holds one value: Some(x), at line " + std::to_string(peek().line));
+            }
+            return lit;
+        }
+        if (noneBuiltin_ && peek().type == TokenType::Identifier && peek().value == "None" &&
+            !(pos_ + 1 < tokens_.size() && (tokens_[pos_ + 1].type == TokenType::Dot ||
+                                            tokens_[pos_ + 1].type == TokenType::LParen))) {
+            // A bare None is Option.None, typed by what it stands beside.
+            AstNode base{AstNode::Type::ExprVarRef, "Option", {}};
+            base.line = peek().line;
+            base.srcFile = currentFilePath_;
+            AstNode mem{AstNode::Type::ExprMember, "None", {std::move(base)}};
+            mem.line = peek().line;
+            mem.srcFile = currentFilePath_;
+            advance();
+            return mem;
         }
         if (peek().type == TokenType::Identifier && peek().value == "len" && pos_ + 1 < tokens_.size() &&
             tokens_[pos_ + 1].type == TokenType::LParen) {
