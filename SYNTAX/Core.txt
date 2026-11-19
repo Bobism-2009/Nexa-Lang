@@ -596,6 +596,8 @@ SLICES ([]T)
     io.println(xs.index_of(9, 2)); // first at or after index 2, or -1
     io.println(xs.last_index_of(9));
     io.println(xs.count(9));      // how many elements equal 9
+    let a = xs.first();           // Option[int]: Some(xs[0]), or None when empty
+    let z = xs.last();            // Option[int]: Some of the last element, or None
     for (x in xs) { ... }
 
   An index outside [0, len) -- on a slice or a string, reading or writing -- is
@@ -711,6 +713,8 @@ MAPS (map[K]V)
     scores["ada"] = 9;           // insert / assign
     let n: int = scores["ada"];  // read (missing key is the zero value)
     if (scores.has("ada")) { ... }
+    let s = scores.get("ada");   // Option[int]: Some(9), or None when not a key
+    io.println(scores.get("bo").or(0));
     scores.remove("ada");
     scores.clear();
     let ks = scores.keys();      // []K
@@ -719,7 +723,8 @@ MAPS (map[K]V)
     for (k, v in scores) { ... } // key and value
 
   Keys and values can be any Nexa type (string, int, structs, ...).
-  Emitted as std::map. Missing-key read default-constructs the value (same as C++ []).
+  Emitted as std::map. Missing-key read default-constructs the value (same as C++ []),
+  and adds the key. m.get(k) tells a missing key from a zero value and adds nothing.
 
 RESULT (Result[T])
   A value that is either success or an error. Core type; no #include.
@@ -819,6 +824,15 @@ OPTION (Option[T])
                            finds both or gives None. The function has to return
                            an Option (of any type). In main there is nothing to
                            pass a None up to: use match or .or there.
+
+  Lookups that may find nothing answer an Option:
+    m.get(key)             - Some(the value), or None when key is not in the map
+    xs.first(), xs.last()  - Some(the element), or None when the slice is empty
+
+      let age = ages.get(name).or(0);
+      fn first_age(ages: map[string]int, names: []string): Option[int] {
+          return ages.get(names.first()?);
+      }
 
   The long forms still work: Option.Some { value: x }, Option.None and the arm
   Option.Some { value } =>. A program that declares its own Option keeps it,

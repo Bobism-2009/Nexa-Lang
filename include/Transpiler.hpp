@@ -4184,6 +4184,9 @@ private:
                                 e.value == "sum") {
                                 return nexaSliceElem(recvT);
                             }
+                            if ((e.value == "first" || e.value == "last") && genericEnums_.count("Option")) {
+                                return "enum:Option[" + nexaSliceElem(recvT) + "]";
+                            }
                             if (e.value == "has") return "bool";
                             if (e.value == "join") return "string";
                             if (e.value == "push" || e.value == "clear" || e.value == "insert" ||
@@ -4194,6 +4197,10 @@ private:
                         }
                         if (nexaIsMapType(recvT)) {
                             if (e.value == "has") return "bool";
+                            if (e.value == "get" && genericEnums_.count("Option")) {
+                                std::string k, v;
+                                if (nexaSplitMapType(recvT, k, v)) return "enum:Option[" + v + "]";
+                            }
                             if (e.value == "remove" || e.value == "clear") return "void";
                             if (e.value == "keys") {
                                 std::string k, v;
@@ -4662,13 +4669,17 @@ private:
                 }
                 if (e.value == "or") {
                     if (e.children.size() != 2) throw std::runtime_error("or takes one value: o.or(fallback)");
-                    const std::string ft = inferExprNexaType(e.children[1]);
+                    // o.or([]): the empty list takes the Option's own list type.
+                    const bool emptyList = e.children[1].type == AstNode::Type::ExprArrayLiteral &&
+                                           e.children[1].children.empty() && nexaIsSliceType(inner);
+                    const std::string ft = emptyList ? inner : inferExprNexaType(e.children[1]);
                     if (matchJoinTypes(inner, ft).empty()) {
                         throw std::runtime_error("or(...) is the value when the Option is None, so it is " +
                             withArticle(nexaTypeForMessage(inner)) + ", as the Option holds; this is " +
                             withArticle(nexaTypeForMessage(ft)) + (e.line ? " at line " + std::to_string(e.line) : std::string()));
                     }
-                    std::string fb = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    std::string fb = emptyList ? nexaTypeToCpp(inner) + "{}" :
+                        emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                     if (inner == "string" && e.children[1].type == AstNode::Type::ExprStringLiteral) fb = "std::string(" + fb + ")";
                     if (plain) return "(" + recv + ".__tag == " + tag + " ? " + recv + "." + fld + " : (" + fb + "))";
                     return held("__o.__tag == " + tag + " ? __o." + fld + " : (" + fb + ")");
@@ -4718,6 +4729,12 @@ private:
                 throw std::runtime_error("Unknown Json method '." + e.value + "()'");
             }
             if (nexaIsSliceType(recvBare)) {
+                if (e.value == "first" || e.value == "last") {
+                    // xs.first() / xs.last(): Some(the element), or None when xs is empty.
+                    if (e.children.size() != 1) throw std::runtime_error(e.value + " expects no arguments");
+                    return emitOptionMake(inferExprNexaType(e), "const auto& __v = " + recv + ";", "!__v.empty()",
+                                          e.value == "first" ? "__v.front()" : "__v.back()", "xs." + e.value + "()");
+                }
                 if (e.value == "push") {
                     if (e.children.size() != 2) throw std::runtime_error("push expects one argument");
                     return recv + ".push_back(" +
@@ -4800,6 +4817,14 @@ private:
                 }
             }
             if (nexaIsMapType(recvBare)) {
+                if (e.value == "get") {
+                    // m.get(k): Some(the value), or None when k is not a key. Unlike m[k], a
+                    // missing key is not added.
+                    if (e.children.size() != 2) throw std::runtime_error("get expects one argument: m.get(key)");
+                    const std::string key = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    return emitOptionMake(inferExprNexaType(e), "const auto& __m = " + recv + "; auto __it = __m.find(" +
+                                          key + ");", "__it != __m.end()", "__it->second", "m.get(key)");
+                }
                 if (e.value == "has") {
                     if (e.children.size() != 2) throw std::runtime_error("has expects one argument");
                     return "((" + recv + ").find(" +
@@ -6038,6 +6063,24 @@ private:
                             if (subst.empty()) enumMemberApplied_[&n] = en;
                         }
                     }
+                }
+                at = saved;
+                return;
+            }
+            if (n.type == AstNode::Type::FnCall && n.initValue == "." && !n.children.empty() &&
+                (n.value == "get" || n.value == "first" || n.value == "last") &&
+                [&]() {
+                    std::string rt = inferExprNexaType(n.children[0]);
+                    if (isPointerType(rt)) rt = pointerPointeeType(rt);
+                    return n.value == "get" ? nexaIsMapType(rt) : nexaIsSliceType(rt);
+                }()) {
+                // m.get(k) / xs.first() / xs.last(): the Option they answer is a type to make.
+                for (const AstNode& c : n.children) scanAny(c, subst, "");
+                std::string t = inferExprNexaType(n);
+                if (!subst.empty() && t.find("typevar:") != std::string::npos) substTypeStr(t, subst);
+                if (isEnumDeclType(t) && t.find("typevar:") == std::string::npos &&
+                    nexaTypeAppBase(enumNameFromDecl(t)) == "Option") {
+                    ensureEnumApp(enumNameFromDecl(t));
                 }
                 at = saved;
                 return;
@@ -10547,6 +10590,21 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         const std::vector<EnumField> f = enumPayloadFields(en, "Some");
         if (f.size() != 1 || f[0].name != "value" || !enumPayloadFields(en, "None").empty()) return std::string();
         return en;
+    }
+    // An Option of type optT made in place: Some(value) when cond holds, else None. setup
+    // runs first and holds what cond and value read.
+    std::string emitOptionMake(const std::string& optT, const std::string& setup, const std::string& cond,
+                               const std::string& value, const std::string& what) {
+        const std::string en = optionEnumOf(optT);
+        if (en.empty()) {
+            throw std::runtime_error(what + " answers an Option with Some { value } and None, "
+                "and this program's own Option is not that shape");
+        }
+        const std::string cpp = nexaTypeToCpp(optT);
+        return std::string(emitAtFileScope_ ? "([]() { " : "([&]() { ") + setup + " " + cpp + " __o{}; if (" + cond +
+            ") { __o.__tag = " + std::to_string(enumVariantIndex(en, "Some")) + "; __o." +
+            enumFieldCpp(en, "Some", "value") + " = " + value + "; } else { __o.__tag = " +
+            std::to_string(enumVariantIndex(en, "None")) + "; } return __o; })()";
     }
     std::string optionInner(const std::string& en) const {
         const std::vector<EnumField> f = enumPayloadFields(en, "Some");

@@ -324,7 +324,8 @@ public:
         if (!sharedExports_) sharedExports_ = &ownedExports_;
     }
 
-    // Option[T] is built in. A file that names Option -- or calls Some(x) -- and declares
+    // Option[T] is built in. A file that names Option -- or calls Some(x), m.get(k),
+    // xs.first() or xs.last() -- and declares
     // no Option of its own reads enum Option[T] { Some { value: T; }; None; } as if it
     // were written first; the entry file then puts that enum in the program once. A
     // program that never names it is unchanged. Some(x) stays a call when the file has
@@ -341,6 +342,9 @@ public:
                 named = true;
                 if (prev == TokenType::Enum || prev == TokenType::Struct ||
                     (prev == TokenType::Identifier && tokens_[i - 1].value == "type")) own = true;
+            } else if ((t.value == "get" || t.value == "first" || t.value == "last") &&
+                       prev == TokenType::Dot && next == TokenType::LParen) {
+                named = true;  // m.get(k), xs.first(), xs.last() answer an Option
             } else if (t.value == "Some") {
                 if (next == TokenType::LParen) named = true;
                 if (prev == TokenType::Fn) fnSome = true;

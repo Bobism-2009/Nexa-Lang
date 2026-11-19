@@ -654,6 +654,43 @@ else
     bad "an Option without .value() brings no helper" "__nexa_none_fail is in the C++"
 fi
 
+run_eq "m.get, xs.first and xs.last answer an Option" '#include <std/io>
+struct Item { name: string; qty: int; }
+struct Stack { xs: []int; fn get(): int { return len(self.xs); } }
+fn oldest(ages: map[string]int, names: []string): Option[int] {
+    let a = ages.get(names.first()?)?;
+    return Some(a);
+}
+fn main() {
+    let ages: map[string]int;
+    ages["ann"] = 31;
+    ages["bo"] = 7;
+    io.println(ages.get("ann").or(-1), " ", ages.get("zed").or(-1), " ", len(ages));
+    match (ages.get("bo")) {
+        Some { a } if a < 18 => { io.println("bo is a child"); }
+        Some { a } => { io.println(a); }
+        None => { io.println("no bo"); }
+    }
+    let names = ["bo", "ann"];
+    let none: []string = [];
+    io.println(names.first().or("-"), " ", names.last().or("-"), " ", none.first().or("-"), " ", none.last().is_none());
+    io.println(oldest(ages, names).or(0), " ", oldest(ages, none).or(0), " ", oldest(ages, ["zed"]).or(0));
+    let items = [Item { name: "pen", qty: 3 }];
+    io.println(items.first().value().name, " ", items.last().value().qty);
+    let words: map[string][]string;
+    words["a"] = ["x", "y"];
+    io.println(words.get("a").or([]).last().or("?"), " ", len(words.get("q").or([])));
+    let s = Stack { xs: [1, 2] };
+    let p = &ages;
+    io.println(s.get(), " ", p.get("ann").or(0));
+}' "31 -1 2
+bo is a child
+bo ann - true
+7 0 0
+pen 3
+y 0
+2 31"
+
 # -- slicing: match is code in place, nothing ahead of main --
 
 prelude_eq "match brings no helpers, headers or types" \
