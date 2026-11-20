@@ -16,7 +16,7 @@
 #              to_float, io.eprintln, time.unix / format, a thread.mutex, a defer, float32 and
 #              bits, std/math, all of std/random, the std/file extras, std/term colour and an
 #              enum taken apart by match (as a statement and as a value, with a guard), a match
-#              on a Result and on ints and strings, and an Option with its methods, ?, m.get and xs.first,
+#              on a Result and on ints (with ranges) and strings, and an Option with its methods, ?, m.get and xs.first,
 #              and xs.filter / any / all / map / find given function literals -- is
 #              under 64KB, and prints
 #              exactly what the same program built without the slimming
@@ -160,7 +160,7 @@ fn main() {
     for (w in words) {
         match (twice(w)) {
             Ok { v } if v > 10 => { io.println("big ", v); }
-            Ok { v } => { io.println(match (v) { -8 => "minus eight", 0 | 1 => "small", _ => "other" }); }
+            Ok { v } => { io.println(match (v) { -8 => "minus eight", 0 | 1 => "small", 2..9 => "few", ..-1 => "below", _ => "other" }); }
             Err { e } => { io.println(match (w) { "x" => "an x", _ => "?" }, ": ", e); }
         }
     }

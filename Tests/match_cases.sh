@@ -691,6 +691,79 @@ pen 3
 y 0
 2 31"
 
+# -- ranges: 1..9 takes both ends; 10.. and ..-1 are open --
+
+run_eq "ranges of ints and chars, open ends, with | and guards" \
+'#include <std/io>
+fn grade(n: int): string {
+    return match (n) { 90.. => "A", 80..89 => "B", 70..79 => "C", 0..69 => "F", _ => "?" };
+}
+fn sign(n: long): string { return match (n) { ..-1 => "neg", 0 => "zero", 1.. => "pos" }; }
+fn kind(c: char): string {
+    match (c) {
+        '"'"'a'"'"'..'"'"'z'"'"' | '"'"'A'"'"'..'"'"'Z'"'"' | '"'"'_'"'"' => { return "word"; }
+        '"'"'0'"'"'..'"'"'9'"'"' => { return "digit"; }
+        '"'"'\x80'"'"'.. => { return "high"; }
+        _ => { return "other"; }
+    }
+}
+fn main() {
+    io.println(grade(95), grade(90), grade(89), grade(72), grade(0), grade(-3));
+    io.println(sign(-7), " ", sign(0), " ", sign(12));
+    io.println(kind('"'"'q'"'"'), " ", kind('"'"'Z'"'"'), " ", kind('"'"'_'"'"'), " ", kind('"'"'5'"'"'), " ", kind('"'"'#'"'"'), " ", kind('"'"'\xC3'"'"'));
+    for (u in [0, 3, 7, 40]) {
+        let w: size_t = u;
+        match (w) {
+            0 => { io.print("none "); }
+            1..9 if w > 5 => { io.print("several "); }
+            1..9 => { io.print("few "); }
+            10.. => { io.print("many "); }
+        }
+    }
+    io.println("");
+}' "AABCF?
+neg zero pos
+word word word digit other high
+none few several many "
+
+expect_has "a range runs low to high" '#include <std/io>
+fn main() { let n = 5; match (n) { 9..1 => {} _ => {} } }' "the range 9..1 takes nothing: write its low end first, as in 1..9"
+
+expect_has "two ranges sharing an end" '#include <std/io>
+fn main() { let n = 5; match (n) { 1..10 => {} 10..20 => {} _ => {} } }' \
+"the arms 1..10 and 10..20 both take 10: a range takes both its ends"
+
+expect_has "a range inside the ones above it" '#include <std/io>
+fn main() { let n = 5; match (n) { 1..10 => {} 11..20 => {} 5..15 => {} _ => {} } }' \
+"the arm 5..15 never runs: the arms above it take every value in 5..15"
+
+expect_has "a value inside a range above it" '#include <std/io>
+fn main() { let n = 5; match (n) { 1..10 => {} 7 => {} _ => {} } }' "the arm 7 never runs: 1..10 above it takes 7"
+
+expect_has "ranges with a gap need _" '#include <std/io>
+fn main() { let n = 5; match (n) { ..0 => {} 5.. => {} } }' \
+"match is not exhaustive: no arm takes 1..4, so it needs an arm for that or a _ arm"
+
+expect_has "a range past the type" '#include <std/io>
+fn main() { let u: size_t = 3; match (u) { -1..4 => {} _ => {} } }' \
+"the range -1..4 goes past what a size_t holds (0..18446744073709551615)"
+
+expect_has "a range of the wrong type" '#include <std/io>
+fn main() { let c = '"'"'a'"'"'; match (c) { 1..9 => {} _ => {} } }' \
+"the arm 1..9 is a range of ints, but this match looks at a char"
+
+expect_has "a range of strings" '#include <std/io>
+fn main() { let n = 5; match (n) { "a".."b" => {} _ => {} } }' "a range in a match arm is of ints or chars"
+
+run_eq "ranges that cover every value need no _" \
+'#include <std/io>
+fn main() {
+    let n = -4;
+    match (n) { 1.. | ..-1 => { io.print("not zero "); } 0 => { io.print("zero "); } }
+    let c = '"'"'x'"'"';
+    match (c) { ..'"'"'m'"'"' => { io.println("early"); } '"'"'n'"'"'.. => { io.println("late"); } }
+}' "not zero late"
+
 # -- slicing: match is code in place, nothing ahead of main --
 
 prelude_eq "match brings no helpers, headers or types" \

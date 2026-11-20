@@ -97,6 +97,8 @@ struct AstNode {
                       MatchExpr,     // match (expr) { arms }; children[0] = scrutinee, children[1..] = MatchArm
                       MatchArm,      // Enum.Variant { fields } => { body }; caseIsEnum = true, value = enum, initValue = variant
                                      // _ => { body } (wildcard); value = "_"
+                      MatchRange,    // a match arm's 1..9, 'a'..'z', 10.. or ..-1, among its paramDefaults;
+                                     // children are the ends written, initValue says which: "both", "lo", "hi"
                       ExprMatch,     // let a = match (expr) { Enum.Variant => value, ... }; children as MatchExpr,
                                      // each MatchArm holds one child: its value
                       ExprMember,
@@ -3697,6 +3699,49 @@ private:
                 throw std::runtime_error("Expected '}' after match arm fields at line " + std::to_string(peek().line));
             }
         };
+        // A value, or a range of ints or chars: 1..9 and 'a'..'z' take both ends; 10.. is
+        // 10 and up, ..-1 is -1 and below.
+        auto rangeEnd = [&](const AstNode& l, const std::string& s) {
+            if (l.type == AstNode::Type::ExprStringLiteral || l.type == AstNode::Type::ExprBoolLiteral) {
+                throw std::runtime_error("a range in a match arm is of ints or chars, as in 1..9 or 'a'..'z', and " + s +
+                    " is neither, at line " + std::to_string(line));
+            }
+        };
+        auto part = [&](AstNode& out, std::string& shown) -> bool {
+            if (match(TokenType::DotDot)) {
+                AstNode hi;
+                std::string hs;
+                if (!literal(hi, hs)) {
+                    throw std::runtime_error("Expected a value after '..' in match arm (..9 takes 9 and below) at line " +
+                        std::to_string(peek().line));
+                }
+                rangeEnd(hi, hs);
+                out = {AstNode::Type::MatchRange, "", {std::move(hi)}};
+                out.initValue = "hi";
+                shown = ".." + hs;
+                return true;
+            }
+            if (!literal(out, shown)) return false;
+            if (!match(TokenType::DotDot)) return true;
+            rangeEnd(out, shown);
+            AstNode lo = std::move(out), hi;
+            std::string hs;
+            if (literal(hi, hs)) {
+                rangeEnd(hi, hs);
+                if ((lo.type == AstNode::Type::ExprCharLiteral) != (hi.type == AstNode::Type::ExprCharLiteral)) {
+                    throw std::runtime_error("a range's two ends are both ints or both chars, and " + shown + ".." + hs +
+                        " mixes them, at line " + std::to_string(line));
+                }
+                out = {AstNode::Type::MatchRange, "", {std::move(lo), std::move(hi)}};
+                out.initValue = "both";
+                shown += ".." + hs;
+            } else {
+                out = {AstNode::Type::MatchRange, "", {std::move(lo)}};
+                out.initValue = "lo";
+                shown += "..";
+            }
+            return true;
+        };
         AstNode lit;
         std::string shown;
         if (peek().type == TokenType::Identifier && peek().value == "_") {
@@ -3734,12 +3779,12 @@ private:
             arm.value = enumName;
             arm.initValue = variantName;
             bindings();
-        } else if (literal(lit, shown)) {
+        } else if (part(lit, shown)) {
             arm.armIsLiteral = true;
             arm.value = shown;
             arm.paramDefaults.push_back(std::move(lit));
             while (match(TokenType::BitOr)) {
-                if (!literal(lit, shown)) {
+                if (!part(lit, shown)) {
                     throw std::runtime_error("Expected a value after '|' in match arm at line " + std::to_string(peek().line));
                 }
                 arm.value += " | " + shown;

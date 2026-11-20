@@ -10869,6 +10869,56 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         return lit.value;
     }
 
+    // A match pattern's value as a number: 3, -3, 0x1F, and a char as its byte (0..255).
+    static bool matchLitValue(const AstNode& lit, __int128& v) {
+        if (lit.type == AstNode::Type::ExprCharLiteral) {
+            if (lit.value.empty()) return false;
+            v = static_cast<unsigned char>(lit.value[0]);
+            return true;
+        }
+        bool neg = false;
+        std::string s;
+        if (lit.type == AstNode::Type::ExprSub && lit.children.size() == 2) { neg = true; s = lit.children[1].value; }
+        else if (lit.type == AstNode::Type::ExprIntLiteral) s = lit.value;
+        else return false;
+        if (!s.empty() && s[0] == '-') { neg = !neg; s.erase(0, 1); }
+        if (s.empty()) return false;
+        char* end = nullptr;
+        const unsigned long long u = std::strtoull(s.c_str(), &end, 0);
+        if (end != s.c_str() + s.size()) return false;
+        v = neg ? -static_cast<__int128>(u) : static_cast<__int128>(u);
+        return true;
+    }
+    // The values a match on an int or char can see; a char is read as its byte.
+    bool matchDomain(const MatchScrut& ms, __int128& lo, __int128& hi) const {
+        if (ms.type == "char" || ms.type == "unsigned char") { lo = 0; hi = 255; return true; }
+        const NexaIntRange r = nexaIntTypeRange(ms.type);
+        if (!r.valid) return false;
+        lo = -static_cast<__int128>(r.maxNegMagnitude);
+        hi = static_cast<__int128>(r.maxValue);
+        return true;
+    }
+    static std::string matchValueText(__int128 v, bool isChar) {
+        if (isChar) {
+            if (v >= 32 && v <= 126 && v != '\\' && v != '\'') return std::string("'") + static_cast<char>(v) + "'";
+            static const char* hex = "0123456789ABCDEF";
+            return std::string("'\\x") + hex[(v >> 4) & 15] + hex[v & 15] + "'";
+        }
+        const bool neg = v < 0;
+        unsigned __int128 u = neg ? -static_cast<unsigned __int128>(v) : static_cast<unsigned __int128>(v);
+        std::string d;
+        do { d.insert(d.begin(), static_cast<char>('0' + static_cast<int>(u % 10))); u /= 10; } while (u);
+        return neg ? "-" + d : d;
+    }
+    // A range part's two ends, the open ones at the domain's edge.
+    static void matchRangeBounds(const AstNode& r, __int128 dlo, __int128 dhi, __int128& lo, __int128& hi) {
+        lo = dlo;
+        hi = dhi;
+        if (r.initValue == "hi") { if (!r.children.empty()) matchLitValue(r.children[0], hi); return; }
+        if (!r.children.empty()) matchLitValue(r.children[0], lo);
+        if (r.initValue == "both" && r.children.size() == 2) matchLitValue(r.children[1], hi);
+    }
+
     // An arm's guard is a condition, read where the arm's names are in scope.
     void semMatchGuard(const AstNode& arm) {
         const AstNode* g = matchArmGuard(arm);
@@ -10892,6 +10942,13 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         const bool isChar = ms.type == "char" || ms.type == "unsigned char";
         std::set<std::string> covered, guardedOnly;
         bool wild = false;
+        // For ranges: the values arms without a guard take, each with the arm and whether
+        // it came from a range, and the values a match on this type can see.
+        struct Taken { __int128 lo, hi; bool range; std::string label; };
+        std::vector<Taken> taken;
+        bool anyRange = false;
+        __int128 dlo = 0, dhi = 0;
+        const bool haveDomain = ms.value && ms.type != "string" && ms.type != "bool" && matchDomain(ms, dlo, dhi);
         for (size_t i = 1; i < m.children.size(); i++) {
             const AstNode& arm = m.children[i];
             if (arm.type != AstNode::Type::MatchArm) continue;
@@ -10949,16 +11006,71 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     semError(m, "the arm " + arm.value + " is a value, but this match looks at " + looksAt);
                 }
                 for (size_t k = 0; k < matchArmLiteralCount(arm); k++) {
-                    const AstNode& lit = arm.paramDefaults[k];
+                    const AstNode& part = arm.paramDefaults[k];
+                    const bool isRange = part.type == AstNode::Type::MatchRange;
+                    const AstNode& lit = isRange && !part.children.empty() ? part.children[0] : part;
                     const std::string lt = lit.type == AstNode::Type::ExprStringLiteral ? "string" :
                         lit.type == AstNode::Type::ExprCharLiteral ? "char" :
                         lit.type == AstNode::Type::ExprBoolLiteral ? "bool" : "int";
                     const bool fits = ms.type == "string" ? lt == "string" : ms.type == "bool" ? lt == "bool" :
                         isChar ? lt == "char" : lt == "int";
                     if (!fits) {
-                        semError(m, "the arm " + arm.value + " is " + withArticle(lt) + ", but this match looks at " + looksAt);
+                        semError(m, "the arm " + arm.value + " is " + (isRange ? "a range of " + lt + "s" : withArticle(lt)) +
+                            ", but this match looks at " + looksAt);
                     }
-                    keys.push_back(matchLiteralKey(lit));
+                    if (!isRange) {
+                        keys.push_back(matchLiteralKey(lit));
+                        __int128 v;
+                        if (haveDomain && matchLitValue(lit, v)) {
+                            for (const Taken& t : taken) {
+                                if (t.range && v >= t.lo && v <= t.hi) {
+                                    semError(m, "the arm " + matchArmLabel(arm) + " never runs: " + t.label +
+                                        " above it takes " + matchValueText(v, isChar));
+                                }
+                            }
+                            if (!guarded) taken.push_back({v, v, false, matchArmLabel(arm)});
+                        }
+                        continue;
+                    }
+                    anyRange = true;
+                    if (!haveDomain) continue;
+                    __int128 lo, hi;
+                    matchRangeBounds(part, dlo, dhi, lo, hi);
+                    std::string shownPart = part.initValue == "hi" ? ".." : "";
+                    if (part.initValue != "hi") shownPart = matchValueText(lo, isChar) + "..";
+                    if (part.initValue != "lo") shownPart += matchValueText(hi, isChar);
+                    if (lo > hi) {
+                        semError(m, "the range " + shownPart + " takes nothing: write its low end first, as in " +
+                            matchValueText(hi, isChar) + ".." + matchValueText(lo, isChar));
+                    }
+                    if (lo < dlo || hi > dhi) {
+                        semError(m, "the range " + shownPart + " goes past what " + looksAt + " holds (" +
+                            matchValueText(dlo, isChar) + ".." + matchValueText(dhi, isChar) + ")");
+                    }
+                    for (const Taken& t : taken) {
+                        if (!t.range) continue;
+                        // 1..10 then 10..20: likely meant to stop short of 10, so say both take it.
+                        const __int128 shared = t.hi == lo ? lo : t.lo == hi ? hi : dlo - 1;
+                        if (shared >= dlo && !(lo >= t.lo && hi <= t.hi)) {
+                            semError(m, "the arms " + t.label + " and " + matchArmLabel(arm) + " both take " +
+                                matchValueText(shared, isChar) + ": a range takes both its ends, so " +
+                                t.label + " already has it");
+                        }
+                    }
+                    // Every value in it already taken: by earlier arms, together.
+                    std::vector<std::pair<__int128, __int128>> iv;
+                    for (const Taken& t : taken) iv.push_back({t.lo, t.hi});
+                    std::sort(iv.begin(), iv.end());
+                    __int128 at = lo;
+                    for (const auto& p : iv) {
+                        if (p.first > at) break;
+                        if (p.second >= at) { if (p.second >= hi) { at = hi + 1; break; } at = p.second + 1; }
+                    }
+                    if (at > hi) {
+                        semError(m, "the arm " + matchArmLabel(arm) + " never runs: the arms above it take every value in " +
+                            shownPart);
+                    }
+                    if (!guarded) taken.push_back({lo, hi, true, matchArmLabel(arm)});
                 }
             }
             for (const std::string& k : keys) {
@@ -10988,6 +11100,26 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             if (!covered.count("true")) missing("true", "true");
             if (!covered.count("false")) missing("false", "false");
         } else {
+            if (haveDomain && anyRange) {
+                // Ranges can cover every value: ..-1 | 0 | 1.. needs no _.
+                std::vector<std::pair<__int128, __int128>> iv;
+                for (const Taken& t : taken) iv.push_back({t.lo, t.hi});
+                std::sort(iv.begin(), iv.end());
+                __int128 at = dlo;
+                bool done = false;
+                for (const auto& p : iv) {
+                    if (p.first > at) break;
+                    if (p.second >= at) { if (p.second >= dhi) { done = true; break; } at = p.second + 1; }
+                }
+                if (done) return;
+                __int128 gapEnd = dhi;
+                for (const auto& p : iv) if (p.first > at && p.first - 1 < gapEnd) gapEnd = p.first - 1;
+                std::string gap = at == gapEnd ? matchValueText(at, isChar) :
+                    gapEnd == dhi ? matchValueText(at, isChar) + " and up" :
+                    at == dlo ? matchValueText(gapEnd, isChar) + " and below" :
+                    matchValueText(at, isChar) + ".." + matchValueText(gapEnd, isChar);
+                semError(m, "match is not exhaustive: no arm takes " + gap + ", so it needs an arm for that or a _ arm");
+            }
             semError(m, "match is not exhaustive: " + looksAt + " has more values than its arms name, so it needs a _ arm");
         }
     }
@@ -11010,7 +11142,35 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             const size_t n = matchArmLiteralCount(arm);
             for (size_t k = 0; k < n; k++) {
                 if (k) t += " || ";
-                t += sw + " == " + emitExpr(arm.paramDefaults[k], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                const AstNode& part = arm.paramDefaults[k];
+                if (part.type == AstNode::Type::MatchRange) {
+                    // lo <= sw && sw <= hi, an end left out where the type cannot pass it.
+                    // A char compares as its byte, so '\x80'..'\xFF' means the same everywhere.
+                    // Two ASCII ends, the low one past 0, compare as written: whether char is signed
+                    // or not, no byte past 127 falls between them.
+                    __int128 dlo = 0, dhi = 0, lo = 0, hi = 0;
+                    const bool dom = matchDomain(ms, dlo, dhi);
+                    if (dom) matchRangeBounds(part, dlo, dhi, lo, hi);
+                    const bool isCh = (ms.type == "char" || ms.type == "unsigned char") &&
+                                      !(part.initValue == "both" && lo > 0 && hi <= 127);
+                    const std::string v = isCh ? "static_cast<unsigned char>(" + sw + ")" : sw;
+                    auto bound = [&](const AstNode& lit, __int128 val) {
+                        return isCh ? matchValueText(val, false)
+                                    : emitExpr(lit, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    };
+                    std::vector<std::string> c;
+                    if (part.initValue != "hi" && !part.children.empty() && !(dom && lo <= dlo)) {
+                        c.push_back(v + " >= " + bound(part.children[0], lo));
+                    }
+                    if (part.initValue != "lo" && !part.children.empty() && !(dom && hi >= dhi)) {
+                        c.push_back(v + " <= " + bound(part.children.back(), hi));
+                    }
+                    if (c.empty()) t += "true";
+                    else if (c.size() == 1) t += c[0];
+                    else t += (n > 1 ? "(" : "") + c[0] + " && " + c[1] + (n > 1 ? ")" : "");
+                    continue;
+                }
+                t += sw + " == " + emitExpr(part, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             }
             if (n > 1) t = "(" + t + ")";
         }

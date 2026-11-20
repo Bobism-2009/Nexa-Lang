@@ -168,6 +168,8 @@ MATCH
     None                      an Option holding nothing
     3,  -1,  1 | 2 | 3        an int (any width) equal to one of them
     'a',  'a' | 'e'           a char
+    1..9,  'a'..'z'           an int or char from the first to the last, both included
+    90..,  ..-1               90 and up; -1 and below
     "go",  "go" | "run"       a string
     true,  false              a bool
 
@@ -192,6 +194,25 @@ MATCH
       compare it with if.
     - The pattern's type is the matched value's: "go" cannot match an int,
       and 65 cannot match a char.
+
+  RANGES
+    A range takes both its ends, and mixes with values and guards:
+
+      let grade = match (score) { 90.. => "A", 80..89 => "B", 0..79 => "C", _ => "?" };
+      match (c) {
+          'a'..'z' | 'A'..'Z' | '_' => { word(); }
+          '0'..'9' => { digit(); }
+          _ => { other(); }
+      }
+
+    - Ranges that leave no value out need no _: ..-1 | 0 | 1.. covers an int,
+      and 0.. covers a size_t.
+    - A char range is read as bytes, 0 to 255: '\x80'.. is every byte past
+      ASCII, on every target.
+    - Errors: a range written high to low (9..1); one past what the type holds
+      (-1..4 on a size_t); an arm the arms above it already take; two ranges
+      sharing an end (1..10 then 10..20 both take 10 -- start the next at 11);
+      and, with no _, the first value no arm takes ("no arm takes 1..4").
 
   GUARDS
     Pattern if cond => ...
