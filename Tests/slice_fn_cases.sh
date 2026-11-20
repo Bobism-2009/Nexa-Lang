@@ -143,8 +143,47 @@ fn main() {
 }' "8 5"
 
 expect_has "the function takes an element" '#include <std/io>
-fn main() { let n = ["a"].find(fn (s) { return s == "a"; }); }' \
-"so it takes (x: string); this one takes (int) (a parameter with no type is an int)"
+fn main() { let n = ["a"].find(fn (s: int) { return s == 1; }); }' \
+"so it takes (x: string) or just (x); this one takes (int)"
+
+run_eq "a parameter with no type is an element; the return type is what it returns" \
+'#include <std/io>
+struct Item { name: string; qty: int; }
+struct Shop { items: []Item; }
+fn names_of(xs: []Item): []string { return xs.map(fn (it) { return it.name; }); }
+fn main() {
+    let names = ["ann", "bo", "cyd", "dee"];
+    io.println(names.filter(fn (s) { return len(s) > 2; }).join(","));
+    io.println(names.map(fn (s) { return s.upper(); }).join(","), " ", names.map(fn (s) { return len(s); }).sum());
+    let shop = Shop { items: [Item { name: "pen", qty: 3 }, Item { name: "cup", qty: 0 }] };
+    io.println(shop.items.find(fn (it) { return it.qty == 0; }).value().name, " ", names_of(shop.items).join("+"));
+    io.println(shop.items.any(fn (it) { return it.name == "pen"; }), " ", shop.items.all(fn (it) { return it.qty > 0; }));
+    let fs = [1.5, 2.5];
+    io.println(fs.map(fn (x) { return x * 2.0; }).sum(), " ", fs.map(fn (x) { return x > 2.0; })[1]);
+    let grid = [[1, 2], [3]];
+    io.println(grid.map(fn (row) { return len(row); }).sum(), " ", grid.filter(fn (row) { return len(row) > 1; })[0][1]);
+    let up = names.map(fn (s) { let t = s.upper(); return t + "!"; });
+    let mix = [1, 2].map(fn (x) { if (x > 1) { return 2.5; } return x; });
+    io.println(up[0], " ", mix.sum());
+}' "ann,cyd,dee
+ANN,BO,CYD,DEE 11
+cup pen+cup
+true false
+8 true
+3 2
+ANN! 3.5"
+
+run_eq "a global let calls a method on another global" \
+'#include <std/io>
+let words = ["ann", "bo"];
+let nums = [3, 1, 2];
+let a = words.join(",");
+let b = words.has("bo");
+let c = nums.min() + nums.max() + nums.sum();
+let d = words.first().or("");
+let e = words.index_of("bo");
+let f = words.map(fn (s) { return s.upper(); }).join("");
+fn main() { io.println(a, " ", b, " ", c, " ", d, " ", e, " ", f); }' "ann,bo true 10 ann 1 ANNBO"
 
 expect_has "a function, not a value" '#include <std/io>
 fn main() { let n = [1].any(5); }' "any(...) takes a function, as in xs.any(fn (x: int)"

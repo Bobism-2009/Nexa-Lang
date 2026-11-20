@@ -1418,6 +1418,11 @@ public:
             const AstNode& node = ast_[astIdx];
             // A global let's initializer is at file scope, where C++ has no statement-expressions.
             emitAtFileScope_ = node.type == AstNode::Type::Variable;
+            if (emitAtFileScope_) {
+                // ... and it reads the globals: let loud = words.join(",") calls a []string's join.
+                nexaDeclStack_.clear();
+                nexaDeclStack_.push_back(globalNexaDecl_);
+            }
             if (node.type == AstNode::Type::Include || node.type == AstNode::Type::CppHeaderInclude) {
                 continue;
             }
@@ -2239,6 +2244,9 @@ private:
     mutable std::vector<std::map<std::string, std::string>> nexaDeclStack_;
     int matchValueSeq_ = 0;  // names the temporary each value-giving match binds
     bool emitAtFileScope_ = false;  // emitting a global let's initializer
+    // The opening of a helper lambda: a global let's initializer has no frame to capture,
+    // and C++ refuses [&] at file scope.
+    std::string lamOpen() const { return emitAtFileScope_ ? "([](){" : "([&](){"; }
 
     std::string canonicalParamType(const AstNode& fn, size_t i) const {
         if (specAst_ == &fn && i < specTypes_.size()) {
@@ -4788,7 +4796,7 @@ private:
                     // A normal build leaves an empty pop unchecked. --debug stops
                     // before back(), the way a bad index stops.
                     std::string guard = lineDirectives_ ? " if (__nexa_v.empty()) __nexa_empty_fail(\"pop\");" : "";
-                    return "([&](){ auto& __nexa_v = " + recv + ";" + guard + " " + et +
+                    return lamOpen() + " auto& __nexa_v = " + recv + ";" + guard + " " + et +
                         " __nexa_x = __nexa_v.back(); __nexa_v.pop_back(); return __nexa_x; })()";
                 }
                 if (e.value == "clear") {
@@ -4799,14 +4807,14 @@ private:
                     if (e.children.size() != 3) throw std::runtime_error("insert expects two arguments");
                     std::string idx = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                     std::string val = emitExpr(e.children[2], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
-                    return "([&](){ auto& __nexa_v = " + recv + "; int __nexa_i = " + idx +
+                    return lamOpen() + " auto& __nexa_v = " + recv + "; int __nexa_i = " + idx +
                         "; int __nexa_n = (int)__nexa_v.size(); if (__nexa_i < 0) __nexa_i = 0; if (__nexa_i > __nexa_n) __nexa_i = __nexa_n; __nexa_v.insert(__nexa_v.begin() + __nexa_i, " +
                         val + "); })()";
                 }
                 if (e.value == "has") {
                     if (e.children.size() != 2) throw std::runtime_error("has expects one argument");
                     std::string val = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
-                    return "([&](){ const auto& __nexa_v = " + recv + "; const auto& __nexa_x = " + val +
+                    return lamOpen() + " const auto& __nexa_v = " + recv + "; const auto& __nexa_x = " + val +
                         "; for (const auto& __nexa_e : __nexa_v) { if (__nexa_e == __nexa_x) return true; } return false; })()";
                 }
                 if (e.value == "remove") {
@@ -4819,12 +4827,12 @@ private:
                           " if ((unsigned long long)(long long)__nexa_i >= __nexa_v.size())"
                           " __nexa_remove_fail((long long)__nexa_i, __nexa_v.size());"
                         : "";
-                    return "([&](){ auto& __nexa_v = " + recv + "; int __nexa_i = " + idx + ";" +
+                    return lamOpen() + " auto& __nexa_v = " + recv + "; int __nexa_i = " + idx + ";" +
                         guard + " __nexa_v.erase(__nexa_v.begin() + __nexa_i); })()";
                 }
                 if (e.value == "reverse") {
                     if (e.children.size() != 1) throw std::runtime_error("reverse expects no arguments");
-                    return "([&](){ auto& __nexa_v = " + recv +
+                    return lamOpen() + " auto& __nexa_v = " + recv +
                         "; size_t __nexa_n = __nexa_v.size(); for (size_t __nexa_i = 0; __nexa_i + __nexa_i + 1 < __nexa_n; __nexa_i++) { auto __nexa_t = __nexa_v[__nexa_i]; __nexa_v[__nexa_i] = __nexa_v[__nexa_n - 1 - __nexa_i]; __nexa_v[__nexa_n - 1 - __nexa_i] = __nexa_t; } })()";
                 }
                 if (e.value == "sort" || e.value == "sort_desc") {
@@ -4834,7 +4842,7 @@ private:
                 if (e.value == "join") {
                     if (e.children.size() != 2) throw std::runtime_error("join expects one argument");
                     std::string sep = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
-                    return "([&](){ const auto& __nexa_v = " + recv + "; std::string __nexa_s = " + sep +
+                    return lamOpen() + " const auto& __nexa_v = " + recv + "; std::string __nexa_s = " + sep +
                         "; std::string __nexa_o; for (size_t __nexa_i = 0; __nexa_i < __nexa_v.size(); __nexa_i++) { if (__nexa_i) __nexa_o += __nexa_s; __nexa_o += __nexa_v[__nexa_i]; } return __nexa_o; })()";
                 }
                 if (e.value == "min" || e.value == "max") {
@@ -4845,7 +4853,7 @@ private:
                     std::string guard = lineDirectives_
                         ? " if (__nexa_v.empty()) __nexa_empty_fail(\"" + e.value + "\");"
                         : "";
-                    return "([&](){ const auto& __nexa_v = " + recv + ";" + guard +
+                    return lamOpen() + " const auto& __nexa_v = " + recv + ";" + guard +
                         " auto __nexa_m = __nexa_v[0]; for (size_t __nexa_i = 1; __nexa_i < __nexa_v.size(); __nexa_i++) { if (__nexa_v[__nexa_i]" + op +
                         "__nexa_m) __nexa_m = __nexa_v[__nexa_i]; } return __nexa_m; })()";
                 }
@@ -4854,7 +4862,7 @@ private:
                     // The accumulator is the element type, not auto, so summing []i8
                     // wraps at 8 bits exactly as `a + b` on two i8 values would.
                     std::string et = nexaTypeToCpp(nexaSliceElem(recvBare));
-                    return "([&](){ const auto& __nexa_v = " + recv + "; " + et +
+                    return lamOpen() + " const auto& __nexa_v = " + recv + "; " + et +
                         " __nexa_s = 0; for (const auto& __nexa_e : __nexa_v) __nexa_s += __nexa_e; return __nexa_s; })()";
                 }
             }
@@ -4886,14 +4894,14 @@ private:
                     if (e.children.size() != 1) throw std::runtime_error("keys expects no arguments");
                     std::string k, v;
                     if (!nexaSplitMapType(recvBare, k, v)) throw std::runtime_error("Invalid map type");
-                    return "([&](){ const auto& __nexa_m = " + recv + "; std::vector<" + nexaTypeToCpp(k) +
+                    return lamOpen() + " const auto& __nexa_m = " + recv + "; std::vector<" + nexaTypeToCpp(k) +
                         "> __nexa_ks; __nexa_ks.reserve(__nexa_m.size()); for (const auto& __nexa_kv : __nexa_m) __nexa_ks.push_back(__nexa_kv.first); return __nexa_ks; })()";
                 }
                 if (e.value == "values") {
                     if (e.children.size() != 1) throw std::runtime_error("values expects no arguments");
                     std::string k, v;
                     if (!nexaSplitMapType(recvBare, k, v)) throw std::runtime_error("Invalid map type");
-                    return "([&](){ const auto& __nexa_m = " + recv + "; std::vector<" + nexaTypeToCpp(v) +
+                    return lamOpen() + " const auto& __nexa_m = " + recv + "; std::vector<" + nexaTypeToCpp(v) +
                         "> __nexa_vs; __nexa_vs.reserve(__nexa_m.size()); for (const auto& __nexa_kv : __nexa_m) __nexa_vs.push_back(__nexa_kv.second); return __nexa_vs; })()";
                 }
             }
@@ -6252,6 +6260,14 @@ private:
             if (n.type != AstNode::Type::Variable) continue;
             semNoteLoc(n);
             for (const AstNode& c : n.children) semExpr(c);
+            if (n.declType.empty() && !n.children.empty() && n.children.back().type == AstNode::Type::FnCall &&
+                n.children.back().value == "map" && n.children.back().children.size() == 2 &&
+                n.children.back().children[1].type == AstNode::Type::ExprLambda) {
+                // let up = names.map(fn (s) { ... }): typed before the literal was filled in.
+                const std::string t = inferExprNexaType(n.children.back());
+                globalNexaDecl_[n.value] = t;
+                nexaDeclStack_.front()[n.value] = t;
+            }
             semCheckVariableInit(n);
         }
         for (const AstNode& n : ast_) {
@@ -6607,6 +6623,10 @@ private:
             }
             default:
                 semExpr(s);
+                if (s.type == AstNode::Type::Return && !semLambdaRets_.empty() && semLambdaRets_.back()) {
+                    semLambdaRets_.back()->push_back(s.children.empty() ? std::string("void")
+                                                                        : inferExprNexaType(s.children[0]));
+                }
                 break;
         }
     }
@@ -6750,8 +6770,30 @@ private:
         }
     }
 
+    // xs.find / any / all / filter / map given a function literal: a parameter written with
+    // no type is an element of xs, and a return type not written is what it returns. The
+    // tree is the parser's (see semResolveStrMethod); this runs before anything reads the
+    // literal's type, and it runs once.
+    void semFillSliceFnLambda(const AstNode& e) {
+        if (e.children.size() != 2 || e.children[1].type != AstNode::Type::ExprLambda) return;
+        if (e.value != "find" && e.value != "any" && e.value != "all" && e.value != "filter" && e.value != "map") return;
+        std::string rt = inferExprNexaType(e.children[0]);
+        if (isPointerType(rt)) rt = pointerPointeeType(rt);
+        if (!nexaIsSliceType(rt)) return;
+        AstNode& lam = const_cast<AstNode&>(e.children[1]);
+        if (lam.paramNames.size() == 1 && (lam.lambdaUntyped & 1u) && !lam.paramTypes.empty()) {
+            lam.paramTypes[0] = nexaSliceElem(rt);
+            lam.lambdaUntyped = 0;
+        }
+        if (lam.fnReturnType.empty()) lam.lambdaInferRet = true;
+    }
+    // The types the returns of each function literal being checked give, innermost last;
+    // nullptr for a literal whose return type is written or not to be worked out.
+    std::vector<std::vector<std::string>*> semLambdaRets_;
+
     void semExpr(const AstNode& e) {
         semNoteLoc(e);
+        if (e.type == AstNode::Type::FnCall && e.initValue == "." && !e.children.empty()) semFillSliceFnLambda(e);
         if (e.type == AstNode::Type::StrMethod) {
             semResolveStrMethod(e);
             if (e.type == AstNode::Type::StrMethod) semCheckStrMethodArity(e);
@@ -6796,12 +6838,23 @@ private:
                 const int savedSwitch = semSwitchDepth_;
                 semLoopDepth_ = 0;
                 semSwitchDepth_ = 0;
+                std::vector<std::string> rets;
+                const bool inferRet = e.lambdaInferRet && e.fnReturnType.empty();
+                semLambdaRets_.push_back(inferRet ? &rets : nullptr);
                 // The body is a scope inside the parameters', as a named fn's is: a let
                 // there may shadow a parameter.
                 semBlock(e.children);
+                semLambdaRets_.pop_back();
                 semLoopDepth_ = savedLoop;
                 semSwitchDepth_ = savedSwitch;
                 nexaDeclStack_.pop_back();
+                if (inferRet && !rets.empty()) {
+                    // Every return gives a value and they share a type: that is the type.
+                    // Otherwise the literal keeps the int rule, and says so where it is wrong.
+                    std::string t = rets[0];
+                    for (size_t i = 1; i < rets.size() && !t.empty(); i++) t = matchJoinTypes(t, rets[i]);
+                    if (!t.empty() && t != "void") const_cast<AstNode&>(e).fnReturnType = t;
+                }
                 break;
             }
             case AstNode::Type::Block:
@@ -8019,7 +8072,7 @@ private:
     std::string emitPayloadCtor(const std::string& en, const std::string& variant,
                                 const std::vector<std::pair<std::string, std::string>>& assigns) const {
         const std::string cpp = enumCppNames_.at(en);
-        std::string s = "([&](){ " + cpp + " __n = {}; __n.__tag = " +
+        std::string s = lamOpen() + " " + cpp + " __n = {}; __n.__tag = " +
             std::to_string(enumVariantIndex(en, variant)) + ";";
         for (const auto& a : assigns) {
             s += " __n." + enumFieldCpp(en, variant, a.first) + " = " + a.second + ";";
@@ -10671,8 +10724,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             std::string got;
             for (size_t i = 0; i < pts.size(); i++) got += (i ? ", " : "") + nexaTypeForMessage(pts[i]);
             throw std::runtime_error("the function " + e.value + "(...) is given is called with one " + shownElem +
-                ", an element of the list, so it takes (x: " + shownElem + "); this one takes (" + got + ")" +
-                (pts.size() == 1 && pts[0] == "int" ? std::string(" (a parameter with no type is an int)") : std::string()) + at);
+                ", an element of the list, so it takes (x: " + shownElem + ") or just (x); this one takes (" + got + ")" + at);
         }
         if (test && ret != "bool" && !nexaIsNumericIntType(ret)) {
             throw std::runtime_error("the function " + e.value + "(...) is given answers whether an element fits, "
@@ -12632,7 +12684,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                         return "((" + R + ").find(" + A0 + ") != (" + R + ").end())";
                     }
                     if (nexaIsSliceType(inferExprNexaType(e.children[0]))) {
-                        return "([&](){ const auto& __nexa_v = " + R + "; const auto& __nexa_x = " + A0 +
+                        return lamOpen() + " const auto& __nexa_v = " + R + "; const auto& __nexa_x = " + A0 +
                             "; for (const auto& __nexa_e : __nexa_v) { if (__nexa_e == __nexa_x) return true; } return false; })()";
                     }
                     return "([](const std::string& __s, const std::string& __p){ return __s.find(__p) != std::string::npos; })(" + R + ", " + A0 + ")";
@@ -12646,7 +12698,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     // searches from the start; past the end, there is nothing to find.
                     const std::string from = A1.empty() ? std::string("0") : A1;
                     if (nexaIsSliceType(inferExprNexaType(e.children[0]))) {
-                        return "([&](){ const auto& __nexa_v = " + R + "; const auto& __nexa_x = " + A0 +
+                        return lamOpen() + " const auto& __nexa_v = " + R + "; const auto& __nexa_x = " + A0 +
                             "; int __nexa_i = (int)(" + from + "); if (__nexa_i < 0) __nexa_i = 0;"
                             " for (; __nexa_i < (int)__nexa_v.size(); __nexa_i++) { if (__nexa_v[(size_t)__nexa_i] == __nexa_x) return __nexa_i; } return -1; })()";
                     }
@@ -12657,7 +12709,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 }
                 if (m == "last_index_of") {
                     if (nexaIsSliceType(inferExprNexaType(e.children[0]))) {
-                        return "([&](){ const auto& __nexa_v = " + R + "; const auto& __nexa_x = " + A0 +
+                        return lamOpen() + " const auto& __nexa_v = " + R + "; const auto& __nexa_x = " + A0 +
                             "; for (int __nexa_i = (int)__nexa_v.size() - 1; __nexa_i >= 0; __nexa_i--) { if (__nexa_v[(size_t)__nexa_i] == __nexa_x) return __nexa_i; } return -1; })()";
                     }
                     return "([](const std::string& __s, const std::string& __p){ size_t __n = __s.rfind(__p); return __n == std::string::npos ? -1 : (int)__n; })(" + R + ", " + A0 + ")";
@@ -12665,7 +12717,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (m == "count") {
                     // Non-overlapping, left to right, as replace() walks: "aaaa".count("aa") is 2.
                     if (nexaIsSliceType(inferExprNexaType(e.children[0]))) {
-                        return "([&](){ const auto& __nexa_v = " + R + "; const auto& __nexa_x = " + A0 +
+                        return lamOpen() + " const auto& __nexa_v = " + R + "; const auto& __nexa_x = " + A0 +
                             "; int __nexa_c = 0; for (const auto& __nexa_e : __nexa_v) { if (__nexa_e == __nexa_x) __nexa_c++; } return __nexa_c; })()";
                     }
                     return "([](const std::string& __s, const std::string& __p){ if (__p.empty()) return 0; int __c = 0; size_t __i = 0; while ((__i = __s.find(__p, __i)) != std::string::npos) { __c++; __i += __p.size(); } return __c; })(" + R + ", " + A0 + ")";
@@ -12825,11 +12877,11 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     " if (__nexa_a > __nexa_n) __nexa_a = __nexa_n; if (__nexa_b > __nexa_n) __nexa_b = __nexa_n;"
                     " if (__nexa_b < __nexa_a) __nexa_b = __nexa_a; ";
                 if (baseT == "string") {
-                    return "([&](){ const auto& __nexa_s = " + asCppStdString(v) + "; " + bounds +
+                    return lamOpen() + " const auto& __nexa_s = " + asCppStdString(v) + "; " + bounds +
                         "return __nexa_s.substr((size_t)__nexa_a, (size_t)(__nexa_b - __nexa_a)); })()";
                 }
                 std::string cppT = nexaTypeToCpp(nexaIsSliceType(baseT) ? baseT : std::string("[]int"));
-                return "([&](){ const auto& __nexa_s = " + asCppStdString(v) + "; " + bounds +
+                return lamOpen() + " const auto& __nexa_s = " + asCppStdString(v) + "; " + bounds +
                     "return " + cppT + "(__nexa_s.begin() + __nexa_a, __nexa_s.begin() + __nexa_b); })()";
             }
             case AstNode::Type::ExprEnumLit: {

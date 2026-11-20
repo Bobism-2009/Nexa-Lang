@@ -131,6 +131,11 @@ struct AstNode {
     bool armHasGuard = false;
     // MatchArm: written Some { v } -- the names bind the variant's fields in order, not by name.
     bool armPositional = false;
+    // A function literal: bit i set when parameter i was written with no type (it reads
+    // as int, unless xs.filter(...) and its kin fill in the element type), and whether
+    // the return type is to be worked out from its returns.
+    unsigned lambdaUntyped = 0;
+    bool lambdaInferRet = false;
     bool isConst = false;       // for Variable: true = let const x = ...
     bool isFixedArray = false;  // for Variable: true = let x: type[size]; (fixed-size buffer)
     bool isArrowMember = false; // for ExprMember: true = ptr->field, false = value.field
@@ -2823,6 +2828,7 @@ private:
         }
         std::vector<std::string> params;
         std::vector<std::string> types;
+        unsigned untyped = 0;
         if (peek().type != TokenType::RParen) {
             for (;;) {
                 const Token& p = peek();
@@ -2834,6 +2840,8 @@ private:
                 std::string ptype = "int";
                 if (match(TokenType::Colon)) {
                     ptype = parseTypeName();
+                } else if (params.size() <= 32) {
+                    untyped |= 1u << (params.size() - 1);
                 }
                 types.push_back(ptype);
                 if (match(TokenType::Assign)) {
@@ -2856,6 +2864,7 @@ private:
         node.fnReturnType = std::move(fnReturnType);
         node.paramNames = std::move(params);
         node.paramTypes = std::move(types);
+        node.lambdaUntyped = untyped;
         node.children = parseBlock();
         if (!match(TokenType::RBrace)) {
             throw std::runtime_error("Expected '}' after lambda body at line " + std::to_string(peek().line));

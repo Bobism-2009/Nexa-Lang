@@ -690,18 +690,21 @@ SLICES ([]T)
   SLICE FUNCTIONS
     Five methods take a function of one element (a literal or a named fn):
 
-      let big = xs.find(fn (x: int) { return x > 10; });  // Option[int]: the first, or None
-      if (xs.any(is_even)) { ... }                         // does one fit
-      if (xs.all(fn (x: int) { return x > 0; })) { ... }   // does every one (true when empty)
-      let evens = xs.filter(is_even);                      // []int of those that fit
-      let names = items.map(fn (it: Item): string { return it.name; });  // []string
+      let big = xs.find(fn (x) { return x > 10; });   // Option[int]: the first, or None
+      if (xs.any(is_even)) { ... }                    // does one fit
+      if (xs.all(fn (x) { return x > 0; })) { ... }   // does every one (true when empty)
+      let evens = xs.filter(is_even);                 // []int of those that fit
+      let names = items.map(fn (it) { return it.name; });  // []string
 
-    The function takes one parameter of the element type -- write it, as in
-    fn (s: string): a parameter with no type is an int, and a []string given
-    fn (s) is told so. find / any / all / filter want an answer: a bool, or an
-    int read as one (a literal with no return type returns int). map makes a
-    list of whatever its function returns, so write the return type when it is
-    not an int: fn (s: string): string { ... }.
+    The function takes one parameter, an element of the list. A literal written
+    straight into the call needs no types: its parameter is the element type
+    (fn (it) on a []Item is fn (it: Item)), and its return type is what its
+    returns give (it.name is a string, so map makes a []string). Writing them
+    is allowed, and they must agree. This is only for a literal given to one of
+    these five; elsewhere a parameter with no type is an int, as for any fn.
+
+    find / any / all / filter want an answer: a bool, or an int read as one.
+    map makes a list of whatever its function returns.
 
     They stop where they can: find and any at the first yes, all at the first
     no. They read the list and never change it; filter and map make a new one.
@@ -709,8 +712,8 @@ SLICES ([]T)
     the loop written out costs, and it sees the names around it:
 
       let lim = 5;
-      let n = len(xs.filter(fn (x: int) { return x > lim; }));
-      let total = xs.filter(is_even).map(fn (x: int) { return x * x; }).sum();
+      let n = len(xs.filter(fn (x) { return x > lim; }));
+      let total = xs.filter(is_even).map(fn (x) { return x * x; }).sum();
 
   Element type can be anything parseTypeName accepts: []string, []Point, [][]int, []*int.
   `fn f(xs: []int)` and struct fields work the same way.

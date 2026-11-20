@@ -168,10 +168,10 @@ fn main() {
     let lw = loud(words);
     io.println(lw.or("-"), " ", lw.is_some(), " ", loud([]).is_none(), " ", lw.value().len());
     io.println(totals.get("cup").or(0), " ", totals.get("nope").is_none(), " ", words.first().or(""), " ", items.last().value().name);
-    let few = bag.filter(fn (x: int) { return x > 1; });
-    io.println(len(few), " ", items.any(fn (it: Item) { return it.qty > 10; }), " ", bag.all(fn (x: int) { return x > 0; }),
-               " ", bag.map(fn (x: int) { return x * sum; }).sum(), " ",
-               items.find(fn (it: Item) { return it.name == "cup"; }).value().qty);
+    let few = bag.filter(fn (x) { return x > 1; });
+    io.println(len(few), " ", items.any(fn (it) { return it.qty > 10; }), " ", bag.all(fn (x: int) { return x > 0; }),
+               " ", bag.map(fn (x) { return x * sum; }).sum(), " ",
+               items.find(fn (it) { return it.name == "cup"; }).value().qty);
 }
 EOF
 
