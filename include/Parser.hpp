@@ -3988,8 +3988,8 @@ private:
         if (nameTok.type != TokenType::Identifier) {
             // for (;;) and for (let i = 0; ...) are C's; say what Nexa's are
             if (nameTok.type == TokenType::Semicolon || nameTok.type == TokenType::Let) {
-                throw std::runtime_error("Nexa's loops are for (i, n) (i from 0 to n - 1), for (x in xs) and "
-                                         "while (cond); for (;;) is while (true) at line " +
+                throw std::runtime_error("Nexa's loops are for (i, n) (i from 0 to n - 1), for (i in a..b) (a to b), "
+                                         "for (x in xs) and while (cond); for (;;) is while (true) at line " +
                                          std::to_string(nameTok.line));
             }
             throw std::runtime_error("Expected loop variable name at line " + std::to_string(nameTok.line));
@@ -4000,6 +4000,19 @@ private:
         if (peek().type == TokenType::Identifier && peek().value == "in") {
             advance();
             AstNode collExpr = parseExpression();
+            if (match(TokenType::DotDot)) {
+                // for (i in a..b): a to b, both included; for (i in a..<b): a to b - 1.
+                // A For whose children are the start, the body and the end.
+                const bool open = match(TokenType::Less);
+                AstNode endExpr = parseExpression();
+                if (!match(TokenType::RParen)) {
+                    throw std::runtime_error("Expected ')' after for (... in a..b) at line " + std::to_string(peek().line));
+                }
+                AstNode block = parseBody();
+                AstNode node{AstNode::Type::For, varName, {std::move(collExpr), std::move(block), std::move(endExpr)}};
+                node.initValue = open ? "..<" : "..";
+                return node;
+            }
             if (!match(TokenType::RParen)) {
                 throw std::runtime_error("Expected ')' after for (... in ...) at line " + std::to_string(peek().line));
             }

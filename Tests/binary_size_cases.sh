@@ -14,8 +14,8 @@
 #   size       Windows and Linux: an everyday program -- strings, a slice, a map,
 #              an f-string, a Result, io.to_int, io.parse_int / parse_float /
 #              to_float, io.eprintln, time.unix / format, a thread.mutex, a defer, float32 and
-#              bits, std/math, all of std/random, the std/file extras, std/term colour and an
-#              enum taken apart by match (as a statement and as a value, with a guard), a match
+#              bits, std/math, all of std/random, the std/file extras, std/term colour,
+#              range loops (a..b, a..<b, over chars), an enum taken apart by match (as a statement and as a value, with a guard), a match
 #              on a Result and on ints (with ranges) and strings, and an Option with its methods, ?, m.get and xs.first,
 #              and xs.filter / any / all / map / find given function literals -- is
 #              under 64KB, and prints
@@ -115,6 +115,8 @@ fn main() {
     let items = [Item { name: "pen", qty: 3 }, Item { name: "cup", qty: 12 }, Item { name: "map" }];
     let totals: map[string]int;
     for (it in items) { totals[it.name] += it.qty; }
+    for (i in 1..<len(items)) { totals[items[i].name] += i; }
+    for (c in 'a'..'c') { totals["pen"] += (int)(c) - 96; }
     let words = "7,x,-4".split(",");
     let sum = 0;
     for (w in words) {

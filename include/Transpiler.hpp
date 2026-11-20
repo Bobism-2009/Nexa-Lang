@@ -3499,8 +3499,12 @@ private:
         }
         if (n.type == AstNode::Type::For) {
             if (!n.children.empty()) discoverNode(n.children[0]);
+            const bool range = forIsRange(n);
+            if (range) discoverNode(n.children[2]);
+            std::string loopT = "int";
+            if (range) { const std::string t = forRangeType(n); if (!t.empty()) loopT = t; }
             nexaDeclStack_.push_back({});
-            if (!n.value.empty()) semDeclare(n.value, "int");
+            if (!n.value.empty()) semDeclare(n.value, loopT);
             if (n.children.size() > 1) {
                 if (n.children[1].type == AstNode::Type::Block) discoverStmts(n.children[1].children);
                 else discoverNode(n.children[1]);
@@ -6476,8 +6480,21 @@ private:
             }
             case AstNode::Type::For: {
                 if (!s.children.empty()) semExpr(s.children[0]);
+                std::string loopT = "int";
+                if (forIsRange(s)) {
+                    semExpr(s.children[2]);
+                    std::string why;
+                    loopT = forRangeType(s, &why);
+                    if (loopT.empty()) semError(s.children[0], why);
+                    const AstNode& st = s.children[0];
+                    if ((loopT == "size_t" || loopT.rfind("unsigned", 0) == 0) && exprIsIntLiteral(st) &&
+                        (st.type == AstNode::Type::ExprSub || (!st.value.empty() && st.value[0] == '-'))) {
+                        semError(s.children[0], "this range loop counts in " + nexaTypeForMessage(loopT) +
+                            ", which is never below 0, so it cannot start at a negative number");
+                    }
+                }
                 nexaDeclStack_.push_back({});
-                semDeclare(s.value, "int");
+                semDeclare(s.value, loopT);
                 semLoopDepth_++;
                 if (s.children.size() > 1) semBlock(s.children[1].children);
                 semLoopDepth_--;
@@ -10155,6 +10172,48 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 out << indent << "while (" << cond << ") {\n";
                 emitBlock(out, child.children[1].children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "    ", inStringSwitchCase);
                 out << indent << "}\n";
+            } else if (forIsRange(child)) {
+                // for (T i = a, end = b; i <= end; i++): the ends read once, before i is named.
+                const std::string lo = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                const std::string hi = emitExpr(child.children[2], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                std::string loopT = forRangeType(child);
+                if (loopT.empty()) loopT = "int";
+                const std::string loopVar = preserveNames_ ? preservedVarName(child.value, varMap) : ("__nexa_for_" + std::to_string(varIdx++));
+                const std::string endVar = "__nexa_end_" + std::to_string(varIdx++);
+                const std::string& name = child.value;
+                struct Saved { bool had; std::string v; bool s, c, f, ch, b, e; };
+                auto it = varMap.find(name);
+                const Saved sv{it != varMap.end(), it != varMap.end() ? it->second : std::string(), varIsString[name],
+                               varIsConst[name], varIsFloat[name], varIsChar[name], varIsBool[name], varIsEnum[name]};
+                bool hadDecl = false;
+                std::string prevDecl;
+                if (!nexaDeclStack_.empty()) {
+                    auto dit = nexaDeclStack_.back().find(name);
+                    if (dit != nexaDeclStack_.back().end()) { hadDecl = true; prevDecl = dit->second; }
+                    nexaDeclStack_.back()[name] = loopT;
+                }
+                varMap[name] = loopVar;
+                varIsString[name] = false;
+                varIsConst[name] = false;
+                varIsFloat[name] = false;
+                varIsChar[name] = loopT == "char" || loopT == "unsigned char";
+                varIsBool[name] = false;
+                varIsEnum[name] = false;
+                out << indent << "for (" << nexaTypeToCpp(loopT) << " " << loopVar << " = " << lo << ", " << endVar << " = " << hi
+                    << "; " << loopVar << (child.initValue == "..<" ? " < " : " <= ") << endVar << "; " << loopVar << "++) {\n";
+                emitBlock(out, child.children[1].children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "    ", inStringSwitchCase);
+                out << indent << "}\n";
+                if (sv.had) {
+                    varMap[name] = sv.v; varIsString[name] = sv.s; varIsConst[name] = sv.c; varIsFloat[name] = sv.f;
+                    varIsChar[name] = sv.ch; varIsBool[name] = sv.b; varIsEnum[name] = sv.e;
+                } else {
+                    varMap.erase(name); varIsString.erase(name); varIsConst.erase(name); varIsFloat.erase(name);
+                    varIsChar.erase(name); varIsBool.erase(name); varIsEnum.erase(name);
+                }
+                if (!nexaDeclStack_.empty()) {
+                    if (hadDecl) nexaDeclStack_.back()[name] = prevDecl;
+                    else nexaDeclStack_.back().erase(name);
+                }
             } else if (child.type == AstNode::Type::For) {
                 std::string loopVar = preserveNames_ ? preservedVarName(child.value, varMap) : ("__nexa_for_" + std::to_string(varIdx++));
                 auto it = varMap.find(child.value);
@@ -10917,6 +10976,46 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         if (r.initValue == "hi") { if (!r.children.empty()) matchLitValue(r.children[0], hi); return; }
         if (!r.children.empty()) matchLitValue(r.children[0], lo);
         if (r.initValue == "both" && r.children.size() == 2) matchLitValue(r.children[1], hi);
+    }
+
+    // for (i in a..b) and for (i in a..<b): a For holding the start, the body and the end.
+    static bool forIsRange(const AstNode& n) {
+        return n.type == AstNode::Type::For && n.children.size() == 3 && (n.initValue == ".." || n.initValue == "..<");
+    }
+    static bool exprIsIntLiteral(const AstNode& e) {
+        if (e.type == AstNode::Type::ExprIntLiteral) return true;
+        return e.type == AstNode::Type::ExprSub && e.children.size() == 2 && e.children[0].initValue == "unary-minus" &&
+               e.children[1].type == AstNode::Type::ExprIntLiteral;
+    }
+    // The loop variable's type, from the ends: a literal end takes the other's type
+    // (0..<n with n a size_t counts in size_t), else the wider; chars count in char.
+    // "" when the ends are not ints or chars alike, with why.
+    std::string forRangeType(const AstNode& n, std::string* why = nullptr) const {
+        const AstNode& a = n.children[0];
+        const AstNode& b = n.children[2];
+        const std::string ta = inferExprNexaType(a), tb = inferExprNexaType(b);
+        auto isCh = [](const std::string& t) { return t == "char" || t == "unsigned char"; };
+        for (const std::string* t : {&ta, &tb}) {
+            if (!nexaIsIntegerType(*t)) {
+                if (why) *why = "a range loop counts ints or chars, and " + withArticle(nexaTypeForMessage(*t)) +
+                    " is neither: use for (x in xs) for a list, or while for a float";
+                return std::string();
+            }
+        }
+        if (isCh(ta) != isCh(tb)) {
+            if (why) *why = "a range loop's two ends are both ints or both chars, and these are " +
+                withArticle(nexaTypeForMessage(ta)) + " and " + withArticle(nexaTypeForMessage(tb));
+            return std::string();
+        }
+        if (isCh(ta)) return ta == tb ? ta : std::string("char");
+        if (exprIsIntLiteral(a) && !exprIsIntLiteral(b)) return tb;
+        if (exprIsIntLiteral(b)) return ta;
+        auto rank = [](const std::string& t) {
+            if (t == "short" || t == "unsigned short") return 1;
+            if (t == "int" || t == "unsigned int") return 2;
+            return 3;
+        };
+        return rank(tb) > rank(ta) ? tb : ta;
     }
 
     // An arm's guard is a condition, read where the arm's names are in scope.

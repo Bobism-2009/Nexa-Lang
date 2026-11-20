@@ -259,6 +259,8 @@ MATCH AS A VALUE
 
 LOOPS
   for (i, n) { ... }       - loop i from 0 to n-1
+  for (i in a..b) { ... }  - loop i from a to b, both included (1..5 is 1 2 3 4 5)
+  for (i in a..<b) { ... } - loop i from a to b-1 (0..<len(xs) is each index of xs)
   for (x in arr) { ... }   - iterate each element of a slice
   for (c in s) { ... }     - iterate each character (a char) of a string
   for (k, v in m) { ... }  - iterate map keys and values (std::map order)
@@ -271,6 +273,20 @@ LOOPS
   break;                 - exit loop immediately
   continue;               - skip to next iteration
   true, false - boolean literals (like C++)
+
+  RANGE LOOPS
+    for (i in 1..10) { ... }           // 1 to 10
+    for (i in 0..<len(xs)) { ... }     // 0 to len(xs) - 1
+    for (c in 'a'..'z') { ... }        // each letter, as a char
+
+    - .. takes both ends, as in a match range; ..< stops short of the end.
+    - The ends are ints or chars, read once before the loop starts: changing
+      them in the body does not change how many times it runs.
+    - It counts up by one. A range whose start is past its end (5..1, n..<n)
+      runs nothing.
+    - i takes the ends' type: 0..<n with n a size_t counts in size_t, and
+      big..big + 2 with big a long counts in long.
+    - It is a plain C++ for loop: no list is made.
 
   Example:
     let nums = [10, 20, 30];
