@@ -16,7 +16,8 @@
 #              to_float, io.eprintln, time.unix / format, a thread.mutex, a defer, float32 and
 #              bits, std/math, all of std/random, the std/file extras, std/term colour and an
 #              enum taken apart by match (as a statement and as a value, with a guard), a match
-#              on a Result and on ints and strings, and an Option with its methods, ?, m.get and xs.first -- is
+#              on a Result and on ints and strings, and an Option with its methods, ?, m.get and xs.first,
+#              and xs.filter / any / all / map / find given function literals -- is
 #              under 64KB, and prints
 #              exactly what the same program built without the slimming
 #              (NEXA_NO_SLIM=1) prints. It does not include std/gfx3d, so the
@@ -167,6 +168,10 @@ fn main() {
     let lw = loud(words);
     io.println(lw.or("-"), " ", lw.is_some(), " ", loud([]).is_none(), " ", lw.value().len());
     io.println(totals.get("cup").or(0), " ", totals.get("nope").is_none(), " ", words.first().or(""), " ", items.last().value().name);
+    let few = bag.filter(fn (x: int) { return x > 1; });
+    io.println(len(few), " ", items.any(fn (it: Item) { return it.qty > 10; }), " ", bag.all(fn (x: int) { return x > 0; }),
+               " ", bag.map(fn (x: int) { return x * sum; }).sum(), " ",
+               items.find(fn (it: Item) { return it.name == "cup"; }).value().qty);
 }
 EOF
 

@@ -687,6 +687,31 @@ SLICES ([]T)
       let mid = xs[1:4];
       mid.sort();
 
+  SLICE FUNCTIONS
+    Five methods take a function of one element (a literal or a named fn):
+
+      let big = xs.find(fn (x: int) { return x > 10; });  // Option[int]: the first, or None
+      if (xs.any(is_even)) { ... }                         // does one fit
+      if (xs.all(fn (x: int) { return x > 0; })) { ... }   // does every one (true when empty)
+      let evens = xs.filter(is_even);                      // []int of those that fit
+      let names = items.map(fn (it: Item): string { return it.name; });  // []string
+
+    The function takes one parameter of the element type -- write it, as in
+    fn (s: string): a parameter with no type is an int, and a []string given
+    fn (s) is told so. find / any / all / filter want an answer: a bool, or an
+    int read as one (a literal with no return type returns int). map makes a
+    list of whatever its function returns, so write the return type when it is
+    not an int: fn (s: string): string { ... }.
+
+    They stop where they can: find and any at the first yes, all at the first
+    no. They read the list and never change it; filter and map make a new one.
+    A literal is called in place, not through a std::function, so it costs what
+    the loop written out costs, and it sees the names around it:
+
+      let lim = 5;
+      let n = len(xs.filter(fn (x: int) { return x > lim; }));
+      let total = xs.filter(is_even).map(fn (x: int) { return x * x; }).sum();
+
   Element type can be anything parseTypeName accepts: []string, []Point, [][]int, []*int.
   `fn f(xs: []int)` and struct fields work the same way.
   Empty: `let xs: []int;` (length 0), or the empty literal `[]`.

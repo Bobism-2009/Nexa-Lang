@@ -934,7 +934,9 @@ public:
         if (needsString && moduleCppIncludes.find("#include <string>\n") == std::string::npos) out << "#include <string>\n";
         if (needsVector && moduleCppIncludes.find("#include <vector>\n") == std::string::npos) out << "#include <vector>\n";
         if (needsMap && moduleCppIncludes.find("#include <map>\n") == std::string::npos) out << "#include <map>\n";
-        if (needsFunctional && moduleCppIncludes.find("#include <functional>\n") == std::string::npos) out << "#include <functional>\n";
+        // A marker, not the include: a program whose only function literals are handed to
+        // xs.find / filter / ... names no std::function, and keeps the header out.
+        if (needsFunctional && moduleCppIncludes.find("#include <functional>\n") == std::string::npos) out << kFunctionalMarker;
         // Float->string helper that matches io.print's "%g" formatting (e.g. 12.0 -> "12", not "12.000000").
         if (needsString && moduleCppIncludes.find("#include <cstdio>\n") == std::string::npos) out << "#include <cstdio>\n";
         if (needsCstdlib && moduleCppIncludes.find("#include <cstdlib>\n") == std::string::npos) out << "#include <cstdlib>\n";
@@ -1996,6 +1998,11 @@ public:
             // Filled in before the dedup, so a line the marker sat in front of is read as itself.
             const size_t at = src.find(kNoneMarker);
             if (at != std::string::npos) src.replace(at, std::string(kNoneMarker).size(), needNoneFail_ ? kNoneRuntime : "");
+            const size_t fat = src.find(kFunctionalMarker);
+            if (fat != std::string::npos) {
+                src.replace(fat, std::string(kFunctionalMarker).size(),
+                            src.find("std::function") != std::string::npos ? "#include <functional>\n" : "");
+            }
         }
         src = dedupUnconditionalIncludes(stripInactivePlatformGuards(src, target_));
         {
@@ -2317,7 +2324,8 @@ private:
                m == "last_index_of" ||
                m == "get" || m == "get_at" || m == "keys" || m == "values" || m == "count" ||
                m == "empty" || m == "ok" || m == "value" || m == "error" || m == "stringify" ||
-               m == "join" || m == "min" || m == "max" || m == "sum";
+               m == "join" || m == "min" || m == "max" || m == "sum" || m == "first" || m == "last" ||
+               m == "find" || m == "any" || m == "all" || m == "filter" || m == "map";
     }
 
     // xs.sort() / xs.sort_desc(), as an in-place heapsort over the emitted receiver.
@@ -4184,8 +4192,18 @@ private:
                                 e.value == "sum") {
                                 return nexaSliceElem(recvT);
                             }
-                            if ((e.value == "first" || e.value == "last") && genericEnums_.count("Option")) {
+                            if ((e.value == "first" || e.value == "last" || e.value == "find") &&
+                                genericEnums_.count("Option")) {
                                 return "enum:Option[" + nexaSliceElem(recvT) + "]";
+                            }
+                            if (e.value == "any" || e.value == "all") return "bool";
+                            if (e.value == "filter") return recvT;
+                            if (e.value == "map" && e.children.size() == 2) {
+                                std::vector<std::string> pts;
+                                std::string ret;
+                                if (nexaSplitFnType(inferExprNexaType(e.children[1]), pts, ret) && ret != "void") {
+                                    return "[]" + ret;
+                                }
                             }
                             if (e.value == "has") return "bool";
                             if (e.value == "join") return "string";
@@ -4734,6 +4752,30 @@ private:
                     if (e.children.size() != 1) throw std::runtime_error(e.value + " expects no arguments");
                     return emitOptionMake(inferExprNexaType(e), "const auto& __v = " + recv + ";", "!__v.empty()",
                                           e.value == "first" ? "__v.front()" : "__v.back()", "xs." + e.value + "()");
+                }
+                if (e.value == "find" || e.value == "any" || e.value == "all" || e.value == "filter" ||
+                    e.value == "map") {
+                    // xs.find(f): Some(the first element f says yes to), or None. any / all: does
+                    // f say yes to one / to every one. filter: those it says yes to. map: f of each.
+                    const std::string ret = sliceFnArgRet(e, nexaSliceElem(recvBare));
+                    bareLambda_ = e.children[1].type == AstNode::Type::ExprLambda;
+                    const std::string f = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    bareLambda_ = false;
+                    const std::string setup = "const auto& __v = " + recv + "; auto&& __f = " + f + "; size_t __i = 0;";
+                    const std::string loop = " for (; __i < __v.size(); __i++)";
+                    if (e.value == "find") {
+                        return emitOptionMake(inferExprNexaType(e), setup + loop + " { if (__f(__v[__i])) break; }",
+                                              "__i < __v.size()", "__v[__i]", "xs.find(f)");
+                    }
+                    const std::string open = emitAtFileScope_ ? "([]() { " : "([&]() { ";
+                    if (e.value == "any") return open + setup + loop + " { if (__f(__v[__i])) return true; } return false; })()";
+                    if (e.value == "all") return open + setup + loop + " { if (!__f(__v[__i])) return false; } return true; })()";
+                    if (e.value == "filter") {
+                        return open + setup + " " + nexaTypeToCpp(recvBare) + " __r;" + loop +
+                            " { if (__f(__v[__i])) __r.push_back(__v[__i]); } return __r; })()";
+                    }
+                    return open + setup + " " + nexaTypeToCpp("[]" + ret) + " __r; __r.reserve(__v.size());" + loop +
+                        " __r.push_back(__f(__v[__i])); return __r; })()";
                 }
                 if (e.value == "push") {
                     if (e.children.size() != 2) throw std::runtime_error("push expects one argument");
@@ -6068,7 +6110,7 @@ private:
                 return;
             }
             if (n.type == AstNode::Type::FnCall && n.initValue == "." && !n.children.empty() &&
-                (n.value == "get" || n.value == "first" || n.value == "last") &&
+                (n.value == "get" || n.value == "first" || n.value == "last" || n.value == "find") &&
                 [&]() {
                     std::string rt = inferExprNexaType(n.children[0]);
                     if (isPointerType(rt)) rt = pointerPointeeType(rt);
@@ -8243,6 +8285,7 @@ template <class __I> inline const char& __nexa_ix(const std::string& __s, __I __
     // one; otherwise say so and stop, as Result.value() on an error does.
     mutable bool needNoneFail_ = false;
     static constexpr const char* kNoneMarker = "// [nexa:none]";
+    static constexpr const char* kFunctionalMarker = "// [nexa:functional]\n";
     static constexpr const char* kNoneRuntime = R"NEXA_NONE(#include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
@@ -10606,6 +10649,42 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             enumFieldCpp(en, "Some", "value") + " = " + value + "; } else { __o.__tag = " +
             std::to_string(enumVariantIndex(en, "None")) + "; } return __o; })()";
     }
+    // xs.find / any / all / filter / map take one function, of one element of xs. Checks
+    // it and answers what it returns; a test (all but map) answers true or false.
+    std::string sliceFnArgRet(const AstNode& e, const std::string& elem) {
+        const bool test = e.value != "map";
+        const std::string at = e.line ? " at line " + std::to_string(e.line) : std::string();
+        const std::string shownElem = nexaTypeForMessage(elem);
+        const std::string example = "xs." + e.value + "(fn (x: " + shownElem + ") { return " +
+            (test ? "x == y" : "x") + "; })";
+        if (e.children.size() != 2) {
+            throw std::runtime_error(e.value + " takes one function, as in " + example + at);
+        }
+        std::vector<std::string> pts;
+        std::string ret;
+        const std::string ft = inferExprNexaType(e.children[1]);
+        if (!nexaSplitFnType(ft, pts, ret)) {
+            throw std::runtime_error(e.value + "(...) takes a function, as in " + example + "; this is " +
+                                     withArticle(nexaTypeForMessage(ft)) + at);
+        }
+        if (pts.size() != 1 || pts[0] != elem) {
+            std::string got;
+            for (size_t i = 0; i < pts.size(); i++) got += (i ? ", " : "") + nexaTypeForMessage(pts[i]);
+            throw std::runtime_error("the function " + e.value + "(...) is given is called with one " + shownElem +
+                ", an element of the list, so it takes (x: " + shownElem + "); this one takes (" + got + ")" +
+                (pts.size() == 1 && pts[0] == "int" ? std::string(" (a parameter with no type is an int)") : std::string()) + at);
+        }
+        if (test && ret != "bool" && !nexaIsNumericIntType(ret)) {
+            throw std::runtime_error("the function " + e.value + "(...) is given answers whether an element fits, "
+                "so it returns a bool; this one returns " + (ret == "void" ? std::string("nothing") :
+                withArticle(nexaTypeForMessage(ret))) + at);
+        }
+        if (!test && ret == "void") {
+            throw std::runtime_error("the function map(...) is given makes each new element, so it returns a value; "
+                "this one returns nothing" + at);
+        }
+        return ret;
+    }
     std::string optionInner(const std::string& en) const {
         const std::vector<EnumField> f = enumPayloadFields(en, "Some");
         return f.empty() ? std::string() : f[0].type;
@@ -11426,6 +11505,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         return s;
     }
 
+    bool bareLambda_ = false;
     std::string emitLambdaExpr(const AstNode& e,
                               const std::map<std::string, std::string>& varMap,
                               const std::map<std::string, bool>* varIsString,
@@ -11435,6 +11515,10 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         // A closure in a global let has no locals around it to capture, and C++ refuses
         // a capture-default ([&]) at file scope; its body is still a function body.
         const bool atFileScope = emitAtFileScope_;
+        // A literal handed straight to xs.find / any / all / filter / map is called right
+        // there, so it stays a plain lambda: a std::function would stop it inlining.
+        const bool bare = bareLambda_;
+        bareLambda_ = false;
         struct FileScopeOff {
             bool& f; bool was;
             explicit FileScopeOff(bool& flag) : f(flag), was(flag) { f = false; }
@@ -11495,7 +11579,9 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         mainRetType_ = savedMainRet;
         varStructPop();
         nexaDeclStack_.pop_back();
-        return nexaTypeToCpp(ty) + (atFileScope ? "([](" : "([&](") + sig + ") -> " + nexaTypeToCpp(ret) + " {\n" + body.str() + "})";
+        const std::string lam = std::string(atFileScope ? "[](" : "[&](") + sig + ") -> " + nexaTypeToCpp(ret) + " {\n" +
+                                body.str() + "}";
+        return bare ? lam : nexaTypeToCpp(ty) + "(" + lam + ")";
     }
 
     // C++ precedence tier of a Nexa binary node, higher binds tighter.

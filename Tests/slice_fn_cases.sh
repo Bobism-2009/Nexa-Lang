@@ -1,0 +1,174 @@
+#!/bin/sh
+# xs.find(f), xs.any(f), xs.all(f), xs.filter(f), xs.map(f): slice methods that
+# take a function of one element.
+#
+# Usage: Tests/slice_fn_cases.sh [path-to-NexaC]   (from the repo root)
+
+set -u
+NEXAC="${1:-./NexaC}"
+case "$NEXAC" in
+    /*|[A-Za-z]:*) ;;
+    *) NEXAC="$(pwd)/$NEXAC" ;;
+esac
+WORK=$(mktemp -d 2>/dev/null || mktemp -d -t nexaslicefn)
+trap 'rm -rf "$WORK"' EXIT
+FAIL=0
+
+bad() { echo "FAIL $1: $2"; FAIL=$((FAIL + 1)); }
+ok() { echo "ok   $1"; }
+
+run_eq() {
+    label=$1
+    src=$2
+    want=$3
+    printf '%s\n' "$src" > "$WORK/p.nxa"
+    out=$("$NEXAC" "$WORK/p.nxa" -o "$WORK/p" 2>&1)
+    if [ $? -ne 0 ]; then
+        bad "$label" "$out"
+        return
+    fi
+    bin="$WORK/p"
+    [ -f "$bin" ] || bin="$WORK/p.exe"
+    got=$(printf '%s' "$("$bin" 2>&1)" | tr -d '\r')
+    if [ "$got" = "$want" ]; then
+        ok "$label"
+    else
+        bad "$label" "expected [$want] got [$got]"
+    fi
+}
+
+expect_has() {
+    label=$1
+    src=$2
+    want=$3
+    printf '%s\n' "$src" > "$WORK/bad.nxa"
+    out=$("$NEXAC" "$WORK/bad.nxa" --source "$WORK/bad.cpp" 2>&1)
+    if [ $? -eq 0 ]; then
+        bad "$label" "NexaC accepted it"
+        return
+    fi
+    case $out in
+        *"$want"*) ok "$label" ;;
+        *) bad "$label" "$out" ;;
+    esac
+}
+
+# The C++ ahead of main() -- headers, runtime helpers, types -- is the same for
+# both programs: what the first one uses brings no code of its own.
+prelude_eq() {
+    label=$1
+    printf '%s\n' "$2" > "$WORK/a.nxa"
+    printf '%s\n' "$3" > "$WORK/b.nxa"
+    if ! "$NEXAC" "$WORK/a.nxa" --source "$WORK/a.cpp" >/dev/null 2>&1 ||
+       ! "$NEXAC" "$WORK/b.nxa" --source "$WORK/b.cpp" >/dev/null 2>&1; then
+        bad "$label" "NexaC refused a program"
+        return
+    fi
+    sed '/^int main/,$d' "$WORK/a.cpp" > "$WORK/a.pre"
+    sed '/^int main/,$d' "$WORK/b.cpp" > "$WORK/b.pre"
+    if [ -s "$WORK/a.pre" ] && cmp -s "$WORK/a.pre" "$WORK/b.pre"; then
+        ok "$label"
+    else
+        bad "$label" "the C++ before main() differs"
+    fi
+}
+
+run_eq "find, any, all, filter, map on ints" \
+'#include <std/io>
+fn even(x: int): bool { return x % 2 == 0; }
+fn main() {
+    let xs = [3, 8, 1, 12, 7];
+    io.println(xs.find(fn (x: int) { return x > 5; }).or(-1), " ", xs.find(fn (x: int) { return x > 50; }).or(-1));
+    io.println(xs.any(even), " ", xs.all(even), " ", xs.all(fn (x: int) { return x > 0; }));
+    let ev = xs.filter(even);
+    io.println(len(ev), " ", ev[0], " ", ev[1]);
+    io.println(xs.map(fn (x: int) { return x * x; }).sum());
+}' "8 -1
+true false true
+2 8 12
+267"
+
+run_eq "strings, structs, and a map to another type" \
+'#include <std/io>
+struct Item { name: string; qty: int; }
+fn main() {
+    let names = ["ann", "bo", "cyd"];
+    io.println(names.map(fn (s: string): string { return s.upper(); }).join(","));
+    io.println(names.map(fn (s: string): int { return len(s); }).sum());
+    io.println(names.filter(fn (s: string) { return len(s) == 3; }).join("+"));
+    let items = [Item { name: "pen", qty: 3 }, Item { name: "cup", qty: 0 }];
+    match (items.find(fn (it: Item) { return it.qty == 0; })) {
+        Some { it } => { io.println("out: " + it.name); }
+        None => { io.println("all stocked"); }
+    }
+    io.println(items.map(fn (it: Item): string { return it.name; }).join(" "));
+}' "ANN,BO,CYD
+8
+ann+cyd
+out: cup
+pen cup"
+
+run_eq "chained, captured, with ?, at file scope, on empty" \
+'#include <std/io>
+fn even(x: int): bool { return x % 2 == 0; }
+let tens = [1, 2, 3].map(fn (x: int) { return x * 10; });
+fn first_big(xs: []int, lim: int): Option[int] {
+    let v = xs.find(fn (x: int) { return x > lim; })?;
+    return Some(v * 2);
+}
+fn main() {
+    let xs = [3, 8, 1, 12, 7];
+    let lim = 6;
+    io.println(xs.filter(fn (x: int) { return x > lim; }).map(fn (x: int) { return x + 1; }).sum());
+    io.println(first_big(xs, 9).or(0), " ", first_big(xs, 99).or(0), " ", tens.sum());
+    let none: []int;
+    io.println(none.any(even), " ", none.all(even), " ", len(none.filter(even)), " ", none.find(even).is_none());
+    let seen = 0;
+    let same = xs.map(fn (x: int) { seen = seen + 1; return x; });
+    io.println(seen, " ", len(same));
+    let flags = [false, true];
+    io.println(flags.find(fn (b: bool) { return b; }).is_some(), " ", flags.all(fn (b: bool) { return b; }));
+}' "30
+24 0 60
+false true 0 true
+5 5
+true false"
+
+run_eq "a user struct keeps its own find" \
+'#include <std/io>
+struct Bag { xs: []int; fn find(n: int): int { return n * 2; } fn map(n: int): int { return n + 1; } }
+fn main() {
+    let b = Bag { xs: [1] };
+    io.println(b.find(4), " ", b.map(4));
+}' "8 5"
+
+expect_has "the function takes an element" '#include <std/io>
+fn main() { let n = ["a"].find(fn (s) { return s == "a"; }); }' \
+"so it takes (x: string); this one takes (int) (a parameter with no type is an int)"
+
+expect_has "a function, not a value" '#include <std/io>
+fn main() { let n = [1].any(5); }' "any(...) takes a function, as in xs.any(fn (x: int)"
+
+expect_has "a test returns a bool" '#include <std/io>
+fn main() { let n = [1].filter(fn (x: int): string { return "a"; }); }' \
+"so it returns a bool; this one returns a string"
+
+expect_has "map makes a value" '#include <std/io>
+fn main() { let n = [1].map(fn (x: int) { io.println(x); }); }' "so it returns a value; this one returns nothing"
+
+expect_has "one argument" '#include <std/io>
+fn main() { let n = [1].all(); }' "all takes one function"
+
+prelude_eq "a literal given to filter names no std::function" \
+'#include <std/io>
+fn main() { let xs = [1, 2]; io.println(len(xs.filter(fn (x: int) { return x > 1; }))); }' \
+'#include <std/io>
+fn main() { let xs = [1, 2]; io.println(len(xs)); }'
+
+echo ""
+if [ "$FAIL" -gt 0 ]; then
+    echo "FAILED $FAIL test(s)"
+    exit 1
+else
+    echo "All tests passed"
+fi

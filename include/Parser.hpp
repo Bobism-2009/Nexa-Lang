@@ -342,9 +342,9 @@ public:
                 named = true;
                 if (prev == TokenType::Enum || prev == TokenType::Struct ||
                     (prev == TokenType::Identifier && tokens_[i - 1].value == "type")) own = true;
-            } else if ((t.value == "get" || t.value == "first" || t.value == "last") &&
+            } else if ((t.value == "get" || t.value == "first" || t.value == "last" || t.value == "find") &&
                        prev == TokenType::Dot && next == TokenType::LParen) {
-                named = true;  // m.get(k), xs.first(), xs.last() answer an Option
+                named = true;  // m.get(k), xs.first(), xs.last(), xs.find(f) answer an Option
             } else if (t.value == "Some") {
                 if (next == TokenType::LParen) named = true;
                 if (prev == TokenType::Fn) fnSome = true;
