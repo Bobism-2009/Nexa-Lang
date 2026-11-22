@@ -1,0 +1,4 @@
+// A misspelled std module.
+#include <std/mth>
+fn main() {
+}

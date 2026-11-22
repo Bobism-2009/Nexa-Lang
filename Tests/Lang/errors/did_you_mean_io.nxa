@@ -1,0 +1,5 @@
+// A misspelled io function.
+#include <std/io>
+fn main() {
+    io.prinln("hi");
+}

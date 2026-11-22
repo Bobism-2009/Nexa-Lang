@@ -1,0 +1,5 @@
+// A misspelled module function: the suggestion comes from the module's own list.
+#include <std/math>
+fn main() {
+    let r = math.sqr(2.0);
+}

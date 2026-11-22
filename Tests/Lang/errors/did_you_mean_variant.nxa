@@ -1,0 +1,9 @@
+// A misspelled enum variant.
+#include <std/io>
+enum Color {
+    Red;
+    Green;
+}
+fn main() {
+    let c = Color.Gren;
+}

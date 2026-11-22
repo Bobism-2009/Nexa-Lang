@@ -1,0 +1,6 @@
+// Nothing is close to xyzzy, so no guess is offered.
+#include <std/io>
+fn main() {
+    let count = 1;
+    io.println(xyzzy);
+}

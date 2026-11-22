@@ -1,0 +1,8 @@
+// A misspelled function: nothing has that name, so the closest one is named.
+#include <std/io>
+fn compute(a: int): int {
+    return a * 2;
+}
+fn main() {
+    io.println(compte(4));
+}

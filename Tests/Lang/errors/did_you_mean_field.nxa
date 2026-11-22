@@ -1,0 +1,10 @@
+// A misspelled field or method of a struct.
+#include <std/io>
+struct Point {
+    x: int;
+    total: int;
+}
+fn main() {
+    let p = Point { x: 1, total: 2 };
+    io.println(p.totl);
+}

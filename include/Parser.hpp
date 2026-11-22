@@ -2,6 +2,7 @@
 
 #include "Lexer.hpp"
 #include "Modules.hpp"
+#include "Suggest.hpp"
 #include <string>
 #include <vector>
 #include <set>
@@ -2232,7 +2233,9 @@ private:
                 // failed later with "json.* requires #include <std/json>" pointing at code
                 // that looked correct. Reject the include itself instead.
                 if (!isKnownStdModule(path)) {
-                    throw std::runtime_error("Unknown module '" + path + "' at line " + std::to_string(t.line) +
+                    NexaSuggest near(path);
+                    for (const std::string& m : knownStdModules()) near.consider(m);
+                    throw std::runtime_error("Unknown module '" + path + "'" + near.text() + " at line " + std::to_string(t.line) +
                                              ". Valid modules: " + knownStdModuleList());
                 }
                 // #include <std/io> - built-in module
@@ -2899,7 +2902,10 @@ private:
             }
             std::string fname = ftok.value;
             if (fieldsIt != structFieldNames_.end() && !fieldsIt->second.count(fname)) {
-                throw std::runtime_error("Unknown field '" + fname + "' in " + sname + " at line " + std::to_string(ftok.line));
+                NexaSuggest near(fname);
+                for (const std::string& f : fieldsIt->second) near.consider(f);
+                throw std::runtime_error("Unknown field '" + fname + "'" + near.text() + " in " + sname + " at line " +
+                                         std::to_string(ftok.line));
             }
             if (!seen.insert(fname).second) {
                 throw std::runtime_error("Duplicate field '" + fname + "' in " + sname + " literal at line " + std::to_string(ftok.line));
@@ -4258,7 +4264,9 @@ private:
             bool known = false;
             for (const auto& f : fields) if (f.first == ftok.value) known = true;
             if (!known) {
-                throw std::runtime_error("Unknown field '" + ftok.value + "' in " + variant + " at line " +
+                NexaSuggest near(ftok.value);
+                for (const auto& f : fields) near.consider(f.first);
+                throw std::runtime_error("Unknown field '" + ftok.value + "'" + near.text() + " in " + variant + " at line " +
                     std::to_string(ftok.line));
             }
             if (!seen.insert(ftok.value).second) {
@@ -4648,7 +4656,7 @@ private:
                     throw std::runtime_error(what + "; you aren't allowed to turn it into a variable at line " +
                                              std::to_string(peek().line));
                 }
-                throw std::runtime_error("Unknown io method 'io." + method + "' at line " +
+                throw std::runtime_error("Unknown io method 'io." + method + "'" + ioSuggest(method) + " at line " +
                                          std::to_string(peek().line));
             }
         }
@@ -4915,7 +4923,7 @@ private:
                 throw std::runtime_error(hint + "; you aren't allowed to call it as a statement at line " +
                                          std::to_string(methodTok.line));
             }
-            throw std::runtime_error("Unknown io method 'io." + method + "' at line " +
+            throw std::runtime_error("Unknown io method 'io." + method + "'" + ioSuggest(method) + " at line " +
                                      std::to_string(methodTok.line));
         }
         if (!match(TokenType::LParen)) {
@@ -4960,6 +4968,27 @@ private:
     // it. parseIoCall names the call instead of failing with the print/println
     // parse error, and parsePrimary's io branch uses the same names when a
     // statement-only io call is written in value position.
+    // " (did you mean 'io.println'?)" for a misspelled io./os. name, or "".
+    // Only built while an error message is.
+    static std::string ioSuggest(const std::string& m) {
+        NexaSuggest near(m, "io.");
+        near.considerList("print, println, eprint, eprintln, flush, readln, read_line, read_int, eof, getline, "
+                          "to_int, to_float, parse_int, parse_float, trim");
+        return near.text();
+    }
+    static std::string osSuggest(const std::string& m) {
+        NexaSuggest near(m, "os.");
+        near.considerList(
+            "alloc_console, arch, avail_mem, cache_dir, chdir, clip_get, clip_set, config_dir, cpu_count, cwd, "
+            "desktop, endian, env, environ, exe_dir, executable, exit, get_brightness, get_volume, getenv, getkey, "
+            "getpid, getprocessid, hideconsolewindow, home, hostname, inject, inject_dll, isatty, keypressed, kill, "
+            "lang, lock, logout, maximizeconsolewindow, messagebox, minimizeconsolewindow, mute, newline, notify, "
+            "page_size, path_sep, platform, reboot, set_brightness, set_volume, setenv, shell, showconsolewindow, "
+            "shutdown, spawn, spawn_at, spawn_wait, suspend, system, tempdir, toggle_mute, total_mem, type_text, "
+            "unmute, unsetenv, uptime, user, username, wait, which");
+        return near.text();
+    }
+
     static std::string ioValueCallHint(const std::string& m) {
         if (m == "readln") return "io.readln() reads a line and hands it back";
         if (m == "read_int") return "io.read_int() reads a line as an int and hands it back";
@@ -5333,7 +5362,7 @@ private:
             return node;
         }
         if (method != "system") {
-            throw std::runtime_error("Unknown os method '" + method + "' at line " + std::to_string(methodTok.line));
+            throw std::runtime_error("Unknown os method '" + method + "'" + osSuggest(method) + " at line " + std::to_string(methodTok.line));
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' at line " + std::to_string(peek().line));
@@ -5842,6 +5871,14 @@ private:
         return method;
     }
 
+    static std::string fileSuggest(const std::string& m) {
+        NexaSuggest near(m, "file.");
+        near.considerList("read, write, append, exists, mkdir, remove, remove_all, rename, copy, list, isdir, "
+                          "isfile, size, cwd, chdir, abspath, join, dirname, basename, extension, stem, modified, "
+                          "lines, walk");
+        return near.text();
+    }
+
     static bool isLegacyFileMethod(const std::string& method) {
         return method == "read" || method == "write" || method == "append" || method == "exists" || method == "mkdir";
     }
@@ -5876,7 +5913,7 @@ private:
         std::string method = canonicalizeFileMethod(methodTok.type == TokenType::Delete ? std::string("delete") : methodTok.value);
         advance();
         if (!isLegacyFileMethod(method) && !isExtendedFileMethod(method)) {
-            throw std::runtime_error("Unknown file method 'file." + methodTok.value + "' at line " + std::to_string(methodTok.line));
+            throw std::runtime_error("Unknown file method 'file." + methodTok.value + "'" + fileSuggest(methodTok.value) + " at line " + std::to_string(methodTok.line));
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after file." + method + " at line " + std::to_string(peek().line));
@@ -5934,7 +5971,7 @@ private:
         }
         std::string method = canonicalizeFileMethod(methodTok.type == TokenType::Delete ? std::string("delete") : methodTok.value);
         if (!isLegacyFileMethod(method) && !isExtendedFileMethod(method)) {
-            throw std::runtime_error("Unknown file method 'file." + methodTok.value + "' at line " + std::to_string(methodTok.line));
+            throw std::runtime_error("Unknown file method 'file." + methodTok.value + "'" + fileSuggest(methodTok.value) + " at line " + std::to_string(methodTok.line));
         }
         advance();
         if (!match(TokenType::LParen)) {
@@ -6095,11 +6132,11 @@ private:
         static const std::set<std::string> threeArg = {"clamp", "lerp"};
         const bool isThree = threeArg.find(method) != threeArg.end();
         if (oneArg.find(method) == oneArg.end() && twoArg.find(method) == twoArg.end() && !isThree) {
-            throw std::runtime_error("Unknown math function 'math." + method +
+            throw std::runtime_error(nexaSuggestFromUse("Unknown math function 'math." + method +
                 "' at line " + std::to_string(methodTok.line) +
                 " (use abs, sign, min, max, clamp, lerp, pow, sqrt, cbrt, hypot, exp, log, log2, log10, floor, "
                 "ceil, round, trunc, mod, sin, cos, tan, asin, acos, atan, atan2, sinh, cosh, tanh, deg, rad, "
-                "pi, tau, e, inf)");
+                "pi, tau, e, inf)", method, "math."));
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after math." + method + " at line " + std::to_string(peek().line));
@@ -6165,8 +6202,10 @@ private:
             if (method == s.name) { spec = &s; break; }
         }
         if (!spec) {
+            NexaSuggest near(method, "physics.");
+            for (const Spec& s : specs) near.consider(s.name);
             throw std::runtime_error("Unknown physics function 'physics." + method +
-                "' at line " + std::to_string(methodTok.line));
+                "'" + near.text() + " at line " + std::to_string(methodTok.line));
         }
         AstNode node{AstNode::Type::PhysicsCall, method, {}};
         if (!match(TokenType::LParen)) {
@@ -6208,9 +6247,9 @@ private:
         static const std::set<std::string> twoArg = {"hmac_sha256"};
         bool isXor = (method == "xor");
         if (!isXor && oneArg.find(method) == oneArg.end() && twoArg.find(method) == twoArg.end()) {
-            throw std::runtime_error("Unknown crypto function 'crypto." + method +
+            throw std::runtime_error(nexaSuggestFromUse("Unknown crypto function 'crypto." + method +
                 "' at line " + std::to_string(methodTok.line) +
-                " (use xor, sha256, sha1, hmac_sha256, hex_encode, hex_decode, base64_encode, base64_decode, random_bytes)");
+                " (use xor, sha256, sha1, hmac_sha256, hex_encode, hex_decode, base64_encode, base64_decode, random_bytes)", method, "crypto."));
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after crypto." + method + " at line " + std::to_string(peek().line));
@@ -6272,9 +6311,9 @@ private:
         advance();  // method name
         const int arity = termArity(m);
         if (arity < 0) {
-            throw std::runtime_error("Unknown term method 'term." + m + "' at line " + std::to_string(methodTok.line) +
+            throw std::runtime_error(nexaSuggestFromUse("Unknown term method 'term." + m + "' at line " + std::to_string(methodTok.line) +
                 " (use color, bg, bold, dim, italic, underline, reverse, clear, clear_line, move, home, "
-                "hide_cursor, show_cursor, cursor, alt_screen, clear_eol, progress, spinner, raw, getkey, key_available, width, height)");
+                "hide_cursor, show_cursor, cursor, alt_screen, clear_eol, progress, spinner, raw, getkey, key_available, width, height)", m, "term."));
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after term." + m + " at line " + std::to_string(peek().line));
@@ -6372,9 +6411,9 @@ private:
         else if (method == "reply") { fixed = 3; optTail = true; shape = "request, status, body"; tail = "[, headers]"; }
         else if (method == "raw") { fixed = 2; optTail = false; shape = "request, text"; }
         else {
-            throw std::runtime_error("Unknown http function 'http." + method +
+            throw std::runtime_error(nexaSuggestFromUse("Unknown http function 'http." + method +
                 "' at line " + std::to_string(methodTok.line) +
-                " (use get, post, put, patch, delete, request, localhost, accept, reply, raw, close)");
+                " (use get, post, put, patch, delete, request, localhost, accept, reply, raw, close)", method, "http."));
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after http." + method + " at line " + std::to_string(peek().line));
@@ -6433,9 +6472,9 @@ private:
         else if (method == "recv") { fixed = 1; optTail = true; shape = "handle"; tail = "[, max]"; }
         else if (method == "port" || method == "close") { fixed = 1; shape = "handle"; }
         else {
-            throw std::runtime_error("Unknown tcp function 'tcp." + method +
+            throw std::runtime_error(nexaSuggestFromUse("Unknown tcp function 'tcp." + method +
                 "' at line " + std::to_string(methodTok.line) +
-                " (use connect, listen, accept, send, recv, port, close)");
+                " (use connect, listen, accept, send, recv, port, close)", method, "tcp."));
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after tcp." + method + " at line " + std::to_string(peek().line));
@@ -6488,9 +6527,9 @@ private:
         else if (method == "port" || method == "close" ||
                  method == "sender" || method == "sender_port") { fixed = 1; shape = "handle"; }
         else {
-            throw std::runtime_error("Unknown udp function 'udp." + method +
+            throw std::runtime_error(nexaSuggestFromUse("Unknown udp function 'udp." + method +
                 "' at line " + std::to_string(methodTok.line) +
-                " (use open, port, send, recv, sender, sender_port, close)");
+                " (use open, port, send, recv, sender, sender_port, close)", method, "udp."));
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after udp." + method + " at line " + std::to_string(peek().line));
@@ -6534,9 +6573,9 @@ private:
         if (method != "parse" && method != "stringify" && method != "of" && method != "null" &&
             method != "bool" && method != "int" && method != "float" && method != "string" &&
             method != "array" && method != "object") {
-            throw std::runtime_error("Unknown json function 'json." + method +
+            throw std::runtime_error(nexaSuggestFromUse("Unknown json function 'json." + method +
                 "' at line " + std::to_string(methodTok.line) +
-                " (use parse, stringify, of, null, bool, int, float, string, array, object)");
+                " (use parse, stringify, of, null, bool, int, float, string, array, object)", method, "json."));
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after json." + method + " at line " + std::to_string(peek().line));
@@ -6731,10 +6770,10 @@ private:
         advance();
         const UiMethod* spec = uiMethod(method);
         if (!spec) {
-            throw std::runtime_error("Unknown ui method 'ui." + method + "' at line " + std::to_string(methodTok.line) +
+            throw std::runtime_error(nexaSuggestFromUse("Unknown ui method 'ui." + method + "' at line " + std::to_string(methodTok.line) +
                 " (use open, background, theme, style, accent, rounding, font_size, text, heading, caption, text_width,"
                 " text_height, panel, separator, button, checkbox, toggle, radio, slider, progress, textbox, dropdown, tabs, list, table,"
-                " menubar, menu, dialog, tooltip)");
+                " menubar, menu, dialog, tooltip)", method, "ui."));
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after ui." + method + " at line " + std::to_string(peek().line));
@@ -6833,9 +6872,9 @@ private:
         else if (method == "alpha") { argc = 0; argcMax = 1; }
         else if (method == "save") argc = 1;
         else {
-            throw std::runtime_error("Unknown gfx method 'gfx." + method +
+            throw std::runtime_error(nexaSuggestFromUse("Unknown gfx method 'gfx." + method +
                 "' at line " + std::to_string(methodTok.line) +
-                " (use open, close, resize, width, height, scale, title, icon, cursor, poll, closed, clear, plot, fill, rect, round_rect, fill_round_rect, line, smooth, circle, fill_circle, ellipse, fill_ellipse, arc, pie, tri, fill_tri, poly, fill_poly, text, text_size, text_width, text_height, get, present, image, decode, image_w, image_h, upload, blit, blit_rot, alpha, save, key, pressed, released, wheel, wheel_x, typed, mouse_x, mouse_y, mouse, pads, pad, pad_pressed, pad_axis, rumble, audio, sample, audio_queued, audio_flush, sound, play, loop, stop, volume, fullscreen, borderless, ontop, transparent, maxfps)");
+                " (use open, close, resize, width, height, scale, title, icon, cursor, poll, closed, clear, plot, fill, rect, round_rect, fill_round_rect, line, smooth, circle, fill_circle, ellipse, fill_ellipse, arc, pie, tri, fill_tri, poly, fill_poly, text, text_size, text_width, text_height, get, present, image, decode, image_w, image_h, upload, blit, blit_rot, alpha, save, key, pressed, released, wheel, wheel_x, typed, mouse_x, mouse_y, mouse, pads, pad, pad_pressed, pad_axis, rumble, audio, sample, audio_queued, audio_flush, sound, play, loop, stop, volume, fullscreen, borderless, ontop, transparent, maxfps)", method, "gfx."));
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after gfx." + method + " at line " + std::to_string(peek().line));
@@ -7093,7 +7132,7 @@ private:
         else if (method == "capsule" || method == "cylinder" || method == "cone") argc = 10;
         else if (method == "tri") argc = 12;
         else {
-            throw std::runtime_error("Unknown gfx3d method 'gfx3d." + method +
+            throw std::runtime_error(nexaSuggestFromUse("Unknown gfx3d method 'gfx3d." + method +
                 "' at line " + std::to_string(methodTok.line) +
                 " (use open, close, poll, closed, present, width, height, clear, camera,"
                 " perspective, tri, cube, box, sphere, capsule, cylinder, cone,"
@@ -7104,7 +7143,7 @@ private:
                 " model, draw, model_tris, texture, use,"
                 " shader, use_shader, shader_set, shader_error,"
                 " sound, play, loop, stop, volume,"
-                " audio, sample, audio_queued, audio_flush)");
+                " audio, sample, audio_queued, audio_flush)", method, "gfx3d."));
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after gfx3d." + method + " at line " + std::to_string(peek().line));
@@ -7237,9 +7276,9 @@ private:
                                      method + "(...); at line " + std::to_string(methodTok.line));
         }
         if (method != "int" && method != "seed" && method != "shuffle") {
-            throw std::runtime_error("Unknown random method 'random." + method + "' at line " +
+            throw std::runtime_error(nexaSuggestFromUse("Unknown random method 'random." + method + "' at line " +
                                      std::to_string(methodTok.line) +
-                                     " (use int, float, bool, chance, choice, shuffle, seed)");
+                                     " (use int, float, bool, chance, choice, shuffle, seed)", method, "random."));
         }
         advance();
         if (!match(TokenType::LParen)) {

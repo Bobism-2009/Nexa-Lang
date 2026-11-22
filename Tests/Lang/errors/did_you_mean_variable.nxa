@@ -1,0 +1,6 @@
+// A misspelled local: the error names the one in scope.
+#include <std/io>
+fn main() {
+    let count = 3;
+    io.println(cuont);
+}

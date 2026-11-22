@@ -3604,6 +3604,8 @@ private:
                 msg += actualArgTypes[i];
             }
             msg += ")";
+            // No function has this name at all: it may be a misspelling.
+            if (!hasNexaFnNamed(name)) msg += nameSuggestion(name, useFile, false);
             if (!modules_.hasCppHeader()) {
                 msg += "; include a C header (#include <foo.h>) or declare: extern fn " + name + "(...): type;";
             }
@@ -4967,7 +4969,14 @@ private:
                 std::string what = recvBare.empty() ? std::string() : " on a " + semTypeLabel(recvBare);
                 std::string hint;
                 if (e.value == "to_int") hint = "; to read a number from text, use io.to_int(s)";
-                throw std::runtime_error("Unknown method '." + e.value + "()'" + what + hint +
+                std::string near;
+                if (hint.empty() && recvBare == "string") {
+                    NexaSuggest s(e.value, ".");
+                    s.considerList("upper, lower, trim, len, contains, starts_with, ends_with, index_of, "
+                                   "last_index_of, count, repeat, split, replace, substring");
+                    if (s.found()) near = " (did you mean '." + s.pick() + "()'?)";
+                }
+                throw std::runtime_error("Unknown method '." + e.value + "()'" + near + what + hint +
                                          (at ? " at line " + std::to_string(at) : std::string()));
             }
             return s;
@@ -5529,7 +5538,18 @@ private:
                     if (!requireKnownStruct) continue;
                     if (structs.count(name)) continue;
                     auto it = nexaName.find(name);
-                    semError(at, "unknown type '" + name + "'" +
+                    std::string near;
+                    if (it == nexaName.end()) {
+                        NexaSuggest s(name);
+                        for (const std::string& c : structs) s.consider(c);
+                        for (const auto& kv : enumCppNames_) s.consider(kv.first);
+                        for (const auto& kv : genericEnums_) s.consider(kv.first);
+                        for (const auto& kv : genericStructs_) s.consider(kv.first);
+                        for (const auto& kv : shapes_) s.consider(kv.first);
+                        s.considerList("int, long, short, char, bool, float, float32, float64, string, void, size_t");
+                        near = s.text();
+                    }
+                    semError(at, "unknown type '" + name + "'" + near +
                                      (it != nexaName.end() ? "; Nexa calls it " + it->second
                                                            : ": no struct, enum or built-in type has that name"));
                 }
@@ -7865,7 +7885,37 @@ private:
         if (genericEnums_.count(nexaTypeAppBase(name))) return;
         if (structCppNames_.count(name)) return;   // bare struct type name
         if (genericStructs_.count(nexaTypeAppBase(name))) return;
-        semError(at, "Undefined variable '" + name + "'");
+        semError(at, "Undefined variable '" + name + "'" + nameSuggestion(name, at.srcFile, true));
+    }
+
+    // " (did you mean 'Green'?)" for a variant enum `en` does not have, or "".
+    std::string variantSuggestion(const std::string& en, const std::string& v) const {
+        NexaSuggest near(v);
+        auto it = enumVariants_.find(en);
+        if (it != enumVariants_.end()) {
+            for (const std::string& c : it->second) near.consider(c);
+        }
+        return near.text();
+    }
+
+    // " (did you mean 'count'?)" for a name nothing declares, from the names in
+    // scope, the functions and (for a value) the type names. Only built while
+    // an error message is.
+    std::string nameSuggestion(const std::string& name, const std::string& file, bool values) const {
+        NexaSuggest near(name);
+        auto ok = [&](const std::string& c) {
+            if (c.find('.') != std::string::npos || !sameFileScope(c, file)) return;
+            near.consider(c);
+        };
+        for (size_t i = nexaDeclStack_.size(); i-- > 0;) {
+            for (const auto& kv : nexaDeclStack_[i]) ok(kv.first);
+        }
+        for (const FnOverloadSlot& sl : fnOverloadSlots_) ok(sl.name);
+        if (values) {
+            for (const auto& kv : enumCppNames_) ok(kv.first);
+            for (const auto& kv : structCppNames_) ok(kv.first);
+        }
+        return near.text();
     }
 
     void semCheckMemberAccess(const AstNode& e) {
@@ -7880,7 +7930,11 @@ private:
                 const AstNode& tmpl = *genericEnums_[nexaTypeAppBase(base.value)];
                 bool known = false;
                 for (const std::string& v : tmpl.paramNames) if (v == e.value) known = true;
-                if (!known) semError(e, "Unknown enum variant '" + e.value + "' for '" + base.value + "'");
+                if (!known) {
+                    NexaSuggest near(e.value);
+                    for (const std::string& v : tmpl.paramNames) near.consider(v);
+                    semError(e, "Unknown enum variant '" + e.value + "'" + near.text() + " for '" + base.value + "'");
+                }
                 for (const AstNode& c : tmpl.children) {
                     if (c.type == AstNode::Type::EnumVariant && c.value == e.value && !c.paramNames.empty()) {
                         semError(e, e.value + " has fields; write " + base.value + "." + e.value + " { ... }");
@@ -7891,7 +7945,9 @@ private:
             }
             if (ev != enumVariants_.end()) {
                 if (!ev->second.count(e.value)) {
-                    semError(e, "Unknown enum variant '" + e.value + "' for '" + ename + "'");
+                    NexaSuggest near(e.value);
+                    for (const std::string& v : ev->second) near.consider(v);
+                    semError(e, "Unknown enum variant '" + e.value + "'" + near.text() + " for '" + ename + "'");
                 }
                 if (!enumPayloadFields(ename, e.value).empty()) {
                     semError(e, e.value + " has fields; write " + ename + "." + e.value + " { ... }");
@@ -7916,7 +7972,9 @@ private:
                 for (const EnumField& f : enumPayloadFields(en, payloadSem_.back().variant)) {
                     if (f.name == e.value) return;
                 }
-                semError(e, payloadSem_.back().variant + " has no field '" + e.value + "'");
+                NexaSuggest near(e.value);
+                for (const EnumField& f : enumPayloadFields(en, payloadSem_.back().variant)) near.consider(f.name);
+                semError(e, payloadSem_.back().variant + " has no field '" + e.value + "'" + near.text());
             }
             std::string where;
             auto it = enumPayload_.find(en);
@@ -7928,7 +7986,15 @@ private:
                     if (!where.empty()) break;
                 }
             }
-            if (where.empty()) semError(e, en + " has no field '" + e.value + "'");
+            if (where.empty()) {
+                NexaSuggest near(e.value);
+                if (it != enumPayload_.end()) {
+                    for (const auto& vf : it->second) {
+                        for (const EnumField& f : vf.second) near.consider(f.name);
+                    }
+                }
+                semError(e, en + " has no field '" + e.value + "'" + near.text());
+            }
             semError(e, e.value + " is there in case " + where);
         }
         if (!isStructDeclType(baseT)) return;  // not a known Nexa struct: no opinion
@@ -7944,7 +8010,19 @@ private:
             semCheckStructMemberPriv(e, sname, e.value);
             return;
         }
-        semError(e, "Struct '" + sname + "' has no field '" + e.value + "'");
+        // Only members this code may use: a priv one from another file is no help.
+        NexaSuggest near(e.value);
+        const std::string use = (e.srcFile.empty() && semLoc_) ? semLoc_->srcFile : e.srcFile;
+        const std::string selfT = lookupNexaDecl("self");
+        const bool inside = isStructDeclType(selfT) && structNameFromDecl(selfT) == sname;
+        auto offer = [&](const std::string& m) {
+            if (inside || sameStructMemberScope(sname, m, use)) near.consider(m);
+        };
+        for (const auto& kv : fields->second) offer(kv.first);
+        if (methods != structMethods_.end()) {
+            for (const auto& kv : methods->second) offer(kv.first);
+        }
+        semError(e, "Struct '" + sname + "' has no field '" + e.value + "'" + near.text());
     }
 
     // Coarse type category used only for the "clearly incompatible" initializer check.
@@ -10627,7 +10705,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     }
                     auto vsIt = enumVariants_.find(scrutEn);
                     if (vsIt == enumVariants_.end() || !vsIt->second.count(c.initValue)) {
-                        throw std::runtime_error("Unknown enum variant '" + c.initValue + "' for '" + scrutEn + "'");
+                        throw std::runtime_error("Unknown enum variant '" + c.initValue + "'" + variantSuggestion(scrutEn, c.initValue) + " for '" + scrutEn + "'");
                     }
                     out << indent << "    case " << enumVariantIndex(scrutEn, c.initValue) << ":";
                 } else {
@@ -10740,7 +10818,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     }
                     auto vsIt = enumVariants_.find(c.value);
                     if (vsIt == enumVariants_.end() || !vsIt->second.count(c.initValue)) {
-                        throw std::runtime_error("Unknown enum variant '" + c.initValue + "' for '" + c.value + "'");
+                        throw std::runtime_error("Unknown enum variant '" + c.initValue + "'" + variantSuggestion(c.value, c.initValue) + " for '" + c.value + "'");
                     }
                     out << indent << "case " << enIt->second << "::" << c.initValue << ":";
                 } else {
@@ -11101,7 +11179,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 }
                 auto vsIt = enumVariants_.find(ms.en);
                 if (vsIt == enumVariants_.end() || !vsIt->second.count(arm.initValue)) {
-                    semError(m, ms.en + " has no variant '" + arm.initValue + "'");
+                    semError(m, ms.en + " has no variant '" + arm.initValue + "'" + variantSuggestion(ms.en, arm.initValue));
                 }
                 const std::vector<EnumField> fields = enumPayloadFields(ms.en, arm.initValue);
                 if (arm.armPositional && arm.paramNames.size() > fields.size()) {
@@ -11846,7 +11924,9 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         const auto& fields = structFields_[litName];
         for (const auto& kv : provided) {
             if (!fields.count(kv.first)) {
-                throw std::runtime_error("Unknown field '" + kv.first + "' in " + litName);
+                NexaSuggest near(kv.first);
+                for (const auto& f : fields) near.consider(f.first);
+                throw std::runtime_error("Unknown field '" + kv.first + "'" + near.text() + " in " + litName);
             }
         }
         std::string s = nexaTypeToCpp("struct:" + litName) + "{";
@@ -13239,7 +13319,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                                 }
                                 return enIt->second + "::" + e.value;
                             }
-                            throw std::runtime_error("Unknown enum variant '" + e.value + "' for '" + base + "'");
+                            throw std::runtime_error("Unknown enum variant '" + e.value + "'" + variantSuggestion(base, e.value) + " for '" + base + "'");
                         }
                         if (genericEnums_.count(nexaTypeAppBase(base))) {
                             throw std::runtime_error(nexaTypeAppBase(base) + " names a type; write " +

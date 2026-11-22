@@ -1,0 +1,8 @@
+// A misspelled type name.
+struct Point {
+    x: int;
+}
+fn show(p: Pont) {
+}
+fn main() {
+}
