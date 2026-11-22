@@ -1,0 +1,4 @@
+#include "cyc_a.nxa"
+let flag = false;
+let n = 5;
+fn peek(): int { return cyc_a.count; }

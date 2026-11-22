@@ -1,0 +1,8 @@
+mod=1.5
+mod_neg=-1.5
+mod_mixed=2
+mod_f32=1.5
+assign=1.25
+assign_index=1
+assign_field=1.5
+int_mod=1

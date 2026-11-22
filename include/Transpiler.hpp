@@ -5,6 +5,7 @@
 #include "PlatformEmit.hpp"
 #include "StbImageRuntime.hpp"
 #include "UiRuntime.hpp"
+#include <algorithm>
 #include <string>
 #include <sstream>
 #include <cstdio>
@@ -8961,7 +8962,17 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             return exprIsString(e.children[1], varIsString) || exprIsString(e.children[2], varIsString);
         }
         if (e.type == AstNode::Type::ExprMatch) return inferExprNexaType(e) == "string";
-        return false;
+        // Any other call the type rules know returns text -- "x" + time.format(...)
+        // -- is joined as text, never handed to std::to_string.
+        if (e.type == AstNode::Type::ExprIntLiteral || e.type == AstNode::Type::ExprFloatLiteral ||
+            e.type == AstNode::Type::ExprCharLiteral || e.type == AstNode::Type::ExprBoolLiteral) {
+            return false;
+        }
+        try {
+            return inferExprNexaType(e) == "string";
+        } catch (...) {
+            return false;
+        }
     }
 
     bool exprIsFloat(const AstNode& e, const std::map<std::string, bool>& varIsFloat) const {
@@ -9017,6 +9028,11 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         if (e.type == AstNode::Type::ExprVarRef) {
             auto it = varIsChar.find(e.value);
             return it != varIsChar.end() && it->second;
+        }
+        // on ? ';' : c is a char when both arms are, so s += it appends the
+        // character rather than its code ("59").
+        if (e.type == AstNode::Type::ExprTernary && e.children.size() >= 3) {
+            return exprIsChar(e.children[1], varIsChar) && exprIsChar(e.children[2], varIsChar);
         }
         return false;
     }
@@ -10015,7 +10031,13 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 else if (op == "-=") out << indent << lhs << " -= " << rhs << ";\n";
                 else if (op == "*=") out << indent << lhs << " *= " << rhs << ";\n";
                 else if (op == "/=") out << indent << lhs << " /= " << rhs << ";\n";
-                else if (op == "%=") out << indent << lhs << " %= " << rhs << ";\n";
+                else if (op == "%=") {
+                    if (nexaIsFloatType(inferExprNexaType(child.children[0]))) {
+                        out << indent << lhs << " = __builtin_fmod(static_cast<double>(" << lhs << "), static_cast<double>(" << rhs << "));\n";
+                    } else {
+                        out << indent << lhs << " %= " << rhs << ";\n";
+                    }
+                }
                 else if (op == "&=") out << indent << lhs << " &= " << rhs << ";\n";
                 else if (op == "|=") out << indent << lhs << " |= " << rhs << ";\n";
                 else if (op == "^=") out << indent << lhs << " ^= " << rhs << ";\n";
@@ -10069,7 +10091,10 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 std::string baseT = lookupNexaDecl(child.value);
                 const bool single = child.children.size() == 2;
                 const std::string idxOp = child.initValue.empty() ? "=" : child.initValue;
-                if (idxOp != "=") {
+                if (idxOp == "%=" && nexaIsFloatType(baseT.substr(baseT.rfind(']') == std::string::npos ? 0 : baseT.rfind(']') + 1))) {
+                    // xs[i] %= 2.0 on floats: C++ has no %= on doubles.
+                    out << indent << lhs << " = __builtin_fmod(static_cast<double>(" << lhs << "), static_cast<double>(" << val << "));\n";
+                } else if (idxOp != "=") {
                     out << indent << lhs << " " << idxOp << " " << val << ";\n";
                 } else if (baseT == "json") {
                     std::string rhsT = inferExprNexaType(rhs);
@@ -10122,7 +10147,13 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
                 }
                 std::string v = cppVarName(varMap, child.value);
-                out << indent << v << " = " << v << " % " << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
+                std::string r = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                if (varIsFloat.count(child.value) && varIsFloat[child.value]) {
+                    // x %= 2.0 on a float is fmod, as x % 2.0 is.
+                    out << indent << v << " = __builtin_fmod(static_cast<double>(" << v << "), static_cast<double>(" << r << "));\n";
+                } else {
+                    out << indent << v << " = " << v << " % " << r << ";\n";
+                }
             } else if (child.type == AstNode::Type::AssnBitAnd) {
                 if (varIsConst.count(child.value) && varIsConst[child.value]) {
                     throw std::runtime_error("Cannot assign to const variable '" + child.value + "'");
@@ -11566,6 +11597,33 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         }
         std::string lhs = emitCmpOperand(c.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
         std::string rhs = emitCmpOperand(c.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+        // s[i] == ";" -- a char against text. A one-character literal is compared as
+        // the char it holds; any other text as a one-character string, so "ab" is
+        // simply never equal (C++ would compare the char with an address).
+        if (c.children.size() >= 2) {
+            static const std::map<std::string, bool> kNone;
+            const auto& vCh = varIsChar ? *varIsChar : kNone;
+            const auto& vStr = varIsString ? *varIsString : kNone;
+            for (int side = 0; side < 2; side++) {
+                const AstNode& ch = c.children[side];
+                const AstNode& other = c.children[1 - side];
+                if (!exprIsChar(ch, vCh) || exprIsChar(other, vCh)) continue;
+                if (!(exprIsString(other, vStr) || exprProducesString(other))) continue;
+                std::string& otherCpp = side == 0 ? rhs : lhs;
+                if (other.type == AstNode::Type::ExprStringLiteral && other.value.size() == 1) {
+                    const unsigned char k = static_cast<unsigned char>(other.value[0]);
+                    if (k >= 32 && k < 127 && k != '\'' && k != '\\') {
+                        otherCpp = std::string("'") + static_cast<char>(k) + "'";
+                    } else {
+                        otherCpp = "(char)" + std::to_string(static_cast<int>(static_cast<signed char>(k)));
+                    }
+                } else {
+                    std::string& chCpp = side == 0 ? lhs : rhs;
+                    chCpp = "std::string(1, " + chCpp + ")";
+                }
+                break;
+            }
+        }
         if (isBareCppStringLiteral(lhs) && isBareCppStringLiteral(rhs)) lhs = asCppStdString(lhs);
         return lhs + " " + op + " " + rhs;
     }
@@ -13220,6 +13278,21 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             case AstNode::Type::ExprMul:
             case AstNode::Type::ExprDiv:
             case AstNode::Type::ExprMod:
+                // C++ has no % on doubles: 7.5 % 2.0 is fmod, truncated like the
+                // integer %, so it keeps the sign of the left side. The builtin
+                // needs no <cmath>.
+                if (e.type == AstNode::Type::ExprMod && e.children.size() == 2) {
+                    const std::string mt = inferExprNexaType(e);
+                    if (nexaIsFloatType(mt)) {
+                        std::string a = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                        std::string b = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                        if (mt == "float32") {
+                            return "__builtin_fmodf(static_cast<float>(" + a + "), static_cast<float>(" + b + "))";
+                        }
+                        return "__builtin_fmod(static_cast<double>(" + a + "), static_cast<double>(" + b + "))";
+                    }
+                }
+                [[fallthrough]];
             case AstNode::Type::ExprBitAnd:
             case AstNode::Type::ExprBitOr:
             case AstNode::Type::ExprShl:

@@ -1,0 +1,17 @@
+// Pins globals used before they are written: by a function further up the
+// file, by another global's initializer, and between two modules that
+// include each other and read each other's state.
+#include <std/io>
+#include "modules/cyc_a.nxa"
+
+fn total(): int { return base + step; }
+
+let base = 40;
+let step = twice + 1;
+let twice = 1;
+
+fn main() {
+    io.println("fn_uses_later=", total());
+    cyc_a.bump();
+    io.println("module_cycle=", cyc_b.flag, " ", cyc_b.peek());
+}

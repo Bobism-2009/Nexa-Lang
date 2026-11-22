@@ -1,0 +1,9 @@
+tern_append=;x
+tern_print=a
+char_eq_lit=true
+lit_eq_char=true
+char_ne_lit=false
+char_lt_lit=true
+char_eq_escape=true
+char_eq_long=false
+builtin_concat=[Y]

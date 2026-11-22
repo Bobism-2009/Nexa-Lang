@@ -1,0 +1,3 @@
+#include "cyc_b.nxa"
+let count = 1;
+fn bump() { cyc_b.flag = true; count += cyc_b.n; }

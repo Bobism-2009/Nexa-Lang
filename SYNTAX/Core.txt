@@ -325,6 +325,8 @@ VARIABLES
     let count = 0;
     let msg = "hello";
     let y = x + 1;   // can use other globals
+    A global may be written below the functions that use it, or in a module
+    that includes this one back; it is set up before its first use.
     No io.readln() or dll.load() at global scope.
 
   Local variables (inside functions): same syntax.
@@ -457,6 +459,7 @@ ARITHMETIC
   Precedence (tightest first): * / % ; + - ; << >> ; & ; ^ ; |
   Bitwise: & | ^  (binary),  ~  (unary NOT),  << >>  (shift)
   int and float (int + float promotes to float)
+  % on floats is fmod, truncated like the integer %:  7.5 % 2.0 is 1.5, -7.5 % 2.0 is -1.5
 
 CASTS (C-style)
   (int)expr    (float)expr    (char)expr    (bool)expr    (string)expr

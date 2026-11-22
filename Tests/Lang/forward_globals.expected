@@ -1,0 +1,2 @@
+fn_uses_later=42
+module_cycle=true 6

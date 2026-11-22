@@ -1,0 +1,25 @@
+// Pins chars meeting text: a ?: of two chars stays a char when appended or
+// printed, a char compares with a string literal by its character, and a
+// builtin that returns text joins with + as text.
+#include <std/io>
+#include <std/time>
+
+fn main() {
+    let c = 'x';
+    let on = true;
+    let s = "";
+    s += on ? ';' : c;               // the character, not its code 59
+    s += !on ? ';' : c;
+    io.println("tern_append=", s);
+    io.println("tern_print=", on ? 'a' : 'b');
+
+    let t = "a;b\n";
+    io.println("char_eq_lit=", t[1] == ";");
+    io.println("lit_eq_char=", "a" == t[0]);
+    io.println("char_ne_lit=", t[2] != "b");
+    io.println("char_lt_lit=", t[0] < "b");
+    io.println("char_eq_escape=", t[3] == "\n");
+    io.println("char_eq_long=", t[0] == "ab");  // never equal
+
+    io.println("builtin_concat=", "[" + time.format("Y") + "]");
+}

@@ -1,0 +1,23 @@
+// Pins % on floats: fmod, truncated toward zero like the integer %, in an
+// expression and in every %= target.
+#include <std/io>
+
+struct Acc { f: float; }
+
+fn main() {
+    io.println("mod=", 7.5 % 2.0);
+    io.println("mod_neg=", -7.5 % 2.0);
+    io.println("mod_mixed=", 7 % 2.5);
+    let h: float32 = 5.5;
+    io.println("mod_f32=", h % 2.0);
+    let x = 10.25;
+    x %= 3.0;
+    io.println("assign=", x);
+    let xs = [7.5, 9.0];
+    xs[1] %= 4.0;
+    io.println("assign_index=", xs[1]);
+    let a = Acc { f: 10.5 };
+    a.f %= 3.0;
+    io.println("assign_field=", a.f);
+    io.println("int_mod=", 7 % 3);
+}

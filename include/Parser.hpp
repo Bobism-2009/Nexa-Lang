@@ -11,6 +11,8 @@
 #include <filesystem>
 #include <stdexcept>
 #include <cctype>
+#include <algorithm>
+#include <functional>
 
 namespace nexa {
 
@@ -406,6 +408,7 @@ public:
             // bare uses (state.L written as L, workspace.fn as fn) in one pass
             // so include order does not matter and shared helpers work.
             if (filePrefix_.empty()) rewriteImportedUses(ast);
+            if (filePrefix_.empty()) hoistForwardGlobals(ast);
             return ast;
         } catch (const std::runtime_error& e) {
             const std::string msg = e.what();
@@ -499,6 +502,102 @@ private:
         if (n.line != 0) return;
         n.line = line;
         n.srcFile = currentFilePath_;
+    }
+
+    // A function may use a global written further down its file, or one from a
+    // module that includes this one back (a.nxa and b.nxa each reading the
+    // other's state). C++ wants the variable first, so each such global moves up
+    // to just before the first top-level item that names it, along with any
+    // later global its own initializer reads. A program with no such use keeps
+    // its order, and its C++, exactly. Never across file-scope inline_cpp!,
+    // which may define what an initializer calls.
+    static void hoistForwardGlobals(std::vector<AstNode>& ast) {
+        std::map<std::string, size_t> globalAt;
+        for (size_t i = 0; i < ast.size(); i++) {
+            if (ast[i].type == AstNode::Type::Variable) globalAt.emplace(ast[i].value, i);
+        }
+        if (globalAt.empty()) return;
+        // The globals each top-level item names: as a plain name, or as mod.name
+        // when the module was still being read where the use was written.
+        std::vector<std::set<size_t>> uses(ast.size());
+        std::function<void(const AstNode&, std::set<size_t>&)> walk = [&](const AstNode& n, std::set<size_t>& into) {
+            switch (n.type) {
+                case AstNode::Type::ExprStringLiteral:
+                case AstNode::Type::ExprCharLiteral:
+                case AstNode::Type::ExprIntLiteral:
+                case AstNode::Type::ExprFloatLiteral:
+                case AstNode::Type::ExprBoolLiteral:
+                case AstNode::Type::InlineCpp:
+                    return;
+                default:
+                    break;
+            }
+            if (!n.value.empty()) {
+                auto it = globalAt.find(n.value);
+                if (it != globalAt.end()) into.insert(it->second);
+            }
+            if (n.type == AstNode::Type::ExprMember && !n.isArrowMember && n.children.size() == 1 &&
+                n.children[0].type == AstNode::Type::ExprVarRef) {
+                auto it = globalAt.find(n.children[0].value + "." + n.value);
+                if (it != globalAt.end()) into.insert(it->second);
+            }
+            for (const AstNode& c : n.children) walk(c, into);
+            for (const AstNode& d : n.paramDefaults) walk(d, into);
+        };
+        for (size_t i = 0; i < ast.size(); i++) {
+            for (const AstNode& c : ast[i].children) walk(c, uses[i]);
+            for (const AstNode& d : ast[i].paramDefaults) walk(d, uses[i]);
+            uses[i].erase(i);
+        }
+        // How high each global may go: not above the last inline_cpp! before it.
+        std::vector<size_t> floor(ast.size(), 0), target(ast.size());
+        size_t lastCpp = 0;
+        for (size_t i = 0; i < ast.size(); i++) {
+            target[i] = i;
+            floor[i] = lastCpp;
+            if (ast[i].type == AstNode::Type::InlineCpp) lastCpp = i + 1;
+        }
+        bool moved = false;
+        for (bool changed = true; changed;) {
+            changed = false;
+            for (size_t i = 0; i < ast.size(); i++) {
+                const size_t at = target[i];
+                for (size_t g : uses[i]) {
+                    const size_t want = std::max(at, floor[g]);
+                    if (want < target[g]) {
+                        target[g] = want;
+                        changed = moved = true;
+                    }
+                }
+            }
+        }
+        if (!moved) return;
+        // Each hoisted global lands just before the item at its target, in the
+        // order the globals were written -- except that one whose initializer
+        // reads another landing at the same spot comes after it.
+        std::vector<std::vector<size_t>> before(ast.size());
+        for (size_t i = 0; i < ast.size(); i++) {
+            if (target[i] != i) before[target[i]].push_back(i);
+        }
+        std::vector<AstNode> out;
+        out.reserve(ast.size());
+        std::vector<char> placed(ast.size(), 0);
+        std::function<void(size_t, size_t)> place = [&](size_t g, size_t spot) {
+            if (placed[g]) return;
+            placed[g] = 1;
+            for (size_t d : uses[g]) {
+                if (target[d] == spot && d != spot) place(d, spot);
+            }
+            out.push_back(std::move(ast[g]));
+        };
+        for (size_t i = 0; i < ast.size(); i++) {
+            for (size_t g : before[i]) place(g, i);
+            if (target[i] == i && !placed[i]) {
+                placed[i] = 1;
+                out.push_back(std::move(ast[i]));
+            }
+        }
+        ast = std::move(out);
     }
 
     std::vector<Token> tokens_;
@@ -7471,6 +7570,12 @@ private:
                 throw std::runtime_error("Expected ';' after thread.worker_join(...) at line " + std::to_string(peek().line));
             }
             return {AstNode::Type::ThreadWorkerJoin, "", {handleArg}};
+        }
+        if (method == "spawn" || method == "worker") {
+            // thread.spawn(work); on its own would start a thread nobody can join.
+            throw std::runtime_error("thread." + method + "(...) hands back a handle to keep: let t = thread." +
+                                     method + "(...); then thread." + (method == "spawn" ? "join" : "worker_join") +
+                                     "(t); at line " + std::to_string(methodTok.line));
         }
         if (method != "join") {
             throw std::runtime_error("Expected thread.join, thread.run, thread.worker_join, thread.lock or thread.unlock at line " +
