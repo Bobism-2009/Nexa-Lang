@@ -1,0 +1,10 @@
+// A method the struct does not have is a Nexa error, not a C++ one.
+#include <std/io>
+struct Point {
+    x: int;
+    fn len(): int { return self.x; }
+}
+fn main() {
+    let p = Point { x: 2 };
+    io.println(p.lenn());
+}

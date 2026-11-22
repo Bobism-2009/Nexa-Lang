@@ -1,0 +1,7 @@
+// A method maps do not have.
+#include <std/io>
+fn main() {
+    let m: map[string]int;
+    m["a"] = 1;
+    io.println(len(m.kyes()));
+}

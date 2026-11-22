@@ -1,0 +1,6 @@
+// .length() from other languages: a list's length is len(xs).
+#include <std/io>
+fn main() {
+    let xs = [1, 2];
+    io.println(xs.length());
+}

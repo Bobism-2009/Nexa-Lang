@@ -1,0 +1,2 @@
+Unknown method '.kyes()' (did you mean '.keys()'?) on a 'map[string]int'
+at line 6

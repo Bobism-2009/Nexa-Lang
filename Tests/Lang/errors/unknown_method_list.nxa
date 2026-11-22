@@ -1,0 +1,6 @@
+// A method lists do not have.
+#include <std/io>
+fn main() {
+    let xs = [1, 2];
+    xs.psh(3);
+}

@@ -1,0 +1,27 @@
+// Calls that must keep compiling now that unknown methods are refused:
+// a field holding a function, a generic struct's method, list and map methods.
+#include <std/io>
+struct Button {
+    id: int;
+    on_click: fn(int): int;
+    fn twice(): int { return self.id * 2; }
+}
+struct Slot[T] {
+    v: T;
+    fn get(): T { return self.v; }
+}
+fn main() {
+    let b = Button { id: 3, on_click: fn (a: int): int { return a + 10; } };
+    io.println(b.on_click(1));
+    io.println(b.twice());
+    let s = Slot { v: 7 };
+    io.println(s.get());
+    let xs = [3, 1, 2];
+    xs.sort();
+    xs.push(4);
+    io.println(xs.sum());
+    let m: map[string]int;
+    m["k"] = 2;
+    io.println(len(m.keys()));
+    io.println(m.has("k"));
+}

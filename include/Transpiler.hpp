@@ -4963,12 +4963,75 @@ private:
                 s += emitCCallArg(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             }
             s += ")";
+            // A list, a map or a struct this program wrote, asked for a method it does not
+            // have: say so here instead of letting clang. A C/C++ header or inline C++ can
+            // name types and methods Nexa cannot see, so then this has no opinion.
+            if (!modules_.hasCppHeader() && semNameChecks_) {
+                std::string on;
+                NexaSuggest near(e.value);
+                if (nexaIsSliceType(recvBare)) {
+                    on = " on a " + semTypeLabel(recvBare);
+                    near.considerList("push, pop, insert, remove, clear, has, contains, count, index_of, "
+                                      "last_index_of, first, last, find, any, all, filter, map, reverse, sort, "
+                                      "sort_desc, join, min, max, sum");
+                } else if (nexaIsMapType(recvBare)) {
+                    on = " on a " + semTypeLabel(recvBare);
+                    near.considerList("get, has, remove, clear, keys, values");
+                } else if (isStructDeclType(recvBare)) {
+                    const std::string full = structNameFromDecl(recvBare);
+                    const std::string base = nexaTypeAppBase(full);
+                    // Slot[int] may be listed as itself or as Slot; either one having
+                    // the name is enough. A field holding a function is called the same
+                    // way as a method: p.on_click(x).
+                    bool known = false, has = false;
+                    for (const std::string& sn : {full, base}) {
+                        auto fit = structFields_.find(sn);
+                        if (fit != structFields_.end()) {
+                            known = true;
+                            if (fit->second.count(e.value)) has = true;
+                        }
+                        auto mit = structMethods_.find(sn);
+                        if (mit != structMethods_.end() && mit->second.count(e.value)) has = true;
+                    }
+                    if (known && !has) {
+                        on = " on struct " + base;
+                        for (const std::string& sn : {full, base}) {
+                            auto mit = structMethods_.find(sn);
+                            if (mit == structMethods_.end()) continue;
+                            for (const auto& kv : mit->second) {
+                                if (sameStructMemberScope(sn, kv.first, e.srcFile)) near.consider(kv.first);
+                            }
+                        }
+                    }
+                }
+                if (!on.empty()) {
+                    const size_t at = e.line ? e.line : e.children[0].line;
+                    // The names other languages give the same thing.
+                    std::string pick = near.pick(), tail;
+                    if (!isStructDeclType(recvBare)) {
+                        if (e.value == "length" || e.value == "lenght" || e.value == "size" || e.value == "len") {
+                            pick.clear();
+                            tail = std::string("; the length of a ") + (nexaIsMapType(recvBare) ? "map is len(m)" : "list is len(xs)");
+                        }
+                        if (nexaIsSliceType(recvBare) && (e.value == "append" || e.value == "push_back" ||
+                                                          e.value == "add")) {
+                            pick = "push";
+                        }
+                    }
+                    throw std::runtime_error("Unknown method '." + e.value + "()'" +
+                                             (!pick.empty() ? " (did you mean '." + pick + "()'?)" : std::string()) +
+                                             on + tail + (at ? " at line " + std::to_string(at) : std::string()));
+                }
+            }
             if (!modules_.hasCppHeader() && !isStructDeclType(recvBare) && !nexaIsSliceType(recvBare) &&
                 !nexaIsMapType(recvBare)) {
                 const size_t at = e.line ? e.line : e.children[0].line;
                 std::string what = recvBare.empty() ? std::string() : " on a " + semTypeLabel(recvBare);
                 std::string hint;
                 if (e.value == "to_int") hint = "; to read a number from text, use io.to_int(s)";
+                if (recvBare == "string" && (e.value == "length" || e.value == "lenght" || e.value == "size")) {
+                    hint = " (did you mean '.len()'?)";
+                }
                 std::string near;
                 if (hint.empty() && recvBare == "string") {
                     NexaSuggest s(e.value, ".");
