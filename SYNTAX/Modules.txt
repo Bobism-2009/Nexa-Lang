@@ -2320,6 +2320,39 @@ ARGUMENT TYPES
   size:
   term.width() / term.height() - the terminal size in columns and rows (80x24
                            if it cannot be determined, e.g. output is a pipe)
+  direct control (termios):
+  term.c_iflag() / term.c_oflag() / term.c_cflag() / term.c_lflag()
+                         - the terminal's input, output, control and local flag
+                           words, as an int; -1 when stdin is not a terminal
+  term.set_c_iflag(flags) / set_c_oflag / set_c_cflag / set_c_lflag
+                         - write a flag word back (applied at once, TCSANOW);
+                           1 if the terminal took it, else 0
+  term.c_cc(i) / term.set_c_cc(i, value)
+                         - a control character, by index (term.VMIN, term.VTIME,
+                           term.VINTR, ...); c_cc gives -1 and set_c_cc 0 off a
+                           terminal or for an index out of range
+  term.restore()         - put back the terminal as the first set_* found it;
+                           pair it with defer. 1 on success (or nothing to undo)
+  flags, written without parentheses (term.ICANON):
+    c_iflag  IGNBRK BRKINT IGNPAR PARMRK INPCK ISTRIP INLCR IGNCR ICRNL IUCLC
+             IXON IXANY IXOFF IMAXBEL IUTF8
+    c_oflag  OPOST OLCUC ONLCR OCRNL ONOCR ONLRET OFILL OFDEL, and the delay
+             masks NLDLY CRDLY TABDLY BSDLY VTDLY FFDLY with NL0..FF1
+    c_cflag  CSIZE CS5 CS6 CS7 CS8 CSTOPB CREAD PARENB PARODD HUPCL CLOCAL CRTSCTS
+    c_lflag  ISIG ICANON XCASE ECHO ECHOE ECHOK ECHONL NOFLSH TOSTOP ECHOCTL
+             ECHOPRT ECHOKE FLUSHO PENDIN IEXTEN
+    c_cc     VINTR VQUIT VERASE VKILL VEOF VTIME VMIN VSTART VSTOP VSUSP VEOL
+             VREPRINT VDISCARD VWERASE VLNEXT VEOL2
+  Each constant is the platform's own value, so the bits are right on Linux,
+  macOS and every CPU; one a platform lacks is 0 there. Only the constants a
+  program names are compiled in.
+      let l = term.c_lflag();
+      term.set_c_lflag(l & ~(term.ICANON | term.ECHO));
+      defer term.restore();
+  Windows has no termios. The constants take Linux's values, and the console
+  mode carries the flags it has: ICANON, ECHO and ISIG (input), OPOST and ONLCR
+  (output). The console echoes only with ICANON on, so ECHO without it is
+  refused (0). The other flags and c_cc are kept and read back, with no effect.
   Windows note: colour needs virtual-terminal processing, which term turns on
   the first time any colour/cursor call runs. The key reader is the console API
   (_getch); on Linux/macOS it is termios + the kernel. No reader on a non-tty.

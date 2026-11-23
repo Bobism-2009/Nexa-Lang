@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdio>
+#include <set>
 #include <string>
 
 namespace nexa {
@@ -15,6 +17,7 @@ namespace nexa {
 // `screen` : term.clear / clear_line / move / home / hide_cursor / show_cursor / alt_screen
 // `raw`    : term.raw / getkey / key_available
 // `size`   : term.width / term.height
+// `flags`  : term.c_iflag ... set_c_lflag / c_cc / set_c_cc / restore, and term.ICANON etc. (termFlagsRuntimeCpp)
 inline std::string termRuntimeCpp(bool style, bool screen, bool raw, bool size, bool progress, bool spinner) {
     std::string out;
     out += "#include <string>\n";
@@ -307,6 +310,212 @@ static int __nexa_term_key_available() {
 #endif
 )NEXA_TERM";
     }
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// Direct terminal control: the termios flag words and control characters.
+//
+//   term.c_iflag() / c_oflag() / c_cflag() / c_lflag()   read a flag word
+//   term.set_c_iflag(v) / ...                             write one back
+//   term.c_cc(i) / term.set_c_cc(i, v)                    control characters
+//   term.restore()                                        undo every set_*
+//   term.IGNBRK, term.ICANON, term.VMIN, ...              the flag constants
+//
+// A constant is the platform's own macro wherever termios has it, so the bits
+// are right on Linux, macOS and every CPU. Only the constants a program names
+// are emitted. Windows has no termios: there the values are Linux's, and the
+// flags the console can do (ICANON, ECHO, ISIG, OPOST, ONLCR) drive its mode;
+// the rest are kept and read back, with no effect.
+
+struct TermFlagConst { const char* name; unsigned long linuxValue; };
+
+inline const TermFlagConst* termFlagConsts() {
+    static const TermFlagConst table[] = {
+        // c_iflag
+        {"IGNBRK", 0000001}, {"BRKINT", 0000002}, {"IGNPAR", 0000004}, {"PARMRK", 0000010},
+        {"INPCK", 0000020}, {"ISTRIP", 0000040}, {"INLCR", 0000100}, {"IGNCR", 0000200},
+        {"ICRNL", 0000400}, {"IUCLC", 0001000}, {"IXON", 0002000}, {"IXANY", 0004000},
+        {"IXOFF", 0010000}, {"IMAXBEL", 0020000}, {"IUTF8", 0040000},
+        // c_oflag
+        {"OPOST", 0000001}, {"OLCUC", 0000002}, {"ONLCR", 0000004}, {"OCRNL", 0000010},
+        {"ONOCR", 0000020}, {"ONLRET", 0000040}, {"OFILL", 0000100}, {"OFDEL", 0000200},
+        {"NLDLY", 0000400}, {"NL0", 0}, {"NL1", 0000400},
+        {"CRDLY", 0003000}, {"CR0", 0}, {"CR1", 0001000}, {"CR2", 0002000}, {"CR3", 0003000},
+        {"TABDLY", 0014000}, {"TAB0", 0}, {"TAB1", 0004000}, {"TAB2", 0010000}, {"TAB3", 0014000},
+        {"BSDLY", 0020000}, {"BS0", 0}, {"BS1", 0020000},
+        {"VTDLY", 0040000}, {"VT0", 0}, {"VT1", 0040000},
+        {"FFDLY", 0100000}, {"FF0", 0}, {"FF1", 0100000},
+        // c_cflag
+        {"CSIZE", 0000060}, {"CS5", 0}, {"CS6", 0000020}, {"CS7", 0000040}, {"CS8", 0000060},
+        {"CSTOPB", 0000100}, {"CREAD", 0000200}, {"PARENB", 0000400}, {"PARODD", 0001000},
+        {"HUPCL", 0002000}, {"CLOCAL", 0004000}, {"CRTSCTS", 020000000000},
+        // c_lflag
+        {"ISIG", 0000001}, {"ICANON", 0000002}, {"XCASE", 0000004}, {"ECHO", 0000010},
+        {"ECHOE", 0000020}, {"ECHOK", 0000040}, {"ECHONL", 0000100}, {"NOFLSH", 0000200},
+        {"TOSTOP", 0000400}, {"ECHOCTL", 0001000}, {"ECHOPRT", 0002000}, {"ECHOKE", 0004000},
+        {"FLUSHO", 0010000}, {"PENDIN", 0040000}, {"IEXTEN", 0100000},
+        // c_cc indices
+        {"VINTR", 0}, {"VQUIT", 1}, {"VERASE", 2}, {"VKILL", 3}, {"VEOF", 4}, {"VTIME", 5},
+        {"VMIN", 6}, {"VSTART", 8}, {"VSTOP", 9}, {"VSUSP", 10}, {"VEOL", 11},
+        {"VREPRINT", 12}, {"VDISCARD", 13}, {"VWERASE", 14}, {"VLNEXT", 15}, {"VEOL2", 16},
+        {nullptr, 0},
+    };
+    return table;
+}
+
+inline const TermFlagConst* termFlagConst(const std::string& name) {
+    for (const TermFlagConst* c = termFlagConsts(); c->name; ++c) {
+        if (name == c->name) return c;
+    }
+    return nullptr;
+}
+
+// The methods that read or write the flags (each takes this runtime).
+inline bool termIsFlagMethod(const std::string& m) {
+    return m == "c_iflag" || m == "c_oflag" || m == "c_cflag" || m == "c_lflag" ||
+           m == "set_c_iflag" || m == "set_c_oflag" || m == "set_c_cflag" || m == "set_c_lflag" ||
+           m == "c_cc" || m == "set_c_cc" || m == "restore";
+}
+
+// `flags`: the read/write functions; `consts`: the constants the program names.
+inline std::string termFlagsRuntimeCpp(bool flags, const std::set<std::string>& consts) {
+    std::string out;
+    out += "#ifdef _WIN32\n#include <windows.h>\n#else\n#include <termios.h>\n#include <unistd.h>\n#endif\n";
+    for (const std::string& n : consts) {
+        const TermFlagConst* c = termFlagConst(n);
+        if (!c) continue;
+        char lin[32];
+        std::snprintf(lin, sizeof lin, "0x%lxu", c->linuxValue);
+        out += "#if defined(" + n + ")\nstatic const int __nexa_tf_" + n + " = (int)(" + n + ");\n";
+        out += "#elif defined(_WIN32)\nstatic const int __nexa_tf_" + n + " = (int)" + lin + ";\n";
+        out += "#else\nstatic const int __nexa_tf_" + n + " = 0;  /* not on this platform */\n#endif\n";
+    }
+    if (!flags) return out;
+    out += R"NEXA_TERM(
+#ifdef _WIN32
+// Windows: the console mode stands in for termios. Linux's bit values.
+static int __nexa_tf_shadow[4] = {
+    0000400 | 0002000,                               /* ICRNL IXON */
+    0000001 | 0000004,                               /* OPOST ONLCR */
+    0000060 | 0000200,                               /* CS8 CREAD */
+    0000001 | 0000002 | 0000010 | 0000020 | 0000040 | 0100000 | 0001000 | 0004000,
+};
+static unsigned char __nexa_tf_cc[17] = {3, 28, 127, 21, 4, 0, 1, 0, 17, 19, 26, 0, 18, 15, 23, 22, 0};
+static DWORD __nexa_tf_orig_in = 0, __nexa_tf_orig_out = 0;
+static int __nexa_tf_saved = 0, __nexa_tf_have_in = 0, __nexa_tf_have_out = 0;
+static void __nexa_tf_save() {
+    if (__nexa_tf_saved) return;
+    __nexa_tf_saved = 1;
+    // Only a handle that is a console has a mode to give back.
+    __nexa_tf_have_in = GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &__nexa_tf_orig_in) ? 1 : 0;
+    __nexa_tf_have_out = GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), &__nexa_tf_orig_out) ? 1 : 0;
+}
+static int __nexa_term_get_flag(int __w) {
+    DWORD __m = 0;
+    if (__w == 1) {
+        if (!GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), &__m)) return -1;
+        int __v = __nexa_tf_shadow[1] & ~(0000001 | 0000004);
+        if (__m & 0x0001) __v |= 0000001;        /* ENABLE_PROCESSED_OUTPUT: OPOST */
+        if (!(__m & 0x0008)) __v |= 0000004;     /* no DISABLE_NEWLINE_AUTO_RETURN: ONLCR */
+        return __v;
+    }
+    if (!GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &__m)) return -1;
+    if (__w != 3) return __nexa_tf_shadow[__w];
+    int __v = __nexa_tf_shadow[3] & ~(0000001 | 0000002 | 0000010);
+    if (__m & 0x0001) __v |= 0000001;            /* ENABLE_PROCESSED_INPUT: ISIG */
+    if (__m & 0x0002) __v |= 0000002;            /* ENABLE_LINE_INPUT: ICANON */
+    if (__m & 0x0004) __v |= 0000010;            /* ENABLE_ECHO_INPUT: ECHO */
+    return __v;
+}
+static int __nexa_term_set_flag(int __w, int __v) {
+    __nexa_tf_save();
+    DWORD __m = 0;
+    if (__w == 1) {
+        HANDLE __h = GetStdHandle(STD_OUTPUT_HANDLE);
+        if (!GetConsoleMode(__h, &__m)) return 0;
+        __m &= ~(DWORD)(0x0001 | 0x0008);
+        if (__v & 0000001) __m |= 0x0001;
+        if (!(__v & 0000004)) __m |= 0x0008;
+        if (!SetConsoleMode(__h, __m)) return 0;
+    } else {
+        HANDLE __h = GetStdHandle(STD_INPUT_HANDLE);
+        if (!GetConsoleMode(__h, &__m)) return 0;
+        if (__w == 3) {
+            __m &= ~(DWORD)(0x0001 | 0x0002 | 0x0004);
+            if (__v & 0000001) __m |= 0x0001;
+            if (__v & 0000002) __m |= 0x0002;
+            if (__v & 0000010) __m |= 0x0004;    /* the console echoes only with ICANON */
+            if (!SetConsoleMode(__h, __m)) return 0;
+        }
+    }
+    __nexa_tf_shadow[__w] = __v;
+    return 1;
+}
+static int __nexa_term_get_cc(int __i) {
+    DWORD __m = 0;
+    if (__i < 0 || __i >= 17 || !GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &__m)) return -1;
+    return __nexa_tf_cc[__i];
+}
+static int __nexa_term_set_cc(int __i, int __v) {
+    DWORD __m = 0;
+    if (__i < 0 || __i >= 17 || !GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &__m)) return 0;
+    __nexa_tf_cc[__i] = (unsigned char)__v;
+    return 1;
+}
+static int __nexa_term_restore() {
+    if (!__nexa_tf_saved) return 1;
+    __nexa_tf_saved = 0;
+    int __a = !__nexa_tf_have_in || SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), __nexa_tf_orig_in);
+    int __b = !__nexa_tf_have_out || SetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), __nexa_tf_orig_out);
+    return __a && __b;
+}
+#else
+// The terminal as the first set_* found it, for term.restore().
+static struct termios __nexa_tf_orig;
+static int __nexa_tf_saved = 0;
+static int __nexa_term_get_flag(int __w) {
+    struct termios __t;
+    if (tcgetattr(0, &__t) != 0) return -1;
+    switch (__w) {
+        case 0: return (int)__t.c_iflag;
+        case 1: return (int)__t.c_oflag;
+        case 2: return (int)__t.c_cflag;
+        default: return (int)__t.c_lflag;
+    }
+}
+static int __nexa_term_set_flag(int __w, int __v) {
+    struct termios __t;
+    if (tcgetattr(0, &__t) != 0) return 0;
+    if (!__nexa_tf_saved) { __nexa_tf_orig = __t; __nexa_tf_saved = 1; }
+    const tcflag_t __f = (tcflag_t)(unsigned int)__v;
+    switch (__w) {
+        case 0: __t.c_iflag = __f; break;
+        case 1: __t.c_oflag = __f; break;
+        case 2: __t.c_cflag = __f; break;
+        default: __t.c_lflag = __f; break;
+    }
+    return tcsetattr(0, TCSANOW, &__t) == 0 ? 1 : 0;
+}
+static int __nexa_term_get_cc(int __i) {
+    struct termios __t;
+    if (__i < 0 || __i >= NCCS || tcgetattr(0, &__t) != 0) return -1;
+    return (int)(unsigned char)__t.c_cc[__i];
+}
+static int __nexa_term_set_cc(int __i, int __v) {
+    struct termios __t;
+    if (__i < 0 || __i >= NCCS || tcgetattr(0, &__t) != 0) return 0;
+    if (!__nexa_tf_saved) { __nexa_tf_orig = __t; __nexa_tf_saved = 1; }
+    __t.c_cc[__i] = (cc_t)__v;
+    return tcsetattr(0, TCSANOW, &__t) == 0 ? 1 : 0;
+}
+static int __nexa_term_restore() {
+    if (!__nexa_tf_saved) return 1;
+    __nexa_tf_saved = 0;
+    return tcsetattr(0, TCSANOW, &__nexa_tf_orig) == 0 ? 1 : 0;
+}
+#endif
+)NEXA_TERM";
     return out;
 }
 

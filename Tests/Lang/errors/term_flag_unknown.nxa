@@ -1,0 +1,6 @@
+// A misspelled termios flag gets the closest one.
+#include <std/io>
+#include <std/term>
+fn main() {
+    io.println(term.ICANNON);
+}

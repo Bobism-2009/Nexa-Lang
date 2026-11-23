@@ -6283,6 +6283,10 @@ private:
             m == "raw" || m == "cursor" || m == "alt_screen") return 1;
         if (m == "clear" || m == "clear_line" || m == "clear_eol" || m == "home" || m == "hide_cursor" || m == "show_cursor" ||
             m == "getkey" || m == "key_available" || m == "width" || m == "height") return 0;
+        // Direct control: the termios flag words and control characters.
+        if (m == "c_iflag" || m == "c_oflag" || m == "c_cflag" || m == "c_lflag" || m == "restore") return 0;
+        if (m == "set_c_iflag" || m == "set_c_oflag" || m == "set_c_cflag" || m == "set_c_lflag" || m == "c_cc") return 1;
+        if (m == "set_c_cc") return 2;
         return -1;
     }
 
@@ -6309,11 +6313,24 @@ private:
         }
         const std::string m = methodTok.value;
         advance();  // method name
+        // term.ICANON, term.VMIN, ...: a flag constant, written without parentheses.
+        if (termFlagConst(m) && peek().type != TokenType::LParen) {
+            AstNode k{AstNode::Type::TermCall, m, {}};
+            k.line = line;
+            return k;
+        }
         const int arity = termArity(m);
         if (arity < 0) {
+            if (!m.empty() && m[0] >= 'A' && m[0] <= 'Z') {
+                NexaSuggest near(m, "term.");
+                for (const TermFlagConst* c = termFlagConsts(); c->name; ++c) near.consider(c->name);
+                throw std::runtime_error("Unknown term flag 'term." + m + "'" + near.text() + " at line " +
+                                         std::to_string(methodTok.line) +
+                                         " (flags are the termios names: IGNBRK, BRKINT, ICRNL, OPOST, CS8, ISIG, ICANON, ECHO, VMIN, ...)");
+            }
             throw std::runtime_error(nexaSuggestFromUse("Unknown term method 'term." + m + "' at line " + std::to_string(methodTok.line) +
                 " (use color, bg, bold, dim, italic, underline, reverse, clear, clear_line, move, home, "
-                "hide_cursor, show_cursor, cursor, alt_screen, clear_eol, progress, spinner, raw, getkey, key_available, width, height)", m, "term."));
+                "hide_cursor, show_cursor, cursor, alt_screen, clear_eol, progress, spinner, raw, getkey, key_available, width, height, c_iflag, c_oflag, c_cflag, c_lflag, set_c_iflag, set_c_oflag, set_c_cflag, set_c_lflag, c_cc, set_c_cc, restore)", m, "term."));
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after term." + m + " at line " + std::to_string(peek().line));

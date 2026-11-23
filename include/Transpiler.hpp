@@ -447,6 +447,8 @@ public:
                 }
                 case AstNode::Type::TermCall: {
                     const std::string& m = n.value;
+                    if (n.children.empty() && termFlagConst(m)) { cppUsage.termConsts.insert(m); break; }
+                    if (termIsFlagMethod(m)) { cppUsage.termFlags = true; break; }
                     if (m == "color" || m == "bg" || m == "bold" || m == "dim" || m == "italic" ||
                         m == "underline" || m == "reverse") cppUsage.termStyle = true;
                     else if (m == "clear" || m == "clear_line" || m == "clear_eol" || m == "move" || m == "home" ||
@@ -7440,6 +7442,12 @@ private:
             {"raw",       "term.raw(on)",           "n"},
             {"progress",  "term.progress(done, total)", "nnn"},
             {"spinner",   "term.spinner(tick)",        "nt"},
+            {"set_c_iflag", "term.set_c_iflag(flags)", "n"},
+            {"set_c_oflag", "term.set_c_oflag(flags)", "n"},
+            {"set_c_cflag", "term.set_c_cflag(flags)", "n"},
+            {"set_c_lflag", "term.set_c_lflag(flags)", "n"},
+            {"c_cc",        "term.c_cc(index)",        "n"},
+            {"set_c_cc",    "term.set_c_cc(index, value)", "nn"},
             {"", nullptr, nullptr},
         };
         return rows;
@@ -12615,6 +12623,18 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (fn == "move") return "(__nexa_term_move(" + n(0) + ", " + n(1) + "), 0)";
                 if (fn == "alt_screen") return "(__nexa_term_alt(" + n(0) + "), 0)";
                 if (fn == "raw") return "(__nexa_term_raw(" + n(0) + "), 0)";
+                if (e.children.empty() && termFlagConst(fn)) return "__nexa_tf_" + fn;
+                if (fn == "c_iflag") return std::string("__nexa_term_get_flag(0)");
+                if (fn == "c_oflag") return std::string("__nexa_term_get_flag(1)");
+                if (fn == "c_cflag") return std::string("__nexa_term_get_flag(2)");
+                if (fn == "c_lflag") return std::string("__nexa_term_get_flag(3)");
+                if (fn == "set_c_iflag") return "__nexa_term_set_flag(0, " + n(0) + ")";
+                if (fn == "set_c_oflag") return "__nexa_term_set_flag(1, " + n(0) + ")";
+                if (fn == "set_c_cflag") return "__nexa_term_set_flag(2, " + n(0) + ")";
+                if (fn == "set_c_lflag") return "__nexa_term_set_flag(3, " + n(0) + ")";
+                if (fn == "c_cc") return "__nexa_term_get_cc(" + n(0) + ")";
+                if (fn == "set_c_cc") return "__nexa_term_set_cc(" + n(0) + ", " + n(1) + ")";
+                if (fn == "restore") return std::string("__nexa_term_restore()");
                 throw std::runtime_error("Internal: unknown term method '" + fn + "'");
             }
             case AstNode::Type::HttpCall: {

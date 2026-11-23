@@ -183,6 +183,8 @@ public:
         bool termSize = false;       // term.width/height
         bool termProgress = false;   // term.progress
         bool termSpinner = false;    // term.spinner
+        bool termFlags = false;      // term.c_iflag/set_c_iflag/.../c_cc/set_c_cc/restore
+        std::set<std::string> termConsts;  // term.IGNBRK, term.ICANON, ... the ones named
         bool gfxPad = false;               // gfx.pads, pad, pad_pressed, pad_axis
         // gfx.rumble, sliced apart from reading a pad: shaking one and reading
         // one are separate costs, and most programs that read never shake.
@@ -2023,6 +2025,9 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
         }
         if (hasTerm() && (usage.termStyle || usage.termScreen || usage.termRaw || usage.termSize || usage.termProgress || usage.termSpinner)) {
             out += termRuntimeCpp(usage.termStyle, usage.termScreen, usage.termRaw, usage.termSize, usage.termProgress, usage.termSpinner);
+        }
+        if (hasTerm() && (usage.termFlags || !usage.termConsts.empty())) {
+            out += termFlagsRuntimeCpp(usage.termFlags, usage.termConsts);
         }
         if (hasRandom() && usage.random) {
             out += "#include <random>\n";

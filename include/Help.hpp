@@ -908,6 +908,9 @@ loses the undefined-name check.)HELP" },
           term.getkey()            a key by name ("a","enter","up","ctrl-c",...)
           term.key_available()     1 if a key is waiting (non-blocking loops)
   size    term.width()  term.height()        columns and rows (80x24 if unknown)
+  flags   term.c_lflag()  term.set_c_lflag(v)  (also c_iflag, c_oflag, c_cflag)
+          term.c_cc(term.VMIN)  term.set_c_cc(i, v)  term.restore()
+          constants: term.ICANON, term.ECHO, term.IGNBRK, term.CS8, ... (termios)
 
 Plain terminal control -- ANSI escapes and the console API, nothing linked, and
 each group emitted only when used. On Windows colour turns on virtual-terminal
