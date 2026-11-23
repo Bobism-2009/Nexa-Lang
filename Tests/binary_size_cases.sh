@@ -28,7 +28,9 @@
 #
 #   hello      Windows: hello world starts on NexaC's own entry point, not MinGW's
 #              crt2.o, so it carries none of the C runtime's startup code: under
-#              6KB (it was 13.8KB), prints, and exits 0.
+#              6KB (it was 13.8KB), prints, and exits 0. Linux (glibc 2.34+): the
+#              same below glibc's crt1.o, under 6KB on x86-64 (it was 14.4KB) and
+#              36KB on aarch64, whose 16KB pages set the floor.
 #
 #   value      Everywhere: .value() on an error, with no try/catch around it,
 #              keeps what the program printed before it, says what the error
@@ -227,7 +229,19 @@ else
     echo "skip size, literal (Windows and Linux only)"
 fi
 
-if [ "$WINDOWS" = 1 ]; then
+HELLO_MAX=
+[ "$WINDOWS" = 1 ] && HELLO_MAX=6144
+if [ "$(uname -s 2>/dev/null)" = Linux ]; then
+    glibc=$(getconf GNU_LIBC_VERSION 2>/dev/null | sed -n 's/^glibc 2\.\([0-9]*\).*/\1/p')
+    if [ -n "$glibc" ] && [ "$glibc" -ge 34 ]; then
+        case "$(uname -m)" in
+            x86_64) HELLO_MAX=6144 ;;
+            # 16KB pages (see the aarch64 link flags): the code and the data each start a page.
+            aarch64) HELLO_MAX=18432 ;;
+        esac
+    fi
+fi
+if [ -n "$HELLO_MAX" ]; then
     printf '#include <std/io>
 fn main() {
     io.println("Hello, Nexa");
@@ -236,7 +250,7 @@ fn main() {
     if "$NEXAC" "$WORK/hello.nxa" -o "$WORK/hello$EXE" > "$WORK/bh.log" 2>&1; then
         size=$(wc -c < "$WORK/hello$EXE" | tr -d ' ')
         out=$("$WORK/hello$EXE" | tr -d "$CR"); rc=$?
-        if [ "$size" -ge 6144 ]; then bad hello "$size bytes, 6KB or more (the startup code is back?)"
+        if [ "$size" -ge "$HELLO_MAX" ]; then bad hello "$size bytes, $HELLO_MAX or more (the startup code is back?)"
         elif [ "$out" != "Hello, Nexa" ] || [ $rc -ne 0 ]; then bad hello "printed [$out], exit $rc"
         else ok "hello ($size bytes)"; fi
     else

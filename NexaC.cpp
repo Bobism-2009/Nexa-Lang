@@ -1384,6 +1384,83 @@ static std::string nexaWinEntryCpp(bool withArgs, bool guiApp) {
 }
 #endif
 
+// Linux executables, the same way. glibc's crt1.o, crti/crtn and the compiler's crtbegin/
+// crtend wrap every program in _init/_fini stubs, transactional-memory registration and an
+// .eh_frame for them -- and GNU ld's separate-code layout (the default since binutils 2.31)
+// then gives the headers, the code, the constants and the data a 4KB page each, which is
+// what made hello world 14.4KB for 3KB of content. Here _start is crt1's own few
+// instructions, handing argc, argv, the environment and ld.so's finaliser to glibc's
+// __libc_start_main, which (since glibc 2.34) runs the global constructors itself, then
+// main, then exit() with its answer: atexit handlers, global destructors, stdio flushed.
+// Threads and thread-locals are set up by ld.so before _start, as they always were.
+// Linked -nostartfiles with -z noseparate-code, which packs headers, code and constants
+// into one read+execute segment (the layout before binutils 2.31, and what lld does); the
+// data stays apart and RELRO is kept. Hello world: 14,392 -> 5,336 bytes on x86-64.
+// glibc 2.34+ on x86-64 and aarch64 only; anything else is refused at compile time, and
+// NexaC builds the ordinary way.
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+static const char* kNexaLinuxEntry = R"NEXAENTRY(
+#include <features.h>
+#if !defined(__GLIBC__) || __GLIBC__ != 2 || __GLIBC_MINOR__ < 34 || !(defined(__x86_64__) || defined(__aarch64__))
+#error "NexaC's own entry point is for glibc 2.34+ on x86-64 and aarch64"
+#endif
+extern "C" {
+// crtbegin's: the handle global destructors are registered under.
+void* __dso_handle __attribute__((visibility("hidden"))) = &__dso_handle;
+// crt1's: tells libio this program uses the current stdio ABI.
+extern const int _IO_stdin_used;
+const int _IO_stdin_used = 0x20000;
+}
+__asm__(
+#if defined(__x86_64__)
+        ".att_syntax prefix\n"
+#endif
+        ".text\n.globl _start\n.type _start,@function\n_start:\n"
+#if defined(__x86_64__)
+#if defined(__CET__)
+        "endbr64\n"
+#endif
+        "xor %ebp, %ebp\n"           // the outermost frame
+        "mov %rdx, %r9\n"            // ld.so's finaliser
+        "pop %rsi\n"                 // argc
+        "mov %rsp, %rdx\n"           // argv
+        "and $-16, %rsp\n"
+        "push %rax\n"
+        "push %rsp\n"                // stack end
+        "xor %r8d, %r8d\n"           // fini, init: glibc runs them itself
+        "xor %ecx, %ecx\n"
+        "lea main(%rip), %rdi\n"
+        "call *__libc_start_main@GOTPCREL(%rip)\n"
+        "hlt\n"
+#else
+#if defined(__ARM_FEATURE_BTI_DEFAULT)
+        "bti c\n"
+#endif
+        "mov x29, #0\n"
+        "mov x30, #0\n"
+        "mov x5, x0\n"               // ld.so's finaliser
+        "ldr x1, [sp]\n"             // argc
+        "add x2, sp, #8\n"           // argv
+        "mov x6, sp\n"               // stack end
+        "adrp x0, main\n"
+        "add x0, x0, :lo12:main\n"
+        "mov x3, #0\n"               // init, fini: glibc runs them itself
+        "mov x4, #0\n"
+        "bl __libc_start_main\n"
+        "brk #0\n"
+#endif
+        ".size _start, .-_start\n");
+)NEXAENTRY";
+#include <gnu/libc-version.h>
+// The glibc this machine links against is the one NexaC runs on. Before 2.34,
+// __libc_start_main left the constructors to crt1's init argument: not tried there at all,
+// rather than failing one compile per build.
+static bool nexaGlibcHasStartMainInit() {
+    int major = 0, minor = 0;
+    return std::sscanf(gnu_get_libc_version(), "%d.%d", &major, &minor) == 2 && (major > 2 || (major == 2 && minor >= 34));
+}
+#endif
+
 static const char* kNexaSlimRuntime = R"NEXASLIM(#include <charconv>
 #include <cstdio>
 #include <cstdlib>
@@ -3811,6 +3888,24 @@ int main(int argc, char* argv[]) {
             { std::ofstream eo(cppPath, std::ios::app); eo << nexaWinEntryCpp(withArgs, noConsole); }
             const std::string log = cppPath + ".log";
             const std::string scmd = cmd + " -nostartfiles -Wl,-e,__nexa_entry -Wl,--disable-runtime-pseudo-reloc";
+            if (std::system((scmd + " > \"" + log + "\" 2>&1").c_str()) == 0) {
+                ret = 0;
+                slimEntryBuilt = true;
+            } else {
+                std::ofstream ro(cppPath, std::ios::trunc);
+                ro << cpp;
+            }
+            std::remove(log.c_str());
+        }
+#elif defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+        // The same below glibc's startup files (see kNexaLinuxEntry). Threads need nothing
+        // from them, so a program that starts one is no exception here.
+        if (slimTarget && noExceptions && cppTarget == nexa::CppTarget::Linux && !buildWin && !buildDll &&
+            !buildShared && linkInputs.empty() && !modules.hasInlineCpp() && !modules.hasCppHeader() &&
+            std::getenv("NEXA_NO_SLIM_ENTRY") == nullptr && nexaGlibcHasStartMainInit()) {
+            { std::ofstream eo(cppPath, std::ios::app); eo << kNexaLinuxEntry; }
+            const std::string log = cppPath + ".log";
+            const std::string scmd = cmd + " -nostartfiles -Wl,-z,noseparate-code";
             if (std::system((scmd + " > \"" + log + "\" 2>&1").c_str()) == 0) {
                 ret = 0;
                 slimEntryBuilt = true;

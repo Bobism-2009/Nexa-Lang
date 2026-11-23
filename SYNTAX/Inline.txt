@@ -69,7 +69,7 @@ Enable
 The same include as inline_cpp!. What a program gives up for C++ of its own --
 the name checks, the slim runtime, RTTI -- is given up for an inline_cpp! block,
 not for the include, so a program whose only foreign code is inline_asm! keeps
-all of it (on Windows, NexaC's own entry point too). Without the include,
+all of it (NexaC's own entry point too). Without the include,
 inline_asm! is rejected at parse time.
 
 Syntax

@@ -43,7 +43,13 @@ OPTIONS
   smaller. Arguments, the environment, global constructors and destructors,
   atexit and the exit code work as before. A program the C runtime's startup is
   needed for is built the ordinary way, with nothing to say about it.
-  NEXA_NO_SLIM_ENTRY=1 keeps the ordinary startup.
+  On Linux (glibc 2.34 or newer, x86-64 and aarch64) the same program, threads
+  allowed, starts on NexaC's own _start rather than glibc's crt1.o, and its
+  headers, code and constants share one read+execute segment instead of a page
+  each (the layout GNU ld used before binutils 2.31, and lld's; the data keeps
+  its own segment and RELRO). Hello world is 5.3KB, where it was 14.4KB, on
+  x86-64; on aarch64, whose 16KB pages set the floor, 17.4KB from 18.3KB.
+  NEXA_NO_SLIM_ENTRY=1 keeps the ordinary startup, on either system.
 
   BUILD SPEED
   With clang, the standard headers every program opens with are parsed once and
