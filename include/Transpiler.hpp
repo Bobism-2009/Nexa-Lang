@@ -445,6 +445,10 @@ public:
                     }
                     break;
                 }
+                case AstNode::Type::InlineAsm:
+                    cppUsage.asm_ = true;
+                    if (n.declType != "att") cppUsage.asmIntel = true;
+                    break;
                 case AstNode::Type::TermCall: {
                     const std::string& m = n.value;
                     if (n.children.empty() && termFlagConst(m)) { cppUsage.termConsts.insert(m); break; }
@@ -1436,6 +1440,7 @@ public:
                 }
             }
             if (node.type != AstNode::Type::Variable && node.type != AstNode::Type::InlineCpp &&
+                node.type != AstNode::Type::InlineAsm &&
                 node.type != AstNode::Type::Function && node.type != AstNode::Type::MainFunction &&
                 node.type != AstNode::Type::StructDef && node.type != AstNode::Type::EnumDef) {
                 continue;
@@ -1446,6 +1451,10 @@ public:
             if (node.type == AstNode::Type::InlineCpp) {
                 emitInlineCppFileScope(out, stripInlineCppIncludeLines(node.value));
                 out << "\n";
+                continue;
+            }
+            if (node.type == AstNode::Type::InlineAsm) {
+                out << "__asm__(" << asmTemplate(node, false) << ");\n";
                 continue;
             }
             if (node.type == AstNode::Type::Function) {
@@ -2583,6 +2592,7 @@ private:
             switch (n.type) {
                 case AstNode::Type::AssnDeref:
                 case AstNode::Type::InlineCpp:
+                case AstNode::Type::InlineAsm:
                     hit = true;  // a store through a pointer can land anywhere
                     break;
                 case AstNode::Type::AssnMember:
@@ -6486,6 +6496,45 @@ private:
         return false;
     }
 
+    // inline_asm!: every operand a variable in scope that a register can hold, and every
+    // {name} in the text one of the operands. Each operand's type is kept with its kind
+    // (paramTypes "out:int") for the emitter, which picks its register class from it.
+    std::string semAsmDialect_;
+    void semCheckInlineAsm(const AstNode& s) {
+        AstNode& n = const_cast<AstNode&>(s);
+        if (!semAsmDialect_.empty() && semAsmDialect_ != n.declType) {
+            semError(s, "this program writes inline_asm! in both Intel and AT&T syntax; a C++ file is read in "
+                        "one, so write every block in the same one");
+        }
+        semAsmDialect_ = n.declType;
+        for (size_t i = 0; i < n.paramNames.size(); ++i) {
+            const std::string& name = n.paramNames[i];
+            std::string kind = n.paramTypes[i];
+            const size_t colon = kind.find(':');
+            if (colon != std::string::npos) kind.resize(colon);
+            std::string t = lookupNexaDecl(name);
+            if (t.empty()) {
+                semError(s, "inline_asm! names '" + name + "', which is not a variable here" +
+                                nameSuggestion(name, s.srcFile, true));
+            }
+            std::string reg, ref;
+            if (!asmOperandClass(t, reg, ref)) {
+                semError(s, "inline_asm! operand '" + name + "' is a " + semTypeLabel(t) +
+                                "; a register holds a number, a char, a bool or a pointer (pass &" + name +
+                                " or a pointer to its data)");
+            }
+            n.paramTypes[i] = kind + ":" + (isPointerType(t) ? std::string("long") : t);
+        }
+        for (const std::string& w : asmBraceNames(n.value)) {
+            bool operand = false;
+            for (const std::string& p : n.paramNames) operand = operand || p == w;
+            if (!operand && !lookupNexaDecl(w).empty()) {
+                semError(s, "inline_asm! writes {" + w + "}, but " + w + " is not one of its operands: add in " +
+                                w + ", out " + w + " or inout " + w);
+            }
+        }
+    }
+
     void semBlock(const std::vector<AstNode>& stmts) {
         nexaDeclStack_.push_back({});
         for (const AstNode& s : stmts) semStmt(s);
@@ -6677,6 +6726,9 @@ private:
             case AstNode::Type::Label:
             case AstNode::Type::Goto:
             case AstNode::Type::InlineCpp:
+                break;
+            case AstNode::Type::InlineAsm:
+                semCheckInlineAsm(s);
                 break;
             // Assignment forms name their target in `value` rather than through an
             // ExprVarRef child, so the target has to be checked explicitly.
@@ -10341,6 +10393,17 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 out << indent << v << " = " << v << " >> " << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
             } else if (child.type == AstNode::Type::InlineCpp) {
                 emitInlineCppRaw(out, stripInlineCppIncludeLines(child.value), indent);
+            } else if (child.type == AstNode::Type::InlineAsm) {
+                for (size_t i = 0; i < child.paramNames.size(); ++i) {
+                    const std::string& nm = child.paramNames[i];
+                    if (child.paramTypes[i].rfind("in:", 0) != 0 && child.paramTypes[i] != "in" &&
+                        varIsConst.count(nm) && varIsConst[nm]) {
+                        throw std::runtime_error("inline_asm! writes const variable '" + nm + "' (it is " +
+                                                 child.paramTypes[i].substr(0, child.paramTypes[i].find(':')) +
+                                                 ") at line " + std::to_string(child.line));
+                    }
+                }
+                emitInlineAsm(out, child, varMap, indent);
             } else if (child.type == AstNode::Type::IfElse) {
                 emitIfElse(out, child, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent, inStringSwitchCase);
             } else if (child.type == AstNode::Type::Switch) {
@@ -14199,6 +14262,175 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             return "std::string(" + v + " ? \"true\" : \"false\")";
         }
         return "std::to_string(" + emitExpr(child, varMap, pStr, pFl, pCh, pBo) + ")";
+    }
+
+    // ---- inline_asm! -------------------------------------------------------------------
+
+    // How an operand of Nexa type `t` is held and written: the register class, and how the
+    // text names it. "" when the type cannot be an operand.
+    static bool asmOperandClass(const std::string& t, std::string& reg, std::string& ref) {
+        if (t == "float") { reg = "__NEXA_ASM_FREG"; ref = "__NEXA_ASM_F64"; return true; }
+        if (t == "float32") { reg = "__NEXA_ASM_FREG"; ref = "__NEXA_ASM_F32"; return true; }
+        reg = "\"r\"";
+        if (t == "long" || t == "unsigned long" || t == "size_t" || isPointerType(t)) {
+            ref = "\"%\"";
+            return true;
+        }
+        if (nexaIsIntegerType(t) || t == "bool") { ref = "__NEXA_ASM_R32"; return true; }
+        return false;
+    }
+
+    static bool asmIdentStart(char c) { return std::isalpha((unsigned char)c) || c == '_'; }
+    static bool asmIdentChar(char c) { return std::isalnum((unsigned char)c) || c == '_'; }
+
+    // The block's lines, with // comments and blank lines gone and the ends trimmed.
+    static std::vector<std::string> asmLines(const std::string& body) {
+        std::vector<std::string> lines;
+        size_t start = 0;
+        while (start <= body.size()) {
+            size_t nl = body.find('\n', start);
+            std::string line = body.substr(start, nl == std::string::npos ? std::string::npos : nl - start);
+            bool inStr = false;
+            for (size_t i = 0; i < line.size(); ++i) {
+                if (line[i] == '"' && (i == 0 || line[i - 1] != '\\')) inStr = !inStr;
+                if (!inStr && line[i] == '/' && i + 1 < line.size() && line[i + 1] == '/') { line.resize(i); break; }
+            }
+            size_t a = line.find_first_not_of(" \t\r");
+            size_t b = line.find_last_not_of(" \t\r");
+            if (a != std::string::npos) lines.push_back(line.substr(a, b - a + 1));
+            if (nl == std::string::npos) break;
+            start = nl + 1;
+        }
+        return lines;
+    }
+
+    // The {word}s a block writes, for the check that each one is an operand.
+    static std::vector<std::string> asmBraceNames(const std::string& body) {
+        std::vector<std::string> names;
+        for (size_t i = 0; i + 1 < body.size(); ++i) {
+            if (body[i] == '{' && body[i + 1] == '{') { ++i; continue; }
+            if (body[i] != '{' || !asmIdentStart(body[i + 1])) continue;
+            size_t j = i + 1;
+            while (j < body.size() && asmIdentChar(body[j])) ++j;
+            if (j < body.size() && body[j] == '}') names.push_back(body.substr(i + 1, j - i - 1));
+        }
+        return names;
+    }
+
+    // The text as a run of C string literals and the operand macros between them. In a
+    // function (extended asm): {name} is the operand, % is written %%, and a label the
+    // block defines is made unique to this asm statement with %=, so the compiler may
+    // inline or unroll it. At file scope (basic asm) the text is taken as it is.
+    std::string asmTemplate(const AstNode& n, bool extended) const {
+        std::map<std::string, std::string> ref;
+        for (size_t i = 0; i < n.paramNames.size(); ++i) {
+            std::string reg, r;
+            const std::string& kt = n.paramTypes[i];
+            const size_t colon = kt.find(':');
+            asmOperandClass(colon == std::string::npos ? std::string("int") : kt.substr(colon + 1), reg, r);
+            ref[n.paramNames[i]] = r;
+        }
+        const std::vector<std::string> lines = asmLines(n.value);
+        std::set<std::string> labels;
+        if (extended) {
+            for (const std::string& l : lines) {
+                size_t j = 0;
+                if (l.empty() || !asmIdentStart(l[0])) continue;
+                while (j < l.size() && asmIdentChar(l[j])) ++j;
+                if (j < l.size() && l[j] == ':') labels.insert(l.substr(0, j));
+            }
+        }
+        std::string out;     // C++: "..." MACRO "..."
+        std::string lit;     // the literal being built
+        auto flush = [&]() { out += "\"" + lit + "\""; lit.clear(); };
+        for (size_t li = 0; li < lines.size(); ++li) {
+            const std::string& l = lines[li];
+            if (li) lit += "\\n\\t";
+            bool sawWord = false;  // the first word of a statement is its mnemonic, never a label use
+            bool inStr = false;
+            for (size_t i = 0; i < l.size(); ++i) {
+                const char c = l[i];
+                if (c == '"') {
+                    if (!(i > 0 && l[i - 1] == '\\')) inStr = !inStr;  // .ascii "a\"b"
+                    lit += "\\\"";
+                    continue;
+                }
+                if (c == '\\') { lit += "\\\\"; continue; }
+                if (c == '%') { lit += extended ? "%%" : "%"; continue; }
+                if (inStr) { lit += c; continue; }
+                if (extended && c == '{' && i + 1 < l.size() && l[i + 1] == '{') { lit += '{'; ++i; continue; }
+                if (extended && c == '}' && i + 1 < l.size() && l[i + 1] == '}') { lit += '}'; ++i; continue; }
+                if (extended && c == '{' && i + 1 < l.size() && asmIdentStart(l[i + 1])) {
+                    size_t j = i + 1;
+                    while (j < l.size() && asmIdentChar(l[j])) ++j;
+                    const std::string name = l.substr(i + 1, j - i - 1);
+                    auto it = ref.find(name);
+                    if (j < l.size() && l[j] == '}' && it != ref.end()) {
+                        if (it->second == "\"%\"") {
+                            lit += "%[" + name + "]";
+                        } else {
+                            flush();
+                            out += " " + it->second + " ";
+                            lit += "[" + name + "]";
+                        }
+                        i = j;
+                        sawWord = true;
+                        continue;
+                    }
+                }
+                if (asmIdentStart(c) && (i == 0 || !asmIdentChar(l[i - 1])) && (i == 0 || l[i - 1] != '.')) {
+                    size_t j = i;
+                    while (j < l.size() && asmIdentChar(l[j])) ++j;
+                    const std::string word = l.substr(i, j - i);
+                    const bool defines = i == 0 && j < l.size() && l[j] == ':';
+                    if (labels.count(word) && (defines || sawWord)) {
+                        lit += ".Lnexa_" + word + "_%=";
+                    } else {
+                        lit += word;
+                    }
+                    if (!defines) sawWord = true;
+                    i = j - 1;
+                    continue;
+                }
+                if (c == ';') sawWord = false;  // a second statement on the line
+                lit += c;
+            }
+        }
+        const bool intel = n.declType != "att";
+        std::string text = "\"" + lit + "\"";
+        if (!out.empty()) text = out + " " + text;
+        if (intel && extended) text = "__NEXA_ASM_INTEL " + text + " __NEXA_ASM_ATT";
+        if (intel && !extended) text = "__NEXA_ASM_FS_INTEL " + text + " __NEXA_ASM_FS_ATT";
+        return text;
+    }
+
+    void emitInlineAsm(std::ostringstream& out, const AstNode& n, const std::map<std::string, std::string>& varMap,
+                       const std::string& indent) {
+        std::string outs, ins;
+        for (size_t i = 0; i < n.paramNames.size(); ++i) {
+            const std::string& kt = n.paramTypes[i];
+            const size_t colon = kt.find(':');
+            const std::string kind = kt.substr(0, colon);
+            std::string reg, r;
+            asmOperandClass(colon == std::string::npos ? std::string("int") : kt.substr(colon + 1), reg, r);
+            // out may not share a register with an input (it can be written before every
+            // input is read); inout is one register, read and written.
+            const std::string prefix = kind == "out" ? "\"=&\" " : kind == "inout" ? "\"+\" " : "";
+            const std::string one = "[" + n.paramNames[i] + "] " + prefix + reg + " (" +
+                                    cppVarName(varMap, n.paramNames[i]) + ")";
+            std::string& list = kind == "in" ? ins : outs;
+            list += (list.empty() ? "" : ", ") + one;
+        }
+        std::string clobbers = "\"cc\", \"memory\"";
+        size_t at = 0;
+        while (at < n.initValue.size()) {
+            size_t comma = n.initValue.find(',', at);
+            if (comma == std::string::npos) comma = n.initValue.size();
+            clobbers += ", \"" + n.initValue.substr(at, comma - at) + "\"";
+            at = comma + 1;
+        }
+        out << indent << "__asm__ volatile(" << asmTemplate(n, true) << "\n" << indent << "    : " << outs
+            << "\n" << indent << "    : " << ins << "\n" << indent << "    : " << clobbers << ");\n";
     }
 
     // File-scope / namespace-scope C++ (no wrapping braces); required for top-level inline_cpp! with functions or main().

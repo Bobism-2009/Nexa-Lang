@@ -3310,6 +3310,7 @@ int main(int argc, char* argv[]) {
             std::string missing;
             for (const std::string& m : modules.enabledModules()) {
                 if (m.rfind("std/", 0) != 0) continue;
+                if (m == "std/asm") continue;  // compiled by clang itself; no library to carry
                 if (std::find(targetSpec.modules.begin(), targetSpec.modules.end(), m) == targetSpec.modules.end()) {
                     missing += (missing.empty() ? "" : ", ") + m;
                 }
@@ -3385,6 +3386,10 @@ int main(int argc, char* argv[]) {
             bo.debug = debugBuild;
             bo.exceptions = !noExceptions;
             bo.rtti = !noRtti;
+            if (usage.asmIntel && (targetSpec.triple.rfind("x86_64", 0) == 0 || targetSpec.triple.rfind("i386", 0) == 0 ||
+                                   targetSpec.triple.rfind("i686", 0) == 0)) {
+                bo.extraFlags.push_back("-masm=intel");
+            }
             for (const std::string& m : modules.enabledModules()) bo.modules.push_back(m);
             try {
                 nexa::target::buildProgram(targetSpec, cppPath, exePath, bo);
@@ -3415,6 +3420,11 @@ int main(int argc, char* argv[]) {
         // one, so unlike http.* there is nothing to route udp.* through. Say so
         // here, where the program can still be changed, rather than handing
         // back a .wasm whose every send silently returns 0.
+        if (buildWasm && (usage.asm_ || usage.asmIntel)) {
+            std::remove(cppPath.c_str());
+            std::cerr << "[Nexa] Error: inline_asm! has no WebAssembly form: WASM runs no machine code of its own.\n";
+            return 1;
+        }
         if (buildWasm && modules.hasUdp() && usage.udp) {
             std::remove(cppPath.c_str());
             std::cerr << "[Nexa] Error: udp.* is not available on WASM (a page has no datagram socket).\n";
@@ -3642,6 +3652,18 @@ int main(int argc, char* argv[]) {
             std::cout << "[Nexa] Link it into an executable with: NexaC <main.nxa> --link \"" << exePath << "\" -o <exe>\n";
             std::cout << "[Nexa] Call its exported functions from main via inline_cpp (declare 'extern \"C\" ...').\n";
             return 0;
+        }
+
+        // inline_asm! in Intel syntax on x86: clang prints operands bare (eax) only under
+        // -masm=intel, and its assembler takes nothing else in Intel syntax. GCC needs no
+        // flag -- the program switches it into Intel and back around each block.
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+        const bool hostX86 = true;
+#else
+        const bool hostX86 = false;
+#endif
+        if (usage.asmIntel && (hostX86 || buildWin) && cxx.find("clang") != std::string::npos) {
+            targetFlags += " -masm=intel";
         }
 
         // A precompiled header for the standard headers every slim build opens with. Parsing

@@ -888,6 +888,29 @@ string can end the block early. Clang has to accept whatever comes out.
 Reach for this last; a program that uses it keeps RTTI and exceptions, and
 loses the undefined-name check.)HELP" },
 
+{ "std/asm", "asm inline_asm assembly assembler x86 arm intel att register", Group::Module,
+  "inline_asm! { ... } -- the CPU's own instructions, on Nexa variables",
+  R"HELP(std/asm - inline assembly
+  #include <std/asm>          (std/inline allows it too)
+  Full reference: SYNTAX/Inline.txt
+
+  inline_asm!(in a, in b, out sum) {
+      mov {sum}, {a}
+      add {sum}, {b}
+  }
+
+  in x / out x / inout x   a variable the block reads / writes / both; {x} in
+                           the text is its register
+  clobber rcx rdx          registers the block overwrites besides its operands
+  att                      AT&T syntax (x86 is Intel syntax by default)
+
+Operands are numbers, chars, bools, pointers and floats (x86 and arm64). A
+label (again:) is made unique to the block, so it may be inlined or unrolled.
+// comments are dropped. At file scope the block has no operands: it is
+assembly in the file, for a function called through extern fn.
+
+The program keeps everything a program with no C++ of its own gets.)HELP" },
+
 { "std/term", "term terminal color colour cursor key tui ansi", Group::Module,
   "terminal colour, cursor control, and a key at a time",
   R"HELP(std/term - terminal colour, cursor and keys

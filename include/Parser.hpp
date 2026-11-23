@@ -106,7 +106,11 @@ struct AstNode {
                                      // each MatchArm holds one child: its value
                       ExprMember,
                       AssnMember,
-                      InlineCpp };
+                      InlineCpp,
+                      // inline_asm!: value is the text; paramNames / paramTypes the operands
+                      // and their kinds (in, out, inout); initValue the clobbers, comma-
+                      // separated; declType the dialect ("intel" or "att").
+                      InlineAsm };
     Type type;
     std::string value;           // for Include path, CppHeaderInclude line, string literal, variable name, or TryCatch catch binding
     std::vector<AstNode> children;
@@ -465,6 +469,8 @@ public:
                 ast.push_back(parseTypeAlias());
             } else if (t.type == TokenType::Let) {
                 ast.push_back(parseVariable());
+            } else if (t.type == TokenType::InlineAsmBlock) {
+                ast.push_back(parseInlineAsm(true));
             } else if (t.type == TokenType::InlineCppBlock) {
                 if (!modules_.hasInlineCpp()) {
                     throw std::runtime_error("inline_cpp! requires #include <std/inline> at line " + std::to_string(t.line));
@@ -1803,7 +1809,7 @@ private:
         static const std::vector<std::string> mods = {
             "std/io", "std/os", "std/file", "std/dll", "std/random", "std/math",
             "std/crypto", "std/network", "std/json", "std/time", "std/thread",
-            "std/gfx", "std/gfx3d", "std/physics", "std/ui", "std/inline", "std/term",
+            "std/gfx", "std/gfx3d", "std/physics", "std/ui", "std/inline", "std/term", "std/asm",
         };
         return mods;
     }
@@ -2657,6 +2663,8 @@ private:
                 stmts.push_back(parseTryCatch());
             } else if (t.type == TokenType::Throw) {
                 stmts.push_back(parseThrowStmt());
+            } else if (t.type == TokenType::InlineAsmBlock) {
+                stmts.push_back(parseInlineAsm(false));
             } else if (t.type == TokenType::InlineCppBlock) {
                 if (!modules_.hasInlineCpp()) {
                     throw std::runtime_error("inline_cpp! requires #include <std/inline> at line " + std::to_string(t.line));
@@ -3951,6 +3959,8 @@ private:
                 stmts.push_back(parseTryCatch());
             } else if (t.type == TokenType::Throw) {
                 stmts.push_back(parseThrowStmt());
+            } else if (t.type == TokenType::InlineAsmBlock) {
+                stmts.push_back(parseInlineAsm(false));
             } else if (t.type == TokenType::InlineCppBlock) {
                 if (!modules_.hasInlineCpp()) {
                     throw std::runtime_error("inline_cpp! requires #include <std/inline> at line " + std::to_string(t.line));
@@ -4070,6 +4080,77 @@ private:
         }
         AstNode block = parseBody();
         return {AstNode::Type::While, "", {cond, block}};
+    }
+
+    // inline_asm!(in a, out sum, inout n, clobber rcx rdx, att) { text }. The token carries
+    // the operand list as written and the text, split by \x1f. At file scope there are no
+    // operands: the text is assembly at the top of the file.
+    AstNode parseInlineAsm(bool fileScope) {
+        const Token tok = peek();
+        if (!modules_.hasAsm() && !modules_.hasInlineCpp()) {
+            throw std::runtime_error("inline_asm! requires #include <std/asm> at line " + std::to_string(tok.line));
+        }
+        advance();
+        const size_t cut = tok.value.find('\x1f');
+        const std::string ops = tok.value.substr(0, cut);
+        AstNode node{AstNode::Type::InlineAsm, "", {}};
+        node.value = cut == std::string::npos ? std::string() : tok.value.substr(cut + 1);
+        node.line = tok.line;
+        node.declType = "intel";
+        const std::string at = " at line " + std::to_string(tok.line);
+        bool inClobber = false, dialectSaid = false;
+        size_t i = 0;
+        while (i < ops.size()) {
+            size_t comma = ops.find(',', i);
+            if (comma == std::string::npos) comma = ops.size();
+            std::vector<std::string> words;
+            std::string w;
+            for (size_t k = i; k < comma; ++k) {
+                const char c = ops[k];
+                if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+                    if (!w.empty()) words.push_back(w), w.clear();
+                } else {
+                    w += c;
+                }
+            }
+            if (!w.empty()) words.push_back(w);
+            i = comma + 1;
+            if (words.empty()) continue;
+            const std::string& k = words[0];
+            if (k == "in" || k == "out" || k == "inout") {
+                if (words.size() != 2 || !isNexaIdent(words[1])) {
+                    throw std::runtime_error("inline_asm! operand: write " + k + " name, one variable" + at);
+                }
+                for (const std::string& n : node.paramNames) {
+                    if (n == words[1]) {
+                        throw std::runtime_error("inline_asm! names '" + n + "' twice; for one that is read and "
+                                                 "written, write inout " + n + at);
+                    }
+                }
+                node.paramNames.push_back(words[1]);
+                node.paramTypes.push_back(k);
+                inClobber = false;
+            } else if (k == "clobber" || inClobber) {
+                for (size_t q = (k == "clobber" ? 1 : 0); q < words.size(); ++q) {
+                    if (!node.initValue.empty()) node.initValue += ",";
+                    node.initValue += words[q];
+                }
+                inClobber = true;
+            } else if ((k == "intel" || k == "att") && words.size() == 1) {
+                if (dialectSaid) throw std::runtime_error("inline_asm! says its syntax twice" + at);
+                node.declType = k;
+                dialectSaid = true;
+            } else {
+                throw std::runtime_error("inline_asm! does not know '" + k + "' (write in name, out name, inout "
+                                         "name, clobber reg..., intel or att)" + at);
+            }
+        }
+        if (fileScope && !node.paramNames.empty()) {
+            throw std::runtime_error("a file-scope inline_asm! has no operands: it is assembly placed in the "
+                                     "file, outside any function" + at);
+        }
+        if (peek().type == TokenType::Semicolon) advance();
+        return node;
     }
 
     // A statement that starts with a token no statement starts with; a hint

@@ -1,0 +1,9 @@
+// {b} names a variable the block did not list as an operand.
+#include <std/asm>
+fn main() {
+    let a = 1;
+    let b = 2;
+    inline_asm!(in a) {
+        mov {b}, {a}
+    }
+}

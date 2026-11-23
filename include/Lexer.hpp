@@ -96,6 +96,7 @@ enum class TokenType {
     Question,
     InlineCpp,
     InlineCppBlock,
+    InlineAsmBlock,  // inline_asm!(operands) { text }: value is operands, \x1f, text
     Eof
 };
 
@@ -159,6 +160,10 @@ public:
                 if ((id.type == TokenType::And || id.type == TokenType::Or || id.type == TokenType::Not) &&
                     !tokens.empty() && tokens.back().type == TokenType::Dot) {
                     id.type = TokenType::Identifier;
+                }
+                if (id.type == TokenType::Identifier && id.value == "inline_asm" && nextNonSpaceIs('!')) {
+                    tokens.push_back(scanInlineAsm(id.line));
+                    continue;
                 }
                 if (id.type == TokenType::InlineCpp) {
                     size_t lineStart = id.line;
@@ -713,8 +718,42 @@ private:
         return {type, value, startLine};
     }
 
+    bool nextNonSpaceIs(char want) const {
+        size_t p = pos_;
+        while (p < source_.size() && (source_[p] == ' ' || source_[p] == '\t')) p++;
+        return p < source_.size() && source_[p] == want;
+    }
+
+    // inline_asm! [ ( operands ) ] { text }. The operands are kept as written, for the
+    // parser to read; the text is raw, brace-matched like inline_cpp!'s.
+    Token scanInlineAsm(size_t lineStart) {
+        skipWhitespace();
+        pos_++;  // the '!'
+        skipWhitespace();
+        std::string ops;
+        if (pos_ < source_.size() && source_[pos_] == '(') {
+            pos_++;
+            int depth = 1;
+            while (pos_ < source_.size()) {
+                const char c = source_[pos_++];
+                if (c == '(') depth++;
+                if (c == ')' && --depth == 0) break;
+                if (c == '\n') line_++;
+                ops += c;
+            }
+            if (depth != 0) fail("Unclosed inline_asm!( ... ) operand list", lineStart);
+            skipWhitespace();
+        }
+        if (pos_ >= source_.size() || source_[pos_] != '{') {
+            fail("Expected '{' after inline_asm!", lineStart);
+        }
+        pos_++;
+        std::string body = scanInlineCppBody(lineStart, "inline_asm!");
+        return {TokenType::InlineAsmBlock, ops + "\x1f" + body, lineStart};
+    }
+
     // Body inside inline_cpp! { ... }; brace depth only (strings/comments with } may need workarounds).
-    std::string scanInlineCppBody(size_t startLine) {
+    std::string scanInlineCppBody(size_t startLine, const char* what = "inline_cpp!") {
         int depth = 1;
         std::string out;
         while (pos_ < source_.size() && depth > 0) {
@@ -738,7 +777,7 @@ private:
             }
         }
         if (depth != 0) {
-            fail("Unclosed inline_cpp! { ... } block", startLine);
+            fail(std::string("Unclosed ") + what + " { ... } block", startLine);
         }
         return out;
     }

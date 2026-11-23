@@ -7,7 +7,8 @@ Enable
 ------
   #include <std/inline>
 
-Without this include, inline_cpp! is rejected at parse time.
+Without this include, inline_cpp! is rejected at parse time. For assembly see
+inline_asm! (std/asm) below.
 
 Syntax
 ------
@@ -54,3 +55,89 @@ CLI
   NexaC --help inline
 
 See also: Includes.txt, Modules.txt, Core.txt
+
+
+std/asm and inline_asm!
+=======================
+
+Assembly in a Nexa function, with the program's variables as its operands.
+
+Enable
+------
+  #include <std/asm>
+
+std/inline allows it as well. std/asm keeps everything a program with no C++
+of its own gets: the name checks, the slim runtime and, on Windows, NexaC's own
+entry point. Without either include, inline_asm! is rejected at parse time.
+
+Syntax
+------
+  inline_asm!(operands) {
+      ... instructions, one per line ...
+  }
+
+  fn add(a: int, b: int): int {
+      let sum = 0;
+      inline_asm!(in a, in b, out sum) {
+          mov {sum}, {a}
+          add {sum}, {b}
+      }
+      return sum;
+  }
+
+Operands, separated by commas:
+  in x        the block reads x
+  out x       the block writes x (it may be written before an input is read,
+              so it never shares a register with one)
+  inout x     the block reads and writes x, in one register
+  clobber reg registers the block overwrites besides its operands
+              (clobber rcx rdx, or clobber x9 on arm64)
+  att         x86 only: AT&T syntax instead of Intel
+
+{x} in the text is the register holding x, sized for its type: on x86 an int
+is eax-sized and a long rax-sized; on arm64 an int is w0, a long or pointer x0,
+a float d0 and a float32 s0. Operands are numbers, chars, bools and pointers,
+and floats on x86 (xmm) and arm64. A string, slice, struct or map is not: pass a
+pointer (let p = &xs[0]). {{ and }} are a literal brace; a brace that names no
+variable (an arm64 register list) is left as written.
+
+The block always clobbers the flags and memory, and is never moved or dropped.
+
+Labels
+------
+A label the block defines (again:) is renamed to one unique to that block, so
+the compiler may inline or unroll the function it is in:
+
+  inline_asm!(inout n) {
+  again:
+      dec {n}
+      jnz again
+  }
+
+Syntax by CPU
+-------------
+x86 and x86-64 take Intel syntax (mov eax, 1). All of a program's blocks use
+the same syntax, so att is all or nothing. arm64 and others take their only
+syntax. The instructions are the CPU's own: a block written for x86 does not
+build for arm64. WebAssembly has no inline_asm!.
+
+File scope
+----------
+At file scope a block has no operands. It is assembly placed in the file, as
+written (no renaming), for example a function called through extern fn:
+
+  inline_asm! {
+      .globl add_one
+  add_one:
+      lea eax, [rcx + 1]      // Windows x64: the first argument is rcx
+      ret
+  }
+  extern fn add_one(x: int): int;
+
+Comments
+--------
+// to the end of a line is a comment. Other comment marks are the assembler's.
+
+CLI
+---
+  NexaC --help std/asm

@@ -183,6 +183,9 @@ public:
         bool termSize = false;       // term.width/height
         bool termProgress = false;   // term.progress
         bool termSpinner = false;    // term.spinner
+        bool asm_ = false;           // an inline_asm! in a function
+        bool asmIntel = false;       // one in Intel syntax (x86: clang reads it with -masm=intel)
+        bool asmFileScope = false;   // a file-scope inline_asm! in Intel syntax (GCC needs it switched)
         bool termFlags = false;      // term.c_iflag/set_c_iflag/.../c_cc/set_c_cc/restore
         std::set<std::string> termConsts;  // term.IGNBRK, term.ICANON, ... the ones named
         bool gfxPad = false;               // gfx.pads, pad, pad_pressed, pad_axis
@@ -353,6 +356,13 @@ public:
 
     bool hasInlineCpp() const {
         return enabled_.count("std/inline") > 0;
+    }
+
+    // inline_asm!. Its own module, so a program with assembly in it keeps everything a
+    // program without C++ of its own gets (the checks, the slim runtime); std/inline
+    // allows it too.
+    bool hasAsm() const {
+        return enabled_.count("std/asm") > 0;
     }
 
     bool hasThread() const {
@@ -2025,6 +2035,34 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
         }
         if (hasTerm() && (usage.termStyle || usage.termScreen || usage.termRaw || usage.termSize || usage.termProgress || usage.termSpinner)) {
             out += termRuntimeCpp(usage.termStyle, usage.termScreen, usage.termRaw, usage.termSize, usage.termProgress, usage.termSpinner);
+        }
+        if (usage.asm_ || usage.asmIntel) {
+            // How an operand is written in the text, by architecture. arm64 names a 32-bit
+            // value w0, a double d0 and a float s0; x86 takes the size from the operand.
+            // Intel syntax on x86: clang reads it under -masm=intel (NexaC passes it); GCC is
+            // switched into it and back around each block.
+            out += "#if defined(__aarch64__)\n"
+                   "#define __NEXA_ASM_R32 \"%w\"\n#define __NEXA_ASM_F64 \"%d\"\n#define __NEXA_ASM_F32 \"%s\"\n"
+                   "#define __NEXA_ASM_FREG \"w\"\n"
+                   "#else\n"
+                   "#define __NEXA_ASM_R32 \"%\"\n#define __NEXA_ASM_F64 \"%\"\n#define __NEXA_ASM_F32 \"%\"\n"
+                   "#define __NEXA_ASM_FREG \"x\"\n"
+                   "#endif\n"
+                   "#if (defined(__x86_64__) || defined(__i386__)) && !defined(__clang__)\n"
+                   "#define __NEXA_ASM_INTEL \".intel_syntax noprefix\\n\\t\"\n"
+                   "#define __NEXA_ASM_ATT \"\\n\\t.att_syntax prefix\"\n"
+                   "#else\n"
+                   "#define __NEXA_ASM_INTEL \"\"\n#define __NEXA_ASM_ATT \"\"\n"
+                   "#endif\n"
+                   // File scope has no operands, so every x86 compiler can be switched
+                   // into Intel syntax there -- and must be: not every clang reads
+                   // file-scope assembly under -masm=intel.
+                   "#if defined(__x86_64__) || defined(__i386__)\n"
+                   "#define __NEXA_ASM_FS_INTEL \".intel_syntax noprefix\\n\\t\"\n"
+                   "#define __NEXA_ASM_FS_ATT \"\\n\\t.att_syntax prefix\"\n"
+                   "#else\n"
+                   "#define __NEXA_ASM_FS_INTEL \"\"\n#define __NEXA_ASM_FS_ATT \"\"\n"
+                   "#endif\n";
         }
         if (hasTerm() && (usage.termFlags || !usage.termConsts.empty())) {
             out += termFlagsRuntimeCpp(usage.termFlags, usage.termConsts);

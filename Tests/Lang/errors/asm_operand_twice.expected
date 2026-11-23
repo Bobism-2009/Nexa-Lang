@@ -1,0 +1,2 @@
+inline_asm! names 'a' twice; for one that is read and written, write inout a
+at line 5

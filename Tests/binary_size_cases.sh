@@ -14,7 +14,7 @@
 #   size       Windows and Linux: an everyday program -- strings, a slice, a map,
 #              an f-string, a Result, io.to_int, io.parse_int / parse_float /
 #              to_float, io.eprintln, time.unix / format, a thread.mutex, a defer, float32 and
-#              bits, std/math, all of std/random, the std/file extras, std/term colour and termios flags,
+#              bits, std/math, all of std/random, the std/file extras, std/term colour and termios flags, an inline_asm! block,
 #              range loops (a..b, a..<b, over chars), an enum taken apart by match (as a statement and as a value, with a guard), a match
 #              on a Result and on ints (with ranges) and strings, and an Option with its methods, ?, m.get and xs.first,
 #              and xs.filter / any / all / map / find given function literals -- is
@@ -82,6 +82,7 @@ cat > "$WORK/every.nxa" <<'EOF'
 #include <std/random>
 #include <std/file>
 #include <std/term>
+#include <std/asm>
 
 struct Item {
     name: string;
@@ -143,6 +144,10 @@ fn main() {
     defer thread.unlock(m);
     sum += 1;
     io.println(term.bold(term.color("ok", "green")), " ", term.underline("x"));
+    // inline_asm!: nop is an instruction on every CPU, so this one builds anywhere.
+    inline_asm!(inout sum) {
+        nop
+    }
     // termios flags: stdin is /dev/null here, so reads give -1 and writes 0.
     io.println(term.c_lflag() & term.ICANON, " ", term.set_c_lflag(term.c_lflag() & ~term.ECHO), " ",
                term.c_cc(term.VMIN), " ", term.restore(), " ", term.ISTRIP);

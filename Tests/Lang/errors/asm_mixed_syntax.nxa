@@ -1,0 +1,11 @@
+// One C++ file is read in one assembly syntax.
+#include <std/asm>
+fn main() {
+    let a = 1;
+    inline_asm!(in a) {
+        nop
+    }
+    inline_asm!(att, in a) {
+        nop
+    }
+}

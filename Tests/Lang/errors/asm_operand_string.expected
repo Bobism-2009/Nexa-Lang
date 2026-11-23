@@ -1,0 +1,2 @@
+inline_asm! operand 's' is a 'string'; a register holds a number, a char, a bool or a pointer
+at line 5

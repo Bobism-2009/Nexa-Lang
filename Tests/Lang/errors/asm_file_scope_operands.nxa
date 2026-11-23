@@ -1,0 +1,7 @@
+// At file scope there is no function for an operand to live in.
+#include <std/asm>
+inline_asm!(in a) {
+    nop
+}
+fn main() {
+}

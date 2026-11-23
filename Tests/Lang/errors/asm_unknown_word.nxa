@@ -1,0 +1,8 @@
+// The operand list takes in, out, inout, clobber, intel and att.
+#include <std/asm>
+fn main() {
+    let a = 1;
+    inline_asm!(input a) {
+        nop
+    }
+}

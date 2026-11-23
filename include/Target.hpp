@@ -1038,6 +1038,8 @@ struct BuildOptions {
     // The std modules the program includes: a library with a "when" is built
     // and linked only if one of its modules is here.
     std::vector<std::string> modules;
+    // More compile flags, for this program only (-masm=intel for Intel-syntax inline_asm!).
+    std::vector<std::string> extraFlags;
 };
 
 // The program: one compile against the target's headers, one static link
@@ -1079,6 +1081,7 @@ inline void buildProgram(const Spec& s, const std::string& cppPath, const std::s
     if (o.debug) cc.push_back("-g");
     if (!o.exceptions) cc.push_back("-fno-exceptions");
     if (!o.rtti) cc.push_back("-fno-rtti");
+    for (const std::string& f : o.extraFlags) cc.push_back(f);
     cc.push_back("-ffunction-sections");
     cc.push_back("-fdata-sections");
     cc.push_back("-c");

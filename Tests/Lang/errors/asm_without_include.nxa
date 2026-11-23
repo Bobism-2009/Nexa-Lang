@@ -1,0 +1,8 @@
+// inline_asm! needs #include <std/asm> (or <std/inline>).
+#include <std/io>
+fn main() {
+    let a = 1;
+    inline_asm!(in a) {
+        nop
+    }
+}

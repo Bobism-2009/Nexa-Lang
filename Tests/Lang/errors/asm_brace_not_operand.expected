@@ -1,0 +1,2 @@
+inline_asm! writes {b}, but b is not one of its operands: add in b, out b or inout b
+at line 6
