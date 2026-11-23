@@ -2,35 +2,13 @@
 
 **Nexa** is a small systems-friendly language with C++-like surface syntax. **NexaC** is its compiler: it parses `.nxa` files, transpiles to a single C++ translation unit, and invokes **clang++** (falling back to **g++** when clang is not installed) to produce a native executable or shared library. Set `NEXA_CXX` to force a specific compiler.
 
-Current compiler version string: **0.1.17** (`NexaC --version`).
-
 | | |
 |---|---|
+| **Version** | 0.1.17 (`NexaC --version`) |
 | **Sources** | `*.nxa` |
 | **Pipeline** | Nexa → C++ → native binary, or **`--wasm`** → WebAssembly |
 | **Host tooling** | C++17 compiler on `PATH` |
 | **Syntax reference** | [`SYNTAX/`](SYNTAX/) (authoritative) |
-
-### What's new in 0.1.17
-
-- **Language:** `match` expressions — pattern matching on enum variants with field destructuring (`Shape.Circle { radius } => { ... }`), exhaustiveness checking, and zero overhead for programs that don't use it.
-- **Language:** `match` gives a value — `let area = match (s) { Shape.Circle { r } => r * r * 3.14, _ => 0.0 };` — anywhere a value can stand. Arms may read the matched variable as their variant (`s.radius`), and unknown fields, duplicate arms and arms naming the wrong enum are compile errors.
-- **Language:** `match` on a `Result` (`Ok { v } => ...`, `Err { e } => ...`), on ints, chars, strings and bools (`0 => ...`, `1 | 2 => ...`, `"go" => ...`, `_ => ...`), and `if` guards on any arm (`Shape.Circle { r } if r > 10 => ...`). A `break` or `continue` in an arm now belongs to the enclosing loop.
-- **Language:** range loops: `for (i in 1..10)` runs 1 to 10, `for (i in 0..<len(xs))` runs 0 to `len(xs) - 1`, and `for (c in 'a'..'z')` counts chars. The ends are read once, and the loop variable takes their type (`long`, `size_t`, `char`). The C++ is a plain `for` loop.
-- **Language:** ranges in `match`: `80..89 => "B"`, `'a'..'z' | 'A'..'Z' => ...`, open-ended `90..` and `..-1`. A range takes both its ends; ranges that cover every value need no `_`, and the compiler names the first value no arm takes, an arm the ones above already cover, and two ranges that share an end.
-- **Language:** `Option[T]` is built in — `return Some(i);`, `return None;`, and `match (find(xs, 3)) { Some { i } => i, None => -1 }` — with no declaration needed. It is the enum `Option[T] { Some { value: T; }; None; }`, so a program that never names it is unchanged, and one that declares its own keeps it. It has `.is_some()`, `.is_none()`, `.value()` and `.or(fallback)`, and `?` passes a `None` up out of a function that returns an `Option` (`return Some(find(xs, a)? + find(xs, b)?);`). `m.get(key)`, `xs.first()` and `xs.last()` answer an `Option`, so a missing key or an empty list is a `None`, not a zero.
-- **Language:** slices take a function: `xs.find(f)` (an `Option` of the first element `f` says yes to), `xs.any(f)`, `xs.all(f)`, `xs.filter(f)` and `xs.map(f)`, as in `names.filter(fn (s) { return len(s) > 3; })`: a literal given to one takes the element type for its parameter and its return type from what it returns. It is called in place, never through a `std::function`, so it runs as fast as the loop written out.
-- **Errors:** a misspelled name gets a guess: `Undefined variable 'cuont' (did you mean 'count'?)`. This covers variables, functions, struct fields and methods, enum variants (also in `match` and `switch`), type names, string methods, `#include <std/...>` modules, and the functions of every std module (`io.prinln`, `math.sqr`, `gfx.rectt`). The guess is worked out only while an error is being reported, so a program that compiles builds just as fast and produces the same binary.
-- **Errors:** calling a method a struct, list or map does not have (`p.lenn()`, `xs.psh(3)`, `m.kyes()`) is now a Nexa error with a guess, where it used to reach clang as a C++ error. `xs.length()` and `xs.size()` point to `len(xs)`. A field holding a function is still called like a method.
-- **Fix:** a global `let` that called a method on another global (`let line = words.join(",");`) failed to compile.
-- **Fix:** a generic enum built from a `for (x in xs)` loop variable or a match arm's name (`return Some(it);`) took the wrong type and failed to compile.
-
-### What's new in 0.1.16
-
-- **Language:** `priv`, `type` aliases, shapes (`T: Drawable`), generics (`fn id[T]` / `struct Slot[T]`), destructuring (`let Point { x, y } = p`), `defer`, `float32` / `float64`, and `x in xs` membership.
-- **Modules:** `std/term`, richer `std/gfx` / `std/gfx3d` (shaders, fog, shadows, mirrors, pads), `std/physics` (soft bodies, cloth), and `std/ui` widgets.
-- **Includes:** each `.nxa` file keeps its own names (`net.load`); a bare name that exactly one included file exported resolves automatically for shared helpers.
-- **Tooling:** nexa-vscode **0.2.7** covers the new keywords and modules; Windows prefers llvm-mingw and keeps everyday programs under 64 KB.
 
 ---
 
