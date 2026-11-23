@@ -142,6 +142,10 @@ OUTPUT
   --shared           .so (Linux) / .dylib (macOS)
   --static-lib       static archive: .a (Linux) / .lib (Windows)
                      aliases: --staticlib --lib
+  --object, -c       an object file (.o), no link. A file with fn main()
+                     keeps it; one without exports each fn by its C name
+  --assembly, -S     the generated assembly (.s)
+  --llvm-ir          LLVM IR (.ll); needs clang. alias: --emit-llvm
   --link <file>      link an archive/object/library into the executable.
                      Repeatable. .a and .o are baked in; .so and .dll link
                      dynamically.
@@ -1115,6 +1119,7 @@ inline void printIndex(const char* version) {
         "  -p           keep your fn names   -g, --debug   steps through .nxa\n"
         "  --small      optimize for size    --source <f>  emit C++ only\n"
         "  --dll  --shared  --static-lib  --link <file>    libraries\n"
+        "  -c, --object  -S, --assembly  --llvm-ir         .o / .s / .ll, no link\n"
         "  --win  --wasm  --target <name>  --no-console    other targets\n";
 
     printGroup("Language", "", Group::Language);

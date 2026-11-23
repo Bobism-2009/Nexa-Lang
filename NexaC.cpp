@@ -2656,6 +2656,9 @@ static std::string nexaStaticLibCmd(
     bool noExceptions,
     bool noRtti,
     bool debugBuild
+,
+    const std::string& mode = "-c",       // -c an object, -S assembly, -S -emit-llvm LLVM IR
+    const std::string& extraFlags = ""
 ) {
 #ifdef _WIN32
     std::string cmd = cxx;
@@ -2673,7 +2676,7 @@ static std::string nexaStaticLibCmd(
     }
     if (debugBuild) cmd += " -fno-omit-frame-pointer";
     else cmd += " -fno-ident -fmerge-all-constants";
-    cmd += " -ffunction-sections -fdata-sections -fPIC -c";
+    cmd += " -ffunction-sections -fdata-sections -fPIC " + mode + extraFlags;
     if (const char* nexaCxx = std::getenv("NEXA_CXXFLAGS")) {
         cmd += " ";
         cmd += nexaCxx;
@@ -2688,6 +2691,7 @@ static std::string nexaStaticLibCmd(
 #else
     std::string ar = "ar";
 #endif
+    if (archivePath.empty()) return cmd;  // --object, --assembly, --llvm-ir: the compile is the build
     cmd += " && " + ar + " rcs \"" + archivePath + "\" \"" + objPath + "\"";
     return cmd;
 }
@@ -2752,6 +2756,7 @@ int main(int argc, char* argv[]) {
     bool buildDll = false;   // mingw -> .dll
     bool buildShared = false;  // clang++ -> .so
     bool buildStaticLib = false;  // -> .a (Linux) / .lib (Windows) static archive
+    std::string emitKind;         // --object (.o), --assembly (.s), --llvm-ir (.ll): the compiler's own output
     bool buildWin = false;   // mingw -> .exe (cross-compile from Linux)
     bool buildWasm = false;  // em++ / WASI -> .js+.wasm or .wasm
     bool wasmSplit = false;  // --wasm-split: .html + .js + .wasm, not one baked .js
@@ -2802,6 +2807,15 @@ int main(int argc, char* argv[]) {
             buildShared = true;
         } else if (arg == "--static-lib" || arg == "--staticlib" || arg == "--lib" || arg == "--a") {
             buildStaticLib = true;
+        } else if (arg == "--object" || arg == "--obj" || arg == "-c" || arg == "--assembly" || arg == "-S" ||
+                   arg == "--llvm-ir" || arg == "--emit-llvm") {
+            const std::string kind = (arg == "--object" || arg == "--obj" || arg == "-c") ? "object"
+                                   : (arg == "--assembly" || arg == "-S") ? "assembly" : "llvm-ir";
+            if (!emitKind.empty() && emitKind != kind) {
+                std::cerr << "[Nexa] Error: --" << emitKind << " and --" << kind << " are two outputs; build one at a time\n";
+                return 1;
+            }
+            emitKind = kind;
         } else if (arg == "--link") {
             if (i + 1 >= argc) {
                 std::cerr << "[Nexa] Error: --link requires a file (e.g. --link libfoo.a)\n";
@@ -2929,6 +2943,17 @@ int main(int argc, char* argv[]) {
         return 1;
 #endif
     }
+    if (!emitKind.empty()) {
+        const char* clash = buildDll ? "--dll" : buildShared ? "--shared" : buildStaticLib ? "--static-lib"
+                          : buildWasm ? "--wasm" : buildWin ? "--win" : runAfterBuild ? "--run"
+                          : noConsole ? "--no-console" : !linkInputs.empty() ? "--link"
+                          : !targetName.empty() ? "--target" : nullptr;
+        if (clash) {
+            std::cerr << "[Nexa] Error: --" << emitKind << " writes the compiler's own output, which " << clash
+                      << " does not apply to\n";
+            return 1;
+        }
+    }
     if (buildStaticLib && (buildDll || buildShared || buildWin)) {
         std::cerr << "[Nexa] Error: --static-lib cannot be combined with --dll, --shared, or --win\n";
         return 1;
@@ -3051,6 +3076,8 @@ int main(int argc, char* argv[]) {
 #else
                 exePath += ".a";
 #endif
+            } else if (!emitKind.empty()) {
+                exePath += emitKind == "object" ? ".o" : emitKind == "assembly" ? ".s" : ".ll";
             } else if (buildWin) {
                 exePath += ".exe";
             }
@@ -3073,11 +3100,16 @@ int main(int argc, char* argv[]) {
                 if (exePath.size() < 2 || exePath.substr(exePath.size() - 2) != ".a") exePath += ".a";
 #endif
             }
+            // -o names the file; one with no extension gets the kind's own.
+            if (!emitKind.empty() && std::filesystem::path(exePath).extension().empty()) {
+                exePath += emitKind == "object" ? ".o" : emitKind == "assembly" ? ".s" : ".ll";
+            }
             if (buildWin && (exePath.size() < 4 || exePath.substr(exePath.size() - 4) != ".exe")) {
                 exePath += ".exe";
             }
 #ifdef _WIN32
-            else if (!buildDll && !buildShared && !buildWasm && !buildTarget && (exePath.size() < 4 || exePath.substr(exePath.size() - 4) != ".exe")) {
+            else if (!buildDll && !buildShared && !buildStaticLib && emitKind.empty() && !buildWasm && !buildTarget &&
+                     (exePath.size() < 4 || exePath.substr(exePath.size() - 4) != ".exe")) {
                 exePath += ".exe";
             }
 #endif
@@ -3149,11 +3181,14 @@ int main(int argc, char* argv[]) {
         std::cout << "[Nexa] Transpiling...\n";
 
         bool isLib = buildDll || buildShared || buildStaticLib;
+        bool hasMain = false;
+        for (const nexa::AstNode& n : ast) {
+            if (n.type == nexa::AstNode::Type::MainFunction) { hasMain = true; break; }
+        }
+        // An object (or its assembly, or IR) of a program keeps its main, to be linked into an
+        // executable; of a file with no main, it is a library's: each fn exported by its C name.
+        if (!emitKind.empty() && !hasMain) isLib = true;
         if (!isLib) {
-            bool hasMain = false;
-            for (const nexa::AstNode& n : ast) {
-                if (n.type == nexa::AstNode::Type::MainFunction) { hasMain = true; break; }
-            }
             if (!hasMain) {
                 throw std::runtime_error("No fn main() found: an executable needs exactly one fn main() (library builds --dll/--shared/--static-lib do not)");
             }
@@ -3479,7 +3514,7 @@ int main(int argc, char* argv[]) {
             }
 #endif
             std::cout << "[Nexa] Compiling with " << nexaCxxDisplayName(cxx) << " (shared library)...\n";
-        } else if (buildStaticLib) {
+        } else if (buildStaticLib || !emitKind.empty()) {
 #ifdef _WIN32
             cxx = findWindowsCxxNative();
             if (cxx.empty()) {
@@ -3493,7 +3528,9 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
 #endif
-            std::cout << "[Nexa] Compiling with " << nexaCxxDisplayName(cxx) << " (static library)...\n";
+            std::cout << "[Nexa] Compiling with " << nexaCxxDisplayName(cxx) << " ("
+                      << (buildStaticLib ? "static library" : emitKind == "object" ? "object file"
+                          : emitKind == "assembly" ? "assembly" : "LLVM IR") << ")...\n";
         } else if (buildWin) {
 #ifdef _WIN32
             cxx = "clang++";
@@ -3637,9 +3674,21 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 
+        // inline_asm! in Intel syntax on x86: clang prints operands bare (eax) only under
+        // -masm=intel, and its assembler takes nothing else in Intel syntax. GCC needs no
+        // flag -- the program switches it into Intel and back around each block.
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+        const bool hostX86 = true;
+#else
+        const bool hostX86 = false;
+#endif
+        const bool asmIntelFlag = usage.asmIntel && (hostX86 || buildWin) && cxx.find("clang") != std::string::npos;
+        if (asmIntelFlag) targetFlags += " -masm=intel";
+
         if (buildStaticLib) {
             std::string objPath = cppPath.substr(0, cppPath.size() - 4) + ".o";
-            std::string cmd = nexaStaticLibCmd(cxx, cppPath, objPath, exePath, opt, noExceptions, noRtti, debugBuild);
+            std::string cmd = nexaStaticLibCmd(cxx, cppPath, objPath, exePath, opt, noExceptions, noRtti, debugBuild,
+                                               "-c", asmIntelFlag ? " -masm=intel" : "");
             int ret = std::system(cmd.c_str());
             if (!debugBuild) std::remove(cppPath.c_str());  // debug: the archive's DWARF points at it
             std::remove(objPath.c_str());
@@ -3653,16 +3702,34 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 
-        // inline_asm! in Intel syntax on x86: clang prints operands bare (eax) only under
-        // -masm=intel, and its assembler takes nothing else in Intel syntax. GCC needs no
-        // flag -- the program switches it into Intel and back around each block.
-#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
-        const bool hostX86 = true;
-#else
-        const bool hostX86 = false;
-#endif
-        if (usage.asmIntel && (hostX86 || buildWin) && cxx.find("clang") != std::string::npos) {
-            targetFlags += " -masm=intel";
+        // --object / --assembly / --llvm-ir: the compiler's own output, written where -o says,
+        // with no link. Built as the static library's object is, so it is the same code.
+        if (!emitKind.empty()) {
+            if (emitKind == "llvm-ir" && cxx.find("clang") == std::string::npos) {
+                std::remove(cppPath.c_str());
+                std::cerr << "[Nexa] Error: --llvm-ir needs clang, which writes LLVM IR; " << nexaCxxDisplayName(cxx)
+                          << " does not (set NEXA_CXX to a clang++)\n";
+                return 1;
+            }
+            const std::string mode = emitKind == "object" ? "-c" : emitKind == "assembly" ? "-S" : "-S -emit-llvm";
+            std::string cmd = nexaStaticLibCmd(cxx, cppPath, exePath, "", opt, noExceptions, noRtti, debugBuild, mode,
+                                               asmIntelFlag ? " -masm=intel" : "");
+            int ret = std::system(cmd.c_str());
+            if (!debugBuild) std::remove(cppPath.c_str());  // debug: the object's DWARF points at it
+            if (ret != 0) {
+                std::cerr << "[Nexa] Build failed.\n";
+                return 1;
+            }
+            const char* what = emitKind == "object" ? "Object file" : emitKind == "assembly" ? "Assembly" : "LLVM IR";
+            std::cout << "[Nexa] Build successful! " << what << ": " << exePath << "\n";
+            if (emitKind == "object" && hasMain) {
+                std::cout << "[Nexa] It holds the program's main: link it with your own linker, e.g. "
+                          << nexaCxxDisplayName(cxx) << " \"" << exePath << "\" -static -o <exe>\n";
+            } else if (emitKind == "object") {
+                std::cout << "[Nexa] Link it into a program with: NexaC <main.nxa> --link \"" << exePath
+                          << "\" -o <exe> (declare each fn there with extern fn)\n";
+            }
+            return 0;
         }
 
         // A precompiled header for the standard headers every slim build opens with. Parsing

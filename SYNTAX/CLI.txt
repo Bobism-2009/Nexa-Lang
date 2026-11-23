@@ -85,6 +85,18 @@ OPTIONS
                   builds target native gdb/lldb, not the browser DWARF workflow.
   --dll     Build Windows .dll (default: -Os; link with strip for size)
   --shared  Build .dylib (macOS) or .so (Linux)
+  --static-lib  Build a static archive: .a (Linux) / .lib (Windows)
+  --object, -c    Write an object file (.o) and stop before linking. A file
+                  with fn main() keeps its main, for your own linker
+                  (clang++ prog.o -static -o prog); a file without one is a
+                  library's object, each fn exported by its C name, for
+                  --link or a C program. -o names it; one with no extension
+                  gets .o (.obj is kept as given). Alias: --obj
+  --assembly, -S  Write the generated assembly (.s) instead
+  --llvm-ir       Write LLVM IR (.ll) instead; needs clang. Alias: --emit-llvm
+                  These three take --small and --debug (which keeps the
+                  .debug.cpp beside the output), and not --run, --link,
+                  --dll, --shared, --static-lib, --win, --wasm or --target.
   --win     Build Windows .exe (mingw-w64 from Linux)
   --wasm    Build WebAssembly (em++, or WASI-SDK when em++ is absent).
             If the WASM toolchain is missing, a popup asks to install Emscripten.
