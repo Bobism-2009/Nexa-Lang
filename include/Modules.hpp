@@ -354,15 +354,19 @@ public:
         return enabled_.count("std/time") > 0;
     }
 
-    bool hasInlineCpp() const {
+    // #include <std/inline>: allows inline_cpp! and inline_asm!.
+    bool inlineEnabled() const {
         return enabled_.count("std/inline") > 0;
     }
 
-    // inline_asm!. Its own module, so a program with assembly in it keeps everything a
-    // program without C++ of its own gets (the checks, the slim runtime); std/inline
-    // allows it too.
-    bool hasAsm() const {
-        return enabled_.count("std/asm") > 0;
+    // The program carries C++ of its own: an inline_cpp! block, seen by the parser. That,
+    // not the include, is what costs the name checks, the slim runtime and RTTI -- so a
+    // program whose only foreign code is inline_asm! keeps them.
+    bool hasInlineCpp() const {
+        return inlineCppBlocks_;
+    }
+    void noteInlineCppBlock() {
+        inlineCppBlocks_ = true;
     }
 
     bool hasThread() const {
@@ -2742,6 +2746,7 @@ static __nexa_mutex_t* __nexa_mutex_at(int id) {
 
 private:
     std::set<std::string> enabled_;
+    bool inlineCppBlocks_ = false;
     bool hasCppHeader_ = false;
 };
 

@@ -1,5 +1,5 @@
 // A register holds a number, a char, a bool or a pointer -- not a string.
-#include <std/asm>
+#include <std/inline>
 fn main() {
     let s = "hi";
     inline_asm!(in s) {

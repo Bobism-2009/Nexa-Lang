@@ -3310,7 +3310,6 @@ int main(int argc, char* argv[]) {
             std::string missing;
             for (const std::string& m : modules.enabledModules()) {
                 if (m.rfind("std/", 0) != 0) continue;
-                if (m == "std/asm") continue;  // compiled by clang itself; no library to carry
                 if (std::find(targetSpec.modules.begin(), targetSpec.modules.end(), m) == targetSpec.modules.end()) {
                     missing += (missing.empty() ? "" : ", ") + m;
                 }

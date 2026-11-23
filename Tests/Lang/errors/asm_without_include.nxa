@@ -1,4 +1,4 @@
-// inline_asm! needs #include <std/asm> (or <std/inline>).
+// inline_asm! needs #include <std/inline>, as inline_cpp! does.
 #include <std/io>
 fn main() {
     let a = 1;

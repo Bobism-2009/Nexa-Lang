@@ -1,5 +1,5 @@
 // out writes the variable, so it cannot be const.
-#include <std/asm>
+#include <std/inline>
 fn main() {
     let const k = 5;
     inline_asm!(out k) {

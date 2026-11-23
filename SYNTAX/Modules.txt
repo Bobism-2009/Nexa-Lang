@@ -2214,8 +2214,7 @@ ARGUMENT TYPES
   Enables inline_cpp! { ... } — paste C++ into the generated file. Lines starting with #include are hoisted to the top of the generated .cpp (no automatic iostream).
   Use only when Nexa has no API for this; body is not parsed by Nexa (brace matching only; } in strings can break).
 
-#include <std/asm>
-  Enables inline_asm!(in a, out b, inout c, clobber reg) { ... } — the CPU's own instructions, with
+  Also enables inline_asm!(in a, out b, inout c, clobber reg) { ... } — the CPU's own instructions, with
   Nexa variables as operands ({a} in the text is a's register). x86 is Intel syntax (att for AT&T).
   Full reference: SYNTAX/Inline.txt.
 

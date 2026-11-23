@@ -82,7 +82,7 @@ cat > "$WORK/every.nxa" <<'EOF'
 #include <std/random>
 #include <std/file>
 #include <std/term>
-#include <std/asm>
+#include <std/inline>
 
 struct Item {
     name: string;

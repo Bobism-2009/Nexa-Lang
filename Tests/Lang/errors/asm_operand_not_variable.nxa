@@ -1,5 +1,5 @@
 // An operand must be a variable in scope.
-#include <std/asm>
+#include <std/inline>
 fn main() {
     let count = 1;
     inline_asm!(in cuont) {

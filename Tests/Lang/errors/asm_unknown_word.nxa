@@ -1,5 +1,5 @@
 // The operand list takes in, out, inout, clobber, intel and att.
-#include <std/asm>
+#include <std/inline>
 fn main() {
     let a = 1;
     inline_asm!(input a) {

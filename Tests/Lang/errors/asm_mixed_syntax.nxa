@@ -1,5 +1,5 @@
 // One C++ file is read in one assembly syntax.
-#include <std/asm>
+#include <std/inline>
 fn main() {
     let a = 1;
     inline_asm!(in a) {

@@ -1,5 +1,5 @@
 // {b} names a variable the block did not list as an operand.
-#include <std/asm>
+#include <std/inline>
 fn main() {
     let a = 1;
     let b = 2;

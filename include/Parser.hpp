@@ -472,9 +472,10 @@ public:
             } else if (t.type == TokenType::InlineAsmBlock) {
                 ast.push_back(parseInlineAsm(true));
             } else if (t.type == TokenType::InlineCppBlock) {
-                if (!modules_.hasInlineCpp()) {
+                if (!modules_.inlineEnabled()) {
                     throw std::runtime_error("inline_cpp! requires #include <std/inline> at line " + std::to_string(t.line));
                 }
+                modules_.noteInlineCppBlock();
                 const Token& tok = peek();
                 std::string body = tok.value;
                 advance();
@@ -1809,7 +1810,7 @@ private:
         static const std::vector<std::string> mods = {
             "std/io", "std/os", "std/file", "std/dll", "std/random", "std/math",
             "std/crypto", "std/network", "std/json", "std/time", "std/thread",
-            "std/gfx", "std/gfx3d", "std/physics", "std/ui", "std/inline", "std/term", "std/asm",
+            "std/gfx", "std/gfx3d", "std/physics", "std/ui", "std/inline", "std/term",
         };
         return mods;
     }
@@ -2666,9 +2667,10 @@ private:
             } else if (t.type == TokenType::InlineAsmBlock) {
                 stmts.push_back(parseInlineAsm(false));
             } else if (t.type == TokenType::InlineCppBlock) {
-                if (!modules_.hasInlineCpp()) {
+                if (!modules_.inlineEnabled()) {
                     throw std::runtime_error("inline_cpp! requires #include <std/inline> at line " + std::to_string(t.line));
                 }
+                modules_.noteInlineCppBlock();
                 const Token& tok = peek();
                 std::string body = tok.value;
                 advance();
@@ -3962,9 +3964,10 @@ private:
             } else if (t.type == TokenType::InlineAsmBlock) {
                 stmts.push_back(parseInlineAsm(false));
             } else if (t.type == TokenType::InlineCppBlock) {
-                if (!modules_.hasInlineCpp()) {
+                if (!modules_.inlineEnabled()) {
                     throw std::runtime_error("inline_cpp! requires #include <std/inline> at line " + std::to_string(t.line));
                 }
+                modules_.noteInlineCppBlock();
                 const Token& tok = peek();
                 std::string body = tok.value;
                 advance();
@@ -4087,8 +4090,8 @@ private:
     // operands: the text is assembly at the top of the file.
     AstNode parseInlineAsm(bool fileScope) {
         const Token tok = peek();
-        if (!modules_.hasAsm() && !modules_.hasInlineCpp()) {
-            throw std::runtime_error("inline_asm! requires #include <std/asm> at line " + std::to_string(tok.line));
+        if (!modules_.inlineEnabled()) {
+            throw std::runtime_error("inline_asm! requires #include <std/inline> at line " + std::to_string(tok.line));
         }
         advance();
         const size_t cut = tok.value.find('\x1f');

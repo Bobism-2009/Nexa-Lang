@@ -69,7 +69,7 @@ fi
 
 cat > "$WORK/x86.nxa" <<'NXA'
 #include <std/io>
-#include <std/asm>
+#include <std/inline>
 fn twice(x: int): int {
     let r = 0;
     inline_asm!(in x, out r) {
@@ -120,7 +120,7 @@ NXA
 
 cat > "$WORK/att.nxa" <<'NXA'
 #include <std/io>
-#include <std/asm>
+#include <std/inline>
 fn main() {
     let a = 40;
     let b = 0;
@@ -137,7 +137,7 @@ ARG=rdi
 [ "$OS" = windows ] && ARG=rcx
 cat > "$WORK/fs.nxa" <<NXA
 #include <std/io>
-#include <std/asm>
+#include <std/inline>
 inline_asm! {
     .globl add_one
 add_one:
@@ -152,7 +152,7 @@ NXA
 
 cat > "$WORK/arm64.nxa" <<'NXA'
 #include <std/io>
-#include <std/asm>
+#include <std/inline>
 fn twice(x: int): int {
     let r = 0;
     inline_asm!(in x, out r) {

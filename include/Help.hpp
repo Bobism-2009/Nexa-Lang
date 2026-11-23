@@ -854,9 +854,9 @@ A #include copy of a global is not shared with a library -- pass values in
 through dll.call. For linking an archive into the executable instead, see
 --static-lib and --link: NexaC --help options.)HELP" },
 
-{ "std/inline", "inline inline_cpp cpp raw escape", Group::Module,
-  "inline_cpp! { ... } -- raw C++ where Nexa has no API",
-  R"HELP(std/inline - raw C++
+{ "std/inline", "inline inline_cpp cpp raw escape inline_asm asm assembly assembler x86 arm intel att register", Group::Module,
+  "inline_cpp! { ... } and inline_asm! { ... } -- raw C++ or assembly where Nexa has no API",
+  R"HELP(std/inline - raw C++ and assembly
   #include <std/inline>
   Full reference: SYNTAX/Inline.txt
 
@@ -885,14 +885,10 @@ There is no automatic <iostream>; add what you need.
 
 The body is not parsed by Nexa -- brace matching only, so a } inside a C++
 string can end the block early. Clang has to accept whatever comes out.
-Reach for this last; a program that uses it keeps RTTI and exceptions, and
-loses the undefined-name check.)HELP" },
+Reach for this last; a program with an inline_cpp! block keeps RTTI and
+exceptions, and loses the undefined-name check.
 
-{ "std/asm", "asm inline_asm assembly assembler x86 arm intel att register", Group::Module,
-  "inline_asm! { ... } -- the CPU's own instructions, on Nexa variables",
-  R"HELP(std/asm - inline assembly
-  #include <std/asm>          (std/inline allows it too)
-  Full reference: SYNTAX/Inline.txt
+inline_asm! -- the CPU's own instructions, on Nexa variables:
 
   inline_asm!(in a, in b, out sum) {
       mov {sum}, {a}
@@ -909,7 +905,8 @@ label (again:) is made unique to the block, so it may be inlined or unrolled.
 // comments are dropped. At file scope the block has no operands: it is
 assembly in the file, for a function called through extern fn.
 
-The program keeps everything a program with no C++ of its own gets.)HELP" },
+A program whose only foreign code is inline_asm! keeps the name checks and
+the slim runtime: they are lost to inline_cpp! blocks, not to the include.)HELP" },
 
 { "std/term", "term terminal color colour cursor key tui ansi", Group::Module,
   "terminal colour, cursor control, and a key at a time",

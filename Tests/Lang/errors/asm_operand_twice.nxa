@@ -1,5 +1,5 @@
 // A variable read and written is one inout operand, not an in and an out.
-#include <std/asm>
+#include <std/inline>
 fn main() {
     let a = 1;
     inline_asm!(in a, out a) {
