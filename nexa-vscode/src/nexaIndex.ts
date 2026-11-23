@@ -5,6 +5,7 @@ const FN_RE = /\b(?:extern\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
 const STRUCT_RE = /\bstruct\s+([A-Za-z_][A-Za-z0-9_]*)\b/g;
 const ENUM_RE = /\benum\s+([A-Za-z_][A-Za-z0-9_]*)\b/g;
 const LET_RE = /^\s*let\s+(?:const\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*(?:[:=;]|$)/gm;
+const DEFINE_RE = /^\s*#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)/gm;
 
 /** Replace // and / ** / with spaces. Same length as input for offset mapping. */
 export function maskComments(s: string): string {
@@ -41,7 +42,7 @@ export function maskComments(s: string): string {
   return a.join("");
 }
 
-export type DefKind = "function" | "struct" | "enum" | "variable";
+export type DefKind = "function" | "struct" | "enum" | "variable" | "macro";
 
 export interface IndexedDef {
   name: string;
@@ -78,6 +79,9 @@ function runPattern(
     if (kind === "enum" && !/\benum\s/.test(line.text)) {
       continue;
     }
+    if (kind === "macro" && !/^\s*#\s*define\s/.test(line.text)) {
+      continue;
+    }
     const nameStart = doc.positionAt(nameOffset);
     const nameEnd = doc.positionAt(nameOffset + name.length);
     out.push({
@@ -102,6 +106,7 @@ export function indexNexaDefinitions(doc: vscode.TextDocument): IndexedDef[] {
     ...runPattern(doc, masked, FN_RE, "function"),
     ...runPattern(doc, masked, STRUCT_RE, "struct"),
     ...runPattern(doc, masked, ENUM_RE, "enum"),
+    ...runPattern(doc, masked, DEFINE_RE, "macro"),
     ...indexLetBindings(doc, masked),
   ];
   return uniqueByLine(defs);

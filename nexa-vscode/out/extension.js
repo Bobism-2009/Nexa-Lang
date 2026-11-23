@@ -110,6 +110,8 @@ function defKindToSymbol(d) {
             return vscode.SymbolKind.Variable;
         case "function":
             return vscode.SymbolKind.Function;
+        case "macro":
+            return vscode.SymbolKind.Constant;
         default: {
             const _never = d.kind;
             return _never;
@@ -126,6 +128,8 @@ function defKindToCompletion(kind) {
             return vscode.CompletionItemKind.Struct;
         case "enum":
             return vscode.CompletionItemKind.Enum;
+        case "macro":
+            return vscode.CompletionItemKind.Constant;
         default: {
             const _never = kind;
             return _never;
@@ -202,8 +206,13 @@ async function findDefinitionInOtherFiles(name, ownUri, token) {
 async function provideCompletions(document, position, token) {
     const prefix = (0, nexaCompletions_1.linePrefix)(document, position);
     const items = [];
-    const modDot = prefix.match(/(?:^|\s)([a-z]+)\.\s*([A-Za-z_]*)$/);
-    if (modDot) {
+    if (/^\s*#\s*[a-z]*$/.test(prefix)) {
+        return (0, nexaCompletions_1.directiveCompletions)();
+    }
+    // io., os., ... list the module; any other name. (a string, a slice, a map) falls
+    // through to the methods.
+    const modDot = prefix.match(/(?:^|[^A-Za-z0-9_.])([a-z][a-z0-9]*)\.\s*([A-Za-z_]*)$/);
+    if (modDot && nexaCompletions_1.MODULE_MEMBERS[modDot[1]]) {
         return (0, nexaCompletions_1.moduleMemberCompletions)(modDot[1]);
     }
     const strDot = prefix.match(/\.([A-Za-z_]*)$/);

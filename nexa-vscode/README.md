@@ -15,14 +15,14 @@ npm run compile
 **Windows (PowerShell):**
 
 ```powershell
-Copy-Item -Recurse nexa-vscode "$env:USERPROFILE\.cursor\extensions\nexac.nexa-0.2.7"
-# or: $env:USERPROFILE\.vscode\extensions\nexac.nexa-0.2.7
+Copy-Item -Recurse nexa-vscode "$env:USERPROFILE\.cursor\extensions\nexac.nexa-0.2.8"
+# or: $env:USERPROFILE\.vscode\extensions\nexac.nexa-0.2.8
 ```
 
 **macOS / Linux:**
 
 ```bash
-cp -r nexa-vscode ~/.cursor/extensions/nexac.nexa-0.2.7
+cp -r nexa-vscode ~/.cursor/extensions/nexac.nexa-0.2.8
 ```
 
 Reload the window (**Developer: Reload Window**).
@@ -40,14 +40,14 @@ Install via **Extensions: Install from VSIX...**.
 ## Features
 
 ### Language support
-- **Syntax highlighting** — keywords (`priv`, `type`, `shape`, `defer`, `in`, …), types (`float32`/`float64`, `unsigned int`, pointers), generic `fn name[T]`, `extern fn`, `null`, `self`, operators, std modules (`io`, `os`, `file`, `term`, `gfx`, `gfx3d`, `ui`, …), structs, enums, type aliases, shapes, strings/chars, `#include`
-- **Snippets** — `main`, `fn`, `fngen`, `fnshape`, `type`, `shape`, `privfn`, `letdest`, `defer`, module includes, `inlinecpp`, etc.
+- **Syntax highlighting** — keywords (`match`, `priv`, `type`, `shape`, `defer`, `in`, `and`/`or`/`not`, …), types (`float32`/`float64`, `unsigned int`, pointers, `Option`), generic `fn name[T]`, `extern fn`, `Some`/`None`, `null`, `self`, operators (`=>`, ranges `..` and `..<`), std modules (`io`, `os`, `file`, `term`, `gfx`, `gfx3d`, `ui`, …), structs, enums, type aliases, shapes, strings/chars, `#include`, `#define` / `#undef` (macro name and parameters), `inline_cpp!` and `inline_asm!`
+- **Snippets** — `main`, `fn`, `fngen`, `fnshape`, `type`, `shape`, `privfn`, `letdest`, `defer`, `match`, `matchopt`, `forrange`, `some`, `filter`, `define`, `definefn`, `undef`, module includes, `inlinecpp`, `inlineasm`, etc.
 - **Bracket matching** and indent for `{}`, `case`/`default`
 
 ### IntelliSense
-- **Completions** — keywords, types, functions/variables/structs/enums in the file and in `#include`d `.nxa` files, `module.` member lists (`io.`, `os.`, …), string methods after `.`
+- **Completions** — keywords, types, functions/variables/structs/enums/`#define` macros in the file and in `#include`d `.nxa` files, `module.` member lists (`io.`, `os.`, `term.` with its termios flags, …), string, slice, map and `Option` methods after `.` (`xs.filter`, `m.get`, `o.or`, …), and `#include` / `#define` / `#undef` after `#`
 - **Hover** — brief docs for std module calls; definition line for locals and included symbols
-- **Go to definition** — functions (including `extern fn`), structs, enums, `let` bindings, and `#include "file.nxa"` paths
+- **Go to definition** — functions (including `extern fn`), structs, enums, `let` bindings, `#define` macros (also from included files), and `#include "file.nxa"` paths
 - **Find references** — workspace-wide for `.nxa` files
 - **Document outline** — symbols in the file tree
 

@@ -15,6 +15,7 @@ import {
   typeCompletions,
   moduleMemberCompletions,
   stringMethodCompletions,
+  directiveCompletions,
   linePrefix,
   HOVER_DOCS,
   MODULE_MEMBERS,
@@ -109,6 +110,8 @@ function defKindToSymbol(d: IndexedDef): vscode.SymbolKind {
       return vscode.SymbolKind.Variable;
     case "function":
       return vscode.SymbolKind.Function;
+    case "macro":
+      return vscode.SymbolKind.Constant;
     default: {
       const _never: never = d.kind;
       return _never;
@@ -126,6 +129,8 @@ function defKindToCompletion(kind: DefKind): vscode.CompletionItemKind {
       return vscode.CompletionItemKind.Struct;
     case "enum":
       return vscode.CompletionItemKind.Enum;
+    case "macro":
+      return vscode.CompletionItemKind.Constant;
     default: {
       const _never: never = kind;
       return _never;
@@ -228,8 +233,14 @@ async function provideCompletions(
   const prefix = linePrefix(document, position);
   const items: vscode.CompletionItem[] = [];
 
-  const modDot = prefix.match(/(?:^|\s)([a-z]+)\.\s*([A-Za-z_]*)$/);
-  if (modDot) {
+  if (/^\s*#\s*[a-z]*$/.test(prefix)) {
+    return directiveCompletions();
+  }
+
+  // io., os., ... list the module; any other name. (a string, a slice, a map) falls
+  // through to the methods.
+  const modDot = prefix.match(/(?:^|[^A-Za-z0-9_.])([a-z][a-z0-9]*)\.\s*([A-Za-z_]*)$/);
+  if (modDot && MODULE_MEMBERS[modDot[1]!]) {
     return moduleMemberCompletions(modDot[1]!);
   }
 

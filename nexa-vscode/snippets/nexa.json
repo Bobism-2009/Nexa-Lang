@@ -270,5 +270,50 @@
     "prefix": "f64",
     "body": ["let ${1:v}: float64 = ${2:0.0};"],
     "description": "64-bit float (same as float)"
+  },
+  "Nexa: match": {
+    "prefix": "match",
+    "body": ["match (${1:value}) {", "\t${2:Pattern} => ${3:result},", "\t_ => ${0:other},", "}"],
+    "description": "match on enum variants, Result, ints, strings or ranges"
+  },
+  "Nexa: match Option": {
+    "prefix": "matchopt",
+    "body": ["match (${1:opt}) {", "\tSome { ${2:v} } => ${3:v},", "\tNone => ${0:fallback},", "}"],
+    "description": "match on an Option: Some { value } or None"
+  },
+  "Nexa: for range": {
+    "prefix": "forrange",
+    "body": ["for (${1:i} in ${2:0}..<${3:n}) {", "\t$0", "}"],
+    "description": "Range loop: 0..<n stops before n, 1..10 includes 10"
+  },
+  "Nexa: return Some": {
+    "prefix": "some",
+    "body": ["return Some(${1:value});"],
+    "description": "Return Option[T]'s value"
+  },
+  "Nexa: #define": {
+    "prefix": "define",
+    "body": ["#define ${1:NAME} ${0:value}"],
+    "description": "C macro: a name replaced by its tokens"
+  },
+  "Nexa: #define function-like": {
+    "prefix": "definefn",
+    "body": ["#define ${1:SQ}(${2:x}) ${0:((x) * (x))}"],
+    "description": "C function-like macro (no space before '(')"
+  },
+  "Nexa: #undef": {
+    "prefix": "undef",
+    "body": ["#undef ${1:NAME}"],
+    "description": "End a macro"
+  },
+  "Nexa: inline_asm": {
+    "prefix": "inlineasm",
+    "body": ["inline_asm!(in ${1:a}, out ${2:r}) {", "\tmov {${2:r}\\}, {${1:a}\\}$0", "}"],
+    "description": "CPU instructions with Nexa variables as operands (#include <std/inline>)"
+  },
+  "Nexa: slice filter": {
+    "prefix": "filter",
+    "body": ["${1:xs}.filter(fn (${2:x}) { return ${0:true}; })"],
+    "description": "Keep the elements a function says yes to"
   }
 }

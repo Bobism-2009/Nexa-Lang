@@ -11,6 +11,7 @@
     { "include": "#chars" },
     { "include": "#numbers" },
     { "include": "#inline-cpp" },
+    { "include": "#option" },
     { "include": "#struct-def" },
     { "include": "#enum-def" },
     { "include": "#type-def" },
@@ -38,6 +39,29 @@
     },
     "preprocessor": {
       "patterns": [
+        {
+          "name": "meta.preprocessor.macro.nexa",
+          "match": "^\\s*(#\\s*define)\\s+([A-Za-z_][A-Za-z0-9_]*)(?:(\\()([^)]*)(\\)))?",
+          "captures": {
+            "1": { "name": "keyword.control.directive.define.nexa" },
+            "2": { "name": "entity.name.function.preprocessor.nexa" },
+            "3": { "name": "punctuation.definition.parameters.begin.nexa" },
+            "4": { "name": "variable.parameter.preprocessor.nexa" },
+            "5": { "name": "punctuation.definition.parameters.end.nexa" }
+          }
+        },
+        {
+          "name": "meta.preprocessor.undef.nexa",
+          "match": "^\\s*(#\\s*undef)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.directive.undef.nexa" },
+            "2": { "name": "entity.name.function.preprocessor.nexa" }
+          }
+        },
+        {
+          "name": "variable.language.va-args.nexa",
+          "match": "\\b__VA_ARGS__\\b"
+        },
         {
           "name": "meta.preprocessor.include.angle.nexa",
           "begin": "^\\s*(#include)\\s*(<)",
@@ -169,7 +193,7 @@
         },
         {
           "name": "constant.numeric.float.nexa",
-          "match": "-?\\b\\.\\d+\\b"
+          "match": "(?<![\\.\\w])-?\\.\\d+\\b"
         },
         {
           "name": "constant.numeric.integer.nexa",
@@ -182,6 +206,22 @@
         {
           "name": "keyword.other.inline_cpp.nexa",
           "match": "\\binline_cpp\\s*!"
+        },
+        {
+          "name": "keyword.other.inline_asm.nexa",
+          "match": "\\binline_asm\\s*!"
+        }
+      ]
+    },
+    "option": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.option.nexa",
+          "match": "\\bSome(?=\\s*\\()"
+        },
+        {
+          "name": "constant.language.none.nexa",
+          "match": "(?<!\\.)\\bNone\\b"
         }
       ]
     },
@@ -289,7 +329,11 @@
         },
         {
           "name": "keyword.control.nexa",
-          "match": "\\b(fn|extern|new|delete|sizeof|let|const|struct|enum|type|shape|priv|if|else|while|for|switch|case|default|return|break|continue|defer|goto|try|catch|throw|in)\\b"
+          "match": "\\b(fn|extern|new|delete|sizeof|let|const|struct|enum|type|shape|priv|if|else|while|for|switch|match|case|default|return|break|continue|defer|goto|try|catch|throw|in)\\b"
+        },
+        {
+          "name": "keyword.operator.logical.word.nexa",
+          "match": "(?<!\\.)\\b(and|or|not)\\b"
         },
         {
           "name": "keyword.other.entry.nexa",
@@ -317,7 +361,7 @@
         },
         {
           "name": "support.function.builtin.nexa",
-          "match": "(?<=\\.)(upper|lower|trim|len|contains|starts_with|ends_with|index_of|last_index_of|count|replace|substring|repeat|split)(?=\\s*\\()"
+          "match": "(?<=\\.)(upper|lower|trim|len|contains|starts_with|ends_with|index_of|last_index_of|count|replace|substring|repeat|split|join|push|pop|insert|remove|clear|has|keys|values|sort|sort_desc|reverse|min|max|sum|find|any|all|filter|map|first|last|get|is_some|is_none|or|ok|value|error)(?=\\s*\\()"
         }
       ]
     },
@@ -376,6 +420,10 @@
           "match": "->"
         },
         {
+          "name": "keyword.operator.fat-arrow.nexa",
+          "match": "=>"
+        },
+        {
           "name": "keyword.operator.address.nexa",
           "match": "(?<![&])&(?![&=])"
         },
@@ -386,6 +434,10 @@
         {
           "name": "keyword.operator.ellipsis.nexa",
           "match": "\\.\\.\\."
+        },
+        {
+          "name": "keyword.operator.range.nexa",
+          "match": "\\.\\.<?"
         },
         {
           "name": "keyword.operator.bitwise.nexa",
@@ -405,7 +457,7 @@
         },
         {
           "name": "keyword.operator.assignment.nexa",
-          "match": "(?<![=!<>])=(?!=)"
+          "match": "(?<![=!<>])=(?![=>])"
         },
         {
           "name": "keyword.operator.arithmetic.nexa",

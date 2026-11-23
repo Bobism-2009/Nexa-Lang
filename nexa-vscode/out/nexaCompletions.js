@@ -33,10 +33,11 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.HOVER_DOCS = exports.STRING_METHODS = exports.MODULE_MEMBERS = exports.STD_INCLUDES = exports.NEXA_TYPES = exports.NEXA_KEYWORDS = void 0;
+exports.HOVER_DOCS = exports.STRING_METHODS = exports.MODULE_MEMBERS = exports.TERM_FLAG_CONSTANTS = exports.STD_INCLUDES = exports.NEXA_TYPES = exports.NEXA_DIRECTIVES = exports.NEXA_KEYWORDS = void 0;
 exports.keywordCompletions = keywordCompletions;
 exports.typeCompletions = typeCompletions;
 exports.moduleMemberCompletions = moduleMemberCompletions;
+exports.directiveCompletions = directiveCompletions;
 exports.stringMethodCompletions = stringMethodCompletions;
 exports.linePrefix = linePrefix;
 const vscode = __importStar(require("vscode"));
@@ -55,6 +56,7 @@ exports.NEXA_KEYWORDS = [
     "while",
     "for",
     "switch",
+    "match",
     "case",
     "default",
     "return",
@@ -73,6 +75,17 @@ exports.NEXA_KEYWORDS = [
     "false",
     "null",
     "self",
+    "and",
+    "or",
+    "not",
+    "Some",
+    "None",
+];
+/** After '#' at the start of a line. */
+exports.NEXA_DIRECTIVES = [
+    { name: "include", detail: "#include <std/io> or \"file.nxa\"", snippet: "include <${1:std/io}>" },
+    { name: "define", detail: "#define NAME body / #define NAME(x) body — a C macro", snippet: "define ${1:NAME} ${0}" },
+    { name: "undef", detail: "#undef NAME — end a macro", snippet: "undef ${1:NAME}" },
 ];
 exports.NEXA_TYPES = [
     "int",
@@ -100,6 +113,7 @@ exports.NEXA_TYPES = [
     "fn",
     "Json",
     "Result",
+    "Option",
     "HttpResponse",
     "HttpServer",
     "HttpRequest",
@@ -121,6 +135,18 @@ exports.STD_INCLUDES = [
     "std/gfx3d",
     "std/ui",
     "std/inline",
+];
+/** std/term termios flag and control-character names (term.ICANON, term.VMIN, ...). */
+exports.TERM_FLAG_CONSTANTS = [
+    "IGNBRK", "BRKINT", "IGNPAR", "PARMRK", "INPCK", "ISTRIP", "INLCR", "IGNCR", "ICRNL",
+    "IUCLC", "IXON", "IXANY", "IXOFF", "IMAXBEL", "IUTF8", "OPOST", "OLCUC", "ONLCR", "OCRNL",
+    "ONOCR", "ONLRET", "OFILL", "OFDEL", "NLDLY", "NL0", "NL1", "CRDLY", "CR0", "CR1", "CR2",
+    "CR3", "TABDLY", "TAB0", "TAB1", "TAB2", "TAB3", "BSDLY", "BS0", "BS1", "VTDLY", "VT0",
+    "VT1", "FFDLY", "FF0", "FF1", "CSIZE", "CS5", "CS6", "CS7", "CS8", "CSTOPB", "CREAD",
+    "PARENB", "PARODD", "HUPCL", "CLOCAL", "CRTSCTS", "ISIG", "ICANON", "XCASE", "ECHO", "ECHOE",
+    "ECHOK", "ECHONL", "NOFLSH", "TOSTOP", "ECHOCTL", "ECHOPRT", "ECHOKE", "FLUSHO", "PENDIN",
+    "IEXTEN", "VINTR", "VQUIT", "VERASE", "VKILL", "VEOF", "VTIME", "VMIN", "VSTART", "VSTOP",
+    "VSUSP", "VEOL", "VREPRINT", "VDISCARD", "VWERASE", "VLNEXT", "VEOL2",
 ];
 /** module prefix -> member completions */
 exports.MODULE_MEMBERS = {
@@ -358,6 +384,18 @@ exports.MODULE_MEMBERS = {
         { name: "key_available", detail: "term.key_available() — 1 if a key is waiting" },
         { name: "width", detail: "term.width() — columns (80 if unknown)" },
         { name: "height", detail: "term.height() — rows (24 if unknown)" },
+        { name: "c_iflag", detail: "term.c_iflag() — termios input flags" },
+        { name: "c_oflag", detail: "term.c_oflag() — termios output flags" },
+        { name: "c_cflag", detail: "term.c_cflag() — termios control flags" },
+        { name: "c_lflag", detail: "term.c_lflag() — termios local flags" },
+        { name: "set_c_iflag", detail: "term.set_c_iflag(v) — set the input flags" },
+        { name: "set_c_oflag", detail: "term.set_c_oflag(v) — set the output flags" },
+        { name: "set_c_cflag", detail: "term.set_c_cflag(v) — set the control flags" },
+        { name: "set_c_lflag", detail: "term.set_c_lflag(v) — set the local flags" },
+        { name: "c_cc", detail: "term.c_cc(i) — a control character, e.g. term.c_cc(term.VMIN)" },
+        { name: "set_c_cc", detail: "term.set_c_cc(i, v) — set a control character" },
+        { name: "restore", detail: "term.restore() — put the terminal back as the program found it" },
+        ...exports.TERM_FLAG_CONSTANTS.map((n) => ({ name: n, detail: `term.${n} — termios constant (this platform's value)` })),
     ],
     dll: [
         { name: "load", detail: "dll.load(path)" },
@@ -559,6 +597,24 @@ exports.STRING_METHODS = [
     "ok",
     "value",
     "error",
+    "join",
+    "sort",
+    "sort_desc",
+    "reverse",
+    "min",
+    "max",
+    "sum",
+    "find",
+    "any",
+    "all",
+    "filter",
+    "map",
+    "first",
+    "last",
+    "get",
+    "is_some",
+    "is_none",
+    "or",
 ];
 exports.HOVER_DOCS = {
     "http.get": "GET a URL. Returns Result[string]: .ok() / .value() for the body. A non-2xx status is a failure with .error() = HTTP <status>. Takes an optional trailing []string of raw request header lines.",
@@ -644,6 +700,11 @@ exports.HOVER_DOCS = {
     "os.endian": "Native endianness: little or big.",
     "os.system": "Run a shell command; blocks until complete.",
     "extern fn": "Declare a C library function (extern \"C\"). No body.",
+    match: "match (v) { Pattern => value, _ => other } — enum variants with fields, Result, ints, chars, strings, bools, ranges (80..89), `|` and `if` guards. Gives a value.",
+    Some: "Option[T]'s value-holding variant: return Some(x);. Option is built in; read it with match, .is_some(), .value() or .or(fallback).",
+    None: "Option[T]'s empty variant: return None;. m.get(k), xs.first() and xs.last() answer one when there is nothing.",
+    "inline_asm": "inline_asm!(in a, out b) { ... } — CPU instructions with Nexa variables as operands, {a} naming the register. Needs #include <std/inline>.",
+    "#define": "#define NAME body or #define NAME(x) body — a C macro, replaced before the program is read. #undef NAME ends it.",
     null: "Null pointer literal (emits nullptr).",
 };
 function keywordCompletions() {
@@ -670,6 +731,14 @@ function moduleMemberCompletions(moduleName) {
         c.detail = m.detail;
         c.documentation = exports.HOVER_DOCS[`${moduleName}.${m.name}`] ?? m.detail;
         c.insertText = m.name;
+        return c;
+    });
+}
+function directiveCompletions() {
+    return exports.NEXA_DIRECTIVES.map((d) => {
+        const c = new vscode.CompletionItem(d.name, vscode.CompletionItemKind.Keyword);
+        c.detail = d.detail;
+        c.insertText = new vscode.SnippetString(d.snippet);
         return c;
     });
 }
