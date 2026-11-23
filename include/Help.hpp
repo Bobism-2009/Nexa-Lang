@@ -908,7 +908,8 @@ loses the undefined-name check.)HELP" },
           term.getkey()            a key by name ("a","enter","up","ctrl-c",...)
           term.key_available()     1 if a key is waiting (non-blocking loops)
   size    term.width()  term.height()        columns and rows (80x24 if unknown)
-  flags   term.c_lflag()  term.set_c_lflag(v)  (also c_iflag, c_oflag, c_cflag)
+  flags   term.c_iflag()  term.c_oflag()  term.c_cflag()  term.c_lflag()
+          term.set_c_iflag(v)  term.set_c_oflag(v)  term.set_c_cflag(v)  term.set_c_lflag(v)
           term.c_cc(term.VMIN)  term.set_c_cc(i, v)  term.restore()
           constants: term.ICANON, term.ECHO, term.IGNBRK, term.CS8, ... (termios)
 
