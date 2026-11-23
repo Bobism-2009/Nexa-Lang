@@ -37,6 +37,13 @@ OPTIONS
   before it. A program with inline_cpp or a C/C++ header keeps the stock runtime.
   NEXA_NO_SLIM=1 in the environment builds with the stock runtime instead, to
   compare or to rule it out.
+  On Windows, such a program that also starts no thread begins on NexaC's own
+  entry point rather than the MinGW C runtime's startup code, which it has no use
+  for: hello world is 4KB, where it was 13.8KB, and every program is about 9KB
+  smaller. Arguments, the environment, global constructors and destructors,
+  atexit and the exit code work as before. A program the C runtime's startup is
+  needed for is built the ordinary way, with nothing to say about it.
+  NEXA_NO_SLIM_ENTRY=1 keeps the ordinary startup.
 
   BUILD SPEED
   With clang, the standard headers every program opens with are parsed once and

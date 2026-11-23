@@ -26,6 +26,10 @@
 #   literal    Windows and Linux: the std::to_string rewrite leaves a string that
 #              happens to spell it alone.
 #
+#   hello      Windows: hello world starts on NexaC's own entry point, not MinGW's
+#              crt2.o, so it carries none of the C runtime's startup code: under
+#              6KB (it was 13.8KB), prints, and exits 0.
+#
 #   value      Everywhere: .value() on an error, with no try/catch around it,
 #              keeps what the program printed before it, says what the error
 #              was on stderr, and exits non-zero.
@@ -216,6 +220,23 @@ EOF
     fi
 else
     echo "skip size, literal (Windows and Linux only)"
+fi
+
+if [ "$WINDOWS" = 1 ]; then
+    printf '#include <std/io>
+fn main() {
+    io.println("Hello, Nexa");
+}
+' > "$WORK/hello.nxa"
+    if "$NEXAC" "$WORK/hello.nxa" -o "$WORK/hello$EXE" > "$WORK/bh.log" 2>&1; then
+        size=$(wc -c < "$WORK/hello$EXE" | tr -d ' ')
+        out=$("$WORK/hello$EXE" | tr -d "$CR"); rc=$?
+        if [ "$size" -ge 6144 ]; then bad hello "$size bytes, 6KB or more (the startup code is back?)"
+        elif [ "$out" != "Hello, Nexa" ] || [ $rc -ne 0 ]; then bad hello "printed [$out], exit $rc"
+        else ok "hello ($size bytes)"; fi
+    else
+        bad hello "build failed: $(tail -3 "$WORK/bh.log")"
+    fi
 fi
 
 cat > "$WORK/value.nxa" <<'EOF'

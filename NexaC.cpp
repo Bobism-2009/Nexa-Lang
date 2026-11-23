@@ -1349,6 +1349,41 @@ static bool nexaWriteWasmHtml(const std::filesystem::path& htmlPath,
 // Linux has the same shape with libstdc++ (138KB against 14KB), closed the same way through
 // its own hooks. Each half is guarded by the library it was measured on (llvm-mingw's libc++,
 // libstdc++ off Windows); any other gets only the to_string stand-in.
+// Windows executables, below the C runtime's floor. MinGW's crt2.o starts a program with
+// ~6KB of code a Nexa program has no use for -- the pseudo-relocator (and its fprintf
+// error path), an unhandled-exception filter, TLS callbacks, x87 setup -- which was most
+// of hello world's 13.8KB. The UCRT initialises itself inside its own DLL, so a program
+// that runs no threads and throws nothing needs only what is below: say what kind of app
+// this is, build argv when main takes it, and exit() with main's answer, which runs the
+// atexit handlers (global destructors among them) and flushes stdio. Global constructors
+// still run: MinGW's main calls __main, as it always did.
+//
+// atexit is crt2.o's own; here it is the UCRT's process-wide list, the one exit() runs.
+// Linked with -nostartfiles -e __nexa_entry and --disable-runtime-pseudo-reloc, so a
+// program that would have needed the relocator fails to link instead of misbehaving, and
+// NexaC then builds it the ordinary way.
+#ifdef _WIN32
+static std::string nexaWinEntryCpp(bool withArgs, bool guiApp) {
+    std::string s = "\n#include <stdlib.h>\n#include <corecrt_startup.h>\n";
+    s += "extern \"C\" int __cdecl atexit(void (__cdecl* __nexa_f)(void)) { return _crt_atexit(__nexa_f); }\n";
+    // MinGW's handler, kept: a CRT call given a bad argument returns its error, as it did,
+    // instead of the UCRT's default, which ends the process.
+    s += "static void __cdecl __nexa_invalid_param(const wchar_t*, const wchar_t*, const wchar_t*, unsigned int, "
+         "uintptr_t) {}\n";
+    s += "extern \"C\" void __nexa_entry(void) {\n";
+    s += guiApp ? "    _set_app_type(_crt_gui_app);\n" : "    _set_app_type(_crt_console_app);\n";
+    s += "    _set_invalid_parameter_handler(__nexa_invalid_param);\n";
+    if (withArgs) {
+        s += "    _configure_narrow_argv(_crt_argv_unexpanded_arguments);\n";
+        s += "    exit(main(*__p___argc(), *__p___argv()));\n";
+    } else {
+        s += "    exit(main());\n";
+    }
+    s += "}\n";
+    return s;
+}
+#endif
+
 static const char* kNexaSlimRuntime = R"NEXASLIM(#include <charconv>
 #include <cstdio>
 #include <cstdlib>
@@ -3669,8 +3704,38 @@ int main(int argc, char* argv[]) {
         }
 
         std::string cmd = nexaBuildCompileCmd(cxx, targetFlags + pchFlag, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, linkGfx3d, noExceptions, noRtti, debugBuild, linkInputs);
-        int ret;
-        if (pchFlag.empty()) {
+        int ret = 1;
+        bool slimEntryBuilt = false;
+#ifdef _WIN32
+        // Below the C runtime's floor (see nexaWinEntryCpp): tried first, quietly, for an
+        // executable that throws nothing, starts no thread and carries no C++ of its own.
+        // Anything that goes wrong -- a library that wants the full startup, a toolchain that
+        // will not link it -- costs one more build: the ordinary one, which shows its own
+        // output as it always did.
+        if (slimTarget && noExceptions && cppTarget == nexa::CppTarget::Windows && !buildDll && !buildShared &&
+            linkInputs.empty() && !modules.hasInlineCpp() && !modules.hasCppHeader() &&
+            std::getenv("NEXA_NO_SLIM_ENTRY") == nullptr &&
+            cpp.find("std::thread") == std::string::npos && cpp.find("thread_local") == std::string::npos &&
+            cpp.find("<thread>") == std::string::npos && cpp.find("<mutex>") == std::string::npos &&
+            cpp.find("CreateThread") == std::string::npos && cpp.find("_beginthread") == std::string::npos &&
+            cpp.find("__declspec(thread)") == std::string::npos) {
+            const bool withArgs = cpp.find("int main(int argc, char** argv)") != std::string::npos;
+            { std::ofstream eo(cppPath, std::ios::app); eo << nexaWinEntryCpp(withArgs, noConsole); }
+            const std::string log = cppPath + ".log";
+            const std::string scmd = cmd + " -nostartfiles -Wl,-e,__nexa_entry -Wl,--disable-runtime-pseudo-reloc";
+            if (std::system((scmd + " > \"" + log + "\" 2>&1").c_str()) == 0) {
+                ret = 0;
+                slimEntryBuilt = true;
+            } else {
+                std::ofstream ro(cppPath, std::ios::trunc);
+                ro << cpp;
+            }
+            std::remove(log.c_str());
+        }
+#endif
+        if (slimEntryBuilt) {
+            // built above
+        } else if (pchFlag.empty()) {
             ret = std::system(cmd.c_str());
         } else {
             // With a PCH the compiler's output is held back for a moment: a complaint about
