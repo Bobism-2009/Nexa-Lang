@@ -1,0 +1,4 @@
+#define F(x) x
+fn main() {
+    let a = F(1;
+}

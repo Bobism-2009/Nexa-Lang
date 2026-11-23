@@ -1,0 +1,9 @@
+// Included by defines.nxa: what a file leaves defined reaches the file that includes it.
+#define VERSION "1.2"
+#define LIMIT 100
+#define SCRATCH 5
+#undef SCRATCH
+
+fn helper(): int {
+    return LIMIT / 2;
+}

@@ -454,6 +454,35 @@ HEAP ALLOCATION (no GC — manual, C-style)
     Compound assignment also works through indices, fields, and pointers:
     xs[i] += n;  m["k"] += n;  grid[i][j] <<= n;  p.x *= 2;  ptr->x -= 1;  *q += n;
 
+DEFINES
+  #define MAX 10
+  #define SQ(x) ((x) * (x))
+  #define LOG(...) io.println(__VA_ARGS__)
+  #undef MAX
+  - As in C: a name is replaced by its tokens before the program is read.
+    io.println(SQ(MAX + 1)) is io.println(((10 + 1) * (10 + 1))): 121.
+  - Function-like when the '(' follows the name with no space; with a space,
+    #define N (x) is object-like and N is (x). ... collects the remaining
+    arguments into __VA_ARGS__. A function-like name with no '(' after it is
+    left alone.
+  - The C rules: arguments are expanded before they are put in, the result is
+    read again for more macros, and a macro never expands inside its own
+    expansion (#define x x + 1 makes x read as x + 1, once).
+  - Commas inside (), [] and {} stay in one argument: ADD(len(xs), [1, 2][0]).
+  - A backslash at the end of the line continues the definition.
+  - Defined from the #define to its #undef or the end of the file, everywhere
+    in between (inside functions too). Not inside "strings"; inside an
+    f-string's {} it is code, so f"{MAX}" is 10.
+  - A file that includes another gets what that file leaves defined, as with
+    a C header (and what the files it includes leave defined, in turn).
+  - Defining a name again with a different body is an error; #undef it first.
+    The same body again is fine, so two files may both define it.
+  - A Nexa keyword (fn, let, if, ...) cannot be a macro name. # and ## in a
+    body, and #if / #ifdef / #else / #endif, are not supported.
+  - A plain constant is often better as let const MAX: int = 10; -- it has a
+    type and a name the error messages can use. A program that never writes
+    #define is unchanged.
+
 ARITHMETIC
   + - * / %
   Precedence (tightest first): * / % ; + - ; << >> ; & ; ^ ; |

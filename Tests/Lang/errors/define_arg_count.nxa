@@ -1,0 +1,5 @@
+#include <std/io>
+#define SQ(x) ((x) * (x))
+fn main() {
+    io.println(SQ(1, 2));
+}

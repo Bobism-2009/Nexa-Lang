@@ -1,0 +1,3 @@
+#define LIMIT 1
+#define LIMIT 2
+fn main() {}

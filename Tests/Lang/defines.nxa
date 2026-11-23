@@ -1,0 +1,41 @@
+// #define and #undef, as in C.
+#include <std/io>
+#include "modules/define_config.nxa"
+
+#define MAX 10
+#define NEG -1
+#define SQ(x) ((x) * (x))
+#define ADD(a, b) ((a) + (b))
+#define TWICE(f, v) f(f(v))
+#define GREETING "hi " + \
+                 "there"
+#define LOG(...) io.println(__VA_ARGS__)
+#define EMPTY
+#define ZERO() 0
+#define INC(v) v += 1
+#define MAX 10
+
+fn main() {
+    io.println(MAX * 2);                 // object-like
+    io.println(MAX NEG);                 // x -1 after a value is x - 1
+    io.println(SQ(MAX + 1));             // arguments are expanded first
+    io.println(ADD(SQ(2), MAX));
+    io.println(TWICE(SQ, 3));            // a macro name passed along, called inside
+    io.println(GREETING);                // continued with a backslash
+    LOG("v=", VERSION, " limit=", LIMIT, " helper=", helper());
+    let base = 4;
+#define base base + 1
+    io.println(base EMPTY);              // never expands inside itself
+#undef base
+    io.println(ZERO());
+    let n = 1;
+    INC(n);
+    io.println(n);
+    io.println(f"max is {MAX}");         // inside an f-string's {}
+    let xs = [1, 2, 3];
+    io.println(ADD(len(xs), xs[1]));     // commas inside [] and () stay in the argument
+    io.println("MAX stays text");        // not inside a string
+#undef MAX
+    let MAX = 7;
+    io.println(MAX);
+}

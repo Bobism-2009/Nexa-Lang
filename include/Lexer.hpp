@@ -97,6 +97,8 @@ enum class TokenType {
     InlineCpp,
     InlineCppBlock,
     InlineAsmBlock,  // inline_asm!(operands) { text }: value is operands, \x1f, text
+    Define,          // #define NAME body: value is what follows "define", continuations joined
+    Undef,           // #undef NAME: value is what follows "undef"
     Eof
 };
 
@@ -110,8 +112,29 @@ class Lexer {
 public:
     // filePath is only used to prefix diagnostics; passing it is optional so that
     // ad-hoc lexing (tests, tooling) still works without a file on disk.
-    explicit Lexer(const std::string& source, const std::string& filePath = "")
-        : source_(source), filePath_(filePath), pos_(0), line_(1) {}
+    explicit Lexer(const std::string& source, const std::string& filePath = "", size_t firstLine = 1)
+        : source_(source), filePath_(filePath), pos_(0), line_(firstLine) {}
+
+    // Whether a token ends an expression, so a '-' after it is the binary operator.
+    // Macro expansion asks it too: a body of -1 put after x is x - 1.
+    static bool endsExpressionToken(TokenType t) {
+        switch (t) {
+            case TokenType::Identifier:
+            case TokenType::Number:
+            case TokenType::Float:
+            case TokenType::String:
+            case TokenType::Char:
+            case TokenType::True:
+            case TokenType::False:
+            case TokenType::RParen:
+            case TokenType::RBracket:
+            case TokenType::PlusPlus:
+            case TokenType::MinusMinus:
+                return true;
+            default:
+                return false;
+        }
+    }
 
     std::vector<Token> tokenize() {
         std::vector<Token> tokens;
@@ -143,7 +166,7 @@ public:
                 }
                 if (!closed) fail("Unterminated block comment (opened with '/*')", commentLine);
             } else if (c == '#') {
-                tokens.push_back(scanInclude());
+                tokens.push_back(scanDirective());
             } else if (c == 'R' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '"') {
                 tokens.push_back(scanRawString());
             } else if (c == 'f' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '"') {
@@ -415,23 +438,7 @@ private:
     // True when the last token can terminate an expression, which makes a following
     // '-' the binary subtraction operator rather than the sign of a numeric literal.
     static bool endsExpression(const std::vector<Token>& tokens) {
-        if (tokens.empty()) return false;
-        switch (tokens.back().type) {
-            case TokenType::Identifier:
-            case TokenType::Number:
-            case TokenType::Float:
-            case TokenType::String:
-            case TokenType::Char:
-            case TokenType::True:
-            case TokenType::False:
-            case TokenType::RParen:
-            case TokenType::RBracket:
-            case TokenType::PlusPlus:
-            case TokenType::MinusMinus:
-                return true;
-            default:
-                return false;
-        }
+        return !tokens.empty() && endsExpressionToken(tokens.back().type);
     }
 
     void skipWhitespace() {
@@ -448,6 +455,41 @@ private:
                 break;
             }
         }
+    }
+
+    // '#' starts a directive: #include (below), #define and #undef. A directive is one
+    // line; a backslash at its end continues it, as in C.
+    Token scanDirective() {
+        size_t p = pos_ + 1;
+        while (p < source_.size() && (source_[p] == ' ' || source_[p] == '\t')) p++;
+        const size_t w = p;
+        while (p < source_.size() && (isAlpha(source_[p]) || source_[p] == '_')) p++;
+        const std::string word = source_.substr(w, p - w);
+        if (word == "define" || word == "undef") {
+            const size_t startLine = line_;
+            std::string text;
+            pos_ = p;
+            while (pos_ < source_.size() && source_[pos_] != '\n') {
+                if (source_[pos_] == '\\') {
+                    size_t q = pos_ + 1;
+                    while (q < source_.size() && (source_[q] == ' ' || source_[q] == '\t' || source_[q] == '\r')) q++;
+                    if (q < source_.size() && source_[q] == '\n') {
+                        text += ' ';
+                        pos_ = q + 1;
+                        line_++;
+                        continue;
+                    }
+                }
+                if (source_[pos_] != '\r') text += source_[pos_];
+                pos_++;
+            }
+            return {word == "define" ? TokenType::Define : TokenType::Undef, text, startLine};
+        }
+        if (word == "if" || word == "ifdef" || word == "ifndef" || word == "elif" || word == "else" ||
+            word == "endif") {
+            fail("#" + word + " is not supported: Nexa has #include, #define and #undef", line_);
+        }
+        return scanInclude();
     }
 
     Token scanInclude() {

@@ -1,0 +1,2 @@
+#define LIMIT: already defined differently (line 1); #undef it first
+at line 2

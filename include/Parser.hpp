@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Lexer.hpp"
+#include "Macros.hpp"
 #include "Modules.hpp"
 #include "Suggest.hpp"
 #include <string>
@@ -329,13 +330,15 @@ public:
            const std::vector<std::string>* packagePaths = nullptr,
            const std::string& filePrefix = "",
            std::map<std::string, std::string>* filePrefixes = nullptr,
-           std::map<std::string, std::string>* sharedExports = nullptr)
+           std::map<std::string, std::string>* sharedExports = nullptr,
+           NexaMacroCache* macroCache = nullptr)
         : tokens_(std::move(tokens)), modules_(modules), pos_(0),
           currentFilePath_(currentFilePath), includedFiles_(includedFiles),
           packagePaths_(packagePaths), filePrefix_(filePrefix),
-          filePrefixes_(filePrefixes), sharedExports_(sharedExports) {
+          filePrefixes_(filePrefixes), sharedExports_(sharedExports), macroCache_(macroCache) {
         if (!filePrefixes_) filePrefixes_ = &ownedPrefixes_;
         if (!sharedExports_) sharedExports_ = &ownedExports_;
+        if (!macroCache_) macroCache_ = &ownedMacroCache_;
     }
 
     // Option[T] is built in. A file that names Option -- or calls Some(x), m.get(k),
@@ -391,6 +394,7 @@ public:
 
     std::vector<AstNode> parse() {
         try {
+            if (!tokensExpanded_) expandFileMacros(tokens_, currentFilePath_);
             noteBuiltinOption();
             std::vector<AstNode> ast = parseProgram();
             if (filePrefix_.empty() && modules_.builtinOption) {
@@ -624,6 +628,12 @@ private:
     // means two files exported the same bare name (ambiguous; leave the use).
     std::map<std::string, std::string> ownedExports_;
     std::map<std::string, std::string>* sharedExports_;
+    // #define (see Macros.hpp): every included .nxa's expanded tokens and the macros it
+    // leaves defined, shared across nested includes. tokensExpanded_ says this file's
+    // tokens came from there, already expanded.
+    NexaMacroCache ownedMacroCache_;
+    NexaMacroCache* macroCache_;
+    bool tokensExpanded_ = false;
     // Names the entry file itself declared (bare). They win over exports.
     std::set<std::string> entryOwns_;
     std::set<std::string> ownFns_, ownStructs_, ownEnums_, ownGlobals_, ownShapes_, ownAliases_;
@@ -2214,6 +2224,93 @@ private:
         rewriteStmtList(ast, {});
     }
 
+    // Expands a file's macros in place; returns what it leaves defined. A file with no
+    // #define and no include that brings one is left exactly as it was lexed.
+    NexaMacroTable expandFileMacros(std::vector<Token>& toks, const std::string& file) {
+        NexaMacroTable table;
+        bool any = NexaMacroExpander::anyDirective(toks);
+        auto include = [this, &file](const Token& t) -> const NexaMacroTable* { return includeMacros(t, file); };
+        if (!any) {
+            for (const Token& t : toks) {
+                if (t.type != TokenType::Include) continue;
+                const NexaMacroTable* m = include(t);
+                if (m && !m->empty()) {
+                    any = true;
+                    break;
+                }
+            }
+        }
+        if (!any) return table;
+        NexaMacroExpander ex(table, file);
+        toks = ex.run(toks, include);
+        return table;
+    }
+
+    // The .nxa an #include names, as parseInclude finds it; "" for std modules, C/C++
+    // headers and anything that is not there (parseInclude reports those).
+    std::string resolveNxaInclude(const std::string& raw, const std::string& fromFile) const {
+        const size_t angleStart = raw.find('<'), angleEnd = raw.find('>');
+        const size_t quoteStart = raw.find('"'), quoteEnd = raw.rfind('"');
+        std::error_code ec;
+        if (angleStart != std::string::npos && angleEnd != std::string::npos && angleEnd > angleStart) {
+            const std::string path = raw.substr(angleStart + 1, angleEnd - angleStart - 1);
+            if (path.compare(0, 4, "std/") == 0 || isCppHeaderIncludePath(path) || isBareCppStdHeader(path)) return "";
+            std::string pkgPath = path;
+            if (pkgPath.size() < 4 || pkgPath.substr(pkgPath.size() - 4) != ".nxa") pkgPath += ".nxa";
+            if (!packagePaths_) return "";
+            for (const std::string& root : *packagePaths_) {
+                const std::filesystem::path full = std::filesystem::path(root) / pkgPath;
+                if (std::filesystem::is_regular_file(full, ec)) return std::filesystem::absolute(full).string();
+            }
+            return "";
+        }
+        if (quoteStart != std::string::npos && quoteEnd != std::string::npos && quoteEnd > quoteStart) {
+            const std::string relPath = raw.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
+            if (isCppHeaderIncludePath(relPath)) return "";
+            std::filesystem::path resolved;
+            if (!relPath.empty() && (relPath[0] == '/' || (relPath.size() > 1 && relPath[1] == ':'))) {
+                resolved = relPath;
+            } else {
+                resolved = (std::filesystem::path(fromFile).parent_path() / relPath).lexically_normal();
+            }
+            const std::string absPath = std::filesystem::absolute(resolved).string();
+            return std::filesystem::is_regular_file(absPath, ec) ? absPath : "";
+        }
+        return "";
+    }
+
+    // What the .nxa an #include names leaves defined, reading (and expanding) it the
+    // first time. The include later parses those same tokens.
+    const NexaMacroTable* includeMacros(const Token& t, const std::string& fromFile) {
+        const std::string absPath = resolveNxaInclude(t.value, fromFile);
+        if (absPath.empty()) return nullptr;
+        auto it = macroCache_->find(absPath);
+        if (it != macroCache_->end()) return it->second.done ? &it->second.macros : nullptr;
+        std::ifstream in(absPath, std::ios::binary);
+        if (!in) return nullptr;
+        std::stringstream buf;
+        buf << in.rdbuf();
+        NexaMacroFile& f = (*macroCache_)[absPath];
+        std::vector<Token> toks = Lexer(buf.str(), absPath).tokenize();
+        NexaMacroTable macros = expandFileMacros(toks, absPath);
+        f.tokens = std::move(toks);
+        f.macros = std::move(macros);
+        f.done = true;
+        return &f.macros;
+    }
+
+    // An included file's tokens: the expanded ones includeMacros kept, or lexed now.
+    std::vector<Token> includeTokens(const std::string& absPath, const std::string& text, bool& expanded) {
+        auto it = macroCache_->find(absPath);
+        if (it != macroCache_->end() && it->second.done && !it->second.taken) {
+            it->second.taken = true;
+            expanded = true;
+            return std::move(it->second.tokens);
+        }
+        expanded = false;
+        return Lexer(text, absPath).tokenize();
+    }
+
     std::vector<AstNode> parseInclude() {
         const Token& t = advance();
         std::string raw = t.value;
@@ -2270,13 +2367,14 @@ private:
                         std::stringstream buf;
                         buf << in.rdbuf();
                         in.close();
-                        Lexer lexer(buf.str(), absPath);
-                        std::vector<Token> subTokens = lexer.tokenize();
+                        bool expanded = false;
+                        std::vector<Token> subTokens = includeTokens(absPath, buf.str(), expanded);
                         std::string alias = includeAlias(raw, angleEnd, t.line);
                         std::string prefix = alias.empty() ? std::filesystem::path(absPath).stem().string() : alias;
                         claimFilePrefix(prefix, absPath, t.line);
                         Parser subParser(std::move(subTokens), modules_, absPath, includedFiles_, packagePaths_,
-                                         prefix, filePrefixes_, sharedExports_);
+                                         prefix, filePrefixes_, sharedExports_, macroCache_);
+                        subParser.tokensExpanded_ = expanded;
                         return subParser.parse();
                     }
                 }
@@ -2319,13 +2417,14 @@ private:
             std::stringstream buf;
             buf << in.rdbuf();
             in.close();
-            Lexer lexer(buf.str(), absPath);
-            std::vector<Token> subTokens = lexer.tokenize();
+            bool expanded = false;
+            std::vector<Token> subTokens = includeTokens(absPath, buf.str(), expanded);
             std::string alias = includeAlias(raw, quoteEnd, t.line);
             std::string prefix = alias.empty() ? std::filesystem::path(absPath).stem().string() : alias;
             claimFilePrefix(prefix, absPath, t.line);
             Parser subParser(std::move(subTokens), modules_, absPath, includedFiles_, packagePaths_,
-                             prefix, filePrefixes_, sharedExports_);
+                             prefix, filePrefixes_, sharedExports_, macroCache_);
+            subParser.tokensExpanded_ = expanded;
             return subParser.parse();
         }
         throw std::runtime_error("Invalid #include at line " + std::to_string(t.line));
