@@ -907,7 +907,7 @@ public:
                 n.type == AstNode::Type::AssnIndex || n.type == AstNode::Type::ForIn) {
                 needsVector = true;
             }
-            if (n.type == AstNode::Type::StrMethod && n.value == "split") {
+            if (n.type == AstNode::Type::StrMethod && (n.value == "split" || n.value == "tokens")) {
                 needsVector = true;
                 needsString = true;
             }
@@ -4095,7 +4095,8 @@ private:
         if (v.initFromReadln || v.initFromFileRead) return "string";
         if (v.initFromDllLoad) return "int";
         if (v.initFromArray) {
-            if (!v.children.empty() && v.children[0].type == AstNode::Type::StrMethod && v.children[0].value == "split") {
+            if (!v.children.empty() && v.children[0].type == AstNode::Type::StrMethod &&
+                (v.children[0].value == "split" || v.children[0].value == "tokens")) {
                 return "[]string";
             }
             if (!v.children.empty() && v.children[0].type == AstNode::Type::FileCall &&
@@ -4523,7 +4524,7 @@ private:
             case AstNode::Type::StrMethod:
                 if (strMethodReturnsString(e.value)) return "string";
                 if (strMethodReturnsBool(e.value)) return "bool";
-                if (e.value == "split") return "[]string";
+                if (e.value == "split" || e.value == "tokens") return "[]string";
                 return "int";  // len, index_of
             case AstNode::Type::OsGetProcessId: return "int";
             case AstNode::Type::OsSpawn: return "int";
@@ -5048,7 +5049,7 @@ private:
                 if (hint.empty() && recvBare == "string") {
                     NexaSuggest s(e.value, ".");
                     s.considerList("upper, lower, trim, len, contains, starts_with, ends_with, index_of, "
-                                   "last_index_of, count, repeat, split, replace, substring");
+                                   "last_index_of, count, repeat, split, tokens, replace, substring");
                     if (s.found()) near = " (did you mean '." + s.pick() + "()'?)";
                 }
                 throw std::runtime_error("Unknown method '." + e.value + "()'" + near + what + hint +
@@ -6818,7 +6819,10 @@ private:
     // contains, ...) before anything knew t was a struct; the method's declared
     // return type is the truth, applied the way an explicit `let x: T` is.
     void semRetypeLetFromMethod(const AstNode& v) {
-        if (!v.declType.empty() && !(v.declType == "[]string" && v.children.back().value == "split")) return;
+        if (!v.declType.empty() &&
+            !(v.declType == "[]string" && (v.children.back().value == "split" || v.children.back().value == "tokens"))) {
+            return;
+        }
         const std::string t = inferExprNexaType(v.children.back());
         if (t.empty()) return;
         AstNode& n = const_cast<AstNode&>(v);
@@ -6886,6 +6890,7 @@ private:
             {"index_of", {1, 2, "s.index_of(sub[, from])"}},
             {"last_index_of", {1, 1, "s.last_index_of(sub)"}}, {"count", {1, 1, "s.count(sub)"}},
             {"repeat", {1, 1, "s.repeat(n)"}}, {"split", {1, 1, "s.split(sep)"}},
+            {"tokens", {0, 1, "s.tokens([delims])"}},
             {"replace", {2, 2, "s.replace(from, to)"}}, {"substring", {2, 2, "s.substring(start, n)"}},
         };
         auto it = shapes.find(e.value);
@@ -6922,6 +6927,21 @@ private:
                                                                 std::to_string(it->second.max)) +
                         (it->second.max == 1 && it->second.min == 1 ? " argument" : " arguments") +
                         ", not " + std::to_string(got));
+        }
+        // split's separator and tokens' delimiters are text; a number there would
+        // otherwise reach the C++ compiler as a lambda it cannot call.
+        if ((e.value == "split" || e.value == "tokens") && got == 1 && !nexaIsSliceType(inferExprNexaType(e.children[0]))) {
+            const AstNode& a = e.children[1];
+            const std::string t = inferExprNexaType(a);
+            const bool sure = nexaIsFloatType(t) || t == "bool" || t == "char" ||
+                (nexaIsNumericIntType(t) && (a.type == AstNode::Type::ExprIntLiteral ||
+                                              (a.type == AstNode::Type::ExprVarRef && !lookupNexaDecl(a.value).empty())));
+            if (sure) {
+                semError(e, std::string(it->second.sig) + (e.value == "split" ? " takes the separator as text"
+                                                                               : " takes the delimiter characters as text") +
+                            ", not " + (t == "bool" ? "a bool" : t == "char" ? "a char" : "a number") +
+                            (e.value == "split" ? ": s.split(\",\")" : ": s.tokens(\" ,;\")"));
+            }
         }
     }
 
@@ -9086,7 +9106,9 @@ static std::string __nexa_show(const std::map<K, V>& m) {
 
     // Whether an array-valued initializer expression yields std::vector<std::string>.
     bool arrayInitProducesString(const AstNode& initExpr, const std::map<std::string, bool>& varIsString) const {
-        if (initExpr.type == AstNode::Type::StrMethod && initExpr.value == "split") return true;
+        if (initExpr.type == AstNode::Type::StrMethod && (initExpr.value == "split" || initExpr.value == "tokens")) {
+            return true;
+        }
         if (initExpr.type == AstNode::Type::FileCall && fileCallGivesStrings(initExpr.value)) return true;
         if (initExpr.type == AstNode::Type::OsInfo && initExpr.value == "environ") return true;
         return arrayLiteralProducesString(initExpr, varIsString);
@@ -9100,7 +9122,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             std::string d = lookupNexaDecl(coll.value);
             if (d == "[]string") return true;
         }
-        if (coll.type == AstNode::Type::StrMethod && coll.value == "split") return true;
+        if (coll.type == AstNode::Type::StrMethod && (coll.value == "split" || coll.value == "tokens")) return true;
         if (coll.type == AstNode::Type::FileCall && fileCallGivesStrings(coll.value)) return true;
         if (coll.type == AstNode::Type::OsInfo && coll.value == "environ") return true;
         if (coll.type == AstNode::Type::ExprArrayLiteral) {
@@ -13273,6 +13295,17 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     return "([](const std::string& __s, int __a, int __n){ if (__a < 0) __a = 0; if ((size_t)__a >= __s.size()) return std::string(); return __s.substr((size_t)__a, __n < 0 ? std::string::npos : (size_t)__n); })(" + R + ", " + A0 + ", " + A1 + ")";
                 if (m == "split")
                     return "([](const std::string& __s, const std::string& __sep){ std::vector<std::string> __out; if (__sep.empty()) { __out.push_back(__s); return __out; } size_t __p = 0, __q; while ((__q = __s.find(__sep, __p)) != std::string::npos) { __out.push_back(__s.substr(__p, __q - __p)); __p = __q + __sep.size(); } __out.push_back(__s.substr(__p)); return __out; })(" + R + ", " + A0 + ")";
+                if (m == "tokens") {
+                    // strtok's rule without its state: any of the delimiter bytes ends a
+                    // token, and a run of them yields no empty tokens. No delims: whitespace.
+                    const std::string D = e.children.size() > 1 ? A0 : "std::string(\" \\t\\n\\r\\f\\v\")";
+                    return "([](const std::string& __s, const std::string& __d){ bool __t[256] = {}; for (char __c : __d) __t[(unsigned char)__c] = true; "
+                           "std::vector<std::string> __out; size_t __n = __s.size(), __i = 0; while (__i < __n) { "
+                           "while (__i < __n && __t[(unsigned char)__s[__i]]) __i++; size_t __b = __i; "
+                           "while (__i < __n && !__t[(unsigned char)__s[__i]]) __i++; "
+                           "if (__i > __b) __out.emplace_back(__s.data() + __b, __i - __b); } return __out; })(" +
+                           R + ", " + D + ")";
+                }
                 return R;
             }
             case AstNode::Type::TimeSeconds: {
@@ -13884,7 +13917,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             return emitCppStringValue(*raw);
         }
         const std::string& m = e.value;
-        if (m == "split") return std::nullopt;
+        if (m == "split" || m == "tokens") return std::nullopt;
         auto recv = tryFoldStrReceiver(e.children[0], varIsString);
         if (!recv) return std::nullopt;
         std::string s = *recv;

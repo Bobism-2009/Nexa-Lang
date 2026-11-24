@@ -15,14 +15,14 @@ npm run compile
 **Windows (PowerShell):**
 
 ```powershell
-Copy-Item -Recurse nexa-vscode "$env:USERPROFILE\.cursor\extensions\nexac.nexa-0.2.9"
-# or: $env:USERPROFILE\.vscode\extensions\nexac.nexa-0.2.9
+Copy-Item -Recurse nexa-vscode "$env:USERPROFILE\.cursor\extensions\nexac.nexa-0.2.10"
+# or: $env:USERPROFILE\.vscode\extensions\nexac.nexa-0.2.10
 ```
 
 **macOS / Linux:**
 
 ```bash
-cp -r nexa-vscode ~/.cursor/extensions/nexac.nexa-0.2.9
+cp -r nexa-vscode ~/.cursor/extensions/nexac.nexa-0.2.10
 ```
 
 Reload the window (**Developer: Reload Window**).

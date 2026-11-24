@@ -576,9 +576,16 @@ STRING METHODS (core; no #include required)
     s.substring(start, n)  -> string   n characters from start (n < 0 = to end)
     s.repeat(n)            -> string   s concatenated n times
     s.split(sep)           -> []string split on sep (empty sep -> [s])
+    s.tokens(delims)       -> []string the pieces between any of the delims
+                                        characters, empty ones dropped: C's strtok
+                                        without its state. "a,,b; c".tokens(", ;")
+                                        is ["a", "b", "c"]
+    s.tokens()             -> []string the words: delims are space, \t, \n, \r, \f, \v
 
   Examples:
     let parts = "a,b,c".split(",");      // []string of length 3
+    let words = "  GET   /index.html ".tokens();  // ["GET", "/index.html"]
+    "a,,b".split(",") is ["a", "", "b"]; "a,,b".tokens(",") is ["a", "b"]
     for (i, len(parts)) { io.println(parts[i]); }
     for (p in parts) { io.println(p); }  // same, range-for
     io.println("Hello".upper());          // HELLO

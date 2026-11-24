@@ -1,0 +1,14 @@
+// s.tokens(delims): strtok without its state -- any delimiter character ends a token, no empty tokens.
+#include <std/io>
+fn main() {
+    let line = "  GET   /index.html\tHTTP/1.1  ";
+    for (t in line.tokens()) { io.println("[", t, "]"); }
+    let csv = "a,,b;c;;,d";
+    let parts = csv.tokens(",;");
+    io.println(len(parts), " ", parts.join("|"));
+    io.println(len("".tokens()), " ", len(" , ".tokens(", ")), " ", "x".tokens(",")[0]);
+    io.println("k=v=w".tokens("=")[1]);
+    let words: []string = "one two  three".tokens();
+    io.println(words.last().or(""));
+    io.println(len("a b".tokens("")));
+}

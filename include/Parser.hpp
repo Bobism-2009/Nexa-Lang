@@ -4492,7 +4492,7 @@ private:
                 // struct with a method of its own by this name -- which is then called.
                 static const std::set<std::string> strMethods = {
                     "upper", "lower", "trim", "len", "contains", "starts_with", "ends_with",
-                    "index_of", "last_index_of", "count", "repeat", "split", "replace", "substring",
+                    "index_of", "last_index_of", "count", "repeat", "split", "tokens", "replace", "substring",
                     "__fmt"  // an f-string's {value:spec}; the lexer writes it, nobody else
                 };
                 if (strMethods.count(m)) {
@@ -8052,7 +8052,7 @@ private:
                 node.initIsFloat = true;
             } else if (b.type == AstNode::Type::RandomCall && (b.value == "bool" || b.value == "chance")) {
                 node.initIsBool = true;
-            } else if (b.type == AstNode::Type::StrMethod && b.value == "split") {
+            } else if (b.type == AstNode::Type::StrMethod && (b.value == "split" || b.value == "tokens")) {
                 node.initFromArray = true;
                 node.initIsInt = false;
                 node.declType = "[]string";

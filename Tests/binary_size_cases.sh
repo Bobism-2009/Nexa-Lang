@@ -17,7 +17,7 @@
 #              bits, std/math, all of std/random, the std/file extras, std/term colour and termios flags, an inline_asm! block,
 #              range loops (a..b, a..<b, over chars), an enum taken apart by match (as a statement and as a value, with a guard), a match
 #              on a Result and on ints (with ranges) and strings, and an Option with its methods, ?, m.get and xs.first,
-#              xs.filter / any / all / map / find given function literals, and #define / #if / # macros -- is
+#              xs.filter / any / all / map / find given function literals, #define / #if / # macros, and s.tokens -- is
 #              under 64KB, and prints
 #              exactly what the same program built without the slimming
 #              (NEXA_NO_SLIM=1) prints. It does not include std/gfx3d, so the
@@ -133,6 +133,7 @@ fn main() {
     for (i in 1..<len(items)) { totals[items[i].name] += i; }
     for (c in 'a'..'c') { totals["pen"] += (int)(c) - 96; }
     let words = "7,x,-4".split(",");
+    for (t in " a;; b ".tokens("; ")) { totals["pen"] += len(t); }
     let sum = 0;
     for (w in words) {
         let r = parse(w);

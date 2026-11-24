@@ -36,7 +36,7 @@ ARGUMENT TYPES
   len(s)           - string or array length, returns int (built-in)
   trim(s[, prefix]) / io.trim(s[, prefix]) - trim ASCII whitespace; if prefix is given, remove it once from the start after that (e.g. trim("  x:5  ", "x:") -> "5")
   Core string methods (no #include): s.upper() s.lower() s.trim() s.len() s.contains(x)
-    s.starts_with(x) s.ends_with(x) s.index_of(x) s.replace(a,b) s.substring(i,n) s.repeat(n) s.split(sep)
+    s.starts_with(x) s.ends_with(x) s.index_of(x) s.replace(a,b) s.substring(i,n) s.repeat(n) s.split(sep) s.tokens([delims])
     See SYNTAX/Core.txt (STRING METHODS) for details.
   io.readln()      - Read one line from stdin, returns string: the whole line however
                      long, without its line ending (\n or \r\n). Once input has run

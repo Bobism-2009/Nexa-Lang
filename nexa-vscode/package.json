@@ -2,7 +2,7 @@
   "name": "nexa",
   "displayName": "Nexa Language",
   "description": "Syntax highlighting, snippets, go-to definition, completions, hover, and NexaC run/build for Nexa (.nxa)",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "publisher": "nexac",
   "main": "./out/extension.js",
   "engines": {

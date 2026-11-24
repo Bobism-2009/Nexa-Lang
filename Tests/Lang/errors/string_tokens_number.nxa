@@ -1,0 +1,4 @@
+#include <std/io>
+fn main() {
+    let x = "a b".tokens(5);
+}

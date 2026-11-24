@@ -626,6 +626,7 @@ exports.STRING_METHODS = [
     "substring",
     "repeat",
     "split",
+    "tokens",
     "push",
     "pop",
     "clear",
