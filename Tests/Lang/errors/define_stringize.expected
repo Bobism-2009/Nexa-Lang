@@ -1,1 +1,1 @@
-'#' and '##' are not supported in a macro body
+'#' must be followed by a parameter name

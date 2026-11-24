@@ -2225,10 +2225,11 @@ private:
     }
 
     // Expands a file's macros in place; returns what it leaves defined. A file with no
-    // #define and no include that brings one is left exactly as it was lexed.
+    // directive, no predefined macro's name and no include that brings a macro is left
+    // exactly as it was lexed.
     NexaMacroTable expandFileMacros(std::vector<Token>& toks, const std::string& file) {
         NexaMacroTable table;
-        bool any = NexaMacroExpander::anyDirective(toks);
+        bool any = NexaMacroExpander::needed(toks, &macroCache_->predefined);
         auto include = [this, &file](const Token& t) -> const NexaMacroTable* { return includeMacros(t, file); };
         if (!any) {
             for (const Token& t : toks) {
@@ -2241,7 +2242,7 @@ private:
             }
         }
         if (!any) return table;
-        NexaMacroExpander ex(table, file);
+        NexaMacroExpander ex(table, file, macroCache_);
         toks = ex.run(toks, include);
         return table;
     }
@@ -2284,13 +2285,13 @@ private:
     const NexaMacroTable* includeMacros(const Token& t, const std::string& fromFile) {
         const std::string absPath = resolveNxaInclude(t.value, fromFile);
         if (absPath.empty()) return nullptr;
-        auto it = macroCache_->find(absPath);
-        if (it != macroCache_->end()) return it->second.done ? &it->second.macros : nullptr;
+        auto it = macroCache_->files.find(absPath);
+        if (it != macroCache_->files.end()) return it->second.done ? &it->second.macros : nullptr;
         std::ifstream in(absPath, std::ios::binary);
         if (!in) return nullptr;
         std::stringstream buf;
         buf << in.rdbuf();
-        NexaMacroFile& f = (*macroCache_)[absPath];
+        NexaMacroFile& f = macroCache_->files[absPath];
         std::vector<Token> toks = Lexer(buf.str(), absPath).tokenize();
         NexaMacroTable macros = expandFileMacros(toks, absPath);
         f.tokens = std::move(toks);
@@ -2301,8 +2302,8 @@ private:
 
     // An included file's tokens: the expanded ones includeMacros kept, or lexed now.
     std::vector<Token> includeTokens(const std::string& absPath, const std::string& text, bool& expanded) {
-        auto it = macroCache_->find(absPath);
-        if (it != macroCache_->end() && it->second.done && !it->second.taken) {
+        auto it = macroCache_->files.find(absPath);
+        if (it != macroCache_->files.end() && it->second.done && !it->second.taken) {
             it->second.taken = true;
             expanded = true;
             return std::move(it->second.tokens);

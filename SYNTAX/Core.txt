@@ -477,11 +477,50 @@ DEFINES
     a C header (and what the files it includes leave defined, in turn).
   - Defining a name again with a different body is an error; #undef it first.
     The same body again is fine, so two files may both define it.
-  - A Nexa keyword (fn, let, if, ...) cannot be a macro name. # and ## in a
-    body, and #if / #ifdef / #else / #endif, are not supported.
+  - A Nexa keyword (fn, let, if, ...) cannot be a macro name.
   - A plain constant is often better as let const MAX: int = 10; -- it has a
     type and a name the error messages can use. A program that never writes
     #define is unchanged.
+
+  # and ## in a body
+    #define STR(x) #x                  STR(a + b) is "a + b"
+    #define XSTR(x) STR(x)             XSTR(MAX) is "10": expanded first
+    #define CAT(a, b) a ## b           CAT(value_, 1) is the name value_1
+    #define LOG(f, ...) io.println(f __VA_OPT__(+ " " +) __VA_ARGS__)
+    #define CALL(f, ...) f(1 , ## __VA_ARGS__)
+  - #param makes a string of the argument as written (not expanded), each run
+    of spaces one space. Only in a function-like macro, before a parameter.
+  - a ## b joins two tokens into one; the result must be one token. An
+    argument beside # or ## is put in as written, not expanded first.
+  - __VA_OPT__(tokens) puts its tokens in only when ... got arguments, and
+    , ## __VA_ARGS__ drops the comma when it got none (as GCC and clang do).
+
+  #if and its family
+    #if LEVEL > 2 && defined(DEBUG)
+    #elif LEVEL > 1
+    #else
+    #endif
+    #ifdef NAME   #ifndef NAME   #elifdef NAME   #elifndef NAME
+    #error message                 stops the build with the message
+    #warning message               prints it and builds on
+  - The lines a condition leaves out are dropped before the program is read:
+    they need not be valid Nexa, but they are still read as tokens, so a
+    string or comment opened in them must be closed.
+  - An #if is integer arithmetic, as in C: + - * / % << >> & | ^ ~,
+    comparisons, && || ! (and, or, not), ?: and parentheses. defined X and
+    defined(X) are 1 or 0; a name no macro has is 0; true is 1.
+  - Every #if needs its #endif in the same file.
+
+  Predefined (they cannot be #undef'd or redefined)
+    __LINE__  __FILE__  __COUNTER__  __NEXA__
+    _WIN32 _WIN64     Windows (--win too)
+    __linux__ __unix__  Linux, and --target platforms built on it
+    __APPLE__ __MACH__  macOS
+    __wasm__ __wasm32__ __wasi__   --wasm
+    __x86_64__  __aarch64__  __i386__  __arm__  __mips__  __riscv
+  - The names C compilers use, for the target being built for, not the
+    machine building it: --win on Linux has _WIN32. __FILE__ is the source
+    file's full path; __COUNTER__ is 0, 1, 2 ... across the whole build.
 
 ARITHMETIC
   + - * / %

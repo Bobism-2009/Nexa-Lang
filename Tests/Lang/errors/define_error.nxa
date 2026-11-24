@@ -1,0 +1,4 @@
+#if 1
+#error this platform is not ready
+#endif
+fn main() {}

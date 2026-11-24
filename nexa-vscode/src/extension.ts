@@ -16,6 +16,7 @@ import {
   moduleMemberCompletions,
   stringMethodCompletions,
   directiveCompletions,
+  predefinedMacroCompletions,
   linePrefix,
   HOVER_DOCS,
   MODULE_MEMBERS,
@@ -251,6 +252,7 @@ async function provideCompletions(
 
   items.push(...keywordCompletions());
   items.push(...typeCompletions());
+  items.push(...predefinedMacroCompletions());
 
   for (const d of indexNexaDefinitions(document)) {
     const c = new vscode.CompletionItem(d.name, defKindToCompletion(d.kind));

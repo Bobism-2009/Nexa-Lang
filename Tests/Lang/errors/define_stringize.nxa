@@ -1,2 +1,2 @@
-#define NAME(x) #x
+#define NAME(x) #y
 fn main() {}

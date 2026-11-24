@@ -33,7 +33,8 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.HOVER_DOCS = exports.STRING_METHODS = exports.MODULE_MEMBERS = exports.TERM_FLAG_CONSTANTS = exports.STD_INCLUDES = exports.NEXA_TYPES = exports.NEXA_DIRECTIVES = exports.NEXA_KEYWORDS = void 0;
+exports.HOVER_DOCS = exports.STRING_METHODS = exports.MODULE_MEMBERS = exports.TERM_FLAG_CONSTANTS = exports.STD_INCLUDES = exports.NEXA_TYPES = exports.NEXA_PREDEFINED_MACROS = exports.NEXA_DIRECTIVES = exports.NEXA_KEYWORDS = void 0;
+exports.predefinedMacroCompletions = predefinedMacroCompletions;
 exports.keywordCompletions = keywordCompletions;
 exports.typeCompletions = typeCompletions;
 exports.moduleMemberCompletions = moduleMemberCompletions;
@@ -86,7 +87,46 @@ exports.NEXA_DIRECTIVES = [
     { name: "include", detail: "#include <std/io> or \"file.nxa\"", snippet: "include <${1:std/io}>" },
     { name: "define", detail: "#define NAME body / #define NAME(x) body — a C macro", snippet: "define ${1:NAME} ${0}" },
     { name: "undef", detail: "#undef NAME — end a macro", snippet: "undef ${1:NAME}" },
+    { name: "if", detail: "#if condition … #endif — keep lines when the condition is not 0", snippet: "if ${1:defined(${2:NAME})}\n$0\n#endif" },
+    { name: "ifdef", detail: "#ifdef NAME … #endif — keep lines when NAME is a macro", snippet: "ifdef ${1:NAME}\n$0\n#endif" },
+    { name: "ifndef", detail: "#ifndef NAME … #endif — keep lines when NAME is not a macro", snippet: "ifndef ${1:NAME}\n$0\n#endif" },
+    { name: "elif", detail: "#elif condition — the next branch of an #if", snippet: "elif ${1:condition}" },
+    { name: "elifdef", detail: "#elifdef NAME — the next branch, when NAME is a macro", snippet: "elifdef ${1:NAME}" },
+    { name: "elifndef", detail: "#elifndef NAME — the next branch, when NAME is not a macro", snippet: "elifndef ${1:NAME}" },
+    { name: "else", detail: "#else — the last branch of an #if", snippet: "else" },
+    { name: "endif", detail: "#endif — ends an #if", snippet: "endif" },
+    { name: "error", detail: "#error message — stop the build", snippet: "error ${1:message}" },
+    { name: "warning", detail: "#warning message — print it and build on", snippet: "warning ${1:message}" },
 ];
+// The macros NexaC defines for the target being built for.
+exports.NEXA_PREDEFINED_MACROS = [
+    { name: "__LINE__", detail: "the line it is on" },
+    { name: "__FILE__", detail: "the source file's full path" },
+    { name: "__COUNTER__", detail: "0, 1, 2 … across the build" },
+    { name: "__NEXA__", detail: "1: built by NexaC" },
+    { name: "_WIN32", detail: "1 when building for Windows (--win too)" },
+    { name: "_WIN64", detail: "1 when building for 64-bit Windows" },
+    { name: "__linux__", detail: "1 when building for Linux" },
+    { name: "__unix__", detail: "1 when building for Linux" },
+    { name: "__APPLE__", detail: "1 when building for macOS" },
+    { name: "__MACH__", detail: "1 when building for macOS" },
+    { name: "__wasm__", detail: "1 when building with --wasm" },
+    { name: "__wasm32__", detail: "1 when building with --wasm" },
+    { name: "__wasi__", detail: "1 when building with --wasm" },
+    { name: "__x86_64__", detail: "1 on x86-64" },
+    { name: "__aarch64__", detail: "1 on 64-bit ARM" },
+    { name: "__i386__", detail: "1 on 32-bit x86" },
+    { name: "__arm__", detail: "1 on 32-bit ARM" },
+    { name: "__mips__", detail: "1 on MIPS" },
+    { name: "__riscv", detail: "1 on RISC-V" },
+];
+function predefinedMacroCompletions() {
+    return exports.NEXA_PREDEFINED_MACROS.map((m) => {
+        const c = new vscode.CompletionItem(m.name, vscode.CompletionItemKind.Constant);
+        c.detail = m.detail;
+        return c;
+    });
+}
 exports.NEXA_TYPES = [
     "int",
     "unsigned int",
@@ -705,6 +745,10 @@ exports.HOVER_DOCS = {
     None: "Option[T]'s empty variant: return None;. m.get(k), xs.first() and xs.last() answer one when there is nothing.",
     "inline_asm": "inline_asm!(in a, out b) { ... } — CPU instructions with Nexa variables as operands, {a} naming the register. Needs #include <std/inline>.",
     "#define": "#define NAME body or #define NAME(x) body — a C macro, replaced before the program is read. #undef NAME ends it.",
+    "#if": "#if condition … #elif … #else … #endif — keep the lines whose condition is not 0. C integer arithmetic, with defined(NAME); a name no macro has is 0.",
+    "#ifdef": "#ifdef NAME … #endif — keep the lines when NAME is a macro (#ifndef: when it is not).",
+    "#error": "#error message — stop the build with the message (#warning prints it and builds on).",
+    "defined": "defined NAME or defined(NAME) in an #if: 1 when NAME is a macro, else 0.",
     null: "Null pointer literal (emits nullptr).",
 };
 function keywordCompletions() {

@@ -17,7 +17,7 @@
 #              bits, std/math, all of std/random, the std/file extras, std/term colour and termios flags, an inline_asm! block,
 #              range loops (a..b, a..<b, over chars), an enum taken apart by match (as a statement and as a value, with a guard), a match
 #              on a Result and on ints (with ranges) and strings, and an Option with its methods, ?, m.get and xs.first,
-#              and xs.filter / any / all / map / find given function literals -- is
+#              xs.filter / any / all / map / find given function literals, and #define / #if / # macros -- is
 #              under 64KB, and prints
 #              exactly what the same program built without the slimming
 #              (NEXA_NO_SLIM=1) prints. It does not include std/gfx3d, so the
@@ -85,6 +85,14 @@ cat > "$WORK/every.nxa" <<'EOF'
 #include <std/file>
 #include <std/term>
 #include <std/inline>
+
+#define SCALE(x) ((x) * 2)
+#define NAME_OF(x) #x
+#if defined(_WIN32) || defined(__linux__)
+#define OS_OK 1
+#else
+#define OS_OK 0
+#endif
 
 struct Item {
     name: string;
@@ -188,6 +196,7 @@ fn main() {
     io.println(len(few), " ", items.any(fn (it) { return it.qty > 10; }), " ", bag.all(fn (x: int) { return x > 0; }),
                " ", bag.map(fn (x) { return x * sum; }).sum(), " ",
                items.find(fn (it) { return it.name == "cup"; }).value().qty);
+    io.println(SCALE(OS_OK), " ", NAME_OF(items[0]), " ", __LINE__);
 }
 EOF
 

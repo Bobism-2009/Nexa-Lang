@@ -99,6 +99,9 @@ enum class TokenType {
     InlineAsmBlock,  // inline_asm!(operands) { text }: value is operands, \x1f, text
     Define,          // #define NAME body: value is what follows "define", continuations joined
     Undef,           // #undef NAME: value is what follows "undef"
+    Directive,       // #if, #ifdef, #ifndef, #elif, #else, #endif, #error, #warning: value is "word rest"
+    Hash,            // # in a macro body (stringize)
+    HashHash,        // ## in a macro body (paste)
     Eof
 };
 
@@ -106,6 +109,7 @@ struct Token {
     TokenType type;
     std::string value;
     size_t line;
+    bool spaced = false;  // whitespace came before it: what #x keeps of the argument's spelling
 };
 
 class Lexer {
@@ -136,10 +140,22 @@ public:
         }
     }
 
+    // A #define body: '#' and '##' are tokens there, not directives.
+    void setMacroBody(bool on) { macroBody_ = on; }
+
     std::vector<Token> tokenize() {
         std::vector<Token> tokens;
+        size_t marked = 0;  // tokens before this have their spaced flag
+        bool gap = false;   // whitespace or a comment since the last token
         while (pos_ < source_.size()) {
+            if (tokens.size() > marked) {
+                tokens[marked].spaced = gap;
+                marked = tokens.size();
+                gap = false;
+            }
+            const size_t before = pos_;
             skipWhitespace();
+            if (pos_ != before) gap = true;
             if (pos_ >= source_.size()) break;
 
             char c = source_[pos_];
@@ -148,8 +164,10 @@ public:
             const bool minusIsSign = !endsExpression(tokens);
 
             if (c == '/' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '/') {
+                gap = true;
                 while (pos_ < source_.size() && source_[pos_] != '\n') pos_++;
             } else if (c == '/' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '*') {
+                gap = true;
                 // An unterminated /* used to swallow the rest of the file silently, so a
                 // stray comment opener could delete arbitrary code with no diagnostic.
                 size_t commentLine = line_;
@@ -165,6 +183,10 @@ public:
                     pos_++;
                 }
                 if (!closed) fail("Unterminated block comment (opened with '/*')", commentLine);
+            } else if (c == '#' && macroBody_) {
+                const bool two = pos_ + 1 < source_.size() && source_[pos_ + 1] == '#';
+                tokens.push_back({two ? TokenType::HashHash : TokenType::Hash, two ? "##" : "#", line_});
+                pos_ += two ? 2 : 1;
             } else if (c == '#') {
                 tokens.push_back(scanDirective());
             } else if (c == 'R' && pos_ + 1 < source_.size() && source_[pos_ + 1] == '"') {
@@ -358,6 +380,7 @@ public:
                 pos_++;  // Skip unknown chars
             }
         }
+        if (tokens.size() > marked) tokens[marked].spaced = gap;
         tokens.push_back({TokenType::Eof, "", line_});
         return tokens;
     }
@@ -367,6 +390,7 @@ private:
     std::string filePath_;
     size_t pos_;
     size_t line_;
+    bool macroBody_ = false;
 
     // Every lexer diagnostic goes through here so they all carry the same
     // "<file>: <what> at line N" shape that the parser's errors already use.
@@ -457,15 +481,24 @@ private:
         }
     }
 
-    // '#' starts a directive: #include (below), #define and #undef. A directive is one
-    // line; a backslash at its end continues it, as in C.
+    // '#' starts a directive: #include (below), #define, #undef and the conditional and
+    // diagnostic ones (#if ... #endif, #error, #warning), which Macros.hpp acts on. A
+    // directive is one line; a backslash at its end continues it, as in C. A '#' alone on
+    // a line is C's null directive, and does nothing.
     Token scanDirective() {
         size_t p = pos_ + 1;
         while (p < source_.size() && (source_[p] == ' ' || source_[p] == '\t')) p++;
         const size_t w = p;
         while (p < source_.size() && (isAlpha(source_[p]) || source_[p] == '_')) p++;
         const std::string word = source_.substr(w, p - w);
-        if (word == "define" || word == "undef") {
+        const bool other = word == "if" || word == "ifdef" || word == "ifndef" || word == "elif" ||
+                           word == "elifdef" || word == "elifndef" || word == "else" || word == "endif" ||
+                           word == "error" || word == "warning";
+        bool null = word.empty();
+        for (size_t q = p; null && q < source_.size() && source_[q] != '\n'; q++) {
+            if (source_[q] != ' ' && source_[q] != '\t' && source_[q] != '\r') null = false;
+        }
+        if (word == "define" || word == "undef" || other || null) {
             const size_t startLine = line_;
             std::string text;
             pos_ = p;
@@ -483,11 +516,9 @@ private:
                 if (source_[pos_] != '\r') text += source_[pos_];
                 pos_++;
             }
-            return {word == "define" ? TokenType::Define : TokenType::Undef, text, startLine};
-        }
-        if (word == "if" || word == "ifdef" || word == "ifndef" || word == "elif" || word == "else" ||
-            word == "endif") {
-            fail("#" + word + " is not supported: Nexa has #include, #define and #undef", line_);
+            if (word == "define") return {TokenType::Define, text, startLine};
+            if (word == "undef") return {TokenType::Undef, text, startLine};
+            return {TokenType::Directive, word + " " + text, startLine};
         }
         return scanInclude();
     }

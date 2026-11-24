@@ -1,0 +1,4 @@
+#define P(a, b) a ## b
+fn main() {
+    let x = P(+, 1);
+}

@@ -221,6 +221,7 @@ async function provideCompletions(document, position, token) {
     }
     items.push(...(0, nexaCompletions_1.keywordCompletions)());
     items.push(...(0, nexaCompletions_1.typeCompletions)());
+    items.push(...(0, nexaCompletions_1.predefinedMacroCompletions)());
     for (const d of (0, nexaIndex_1.indexNexaDefinitions)(document)) {
         const c = new vscode.CompletionItem(d.name, defKindToCompletion(d.kind));
         c.detail = `Nexa ${d.kind} in this file`;

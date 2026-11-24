@@ -82,6 +82,7 @@ DECLARATIONS
   let buf: unsigned char[4080];                 fixed array, not a slice
   Globals are the same syntax at file scope.
   #define MAX 10   #define SQ(x) ((x) * (x))   #undef MAX      C macros
+  #if defined(_WIN32)  #ifdef X  #elif  #else  #endif          C conditionals
 
 STRUCTS AND ENUMS
   struct Point { x: int = 0; y: int;   fields may carry a default (= expr)

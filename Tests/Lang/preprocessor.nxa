@@ -1,0 +1,67 @@
+// #if and its family, # and ##, __VA_OPT__ and the predefined macros, as in C.
+#include <std/io>
+#include "modules/define_config.nxa"
+
+#define LEVEL 3
+#define STR(x) #x
+#define XSTR(x) STR(x)
+#define CAT(a, b) a ## b
+#define VAR(n) CAT(value_, n)
+#define LOG(msg, ...) io.println(msg __VA_OPT__(+ " " +) __VA_ARGS__)
+#define CALL(f, ...) f(1 , ## __VA_ARGS__)
+
+fn one(a: int): int { return a; }
+fn two(a: int, b: int): int { return a + b; }
+
+#if LEVEL > 2 && defined(STR)
+let const MODE = "high";
+#elif LEVEL > 1
+let const MODE = "mid";
+#else
+let const MODE = "low";
+#endif
+
+#ifdef NOT_DEFINED
+lines left out ( are still tokens but need not parse
+#define NEVER 1
+#endif
+
+fn main() {
+    io.println(MODE);
+    io.println(STR(a + b));                 // # keeps the spelling
+    io.println(STR(  spaced    out  ));     // and one space for each run of them
+    io.println(STR("quoted\n"));
+    io.println(XSTR(LEVEL));                // expanded first, then made a string
+    let VAR(1) = 41;                        // ## builds a name
+    io.println(value_1 + 1);
+    io.println(CAT(12, 34));
+    LOG("alone");
+    LOG("with", "more");
+    io.println(CALL(one));                  // , ## __VA_ARGS__ drops the comma
+    io.println(CALL(two, 5));
+#if defined(LIMIT) && LIMIT >= 100          // from the included file
+    io.println("limit from the include");
+#endif
+#ifdef NEVER
+    io.println("NEVER was defined in a left-out group");
+#endif
+#if defined(_WIN32) || defined(__linux__) || defined(__APPLE__) || defined(__wasm__)
+    io.println("a known platform");
+#endif
+#ifndef __NEXA__
+    io.println("__NEXA__ is missing");
+#endif
+#if 0
+    #if 1
+        #error nested in a left-out group: never reached
+    #endif
+#elif (1 ? 2 : 1 / 0) == 2 and not 0
+    io.println("ternary, and, not");
+#endif
+#if UNKNOWN_NAME == 0
+    io.println("a name no macro has is 0");
+#endif
+    io.println(__LINE__);
+    io.println(__COUNTER__ + __COUNTER__);
+#
+}

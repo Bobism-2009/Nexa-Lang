@@ -59,8 +59,52 @@
           }
         },
         {
+          "name": "meta.preprocessor.conditional.nexa",
+          "begin": "^\\s*(#\\s*(?:if|elif))\\b",
+          "beginCaptures": {
+            "1": { "name": "keyword.control.directive.conditional.nexa" }
+          },
+          "end": "(?=$)",
+          "patterns": [
+            { "name": "keyword.control.directive.defined.nexa", "match": "\\bdefined\\b" },
+            { "include": "$self" }
+          ]
+        },
+        {
+          "name": "meta.preprocessor.conditional.nexa",
+          "match": "^\\s*(#\\s*(?:ifdef|ifndef|elifdef|elifndef))\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.directive.conditional.nexa" },
+            "2": { "name": "entity.name.function.preprocessor.nexa" }
+          }
+        },
+        {
+          "name": "keyword.control.directive.conditional.nexa",
+          "match": "^\\s*#\\s*(?:else|endif)\\b"
+        },
+        {
+          "name": "meta.preprocessor.diagnostic.nexa",
+          "match": "^\\s*(#\\s*(?:error|warning))\\b(.*)$",
+          "captures": {
+            "1": { "name": "keyword.control.directive.diagnostic.nexa" },
+            "2": { "name": "string.unquoted.diagnostic.nexa" }
+          }
+        },
+        {
+          "name": "keyword.operator.token-paste.nexa",
+          "match": "##"
+        },
+        {
+          "name": "keyword.operator.stringize.nexa",
+          "match": "(?<=[\\w)\\s(,])#(?=\\s*[A-Za-z_])"
+        },
+        {
           "name": "variable.language.va-args.nexa",
-          "match": "\\b__VA_ARGS__\\b"
+          "match": "\\b__VA_(?:ARGS|OPT)__\\b"
+        },
+        {
+          "name": "support.constant.predefined-macro.nexa",
+          "match": "\\b(?:__LINE__|__FILE__|__COUNTER__|__NEXA__|_WIN32|_WIN64|__linux__|__unix__|__APPLE__|__MACH__|__wasm__|__wasm32__|__wasi__|__x86_64__|__aarch64__|__i386__|__arm__|__mips__|__riscv)\\b"
         },
         {
           "name": "meta.preprocessor.include.angle.nexa",

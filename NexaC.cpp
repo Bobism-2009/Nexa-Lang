@@ -3252,7 +3252,31 @@ int main(int argc, char* argv[]) {
         const char* home = std::getenv("HOME");
         if (!home) home = std::getenv("USERPROFILE");
         if (home) packagePaths.push_back(std::string(home) + "/.nexa/packages");
-        nexa::Parser parser(std::move(tokens), modules, absInputPath, &includedFiles, &packagePaths);
+        // #if _WIN32, __linux__, __aarch64__ ...: the macros of the target being built for.
+        nexa::NexaMacroCache macroCache;
+        {
+#if defined(__x86_64__) || defined(_M_X64)
+            const std::string hostArch = "x86_64";
+#elif defined(__aarch64__) || defined(_M_ARM64)
+            const std::string hostArch = "aarch64";
+#elif defined(__i386__) || defined(_M_IX86)
+            const std::string hostArch = "i686";
+#elif defined(__arm__)
+            const std::string hostArch = "arm";
+#else
+            const std::string hostArch = "unknown";
+#endif
+            std::string triple;
+            if (buildTarget) triple = targetSpec.triple;
+            else if (buildWasm) triple = "wasm32-wasi";
+            else if (buildWin) triple = "x86_64-w64-mingw32";
+            else if (nexa::hostCppTarget() == nexa::CppTarget::Windows) triple = hostArch + "-w64-windows";
+            else if (nexa::hostCppTarget() == nexa::CppTarget::Darwin) triple = hostArch + "-apple-darwin";
+            else triple = hostArch + "-linux-gnu";
+            macroCache.predefined = nexa::nexaPredefinedMacros(triple);
+        }
+        nexa::Parser parser(std::move(tokens), modules, absInputPath, &includedFiles, &packagePaths, "", nullptr,
+                            nullptr, &macroCache);
         std::vector<nexa::AstNode> ast = parser.parse();
 
         std::cout << "[Nexa] Transpiling...\n";
