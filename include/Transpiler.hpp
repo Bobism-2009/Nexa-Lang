@@ -892,7 +892,7 @@ public:
             // their names with plausible user functions -- a program with its own
             // fn min(a, b) has no slice in it and should not gain <vector>.
             if (n.type == AstNode::Type::FnCall && n.initValue == "." &&
-                    (n.value == "sort" || n.value == "sort_desc" || n.value == "reverse" ||
+                    (n.value == "sort" || n.value == "sort_desc" || n.value == "sort_by" || n.value == "reverse" ||
                      n.value == "join" || n.value == "min" || n.value == "max" || n.value == "sum")) {
                 needsVector = true;
                 // join builds a std::string out of a []string; every other one hands
@@ -2377,6 +2377,42 @@ private:
                " __nexa_sift(0, __nexa_i); } })()";
     }
 
+    // xs.sort_by(f), in place and stable: elements f does not put apart keep their
+    // order, which is the point of sorting records by one field. Runs of 32 are
+    // insertion-sorted where they lie, so a short slice allocates nothing; a longer
+    // one gets one buffer of n elements and bottom-up merges that ping-pong between
+    // it and the slice, through two pointers that swap, so the merge is emitted once.
+    // A []bool's bits have no pointer, so it names the two in turn instead. Elements
+    // are moved, never copied, and the element type is spelled out (not auto) so a
+    // []bool's bit proxies are read as values.
+    static std::string emitSliceSortBy(const std::string& recv, const std::string& f,
+                                       const std::string& elemCpp, const std::string& open) {
+        const bool bits = elemCpp == "bool";
+        auto merge = [](const std::string& S, const std::string& D) {
+            return " for (size_t __lo = 0; __lo < __n; __lo += 2 * __w) {"
+                   " size_t __m = __n - __lo > __w ? __lo + __w : __n;"
+                   " size_t __hi = __n - __m > __w ? __m + __w : __n;"
+                   " size_t __i = __lo, __j = __m, __k = __lo;"
+                   " while (__i < __m && __j < __hi) { if (__f(" + S + "[__j], " + S + "[__i])) " + D +
+                   "[__k++] = std::move(" + S + "[__j++]); else " + D + "[__k++] = std::move(" + S + "[__i++]); }"
+                   " while (__i < __m) " + D + "[__k++] = std::move(" + S + "[__i++]);"
+                   " while (__j < __hi) " + D + "[__k++] = std::move(" + S + "[__j++]); }";
+        };
+        return open + " auto& __v = " + recv + "; auto&& __f = " + f + "; size_t __n = __v.size();"
+               " for (size_t __s = 0; __s < __n; __s += 32) { size_t __e = __n - __s > 32 ? __s + 32 : __n;"
+               " for (size_t __i = __s + 1; __i < __e; __i++) { " + elemCpp + " __x = std::move(__v[__i]); size_t __j = __i;"
+               " for (; __j > __s && __f(__x, __v[__j - 1]); __j--) __v[__j] = std::move(__v[__j - 1]);"
+               " __v[__j] = std::move(__x); } }"
+               " if (__n <= 32) return;"
+               " std::vector<" + elemCpp + "> __b(__n); bool __inB = false;" +
+               (bits ? " for (size_t __w = 32; __w < __n; __w *= 2) { if (!__inB) {" + merge("__v", "__b") + " } else {" +
+                           merge("__b", "__v") + " } __inB = !__inB; }"
+                     : " " + elemCpp + "* __src = __v.data(); " + elemCpp + "* __dst = __b.data();"
+                       " for (size_t __w = 32; __w < __n; __w *= 2) {" + merge("__src", "__dst") +
+                       " " + elemCpp + "* __t = __src; __src = __dst; __dst = __t; __inB = !__inB; }") +
+               " if (__inB) for (size_t __i = 0; __i < __n; __i++) __v[__i] = std::move(__b[__i]); })()";
+    }
+
     // Type of an lvalue chain (xs, p.a.b, xs[i], *p) rooted at `rootName`, given that
     // name's Nexa type. Empty when the chain leaves what the tables know.
     std::string chainTypeFrom(const AstNode& e, const std::string& rootName,
@@ -3514,6 +3550,7 @@ private:
             if (!n.children.empty()) discoverNode(n.children[0]);
             const bool range = forIsRange(n);
             if (range) discoverNode(n.children[2]);
+            if (const AstNode* st = forRangeStep(n)) discoverNode(*st);
             std::string loopT = "int";
             if (range) { const std::string t = forRangeType(n); if (!t.empty()) loopT = t; }
             nexaDeclStack_.push_back({});
@@ -4236,7 +4273,7 @@ private:
                             if (e.value == "has") return "bool";
                             if (e.value == "join") return "string";
                             if (e.value == "push" || e.value == "clear" || e.value == "insert" ||
-                                e.value == "sort" || e.value == "sort_desc" || e.value == "reverse" ||
+                                e.value == "sort" || e.value == "sort_desc" || e.value == "sort_by" || e.value == "reverse" ||
                                 e.value == "remove") {
                                 return "void";
                             }
@@ -4859,6 +4896,13 @@ private:
                     if (e.children.size() != 1) throw std::runtime_error(e.value + " expects no arguments");
                     return emitSliceSort(recv, e.value == "sort_desc");
                 }
+                if (e.value == "sort_by") {
+                    sortByArgCheck(e, nexaSliceElem(recvBare));
+                    bareLambda_ = e.children[1].type == AstNode::Type::ExprLambda;
+                    const std::string f = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    bareLambda_ = false;
+                    return emitSliceSortBy(recv, f, nexaTypeToCpp(nexaSliceElem(recvBare)), lamOpen());
+                }
                 if (e.value == "join") {
                     if (e.children.size() != 2) throw std::runtime_error("join expects one argument");
                     std::string sep = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
@@ -4986,7 +5030,7 @@ private:
                     on = " on a " + semTypeLabel(recvBare);
                     near.considerList("push, pop, insert, remove, clear, has, contains, count, index_of, "
                                       "last_index_of, first, last, find, any, all, filter, map, reverse, sort, "
-                                      "sort_desc, join, min, max, sum");
+                                      "sort_desc, sort_by, join, min, max, sum");
                 } else if (nexaIsMapType(recvBare)) {
                     on = " on a " + semTypeLabel(recvBare);
                     near.considerList("get, has, remove, clear, keys, values");
@@ -6622,6 +6666,18 @@ private:
                     std::string why;
                     loopT = forRangeType(s, &why);
                     if (loopT.empty()) semError(s.children[0], why);
+                    if (const AstNode* step = forRangeStep(s)) {
+                        semExpr(*step);
+                        const std::string tst = inferExprNexaType(*step);
+                        long long sv = 0;
+                        if (!nexaIsIntegerType(tst) || tst == "char" || tst == "unsigned char" || tst == "bool") {
+                            semError(*step, "a range loop's step is an int, how far each turn moves, and this is " +
+                                withArticle(nexaTypeForMessage(tst)));
+                        } else if (forStepLiteral(*step, sv) && sv == 0) {
+                            semError(*step, "a range loop's step cannot be 0: the loop would never move. "
+                                "Count up with a step above 0 and down with one below (10..1 step -1)");
+                        }
+                    }
                     const AstNode& st = s.children[0];
                     if ((loopT == "size_t" || loopT.rfind("unsigned", 0) == 0) && exprIsIntLiteral(st) &&
                         (st.type == AstNode::Type::ExprSub || (!st.value.empty() && st.value[0] == '-'))) {
@@ -6951,13 +7007,16 @@ private:
     // literal's type, and it runs once.
     void semFillSliceFnLambda(const AstNode& e) {
         if (e.children.size() != 2 || e.children[1].type != AstNode::Type::ExprLambda) return;
-        if (e.value != "find" && e.value != "any" && e.value != "all" && e.value != "filter" && e.value != "map") return;
+        const bool two = e.value == "sort_by";
+        if (!two && e.value != "find" && e.value != "any" && e.value != "all" && e.value != "filter" && e.value != "map") return;
         std::string rt = inferExprNexaType(e.children[0]);
         if (isPointerType(rt)) rt = pointerPointeeType(rt);
         if (!nexaIsSliceType(rt)) return;
         AstNode& lam = const_cast<AstNode&>(e.children[1]);
-        if (lam.paramNames.size() == 1 && (lam.lambdaUntyped & 1u) && !lam.paramTypes.empty()) {
-            lam.paramTypes[0] = nexaSliceElem(rt);
+        if (lam.paramNames.size() == (two ? 2u : 1u) && lam.paramTypes.size() == lam.paramNames.size()) {
+            for (size_t i = 0; i < lam.paramNames.size(); i++) {
+                if (lam.lambdaUntyped & (1u << i)) lam.paramTypes[i] = nexaSliceElem(rt);
+            }
             lam.lambdaUntyped = 0;
         }
         if (lam.fnReturnType.empty()) lam.lambdaInferRet = true;
@@ -7969,7 +8028,7 @@ private:
         // fail, and push and clear already compile to a discarded no-op, so
         // either way that is established behaviour and not this check's to
         // change.
-        const bool inPlace = (m == "sort" || m == "sort_desc" || m == "reverse" ||
+        const bool inPlace = (m == "sort" || m == "sort_desc" || m == "sort_by" || m == "reverse" ||
                               m == "remove");
         if (!inPlace && m != "min" && m != "max" && m != "sum" && m != "join") {
             return;
@@ -7990,9 +8049,10 @@ private:
                 "xs[1:4], a split, or a function's return value is a temporary, and "
                 "reordering one changes nothing");
         }
-        // reverse and remove move elements without looking at them, so any
-        // element type will do; the rest need `<` or `+=`.
-        if (m == "reverse" || m == "remove") return;
+        // reverse and remove move elements without looking at them, and sort_by
+        // compares with the function it is given, so any element type will do;
+        // the rest need `<` or `+=`.
+        if (m == "reverse" || m == "remove" || m == "sort_by") return;
         if (m == "join") {
             if (elem == "string") return;
             semError(e, ".join(sep) expects []string, but " + subject + " is '" + shown + "'");
@@ -10441,6 +10501,9 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 // for (T i = a, end = b; i <= end; i++): the ends read once, before i is named.
                 const std::string lo = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
                 const std::string hi = emitExpr(child.children[2], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                const std::string stepE = forRangeStep(child)
+                    ? emitExpr(*forRangeStep(child), varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool)
+                    : std::string();
                 std::string loopT = forRangeType(child);
                 if (loopT.empty()) loopT = "int";
                 const std::string loopVar = preserveNames_ ? preservedVarName(child.value, varMap) : ("__nexa_for_" + std::to_string(varIdx++));
@@ -10464,10 +10527,46 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 varIsChar[name] = loopT == "char" || loopT == "unsigned char";
                 varIsBool[name] = false;
                 varIsEnum[name] = false;
+                if (const AstNode* stepNode = forRangeStep(child)) {
+                    // for (i in a..b step s): the ends and the step read once, before i is named.
+                    // A turn moves on only when the end is at least s away, worked out on the
+                    // distance in unsigned, so i never steps past the end: 10..0 step -1 on a
+                    // size_t stops at 0, and 0..2147483647 step 2 on an int never overflows.
+                    // A step only known when the loop runs takes its direction from its sign,
+                    // and a step of 0 runs nothing.
+                    const std::string cppT = nexaTypeToCpp(loopT);
+                    const std::string stepVar = "__nexa_step_" + std::to_string(varIdx++);
+                    const std::string moreVar = "__nexa_more_" + std::to_string(varIdx++);
+                    const bool open = child.initValue == "..<";
+                    const std::string U = "(unsigned long long)(long long)";
+                    long long sv = 0;
+                    const bool lit = forStepLiteral(*stepNode, sv);
+                    auto upStart = loopVar + (open ? " < " : " <= ") + endVar;
+                    auto downStart = loopVar + (open ? " > " : " >= ") + endVar;
+                    auto upNext = U + endVar + " - " + U + loopVar + (open ? " > " : " >= ") + "(unsigned long long)" + stepVar;
+                    auto downNext = U + loopVar + " - " + U + endVar + (open ? " > " : " >= ") + "0ull - (unsigned long long)" + stepVar;
+                    std::string start, next;
+                    if (lit) {
+                        start = sv > 0 ? upStart : downStart;
+                        next = sv > 0 ? upNext : downNext;
+                    } else {
+                        start = "(" + stepVar + " > 0 ? " + upStart + " : " + stepVar + " < 0 && " + downStart + ")";
+                        next = "(" + stepVar + " > 0 ? " + upNext + " : " + downNext + ")";
+                    }
+                    out << indent << "{\n";
+                    out << indent << "    " << cppT << " " << loopVar << " = " << lo << ", " << endVar << " = " << hi << ";\n";
+                    out << indent << "    const long long " << stepVar << " = " << stepE << ";\n";
+                    out << indent << "    for (bool " << moreVar << " = " << start << "; " << moreVar << "; " << moreVar << " = "
+                        << next << " && ((" << loopVar << " = (" << cppT << ")(" << loopVar << " + " << stepVar << ")), true)) {\n";
+                    emitBlock(out, child.children[1].children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "        ", inStringSwitchCase);
+                    out << indent << "    }\n";
+                    out << indent << "}\n";
+                } else {
                 out << indent << "for (" << nexaTypeToCpp(loopT) << " " << loopVar << " = " << lo << ", " << endVar << " = " << hi
                     << "; " << loopVar << (child.initValue == "..<" ? " < " : " <= ") << endVar << "; " << loopVar << "++) {\n";
                 emitBlock(out, child.children[1].children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "    ", inStringSwitchCase);
                 out << indent << "}\n";
+                }
                 if (sv.had) {
                     varMap[name] = sv.v; varIsString[name] = sv.s; varIsConst[name] = sv.c; varIsFloat[name] = sv.f;
                     varIsChar[name] = sv.ch; varIsBool[name] = sv.b; varIsEnum[name] = sv.e;
@@ -11061,6 +11160,33 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         }
         return ret;
     }
+    // xs.sort_by(f): f(a, b) takes two elements and answers whether a goes before b.
+    void sortByArgCheck(const AstNode& e, const std::string& elem) {
+        const std::string at = e.line ? " at line " + std::to_string(e.line) : std::string();
+        const std::string shown = nexaTypeForMessage(elem);
+        const std::string example = "xs.sort_by(fn (a, b) { return a < b; })";
+        if (e.children.size() != 2) {
+            throw std::runtime_error("sort_by takes one function, as in " + example + at);
+        }
+        std::vector<std::string> pts;
+        std::string ret;
+        const std::string ft = inferExprNexaType(e.children[1]);
+        if (!nexaSplitFnType(ft, pts, ret)) {
+            throw std::runtime_error("sort_by(...) takes a function, as in " + example + "; this is " +
+                                     withArticle(nexaTypeForMessage(ft)) + at);
+        }
+        if (pts.size() != 2 || pts[0] != elem || pts[1] != elem) {
+            std::string got;
+            for (size_t i = 0; i < pts.size(); i++) got += (i ? ", " : "") + nexaTypeForMessage(pts[i]);
+            throw std::runtime_error("the function sort_by(...) is given is called with two elements of the list, "
+                "so it takes (a: " + shown + ", b: " + shown + ") or just (a, b); this one takes (" + got + ")" + at);
+        }
+        if (ret != "bool" && !nexaIsNumericIntType(ret)) {
+            throw std::runtime_error("the function sort_by(...) is given answers whether a goes before b, "
+                "so it returns a bool; this one returns " + (ret == "void" ? std::string("nothing") :
+                withArticle(nexaTypeForMessage(ret))) + at);
+        }
+    }
     std::string optionInner(const std::string& en) const {
         const std::vector<EnumField> f = enumPayloadFields(en, "Some");
         return f.empty() ? std::string() : f[0].type;
@@ -11245,7 +11371,24 @@ static std::string __nexa_show(const std::map<K, V>& m) {
 
     // for (i in a..b) and for (i in a..<b): a For holding the start, the body and the end.
     static bool forIsRange(const AstNode& n) {
-        return n.type == AstNode::Type::For && n.children.size() == 3 && (n.initValue == ".." || n.initValue == "..<");
+        return n.type == AstNode::Type::For && (n.children.size() == 3 || n.children.size() == 4) &&
+               (n.initValue == ".." || n.initValue == "..<");
+    }
+    // The `step s` of a range loop, when it has one.
+    static const AstNode* forRangeStep(const AstNode& n) {
+        return forIsRange(n) && n.children.size() == 4 ? &n.children[3] : nullptr;
+    }
+    // A step written as a literal: its value, or false.
+    static bool forStepLiteral(const AstNode& e, long long& v) {
+        if (e.type == AstNode::Type::ExprIntLiteral) {
+            v = std::strtoll(e.value.c_str(), nullptr, 0);
+            return true;
+        }
+        if (exprIsIntLiteral(e)) {
+            v = -std::strtoll(e.children[1].value.c_str(), nullptr, 0);
+            return true;
+        }
+        return false;
     }
     static bool exprIsIntLiteral(const AstNode& e) {
         if (e.type == AstNode::Type::ExprIntLiteral) return true;

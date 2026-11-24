@@ -1,0 +1,4 @@
+fn main() {
+#line 90
+    let x: int = "s";
+}

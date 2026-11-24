@@ -286,6 +286,16 @@
     "body": ["for (${1:i} in ${2:0}..<${3:n}) {", "\t$0", "}"],
     "description": "Range loop: 0..<n stops before n, 1..10 includes 10"
   },
+  "Nexa: range loop counting down": {
+    "prefix": "fordown",
+    "body": ["for (${1:i} in ${2:10}..${3:1} step -${4:1}) {", "\t$0", "}"],
+    "description": "Range loop with a step: 10..1 step -1 counts down"
+  },
+  "Nexa: slice sort_by": {
+    "prefix": "sortby",
+    "body": ["${1:xs}.sort_by(fn (a, b) { return a.${2:field} < b.${2:field}; });"],
+    "description": "Sort in place, stably, in the order the function gives"
+  },
   "Nexa: return Some": {
     "prefix": "some",
     "body": ["return Some(${1:value});"],

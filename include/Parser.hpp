@@ -2243,6 +2243,7 @@ private:
         }
         if (!any) return table;
         NexaMacroExpander ex(table, file, macroCache_);
+        ex.setHasInclude([this, &file](const std::string& raw) { return hasIncludeFor(raw, file); });
         toks = ex.run(toks, include);
         return table;
     }
@@ -2278,6 +2279,43 @@ private:
             return std::filesystem::is_regular_file(absPath, ec) ? absPath : "";
         }
         return "";
+    }
+
+    // __has_include: whether an #include of `raw` (with its <> or "") would find what it
+    // names. A std module is there when it is one; a .nxa or a header in quotes when the
+    // file is; <vector> or <stdio.h> when it is a C or C++ standard header; any other
+    // <header> when it is in a package folder, since only the C++ compiler knows its own.
+    bool hasIncludeFor(const std::string& raw, const std::string& fromFile) const {
+        if (raw.size() < 3) return false;
+        const std::string path = raw.substr(1, raw.size() - 2);
+        std::error_code ec;
+        if (raw[0] == '"') {
+            if (isCppHeaderIncludePath(path)) {
+                const std::filesystem::path p = !path.empty() && (path[0] == '/' || (path.size() > 1 && path[1] == ':'))
+                    ? std::filesystem::path(path)
+                    : std::filesystem::path(fromFile).parent_path() / path;
+                return std::filesystem::is_regular_file(p, ec);
+            }
+            return !resolveNxaInclude(raw, fromFile).empty();
+        }
+        if (path.compare(0, 4, "std/") == 0) return isKnownStdModule(path);
+        if (isBareCppStdHeader(path)) return true;
+        if (isCppHeaderIncludePath(path)) {
+            static const char* kC[] = {"assert.h", "complex.h", "ctype.h", "errno.h", "fenv.h", "float.h",
+                                       "inttypes.h", "iso646.h", "limits.h", "locale.h", "math.h", "setjmp.h",
+                                       "signal.h", "stdalign.h", "stdarg.h", "stdbool.h", "stddef.h", "stdint.h",
+                                       "stdio.h", "stdlib.h", "string.h", "tgmath.h", "time.h", "uchar.h",
+                                       "wchar.h", "wctype.h", nullptr};
+            for (int i = 0; kC[i]; i++) {
+                if (path == kC[i]) return true;
+            }
+            if (!packagePaths_) return false;
+            for (const std::string& root : *packagePaths_) {
+                if (std::filesystem::is_regular_file(std::filesystem::path(root) / path, ec)) return true;
+            }
+            return false;
+        }
+        return !resolveNxaInclude(raw, fromFile).empty();
     }
 
     // What the .nxa an #include names leaves defined, reading (and expanding) it the
@@ -4291,14 +4329,24 @@ private:
             AstNode collExpr = parseExpression();
             if (match(TokenType::DotDot)) {
                 // for (i in a..b): a to b, both included; for (i in a..<b): a to b - 1.
-                // A For whose children are the start, the body and the end.
+                // A For whose children are the start, the body and the end, and the
+                // step when `step s` follows (10..1 step -1 counts down).
                 const bool open = match(TokenType::Less);
                 AstNode endExpr = parseExpression();
+                bool hasStep = false;
+                AstNode stepExpr{AstNode::Type::ExprIntLiteral, "1", {}};
+                if (peek().type == TokenType::Identifier && peek().value == "step") {
+                    advance();
+                    stepExpr = parseExpression();
+                    hasStep = true;
+                }
                 if (!match(TokenType::RParen)) {
-                    throw std::runtime_error("Expected ')' after for (... in a..b) at line " + std::to_string(peek().line));
+                    throw std::runtime_error(std::string("Expected ')' after for (... in a..b") +
+                                             (hasStep ? " step s" : "") + ") at line " + std::to_string(peek().line));
                 }
                 AstNode block = parseBody();
                 AstNode node{AstNode::Type::For, varName, {std::move(collExpr), std::move(block), std::move(endExpr)}};
+                if (hasStep) node.children.push_back(std::move(stepExpr));
                 node.initValue = open ? "..<" : "..";
                 return node;
             }

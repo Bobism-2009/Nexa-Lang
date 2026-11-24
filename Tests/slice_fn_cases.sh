@@ -1,6 +1,6 @@
 #!/bin/sh
 # xs.find(f), xs.any(f), xs.all(f), xs.filter(f), xs.map(f): slice methods that
-# take a function of one element.
+# take a function of one element, and xs.sort_by(f), which takes a function of two.
 #
 # Usage: Tests/slice_fn_cases.sh [path-to-NexaC]   (from the repo root)
 
@@ -197,6 +197,56 @@ fn main() { let n = [1].map(fn (x: int) { io.println(x); }); }' "so it returns a
 
 expect_has "one argument" '#include <std/io>
 fn main() { let n = [1].all(); }' "all takes one function"
+
+run_eq "sort_by: a literal, a named fn, structs, empty" \
+'#include <std/io>
+struct P { name: string; age: int; }
+fn by_len(a: string, b: string): bool { return len(a) < len(b); }
+fn main() {
+    let xs = [5, 3, 9, 1, 7];
+    xs.sort_by(fn (a, b) { return a > b; });
+    let ws = ["ccc", "a", "bb", "dd", "e"];
+    ws.sort_by(by_len);
+    let ps: []P = [P { name: "ann", age: 36 }, P { name: "bo", age: 25 }, P { name: "cy", age: 36 }, P { name: "di", age: 25 }];
+    ps.sort_by(fn (a: P, b: P): bool { return a.age < b.age; });
+    let es: []int;
+    es.sort_by(fn (a, b) { return a < b; });
+    io.println(xs[0], xs[4], " ", ws.join(","), " ", ps.map(fn (p) { return p.name; }).join(","), " ", len(es));
+}' "91 a,e,bb,dd,ccc bo,di,ann,cy 0"
+
+run_eq "sort_by is stable past one run, and sorts" \
+'#include <std/io>
+struct R { key: int; at: int; }
+fn main() {
+    let rs: []R;
+    let i = 0;
+    while (i < 5000) { rs.push(R { key: (i * 7919) % 13, at: i }); i += 1; }
+    rs.sort_by(fn (a, b) { return a.key < b.key; });
+    let bad = 0;
+    let j = 1;
+    while (j < len(rs)) {
+        if (rs[j - 1].key > rs[j].key) { bad += 1; }
+        if (rs[j - 1].key == rs[j].key && rs[j - 1].at > rs[j].at) { bad += 1; }
+        j += 1;
+    }
+    let ns: []int;
+    i = 0;
+    while (i < 1000) { ns.push((i * 31) % 1000); i += 1; }
+    ns.sort_by(fn (a, b) { return a > b; });
+    io.println(bad, " ", len(rs), " ", ns[0], " ", ns[999]);
+}' "0 5000 999 0"
+
+expect_has "sort_by takes two elements" '#include <std/io>
+fn main() { let xs = [1]; xs.sort_by(fn (a: int) { return a > 1; }); }' \
+"so it takes (a: int, b: int) or just (a, b); this one takes (int)"
+
+expect_has "sort_by returns a bool" '#include <std/io>
+fn main() { let xs = ["a"]; xs.sort_by(fn (a, b) { return a; }); }' \
+"answers whether a goes before b, so it returns a bool; this one returns a string"
+
+expect_has "sort_by needs a slice to sort" '#include <std/io>
+fn main() { let xs = [1, 2]; xs[0:1].sort_by(fn (a, b) { return a < b; }); }' \
+".sort_by() changes the slice in place"
 
 prelude_eq "a literal given to filter names no std::function" \
 '#include <std/io>

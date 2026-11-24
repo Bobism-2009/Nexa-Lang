@@ -66,7 +66,7 @@
           },
           "end": "(?=$)",
           "patterns": [
-            { "name": "keyword.control.directive.defined.nexa", "match": "\\bdefined\\b" },
+            { "name": "keyword.control.directive.defined.nexa", "match": "\\b(?:defined|__has_include)\\b" },
             { "include": "$self" }
           ]
         },
@@ -89,6 +89,18 @@
             "1": { "name": "keyword.control.directive.diagnostic.nexa" },
             "2": { "name": "string.unquoted.diagnostic.nexa" }
           }
+        },
+        {
+          "name": "meta.preprocessor.line.nexa",
+          "begin": "^\\s*(#\\s*(?:line|pragma))\\b",
+          "beginCaptures": {
+            "1": { "name": "keyword.control.directive.nexa" }
+          },
+          "end": "(?=$)",
+          "patterns": [
+            { "name": "keyword.control.directive.pragma.nexa", "match": "\\b(?:once|message)\\b" },
+            { "include": "$self" }
+          ]
         },
         {
           "name": "keyword.operator.token-paste.nexa",
@@ -374,6 +386,10 @@
         {
           "name": "keyword.control.nexa",
           "match": "\\b(fn|extern|new|delete|sizeof|let|const|struct|enum|type|shape|priv|if|else|while|for|switch|match|case|default|return|break|continue|defer|goto|try|catch|throw|in)\\b"
+        },
+        {
+          "name": "keyword.control.step.nexa",
+          "match": "\\bstep\\b(?=\\s+(?!in\\b)-?\\s*[A-Za-z0-9_(])"
         },
         {
           "name": "keyword.operator.logical.word.nexa",

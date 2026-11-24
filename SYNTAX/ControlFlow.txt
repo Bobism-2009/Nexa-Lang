@@ -278,12 +278,24 @@ LOOPS
     for (i in 1..10) { ... }           // 1 to 10
     for (i in 0..<len(xs)) { ... }     // 0 to len(xs) - 1
     for (c in 'a'..'z') { ... }        // each letter, as a char
+    for (i in 0..10 step 2) { ... }    // 0, 2, 4, 6, 8, 10
+    for (i in 10..1 step -1) { ... }   // 10 down to 1
+    for (i in len(xs) - 1..0 step -1)  // the indexes of xs, last first
 
     - .. takes both ends, as in a match range; ..< stops short of the end.
     - The ends are ints or chars, read once before the loop starts: changing
       them in the body does not change how many times it runs.
     - It counts up by one. A range whose start is past its end (5..1, n..<n)
       runs nothing.
+    - step s counts by s instead: up when s is above 0, down when it is below.
+      Counting down, the start is the high end and ..< stops short of the low
+      one (10..<0 step -2 is 10, 8, 6, 4, 2). A range that lies the other way
+      from its step (1..5 step -1) runs nothing.
+    - The step is an int, read once with the ends. A literal 0 is an error; a
+      step that comes to 0 when the loop runs runs nothing.
+    - The last turn is the last one the step lands on at or before the end, and
+      i never steps past the end: 0..10 step 3 ends at 9, 0..2147483647 step 2
+      on an int never overflows, and u..0 step -1 on a size_t stops at 0.
     - i takes the ends' type: 0..<n with n a size_t counts in size_t, and
       big..big + 2 with big a long counts in long.
     - It is a plain C++ for loop: no list is made.

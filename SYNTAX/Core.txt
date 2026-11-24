@@ -511,6 +511,24 @@ DEFINES
     defined(X) are 1 or 0; a name no macro has is 0; true is 1.
   - Every #if needs its #endif in the same file.
 
+  __has_include, #line and #pragma
+    #if __has_include("config.nxa")    1 when that #include would find it
+    #if __has_include(<std/gfx>)
+    #line 100                          the next line is line 100
+    #line 1 "generated.nxa"            ... and __FILE__ is "generated.nxa"
+    #pragma once
+    #pragma message("text")            prints the text and builds on
+  - __has_include finds what #include finds: a std module that exists, a .nxa
+    or a header in quotes beside the file, a .nxa package. <vector>, <stdio.h>
+    and the other C and C++ standard headers are 1. Another <header> is looked
+    for in the package folders only, since only the C++ compiler knows where
+    its own are. defined(__has_include) is 1.
+  - #line moves the line numbers of everything after it: __LINE__, the build's
+    error messages and the lines a debugger shows for a --debug build. Its
+    file name changes __FILE__; error messages keep naming the real file.
+  - Every file is read once already, so #pragma once asks for nothing more.
+    Another #pragma is ignored with a warning naming it, as C compilers do.
+
   Predefined (they cannot be #undef'd or redefined)
     __LINE__  __FILE__  __COUNTER__  __NEXA__
     _WIN32 _WIN64     Windows (--win too)
@@ -703,6 +721,7 @@ SLICES ([]T)
 
       xs.sort();           // ascending
       xs.sort_desc();      // descending
+      xs.sort_by(fn (a, b) { return a.age < b.age; });   // your order: below
       xs.reverse();
       xs.remove(i);        // shown above with the other index methods
 
@@ -722,7 +741,8 @@ SLICES ([]T)
 
     A slice of structs, of slices, or of maps has none of these: sorting needs
     `<` and summing needs `+=`, and NexaC says so by line rather than letting
-    clang complain about the code it generated.
+    clang complain about the code it generated. To sort one, say the order
+    with sort_by.
 
     Strings sort and compare by byte value, so "Z" sorts before "a" and no
     locale or case folding is applied. The sort is not stable, which cannot be
@@ -748,7 +768,7 @@ SLICES ([]T)
       io.println(xs[1:4].sum());              // total of a sub-range
       io.println(line.split(",").join(";"));  // re-punctuate a line
 
-    The in-place four — sort, sort_desc, reverse, remove — need a slice you can
+    The in-place ones — sort, sort_desc, sort_by, reverse, remove — need a slice you can
     name, because they hand back nothing and their whole effect is on the
     receiver:
 
@@ -792,6 +812,31 @@ SLICES ([]T)
       let lim = 5;
       let n = len(xs.filter(fn (x) { return x > lim; }));
       let total = xs.filter(is_even).map(fn (x) { return x * x; }).sum();
+
+  SORT_BY
+    xs.sort_by(f) sorts xs in place in the order f gives. f takes two elements
+    and returns true when the first goes before the second -- a `<`, written
+    for this element type:
+
+      people.sort_by(fn (a, b) { return a.age < b.age; });     // youngest first
+      people.sort_by(fn (a, b) { return a.age > b.age; });     // oldest first
+      words.sort_by(fn (a, b) { return len(a) < len(b); });    // shortest first
+      fn by_name(a: Person, b: Person): bool { return a.name < b.name; }
+      people.sort_by(by_name);
+
+    It works on any element type, structs included. As with the five above, a
+    literal's parameters need no types (a and b are elements), and it is
+    called in place, not through a std::function.
+
+    The sort is stable: elements f does not put apart keep the order they had.
+    Sort by name and then sort_by age, and people of one age stay in name order.
+
+    f must answer the same way each time and never say both a-before-b and
+    b-before-a; `<=` breaks that rule for equal elements, so write `<`. A
+    function that breaks it gives some order, never a crash.
+
+    Up to 32 elements are sorted where they lie. A longer slice gets one
+    buffer of its own length for the merges, freed when the sort ends.
 
   Element type can be anything parseTypeName accepts: []string, []Point, [][]int, []*int.
   `fn f(xs: []int)` and struct fields work the same way.

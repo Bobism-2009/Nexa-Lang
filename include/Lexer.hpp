@@ -482,7 +482,7 @@ private:
     }
 
     // '#' starts a directive: #include (below), #define, #undef and the conditional and
-    // diagnostic ones (#if ... #endif, #error, #warning), which Macros.hpp acts on. A
+    // diagnostic ones (#if ... #endif, #error, #warning, #line, #pragma), which Macros.hpp acts on. A
     // directive is one line; a backslash at its end continues it, as in C. A '#' alone on
     // a line is C's null directive, and does nothing.
     Token scanDirective() {
@@ -493,7 +493,7 @@ private:
         const std::string word = source_.substr(w, p - w);
         const bool other = word == "if" || word == "ifdef" || word == "ifndef" || word == "elif" ||
                            word == "elifdef" || word == "elifndef" || word == "else" || word == "endif" ||
-                           word == "error" || word == "warning";
+                           word == "error" || word == "warning" || word == "line" || word == "pragma";
         bool null = word.empty();
         for (size_t q = p; null && q < source_.size() && source_[q] != '\n'; q++) {
             if (source_[q] != ' ' && source_[q] != '\t' && source_[q] != '\r') null = false;

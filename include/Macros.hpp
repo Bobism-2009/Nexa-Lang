@@ -5,7 +5,8 @@
 //     ((x) * (x)), with ... , __VA_ARGS__ and __VA_OPT__) macros, with # (stringize) and
 //     ## (paste) in a body;
 //   #if, #ifdef, #ifndef, #elif, #elifdef, #elifndef, #else and #endif, with defined;
-//   #error and #warning;
+//   #error and #warning; #line N ["file"]; #pragma once and #pragma message("text");
+//   __has_include(<std/io>) and __has_include("file.nxa") in an #if;
 //   predefined macros: __LINE__, __FILE__, __COUNTER__, __NEXA__ and the target's own,
 //     as C compilers name them (_WIN32, __linux__, __APPLE__, __x86_64__, __aarch64__ ...).
 // Expansion follows C's rules -- arguments are expanded before they are put in (except
@@ -121,6 +122,9 @@ inline NexaMacroTable nexaPredefinedMacros(const std::string& triple) {
 class NexaMacroExpander {
 public:
     using IncludeMacros = std::function<const NexaMacroTable*(const Token&)>;
+    // __has_include: whether the include written as given ("<std/io>", "\"a.nxa\"") is there.
+    using HasInclude = std::function<bool(const std::string&)>;
+    void setHasInclude(HasInclude f) { hasInclude_ = std::move(f); }
 
     NexaMacroExpander(NexaMacroTable& table, const std::string& file, NexaMacroCache* shared = nullptr)
         : table_(table), file_(file), shared_(shared) {}
@@ -137,6 +141,9 @@ public:
         std::vector<Token> out;
         out.reserve(expanded.size());
         for (HTok& h : expanded) out.push_back(std::move(h.t));
+        if (!lineMarks_.empty()) {
+            for (Token& t : out) t.line = mapLine(t.line);
+        }
         splitNegatives(out);
         return out;
     }
@@ -186,12 +193,32 @@ private:
     NexaMacroTable& table_;
     std::string file_;
     NexaMacroCache* shared_;
+    HasInclude hasInclude_;
+    // #line: from the line after each one, the lines are counted from its number, and
+    // __FILE__ is its file when it names one. Applied to the tokens as run() hands them on.
+    struct LineMark {
+        size_t from;
+        long long delta;
+        std::string file;
+    };
+    std::vector<LineMark> lineMarks_;
+    const LineMark* markAt(size_t line) const {
+        const LineMark* m = nullptr;
+        for (const LineMark& lm : lineMarks_) {
+            if (lm.from <= line) m = &lm;
+        }
+        return m;
+    }
+    size_t mapLine(size_t line) const {
+        const LineMark* m = markAt(line);
+        return m ? static_cast<size_t>(static_cast<long long>(line) + m->delta) : line;
+    }
     std::vector<Cond> conds_;
 
     [[noreturn]] void fail(const std::string& what, size_t line) const {
         std::string msg;
         if (!file_.empty()) msg += file_ + ": ";
-        msg += what + " at line " + std::to_string(line);
+        msg += what + " at line " + std::to_string(mapLine(line));
         throw std::runtime_error(msg);
     }
 
@@ -415,7 +442,7 @@ private:
 
     // ---- #if and its family ----
 
-    bool isDefined(const std::string& name) const { return lookup(name) != nullptr; }
+    bool isDefined(const std::string& name) const { return name == "__has_include" || lookup(name) != nullptr; }
 
     // #ifdef NAME, #ifndef NAME: the name, checked.
     std::string condName(const std::string& word, const std::string& rest, size_t line) const {
@@ -477,10 +504,58 @@ private:
         std::string msg = rest.substr(i);
         while (!msg.empty() && (msg.back() == ' ' || msg.back() == '\t')) msg.pop_back();
         if (word == "error") fail("#error" + (msg.empty() ? std::string() : " " + msg), line);
+        const std::string where = (file_.empty() ? std::string() : file_ + ":") + std::to_string(mapLine(line)) + ": ";
         if (word == "warning") {
-            std::cerr << "[Nexa] Warning: " << (file_.empty() ? std::string() : file_ + ":") << line << ": #warning"
-                      << (msg.empty() ? std::string() : " " + msg) << "\n";
+            std::cerr << "[Nexa] Warning: " << where << "#warning" << (msg.empty() ? std::string() : " " + msg) << "\n";
         }
+        if (word == "line") lineDirective(msg, line);
+        if (word == "pragma") pragma(msg, line, where);
+    }
+
+    // #line N or #line N "file": the next line is line N (of that file, for __FILE__).
+    void lineDirective(const std::string& text, size_t line) {
+        size_t i = 0;
+        while (i < text.size() && text[i] >= '0' && text[i] <= '9') i++;
+        if (i == 0 || i > 10) fail("#line needs a line number: #line 100 or #line 100 \"name.nxa\"", line);
+        const long long n = std::strtoll(text.substr(0, i).c_str(), nullptr, 10);
+        if (n < 1 || n > 2147483647) fail("#line " + text.substr(0, i) + ": a line number is 1 to 2147483647", line);
+        skipBlanks(text, i);
+        std::string file = markAt(line) ? markAt(line)->file : std::string();
+        if (i < text.size()) {
+            const size_t close = text.find('"', i + 1);
+            if (text[i] != '"' || close == std::string::npos || !restEmpty(text, close + 1)) {
+                fail("#line " + text.substr(0, text.find_first_of(" \t")) +
+                     ": after the number comes a file name in quotes, or the end of the line", line);
+            }
+            file = text.substr(i + 1, close - i - 1);
+        }
+        lineMarks_.push_back({line + 1, n - static_cast<long long>(line + 1), file});
+    }
+
+    // #pragma once: every file is read once already, so it asks for nothing more.
+    // #pragma message("text") or #pragma message "text": prints the text. Another
+    // pragma is told to be ignored, as a C compiler warns of one it does not know.
+    void pragma(const std::string& text, size_t line, const std::string& where) {
+        size_t i = 0;
+        const std::string name = readName(text, i);
+        if (name == "once" && restEmpty(text, i)) return;
+        if (name == "message") {
+            skipBlanks(text, i);
+            const bool paren = i < text.size() && text[i] == '(';
+            if (paren) i++;
+            skipBlanks(text, i);
+            const size_t close = i < text.size() && text[i] == '"' ? text.find('"', i + 1) : std::string::npos;
+            size_t j = close == std::string::npos ? close : close + 1;
+            if (j != std::string::npos) skipBlanks(text, j);
+            if (paren && j != std::string::npos) j = j < text.size() && text[j] == ')' ? j + 1 : std::string::npos;
+            if (j == std::string::npos || !restEmpty(text, j)) {
+                fail("#pragma message takes the text in quotes: #pragma message(\"text\")", line);
+            }
+            std::cerr << "[Nexa] " << where << "#pragma message: " << text.substr(i + 1, close - i - 1) << "\n";
+            return;
+        }
+        std::cerr << "[Nexa] Warning: " << where << "#pragma " << text
+                  << " is ignored: Nexa knows #pragma once and #pragma message(\"text\")\n";
     }
 
     // An #if's expression: defined X and defined(X) first, then macros, then C's integer
@@ -491,6 +566,34 @@ private:
         if (toks.empty()) fail(std::string(what) + " needs a condition", line);
         std::vector<HTok> pre;
         for (size_t i = 0; i < toks.size(); i++) {
+            if (toks[i].type == TokenType::Identifier && toks[i].value == "__has_include") {
+                // __has_include(<std/io>) or __has_include("file.nxa"): 1 when that #include
+                // would find what it names.
+                const std::string how = std::string(what) + ": __has_include takes (<std/io>) or (\"file.nxa\")";
+                size_t j = i + 1;
+                if (j >= toks.size() || toks[j].type != TokenType::LParen) fail(how, line);
+                j++;
+                std::string raw;
+                if (j < toks.size() && toks[j].type == TokenType::String) {
+                    raw = "\"" + toks[j].value + "\"";
+                    j++;
+                } else if (j < toks.size() && toks[j].type == TokenType::Less) {
+                    for (j++; j < toks.size() && toks[j].type != TokenType::Greater; j++) {
+                        if (toks[j].type == TokenType::RParen) break;
+                        raw += toks[j].value;
+                    }
+                    if (j >= toks.size() || toks[j].type != TokenType::Greater || raw.empty()) fail(how, line);
+                    raw = "<" + raw + ">";
+                    j++;
+                } else {
+                    fail(how, line);
+                }
+                if (j >= toks.size() || toks[j].type != TokenType::RParen) fail(how, line);
+                const bool v = hasInclude_ && hasInclude_(raw);
+                pre.push_back({{TokenType::Number, v ? "1" : "0", line}, nullptr});
+                i = j;
+                continue;
+            }
             if (toks[i].type == TokenType::Identifier && toks[i].value == "defined") {
                 size_t j = i + 1;
                 const bool paren = j < toks.size() && toks[j].type == TokenType::LParen;
@@ -855,12 +958,14 @@ private:
         switch (m.builtin) {
             case NexaMacro::Builtin::Line:
                 t.type = TokenType::Number;
-                t.value = std::to_string(h.t.line);
+                t.value = std::to_string(mapLine(h.t.line));
                 break;
-            case NexaMacro::Builtin::File:
+            case NexaMacro::Builtin::File: {
                 t.type = TokenType::String;
-                t.value = file_;
+                const LineMark* lm = markAt(h.t.line);
+                t.value = lm && !lm->file.empty() ? lm->file : file_;
                 break;
+            }
             default:
                 t.type = TokenType::Number;
                 t.value = std::to_string(shared_ ? shared_->counter++ : 0);

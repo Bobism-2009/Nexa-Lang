@@ -56,6 +56,8 @@ export const NEXA_DIRECTIVES: { name: string; detail: string; snippet: string }[
   { name: "endif", detail: "#endif — ends an #if", snippet: "endif" },
   { name: "error", detail: "#error message — stop the build", snippet: "error ${1:message}" },
   { name: "warning", detail: "#warning message — print it and build on", snippet: "warning ${1:message}" },
+  { name: "line", detail: "#line N [\"file\"] — the next line is line N", snippet: "line ${1:100}" },
+  { name: "pragma", detail: "#pragma once / #pragma message(\"text\")", snippet: "pragma ${1:once}" },
 ];
 
 // The macros NexaC defines for the target being built for.
@@ -64,6 +66,7 @@ export const NEXA_PREDEFINED_MACROS: { name: string; detail: string }[] = [
   { name: "__FILE__", detail: "the source file's full path" },
   { name: "__COUNTER__", detail: "0, 1, 2 … across the build" },
   { name: "__NEXA__", detail: "1: built by NexaC" },
+  { name: "__has_include", detail: "__has_include(<std/io>) or (\"file.nxa\") in an #if: 1 when #include would find it" },
   { name: "_WIN32", detail: "1 when building for Windows (--win too)" },
   { name: "_WIN64", detail: "1 when building for 64-bit Windows" },
   { name: "__linux__", detail: "1 when building for Linux" },
@@ -607,6 +610,7 @@ export const STRING_METHODS = [
   "join",
   "sort",
   "sort_desc",
+  "sort_by",
   "reverse",
   "min",
   "max",
@@ -717,6 +721,11 @@ export const HOVER_DOCS: Record<string, string> = {
   "#ifdef": "#ifdef NAME … #endif — keep the lines when NAME is a macro (#ifndef: when it is not).",
   "#error": "#error message — stop the build with the message (#warning prints it and builds on).",
   "defined": "defined NAME or defined(NAME) in an #if: 1 when NAME is a macro, else 0.",
+  "__has_include": "__has_include(<std/gfx>) or __has_include(\"config.nxa\") in an #if: 1 when that #include would find what it names.",
+  "#line": "#line N or #line N \"file\" — the next line is line N, for __LINE__, errors and the debugger; the file is __FILE__.",
+  "#pragma": "#pragma once (every file is read once already) or #pragma message(\"text\") (prints it). Others are ignored with a warning.",
+  step: "for (i in a..b step s) — count by s: 0..10 step 2, 10..1 step -1. i never steps past the end.",
+  sort_by: "xs.sort_by(fn (a, b) { return a.age < b.age; }) — sort in place, stably, in the order the function gives (true when a goes first).",
   null: "Null pointer literal (emits nullptr).",
 };
 

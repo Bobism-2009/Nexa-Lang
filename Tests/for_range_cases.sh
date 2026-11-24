@@ -1,5 +1,6 @@
 #!/bin/sh
-# for (i in a..b) and for (i in a..<b): counted loops over a range of ints or chars.
+# for (i in a..b) and for (i in a..<b): counted loops over a range of ints or chars,
+# and with `step s` (10..1 step -1 counts down).
 #
 # Usage: Tests/for_range_cases.sh [path-to-NexaC]   (from the repo root)
 
@@ -124,6 +125,48 @@ fn main() {
 }' " 1 3 5 7
 abcde[x][y][z]
 9000000003 3"
+
+run_eq "step: up, down, open ends, chars, a size_t down to 0" \
+'#include <std/io>
+fn main() {
+    for (i in 0..10 step 3) { io.print(" ", i); }
+    io.println("");
+    for (i in 5..1 step -1) { io.print(" ", i); }
+    io.println("");
+    for (i in 10..<0 step -2) { io.print(" ", i); }
+    for (i in 0..<6 step 2) { io.print(" ", i); }
+    io.println("");
+    let u: size_t = 3;
+    for (k in u..0 step -1) { io.print(" ", k); }
+    for (c in '"'"'z'"'"'..'"'"'a'"'"' step -5) { io.print(c); }
+    io.println("");
+}' " 0 3 6 9
+ 5 4 3 2 1
+ 10 8 6 4 2 0 2 4
+ 3 2 1 0zupkfa"
+
+run_eq "step: read once and before the name, its sign at run time, 0, and the int edge" \
+'#include <std/io>
+fn main() {
+    let s = -3;
+    for (i in 9..0 step s) { if (i == 6) { continue; } io.print(" ", i); s = 100; }
+    io.println("");
+    let z = 0;
+    for (i in 0..5 step z) { io.print("never"); }
+    for (i in 1..5 step -1) { io.print("never"); }
+    let n = 0;
+    for (i in 0..2147483647 step 1000000000) { n += 1; }
+    let step = 2;
+    for (step in 0..step step step) { io.print(" ", step); }
+    io.println(" ", n);
+}' " 9 3 0
+ 0 2 3"
+
+expect_has "a step of 0" '#include <std/io>
+fn main() { for (i in 0..5 step 0) { } }' "a range loop's step cannot be 0"
+
+expect_has "a float step" '#include <std/io>
+fn main() { for (i in 0..5 step 0.5) { } }' "a range loop's step is an int, how far each turn moves, and this is a float"
 
 expect_has "a float end" '#include <std/io>
 fn main() { let f = 1.5; for (i in 0..f) { } }' "a range loop counts ints or chars, and a float is neither"

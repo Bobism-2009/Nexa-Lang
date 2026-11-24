@@ -1,0 +1,26 @@
+// #pragma once, __has_include and #line.
+#pragma once
+#include <std/io>
+#if __has_include("modules/define_config.nxa")
+#include "modules/define_config.nxa"
+#define FOUND "found the include"
+#else
+#define FOUND "no include"
+#endif
+
+fn main() {
+    io.println(FOUND);
+#if __has_include(<std/io>) && __has_include(<vector>) && __has_include(<stdio.h>)
+    io.println("std/io, <vector> and <stdio.h> are there");
+#endif
+#if !__has_include(<std/nosuch>) && !__has_include("modules/nosuch.nxa")
+    io.println("missing ones are 0");
+#endif
+#ifdef __has_include
+    io.println("__has_include is defined");
+#endif
+#line 500
+    io.println(__LINE__);
+#line 20 "made.nxa"
+    io.println(__LINE__, " ", __FILE__);
+}

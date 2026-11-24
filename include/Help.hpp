@@ -83,6 +83,7 @@ DECLARATIONS
   Globals are the same syntax at file scope.
   #define MAX 10   #define SQ(x) ((x) * (x))   #undef MAX      C macros
   #if defined(_WIN32)  #ifdef X  #elif  #else  #endif          C conditionals
+  #if __has_include("x.nxa")  #line 100  #pragma once / message("..")
 
 STRUCTS AND ENUMS
   struct Point { x: int = 0; y: int;   fields may carry a default (= expr)
@@ -94,6 +95,7 @@ CONTROL FLOW
   if (cond) { } else if (cond) { } else { }     braces optional for one stmt
   while (cond) { }                              break;  continue;
   for (i, n) { }          counts 0..n-1
+  for (i in 1..10) { }    1 to 10; ..< stops short; step 2 / step -1 counts by
   for (x in xs) { }       slice elements
   for (k, v in m) { }     map keys and values
   switch (e) { case 0: ... break; default: ... }   int, string or enum cases
