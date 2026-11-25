@@ -13,10 +13,13 @@ const STD_MODULES =
   "io|os|dll|file|random|math|crypto|network|json|time|thread|term|gfx3d|gfx|ui|inline";
 
 export const SEMANTIC_LEGEND = new vscode.SemanticTokensLegend(
-  ["module", "member", "importKeyword", "importModule", "importPrefix", "nexaVariable"],
+  ["module", "member", "importKeyword", "importModule", "importPrefix", "nexaVariable",
+    "nexaFunctionDef", "nexaFunctionCall"],
   []
 );
 const VARIABLE = 5;
+const FUNCTION_DEF = 6;
+const FUNCTION_CALL = 7;
 
 const NOT_NAMES = new Set(
   ("fn extern new delete sizeof let const struct enum type shape priv if else while for " +
@@ -170,6 +173,17 @@ export function buildSemanticTokens(
     while ((w = WORD.exec(lineText)) !== null) {
       const at = w.index;
       const name = w[0];
+      if (NOT_NAMES.has(name) || /[0-9]/.test(lineText[at - 1] ?? "")) continue;
+      if (tokens.some(([s, l]) => at >= s && at < s + l)) continue;
+      const before = lineText.slice(0, at);
+      if (/\bfn\s+$/.test(before)) {
+        tokens.push([at, name.length, FUNCTION_DEF]);
+        continue;
+      }
+      if (/^\s*\(/.test(lineText.slice(at + name.length))) {
+        tokens.push([at, name.length, FUNCTION_CALL]);
+        continue;
+      }
       if (!vars.has(name)) continue;
       if (/[0-9]/.test(lineText[at - 1] ?? "")) continue;
       if (/\.\s*$/.test(lineText.slice(0, at)) && !/\.\.\s*$/.test(lineText.slice(0, at))) continue;
