@@ -47,31 +47,62 @@ The generated C++ uses the standard library (`std::string`, `std::vector`, threa
 
 ## Get NexaC
 
-From source, in the repo root. `build.cmd` / `build.sh` pick `clang++` (else `g++`); name a
-different compiler as their argument (`sh build.sh g++`).
+**From source (repo root):**
 
-**Windows** (cmd.exe; or `sh build.sh` from Git Bash or MSYS2):
+**Windows:** link **statically** so `NexaC.exe` runs on a clean PC (no MinGW/LLVM C++ runtime DLLs),
+and compile `NexaC.rc` into it for the Nexa icon:
 
-```bat
-build.cmd
+```bash
+windres NexaC.rc -O coff -o NexaC-icon.o
+clang++ -std=c++17 -O2 -static -static-libgcc -static-libstdc++ NexaC.cpp NexaC-icon.o -o NexaC.exe
 ```
 
-This builds the Nexa icon into `NexaC.exe` from `NexaC.rc` (with `windres` for a MinGW compiler,
-`llvm-rc` for an MSVC-target clang++), and with MinGW links **statically**, so the exe runs on a
-clean PC (no MinGW/LLVM C++ runtime DLLs). Without either tool it builds the same compiler with no
-icon. There is also a [WIN/Makefile](WIN/Makefile) (`make` in MSYS2, or a Linux cross-compiler).
+If that fails with your Clang (e.g. MSVC-target toolchain), build with **MinGW g++** instead, same flags:
+
+```bash
+windres NexaC.rc -O coff -o NexaC-icon.o
+g++ -std=c++17 -O2 -static -static-libgcc -static-libstdc++ NexaC.cpp NexaC-icon.o -o NexaC.exe
+```
+
+With an MSVC-target clang++, the icon goes through `llvm-rc` instead, and the build needs `advapi32`:
+
+```bash
+llvm-rc -fo NexaC.res NexaC.rc
+clang++ -std=c++17 -O2 NexaC.cpp NexaC.res -o NexaC.exe -ladvapi32
+```
+
+Leave the `.o` / `.res` out to build without the icon. `build.cmd` (from cmd.exe) or `sh build.sh`
+(from Git Bash or MSYS2) runs the right lines for the compiler it finds. There is also a
+[WIN/Makefile](WIN/Makefile) for building `NexaC.exe` in the `WIN/` folder (`make` in MSYS2 or similar).
 
 **Linux:**
+
+```bash
+clang++ -std=c++17 -O2 NexaC.cpp -o NexaC
+```
+
+or with g++:
+
+```bash
+g++ -std=c++17 -O2 NexaC.cpp -o NexaC
+```
+
+`make install-deps` installs the compiler and the X11 headers `std/gfx` needs (apt, dnf, pacman,
+zypper or apk), and `make install` builds NexaC and puts `NexaC`, `nexac` and `nexapkg` in
+`~/.local/bin`:
 
 ```bash
 make install-deps && make && make install
 ```
 
-`make install-deps` installs the compiler and the X11 headers `std/gfx` needs (apt, dnf, pacman,
-zypper or apk), `make` builds `NexaC`, and `make install` puts `NexaC`, `nexac` and `nexapkg` in
-`~/.local/bin`. To only build it, with what you already have: `sh build.sh`.
+**Raspberry Pi and other 64-bit ARM Linux:** the same, on the Pi itself — Raspberry Pi OS
+already has clang:
 
-**Raspberry Pi and other 64-bit ARM Linux**, on the Pi itself (Raspberry Pi OS already has clang):
+```bash
+clang++ -std=c++17 -O2 NexaC.cpp -o NexaC
+```
+
+`make install-deps` adds the X11 headers `std/gfx` needs, and `make install` puts `NexaC` on your PATH:
 
 ```bash
 make install-deps && make && make install
@@ -79,14 +110,23 @@ make install-deps && make && make install
 
 (To build *for* a Pi from another machine, use the [`arm64-linux` target](https://github.com/Bobism-2009/Nexa-Targets) instead: `NexaC hello.nxa --target arm64-linux`.)
 
-**macOS**, after Apple's Command Line Tools:
+**macOS:** install Apple's Command Line Tools first if needed, then:
 
 ```bash
 xcode-select --install
-make && make install
+clang++ -std=c++17 -O2 NexaC.cpp -o NexaC
+```
+
+or build and install with make:
+
+```bash
+make
+make install
 ```
 
 This installs `NexaC`, `nexac`, and `nexapkg` to `~/.local/bin` by default. Details: [`MACOS.md`](MACOS.md).
+
+On Linux and macOS, `sh build.sh` runs the same `clang++` line (or `g++` when there is no clang).
 
 Check the toolchain:
 
