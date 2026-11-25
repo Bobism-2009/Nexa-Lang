@@ -2,7 +2,7 @@
   "name": "nexa",
   "displayName": "Nexa Language",
   "description": "Syntax highlighting, snippets, go-to definition, completions, hover, and NexaC run/build for Nexa (.nxa)",
-  "version": "0.2.14",
+  "version": "0.2.15",
   "publisher": "nexac",
   "main": "./out/extension.js",
   "engines": {
@@ -41,7 +41,8 @@
       { "id": "importPrefix", "superType": "keyword", "description": "std/ in import paths" },
       { "id": "nexaVariable", "superType": "variable", "description": "A variable or parameter this file declares" },
       { "id": "nexaFunctionDef", "superType": "function", "description": "A function's name where fn defines it" },
-      { "id": "nexaFunctionCall", "superType": "function", "description": "A function or method being called" }
+      { "id": "nexaFunctionCall", "superType": "function", "description": "A function or method being called" },
+      { "id": "nexaMacro", "superType": "macro", "description": "A #define name, where it is defined and where it is used" }
     ],
     "snippets": [
       {
@@ -111,7 +112,8 @@
             "importPrefix": "#569CD6",
             "nexaVariable": "#9CDCFE",
             "nexaFunctionDef": "#C586C0",
-            "nexaFunctionCall": "#DCDCAA"
+            "nexaFunctionCall": "#DCDCAA",
+            "nexaMacro": "#569CD6"
           }
         }
       },
@@ -119,7 +121,8 @@
         "rules": {
           "nexaVariable": "#9CDCFE",
           "nexaFunctionDef": "#C586C0",
-          "nexaFunctionCall": "#DCDCAA"
+          "nexaFunctionCall": "#DCDCAA",
+          "nexaMacro": "#569CD6"
         }
       }
     }

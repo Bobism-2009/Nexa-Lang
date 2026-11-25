@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { maskComments } from "./nexaIndex";
+import { NEXA_PREDEFINED_MACROS } from "./nexaCompletions";
 
 const MODULES =
   "io|os|dll|file|random|math|crypto|http|tcp|udp|json|time|thread|term|gfx3d|gfx|ui";
@@ -14,12 +15,24 @@ const STD_MODULES =
 
 export const SEMANTIC_LEGEND = new vscode.SemanticTokensLegend(
   ["module", "member", "importKeyword", "importModule", "importPrefix", "nexaVariable",
-    "nexaFunctionDef", "nexaFunctionCall"],
+    "nexaFunctionDef", "nexaFunctionCall", "nexaMacro"],
   []
 );
 const VARIABLE = 5;
 const FUNCTION_DEF = 6;
 const FUNCTION_CALL = 7;
+const MACRO = 8;
+
+// Every name #define gives a meaning to in this file, plus the ones NexaC predefines.
+function macroNames(text: string): Set<string> {
+  const names = new Set<string>(
+    NEXA_PREDEFINED_MACROS.map((m) => m.name).filter((n) => n !== "__has_include")
+  );
+  const def = /^[ \t]*#[ \t]*define[ \t]+([A-Za-z_][A-Za-z0-9_]*)/gm;
+  let m: RegExpExecArray | null;
+  while ((m = def.exec(text)) !== null) names.add(m[1]!);
+  return names;
+}
 
 const NOT_NAMES = new Set(
   ("fn extern new delete sizeof let const struct enum type shape priv if else while for " +
@@ -142,6 +155,7 @@ export function buildSemanticTokens(
   const masked = maskStrings(maskComments(document.getText()));
   const lines = masked.split(/\r?\n/);
   const vars = declaredNames(masked);
+  const macros = macroNames(masked);
 
   for (let line = 0; line < lines.length; line++) {
     const lineText = lines[line] ?? "";
@@ -158,7 +172,7 @@ export function buildSemanticTokens(
       continue;
     }
 
-    if (/^\s*#/.test(lineText)) continue;
+    const directive = /^\s*#/.test(lineText);
 
     const tokens: [number, number, number][] = [];
     MODULE_CALL.lastIndex = 0;
@@ -175,6 +189,11 @@ export function buildSemanticTokens(
       const name = w[0];
       if (NOT_NAMES.has(name) || /[0-9]/.test(lineText[at - 1] ?? "")) continue;
       if (tokens.some(([s, l]) => at >= s && at < s + l)) continue;
+      if (macros.has(name) && !/\.\s*$/.test(lineText.slice(0, at).replace(/\.\.\s*$/, ""))) {
+        tokens.push([at, name.length, MACRO]);
+        continue;
+      }
+      if (directive) continue;
       const before = lineText.slice(0, at);
       if (/\bfn\s+$/.test(before)) {
         tokens.push([at, name.length, FUNCTION_DEF]);
