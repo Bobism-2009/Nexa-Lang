@@ -20,6 +20,7 @@
     { "include": "#keywords" },
     { "include": "#builtins" },
     { "include": "#types" },
+    { "include": "#names" },
     { "include": "#operators" },
     { "include": "#punctuation" }
   ],
@@ -421,7 +422,7 @@
         },
         {
           "name": "support.function.builtin.nexa",
-          "match": "(?<=\\.)(upper|lower|trim|len|contains|starts_with|ends_with|index_of|last_index_of|count|replace|substring|repeat|split|join|push|pop|insert|remove|clear|has|keys|values|sort|sort_desc|reverse|min|max|sum|find|any|all|filter|map|first|last|get|is_some|is_none|or|ok|value|error)(?=\\s*\\()"
+          "match": "(?<=\\.)(upper|lower|trim|len|contains|starts_with|ends_with|index_of|last_index_of|count|replace|substring|repeat|split|join|push|pop|insert|remove|clear|has|keys|values|sort|sort_desc|sort_by|tokens|reverse|min|max|sum|find|any|all|filter|map|first|last|get|is_some|is_none|or|ok|value|error)(?=\\s*\\()"
         }
       ]
     },
@@ -434,6 +435,35 @@
             "1": { "name": "entity.name.namespace" },
             "2": { "name": "entity.name.function" }
           }
+        }
+      ]
+    },
+    "names": {
+      "comment": "Last before operators, so keywords, builtins and types win a tie at the same column.",
+      "patterns": [
+        {
+          "name": "entity.name.function.member.call.nexa",
+          "match": "(?<=\\.)[A-Za-z_][A-Za-z0-9_]*(?=\\s*\\()"
+        },
+        {
+          "name": "entity.name.function.call.nexa",
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?=\\s*\\()"
+        },
+        {
+          "name": "variable.other.property.nexa",
+          "match": "(?<=\\.)[A-Za-z_][A-Za-z0-9_]*\\b"
+        },
+        {
+          "name": "variable.other.constant.nexa",
+          "match": "\\b_*[A-Z][A-Z0-9_]*\\b(?<=[A-Z0-9_]{2})"
+        },
+        {
+          "name": "entity.name.type.nexa",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+        },
+        {
+          "name": "variable.other.readwrite.nexa",
+          "match": "\\b[a-z_][A-Za-z0-9_]*\\b"
         }
       ]
     },
