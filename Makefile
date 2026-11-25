@@ -2,6 +2,8 @@
 CXX := $(shell which clang++ 2>/dev/null || which g++ 2>/dev/null || echo "g++")
 CXXFLAGS = -std=c++17 -O2
 PREFIX ?= $(HOME)/.local
+# Plain `make` builds NexaC; install-deps, written first, is only run by name.
+.DEFAULT_GOAL := NexaC
 
 # Install *build* deps only (compile Nexa programs). Not wasm. Not runtime libs we ship.
 # gfx statically embeds X11 — the -dev packages are required on this machine.

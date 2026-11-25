@@ -47,28 +47,31 @@ The generated C++ uses the standard library (`std::string`, `std::vector`, threa
 
 ## Get NexaC
 
-**From source (repo root):**
+From source, in the repo root. `build.cmd` / `build.sh` pick `clang++` (else `g++`); name a
+different compiler as their argument (`sh build.sh g++`).
 
-Run the build script. It picks `clang++` (else `g++`), or the compiler you name:
+**Windows** (cmd.exe; or `sh build.sh` from Git Bash or MSYS2):
 
-```bash
-build.cmd            # Windows, from cmd.exe
-sh build.sh          # Git Bash or MSYS2 on Windows, Linux, macOS
-sh build.sh g++      # a compiler of your choice
+```bat
+build.cmd
 ```
 
-On Windows it builds the Nexa icon into `NexaC.exe` from `NexaC.rc`, with `windres` for a MinGW
-compiler or `llvm-rc` for an MSVC-target clang++, and with MinGW it links **statically**, so the exe
-runs on a clean PC (no MinGW/LLVM C++ runtime DLLs). Without either tool it builds the same compiler with no icon.
-On Linux and macOS it is the plain build:
+This builds the Nexa icon into `NexaC.exe` from `NexaC.rc` (with `windres` for a MinGW compiler,
+`llvm-rc` for an MSVC-target clang++), and with MinGW links **statically**, so the exe runs on a
+clean PC (no MinGW/LLVM C++ runtime DLLs). Without either tool it builds the same compiler with no
+icon. There is also a [WIN/Makefile](WIN/Makefile) (`make` in MSYS2, or a Linux cross-compiler).
+
+**Linux:**
 
 ```bash
-clang++ -std=c++17 -O2 NexaC.cpp -o NexaC
+make install-deps && make && make install
 ```
 
-**Raspberry Pi and other 64-bit ARM Linux:** the same, on the Pi itself — Raspberry Pi OS
-already has clang. `make install-deps` adds the X11 headers `std/gfx` needs, and
-`make install` puts `NexaC` on your PATH:
+`make install-deps` installs the compiler and the X11 headers `std/gfx` needs (apt, dnf, pacman,
+zypper or apk), `make` builds `NexaC`, and `make install` puts `NexaC`, `nexac` and `nexapkg` in
+`~/.local/bin`. To only build it, with what you already have: `sh build.sh`.
+
+**Raspberry Pi and other 64-bit ARM Linux**, on the Pi itself (Raspberry Pi OS already has clang):
 
 ```bash
 make install-deps && make && make install
@@ -76,17 +79,14 @@ make install-deps && make && make install
 
 (To build *for* a Pi from another machine, use the [`arm64-linux` target](https://github.com/Bobism-2009/Nexa-Targets) instead: `NexaC hello.nxa --target arm64-linux`.)
 
-On macOS, install Apple's Command Line Tools first if needed:
+**macOS**, after Apple's Command Line Tools:
 
 ```bash
 xcode-select --install
-make
-make install
+make && make install
 ```
 
 This installs `NexaC`, `nexac`, and `nexapkg` to `~/.local/bin` by default. Details: [`MACOS.md`](MACOS.md).
-
-There is also a [WIN/Makefile](WIN/Makefile) for building `NexaC.exe` in the `WIN/` folder (`make` in MSYS2 or similar).
 
 Check the toolchain:
 
