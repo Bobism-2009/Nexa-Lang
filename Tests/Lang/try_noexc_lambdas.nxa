@@ -1,0 +1,75 @@
+// Pins a throw inside a function literal handed straight to a slice function:
+// NexaC's own errors, with what C++'s exceptions did. The error leaves the
+// literal, then the call; the literal is not called again after it; a catch
+// inside the literal takes its own errors; a catch around the call takes them
+// from xs.map / filter / find / any / all / sort_by; one nothing catches is
+// "Uncaught error" (see Tests/throw_cases.sh).
+// Reference: SYNTAX/ControlFlow.txt (TRY / CATCH)
+#include <std/io>
+
+fn half(n: int): int {
+    if (n % 2 != 0) { throw "odd: " + n; }
+    return n / 2;
+}
+
+fn halves(xs: []int): []int {
+    // the error goes through this function, which catches nothing
+    return xs.map(fn (x) { return half(x); });
+}
+
+fn main() {
+    let xs = [2, 4, 5, 6];
+    let ok = [2, 4, 6];
+
+    io.println(ok.map(fn (x) { return half(x); }));
+    try {
+        let ys = xs.map(fn (x) { io.println("map ", x); return half(x); });
+        io.println("not here ", len(ys));
+    } catch (e) {
+        io.println("map caught ", e);
+    }
+    try {
+        let ys = xs.filter(fn (x) { io.println("filter ", x); return half(x) > 1; });
+        io.println("not here ", len(ys));
+    } catch (e) {
+        io.println("filter caught ", e);
+    }
+    try {
+        let f = xs.find(fn (x) { return half(x) > 2; });
+        io.println("found ", f.value());
+        let g = xs.find(fn (x) { return half(x) > 9; });
+        io.println("not here ", g.is_some());
+    } catch (e) {
+        io.println("find caught ", e);
+    }
+    try {
+        io.println("any ", ok.any(fn (x) { return half(x) == 3; }));
+        io.println("not here ", xs.any(fn (x) { return half(x) == 9; }));
+    } catch (e) {
+        io.println("any caught ", e);
+    }
+    try {
+        io.println("all ", xs.all(fn (x) { return half(x) > 0; }));
+    } catch (e) {
+        io.println("all caught ", e);
+    }
+    let zs = [3, 1, 2];
+    try {
+        zs.sort_by(fn (a, b) { if (a == 2) { throw "no twos"; } return a < b; });
+        io.println("not here");
+    } catch (e) {
+        io.println("sort_by caught ", e);
+    }
+    try {
+        io.println(halves(ok), " ", halves(xs));
+    } catch (e) {
+        io.println("halves caught ", e);
+    }
+    // a catch inside the literal takes its own error; the call goes on
+    let safe = xs.map(fn (x) {
+        try { return half(x); } catch (e) { io.println("inside caught ", e); return -1; }
+    });
+    io.println(safe);
+    // after an error, the same program carries on
+    io.println(ok.filter(fn (x) { return half(x) != 2; }));
+}

@@ -318,7 +318,7 @@ public:
         // Nexa, so those keep the exception runtime.
         ownErrors_ = ownErrorsAllowed_ && !buildDll_ && !modules_.hasInlineCpp() && !modules_.hasCppHeader() &&
                      ownErrorsEligible();
-        if (!ownErrors_) { mayThrowFns_.clear(); mayThrowMethods_.clear(); }
+        if (!ownErrors_) { mayThrowFns_.clear(); mayThrowMethods_.clear(); ownErrLambdas_.clear(); }
 
         if (target_ == CppTarget::Wasm) {
             out << "#define NEXA_WASM 1\n";
@@ -2231,6 +2231,31 @@ private:
     std::set<std::string> mayThrowMethods_;  // struct methods that can, by method name
     std::vector<std::string> errCatchLabels_;  // the catch labels of the try blocks open here
     mutable int errCounter_ = 0;
+    // Function literals that can throw, handed straight to xs.find / any / all / filter /
+    // map / sort_by: NexaC writes the loop that calls them, so their errors are its own too.
+    std::set<const AstNode*> ownErrLambdas_;
+
+    static bool isSliceFnCall(const AstNode& n) {
+        return n.type == AstNode::Type::FnCall && n.initValue == "." && n.children.size() == 2 &&
+               n.children[1].type == AstNode::Type::ExprLambda &&
+               (n.value == "find" || n.value == "any" || n.value == "all" || n.value == "filter" ||
+                n.value == "map" || n.value == "sort_by");
+    }
+
+    // A call that can raise one of NexaC's own errors.
+    bool callMayRaise(const AstNode& n) const {
+        if (n.type != AstNode::Type::FnCall) return false;
+        if (n.initValue.empty()) return mayThrowFns_.count(n.value) > 0;
+        if (n.initValue != "." && n.initValue != "->") return false;
+        if (n.value == "value" || mayThrowMethods_.count(n.value)) return true;
+        return isSliceFnCall(n) && ownErrLambdas_.count(&n.children[1]);
+    }
+
+    // The literal as the loop calls it: once an error is set it is not called again (its
+    // side effects would run after the throw), and a default value stands in for it.
+    static std::string ownErrGuard(const std::string& f) {
+        return "[__nexa_g = " + f + "](auto&&... __a) { return __nexa_err ? decltype(__nexa_g(__a...)){} : __nexa_g(__a...); }";
+    }
 
 public:
     void setOwnErrors(bool on) { ownErrorsAllowed_ = on; }
@@ -2565,6 +2590,12 @@ static std::string __nexa_err_msg;
                 if (n.initValue == "." && n.value == "value") return true;
                 if (n.initValue.empty() && mayThrowFns_.count(n.value)) return true;
                 if ((n.initValue == "." || n.initValue == "->") && mayThrowMethods_.count(n.value)) return true;
+                // xs.map(fn (x) { ... throw ... }): the error comes out of the call.
+                if (isSliceFnCall(n)) {
+                    if (throws(n.children[0])) return true;
+                    for (const AstNode& s : n.children[1].children) if (throws(s)) return true;
+                    return false;
+                }
             }
             for (const AstNode& c : n.children) if (throws(c)) return true;
             for (const AstNode& c : n.paramDefaults) if (throws(c)) return true;
@@ -2583,6 +2614,17 @@ static std::string __nexa_err_msg;
                 }
             }
         }
+        // The literals handed to a slice function that can throw.
+        std::function<void(const AstNode&)> noteLambdas = [&](const AstNode& n) {
+            if (isSliceFnCall(n)) {
+                for (const AstNode& s : n.children[1].children) {
+                    if (throws(s)) { ownErrLambdas_.insert(&n.children[1]); break; }
+                }
+            }
+            for (const AstNode& c : n.children) noteLambdas(c);
+            for (const AstNode& c : n.paramDefaults) noteLambdas(c);
+        };
+        for (const AstNode& n : ast_) noteLambdas(n);
         // Anything an error could leave by that NexaC cannot follow keeps C++'s exceptions.
         bool ok = true;
         std::function<void(const AstNode&)> scan = [&](const AstNode& n) {
@@ -2594,7 +2636,9 @@ static std::string __nexa_err_msg;
                     ok = false;  // an error on another thread
                     return;
                 case AstNode::Type::ExprLambda: {
-                    // A function literal is called through a value NexaC does not follow.
+                    // A function literal is called through a value NexaC does not follow --
+                    // unless it is handed straight to a slice function, whose loop NexaC writes.
+                    if (ownErrLambdas_.count(&n)) break;
                     bool inner = false;
                     std::function<void(const AstNode&)> any = [&](const AstNode& x) {
                         if (x.type == AstNode::Type::Throw) inner = true;
@@ -4379,12 +4423,7 @@ private:
                 // With NexaC's own errors it is known which calls can throw; with C++'s,
                 // any call might.
                 if (ownErrors_) {
-                    if (n.type == AstNode::Type::FnCall &&
-                        ((n.initValue.empty() && mayThrowFns_.count(n.value)) ||
-                         ((n.initValue == "." || n.initValue == "->") &&
-                          (n.value == "value" || mayThrowMethods_.count(n.value))))) {
-                        call = true;
-                    }
+                    if (callMayRaise(n)) call = true;
                 } else if (n.type == AstNode::Type::FnCall || n.type == AstNode::Type::ExprCall ||
                            n.type == AstNode::Type::StrMethod) {
                     call = true;
@@ -5393,24 +5432,34 @@ private:
                     bareLambda_ = false;
                     const std::string setup = "const auto& __v = " + recv + "; auto&& __f = " + f + "; size_t __i = 0;";
                     const std::string loop = " for (; __i < __v.size(); __i++)";
+                    // A literal that can throw: the call is followed by the test of the
+                    // flag, as a call to a function that can throw is.
+                    const bool raises = ownErrors_ && ownErrLambdas_.count(&e.children[1]) > 0;
+                    auto done = [&](const std::string& r) { return raises ? errChecked(r, false) : r; };
                     if (e.value == "find") {
-                        return emitOptionMake(inferExprNexaType(e), setup + loop + " { if (__f(__v[__i])) break; }",
-                                              "__i < __v.size()", "__v[__i]", "xs.find(f)");
+                        return done(emitOptionMake(inferExprNexaType(e), setup + loop + " { if (__f(__v[__i])) break; }",
+                                                   "__i < __v.size()", "__v[__i]", "xs.find(f)"));
                     }
                     const std::string open = emitAtFileScope_ ? "([]() { " : "([&]() { ";
-                    if (e.value == "any") return open + setup + loop + " { if (__f(__v[__i])) return true; } return false; })()";
-                    if (e.value == "all") return open + setup + loop + " { if (!__f(__v[__i])) return false; } return true; })()";
+                    if (e.value == "any") return done(open + setup + loop + " { if (__f(__v[__i])) return true; } return false; })()");
+                    if (e.value == "all") return done(open + setup + loop + " { if (!__f(__v[__i])) return false; } return true; })()");
                     if (e.value == "filter") {
-                        return open + setup + " " + nexaTypeToCpp(recvBare) + " __r;" + loop +
-                            " { if (__f(__v[__i])) __r.push_back(__v[__i]); } return __r; })()";
+                        return done(open + setup + " " + nexaTypeToCpp(recvBare) + " __r;" + loop +
+                            " { if (__f(__v[__i])) __r.push_back(__v[__i]); } return __r; })()");
                     }
-                    return open + setup + " " + nexaTypeToCpp("[]" + ret) + " __r; __r.reserve(__v.size());" + loop +
-                        " __r.push_back(__f(__v[__i])); return __r; })()";
+                    // One result per element: made at its size and filled in, with no
+                    // capacity test per element as push_back has.
+                    // Not vectorized: as fast here (the literal is the work), ~100 bytes less a use.
+                    strHelpers_.insert("novec");
+                    return done(open + setup + " " + nexaTypeToCpp("[]" + ret) + " __r(__v.size()); __NEXA_NOVEC" + loop +
+                        " __r[__i] = __f(__v[__i]); return __r; })()");
                 }
                 if (e.value == "push") {
                     if (e.children.size() != 2) throw std::runtime_error("push expects one argument");
-                    return recv + ".push_back(" +
-                        emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
+                    const std::string arg = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    // Its last use (markPushMoves): moved in, not copied.
+                    if (pushMoves_.count(&e.children[1])) return recv + ".push_back(std::move(" + arg + "))";
+                    return recv + ".push_back(" + arg + ")";
                 }
                 if (e.value == "pop") {
                     if (e.children.size() != 1) throw std::runtime_error("pop expects no arguments");
@@ -5467,7 +5516,9 @@ private:
                     bareLambda_ = e.children[1].type == AstNode::Type::ExprLambda;
                     const std::string f = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                     bareLambda_ = false;
-                    return emitSliceSortBy(recv, f, nexaTypeToCpp(nexaSliceElem(recvBare)), lamOpen());
+                    const std::string sorted = emitSliceSortBy(recv, f, nexaTypeToCpp(nexaSliceElem(recvBare)), lamOpen());
+                    if (ownErrors_ && ownErrLambdas_.count(&e.children[1])) return errChecked(sorted, true);
+                    return sorted;
                 }
                 if (e.value == "join") {
                     if (e.children.size() != 2) throw std::runtime_error("join expects one argument");
@@ -7481,14 +7532,21 @@ private:
             // its own parameters, not to anything in scope here.
             if (e.type == AstNode::Type::ExprLambda) return;
             if (e.type == AstNode::Type::ExprMember) {
+                // Colour.Red, and Option.None (what a bare None is): a generic enum's
+                // variant has its type from where it stands, not a field to look up.
                 const bool enumVariant = !e.children.empty() && e.children[0].type == AstNode::Type::ExprVarRef &&
                                          lookupNexaDecl(e.children[0].value).empty() &&
-                                         enumCppNames_.count(e.children[0].value);
+                                         (enumCppNames_.count(e.children[0].value) ||
+                                          genericEnums_.count(e.children[0].value));
                 if (!enumVariant && fieldTypeOfMemberExpr(e).empty()) known = false;
             }
             for (const AstNode& ch : e.children) visit(ch);
         };
         visit(init);
+        if (init.type == AstNode::Type::ExprMember && !init.children.empty() &&
+            init.children[0].type == AstNode::Type::ExprVarRef && genericEnums_.count(init.children[0].value)) {
+            known = false;  // let x = None: said below, before anything tries to type it
+        }
         const std::string t = known ? inferExprNexaType(init) : std::string();
         if (t.empty() || t == "void" || t == "null") {
             if (init.type == AstNode::Type::ExprMember && !init.children.empty() &&
@@ -9277,7 +9335,7 @@ template <class __I> inline const char& __nexa_ix(const std::string& __s, __I __
                 "return __s.substr((size_t)__a, __n < 0 ? std::string::npos : (size_t)__n); }\n";
         } else if (h == "split") {
             b = std::string("#include <vector>\n") + pre + "std::vector<std::string> __nexa_str_split(const std::string& __s, const std::string& __sep) { std::vector<std::string> __out; "
-                "if (__sep.empty()) { __out.push_back(__s); return __out; } size_t __p = 0, __q; "
+                "if (__sep.empty()) { __out.push_back(std::string(__s)); return __out; } size_t __p = 0, __q; "
                 "while ((__q = __s.find(__sep, __p)) != std::string::npos) { __out.push_back(__s.substr(__p, __q - __p)); __p = __q + __sep.size(); } "
                 "__out.push_back(__s.substr(__p)); return __out; }\n";
         } else if (h == "cat") {
@@ -9285,6 +9343,9 @@ template <class __I> inline const char& __nexa_ix(const std::string& __s, __I __
             b = std::string(pre) +
                 "std::string __nexa_str_cat(std::initializer_list<__nexa_sv> __l) { size_t __n = 0; for (const __nexa_sv& __p : __l) __n += __p.n; "
                 "std::string __o; __o.reserve(__n); for (const __nexa_sv& __p : __l) __o.append(__p.d(), __p.n); return __o; }\n";
+        } else if (h == "novec") {
+            // The loop after it is not vectorized (clang only; nothing elsewhere).
+            b = "#if defined(__clang__)\n#define __NEXA_NOVEC _Pragma(\"clang loop vectorize(disable)\")\n#else\n#define __NEXA_NOVEC\n#endif\n";
         } else if (h == "put") {
             // A line of pieces: into a buffer on the stack, out in one fwrite. A line too
             // long for it goes out piece by piece, every value already in hand.
@@ -9303,7 +9364,7 @@ template <class __I> inline const char& __nexa_ix(const std::string& __s, __I __
             b = std::string("#include <vector>\n") + pre + "std::vector<std::string> __nexa_str_tokens(const std::string& __s, const std::string& __d) { bool __t[256] = {}; "
                 "for (char __c : __d) __t[(unsigned char)__c] = true; std::vector<std::string> __out; size_t __n = __s.size(), __i = 0; while (__i < __n) { "
                 "while (__i < __n && __t[(unsigned char)__s[__i]]) __i++; size_t __b = __i; while (__i < __n && !__t[(unsigned char)__s[__i]]) __i++; "
-                "if (__i > __b) __out.emplace_back(__s.data() + __b, __i - __b); } return __out; }\n";
+                "if (__i > __b) __out.push_back(std::string(__s.data() + __b, __i - __b)); } return __out; }\n";
         }
         return b;
     }
@@ -10350,6 +10411,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                    std::map<std::string, bool>& varIsFloat, std::map<std::string, bool>& varIsChar,
                    std::map<std::string, bool>& varIsBool, std::map<std::string, bool>& varIsEnum,
                    const std::string& indent = "    ", bool inStringSwitchCase = false) {
+        markPushMoves(children);
         for (const AstNode& child : children) {
             LineMarkScope lineMark(lineDirectives_, out, child, indent);
             std::vector<const AstNode*> printPieces;  // a print whose lone + chain is printed piece by piece
@@ -13164,18 +13226,27 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         tryFnRet_ = ret; tryFnName_ = "a function literal"; tryInMain_ = false;
         const std::string savedMainRet = mainRetType_;
         mainRetType_.clear();
+        // An error in the literal leaves the literal (return {}), never for a catch of the
+        // function around it: a goto cannot leave a lambda.
+        std::vector<std::string> savedCatch;
+        savedCatch.swap(errCatchLabels_);
+        const bool ownErr = ownErrors_ && ownErrLambdas_.count(&e) > 0;
+        if (ownErr && (!bare || atFileScope)) ownErrorsReject_ = true;  // called somewhere NexaC does not write
         std::ostringstream body;
         emitBlockStatements(body, e.children, localMap, varIdx, localStr, localConst, localFloat,
                             localChar, localBool, localEnum);
         emitImplicitFnTail(body, e, hasValRet);
+        errCatchLabels_.swap(savedCatch);
         emitFnRet_ = savedRet;
         inferredIntFn_ = savedInferred;
         tryFnRet_ = savedTryRet; tryFnName_ = savedTryName; tryInMain_ = savedTryMain;
         mainRetType_ = savedMainRet;
         varStructPop();
         nexaDeclStack_.pop_back();
-        const std::string lam = std::string(atFileScope ? "[](" : "[&](") + sig + ") -> " + nexaTypeToCpp(ret) + " {\n" +
-                                body.str() + "}";
+        // Its body is a function body for the error tests in it (the scanner's 'M').
+        const std::string lam = std::string(atFileScope ? "[](" : "[&](") + sig + ") -> " + nexaTypeToCpp(ret) +
+                                (ownErr ? " /*__nexa_fnbody*/{\n" : " {\n") + body.str() + "}";
+        if (ownErr && bare) return ownErrGuard(lam);
         return bare ? lam : nexaTypeToCpp(ty) + "(" + lam + ")";
     }
 
@@ -15250,6 +15321,60 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             return;
         }
         parts.push_back(&n);
+    }
+
+    // Does anything under n name `name`? Erring on yes: any node whose value or
+    // initValue is the name, a parameter of that name, or (inline C++ and asm, whose
+    // text NexaC does not read) the name anywhere in the text.
+    static bool astMentions(const AstNode& n, const std::string& name) {
+        if (n.value == name || n.initValue == name) return true;
+        for (const std::string& p : n.paramNames) if (p == name) return true;
+        if ((n.type == AstNode::Type::InlineCpp || n.type == AstNode::Type::InlineAsm) &&
+            n.value.find(name) != std::string::npos) {
+            return true;
+        }
+        for (const AstNode& c : n.children) if (astMentions(c, name)) return true;
+        for (const AstNode& d : n.paramDefaults) if (astMentions(d, name)) return true;
+        return false;
+    }
+
+    // Anything that can read v after the statement it sits in has run: a defer (it
+    // runs at the end of the block), a function literal (it can be kept and called
+    // later), or &v (a pointer can be read later).
+    static bool astMayReadLater(const AstNode& n, const std::string& name) {
+        if ((n.type == AstNode::Type::Defer || n.type == AstNode::Type::ExprLambda ||
+             n.type == AstNode::Type::ExprAddrOf) && astMentions(n, name)) {
+            return true;
+        }
+        for (const AstNode& c : n.children) if (astMayReadLater(c, name)) return true;
+        for (const AstNode& d : n.paramDefaults) if (astMayReadLater(d, name)) return true;
+        return false;
+    }
+
+    // xs.push(v) where it is v's last use: v is a let of this block (so a loop's next
+    // pass has a new one), nothing after the push in the block names it, and nothing
+    // can read it later. Then v is moved into the list rather than copied: a string's
+    // copy was ~250 bytes of code and an allocation a push.
+    mutable std::set<const AstNode*> pushMoves_;
+    void markPushMoves(const std::vector<AstNode>& kids) const {
+        for (size_t i = 0; i < kids.size(); ++i) {
+            const AstNode& st = kids[i];
+            if (st.type != AstNode::Type::FnCall || st.initValue != "." || st.value != "push" ||
+                st.children.size() != 2 || st.children[1].type != AstNode::Type::ExprVarRef) {
+                continue;
+            }
+            const std::string& v = st.children[1].value;
+            if (astMentions(st.children[0], v)) continue;
+            bool declared = false;
+            for (size_t j = 0; j < i; ++j) {
+                if (kids[j].type == AstNode::Type::Variable && kids[j].value == v) declared = true;
+            }
+            if (!declared) continue;
+            bool keep = false;
+            for (size_t k = i + 1; k < kids.size() && !keep; ++k) keep = astMentions(kids[k], v);
+            for (size_t k = 0; k < kids.size() && !keep; ++k) keep = astMayReadLater(kids[k], v);
+            if (!keep) pushMoves_.insert(&st.children[1]);
+        }
     }
 
     // A piece of __nexa_str_cat / __nexa_str_put: emitConcatOperand's choices, step for

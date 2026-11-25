@@ -96,7 +96,7 @@ static std::vector<std::string> __nexa_file_lines(const char* __path) {
     if (__b == std::string::npos) __b = __s.size();
     size_t __e = __b;
     if (__e > __a && __s[__e - 1] == '\r') __e--;
-    __out.emplace_back(__s, __a, __e - __a);
+    __out.push_back(__s.substr(__a, __e - __a));  // the push every list of strings shares
     __a = __b + 1;
   }
   return __out;
@@ -111,7 +111,7 @@ static void __nexa_file_walk_into(const std::string& __dir, const std::string& _
   if (__depth > 64) return;
   std::vector<std::string> __names = __nexa_file_list(__dir.c_str());
   for (size_t __i = 1; __i < __names.size(); __i++) {
-    for (size_t __j = __i; __j > 0 && __names[__j] < __names[__j - 1]; __j--) __names[__j].swap(__names[__j - 1]);
+    for (size_t __j = __i; __j > 0 && __names[__j] < __names[__j - 1]; __j--) { std::string __t = std::move(__names[__j]); __names[__j] = std::move(__names[__j - 1]); __names[__j - 1] = std::move(__t); }  // libstdc++'s swap is 1.5KB
   }
   for (const std::string& __n : __names) {
     const std::string __full = __nexa_file_join(__dir.c_str(), __n.c_str());

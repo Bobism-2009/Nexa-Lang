@@ -42,8 +42,8 @@ expect() {
 printf '#include <std/io>\nfn main() {\n    io.println("hi");\n}\n' > "$WORK/io.nxa"
 printf '#include <std/gfx>\nfn main() {\n    gfx.open("x", 10, 10, 1);\n}\n' > "$WORK/gfx.nxa"
 # A throw NexaC cannot follow is what needs C++ exceptions -- here one in a function
-# literal xs.map calls. A plain try/catch is NexaC's own errors and needs none
-# (nor do io.to_int and Result).
+# literal called through a variable. A plain try/catch is NexaC's own errors and
+# needs none (nor do io.to_int and Result).
 cat > "$WORK/exc.nxa" <<'NXA'
 #include <std/io>
 fn half(n: int): int {
@@ -51,8 +51,8 @@ fn half(n: int): int {
     return n / 2;
 }
 fn main() {
-    let xs = [2, 3];
-    try { let ys = xs.map(fn (x) { return half(x); }); io.println(len(ys)); } catch (e) { io.println(e); }
+    let f = fn (x: int): int { return half(x); };
+    try { io.println(f(3)); } catch (e) { io.println(e); }
 }
 NXA
 printf '#include <std/io>\nfn main() {\n    try {\n        io.println("n");\n    } catch (e) {\n        io.println(e);\n    }\n}\n' > "$WORK/own.nxa"

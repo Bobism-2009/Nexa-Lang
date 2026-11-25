@@ -39,10 +39,15 @@ OPTIONS
   throw and its catch are about 50 times faster than C++'s. Its uncaught error
   prints as "Uncaught error: <what was thrown>", after everything the program
   printed before it, and the exit status is 1.
+  A function literal that throws and is handed straight to xs.map, filter, find,
+  any, all or sort_by is NexaC's own errors too, since NexaC writes the loop that
+  calls it: the error leaves the literal, the literal is not called again, and
+  the call passes the error on as a throwing function's call does.
   A program keeps C++'s exceptions where NexaC cannot follow an error: a throw
-  (or a .value() that can fail, or a call to a function that can throw) inside a
-  function literal, a throwing function used as a value, threads, a --dll or
-  --shared library, inline_cpp or a C/C++ header. What it prints is the same
+  (or a .value() that can fail, or a call to a function that can throw) in a
+  function literal kept in a variable or passed to a function, a throwing
+  function used as a value, threads, a --dll or --shared library, inline_cpp or
+  a C/C++ header. What it prints is the same
   either way; such a program is 60-100KB rather than 140-260KB, without what the
   exception runtime can do without (the C++ demangler among it). A program with
   inline_cpp or a C/C++ header keeps the stock runtime.
