@@ -91,14 +91,36 @@ function parseNexaOutput(out) {
     }
     return problems;
 }
-/** Runs NexaC with --source into a temp file: the Nexa checks, no C++ compiler. */
+/**
+ * Runs NexaC with --source into a temp file: the Nexa checks, no C++ compiler.
+ * A file with no fn main() is a library's: it is checked again as one (--dll), since
+ * the missing main would be the only problem shown and is not one.
+ */
 function runNexacSource(filePath, outCpp, onDone) {
-    return cp.execFile((0, nexaRun_1.getNexacPath)(), [filePath, "--source", outCpp], { cwd: path.dirname(filePath), timeout: 20000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
-        const code = err?.code;
-        const missing = code === "ENOENT";
-        const killed = !!(err && err.killed);
-        onDone({ problems: parseNexaOutput(`${stdout}\n${stderr}`), ok: !err, missing, killed });
-    });
+    let child;
+    let killed = false;
+    const run = (extra) => {
+        child = cp.execFile((0, nexaRun_1.getNexacPath)(), [filePath, "--source", outCpp, ...extra], { cwd: path.dirname(filePath), timeout: 20000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+            const code = err?.code;
+            const missing = code === "ENOENT";
+            const timedOut = !!(err && err.killed);
+            const problems = parseNexaOutput(`${stdout}\n${stderr}`);
+            if (!killed &&
+                extra.length === 0 &&
+                problems.some((p) => p.severity === "error" && /^No fn main\(\) found/.test(p.message))) {
+                run(["--dll"]);
+                return;
+            }
+            onDone({ problems, ok: !err, missing, killed: killed || timedOut });
+        });
+    };
+    run([]);
+    return {
+        kill: () => {
+            killed = true;
+            child.kill();
+        },
+    };
 }
 function tempCpp(filePath) {
     const base = path.basename(filePath, path.extname(filePath)).replace(/[^A-Za-z0-9_-]/g, "_");

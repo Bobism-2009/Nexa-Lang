@@ -59,7 +59,7 @@ Install via **Extensions: Install from VSIX...**.
 ### NexaC integration
 - **Nexa: Run Current File** — runs `NexaC path.nxa --run` in the integrated terminal (editor run button or `Ctrl+Shift+R` / `Cmd+Shift+R`)
 - **Nexa: Build Current File** — runs `NexaC path.nxa`
-- **Errors as you save** — each file is checked by NexaC when it opens and each time it is saved (`NexaC file.nxa --source`, so only the Nexa checks run, not the C++ compiler); errors and warnings show in the editor and the Problems panel. A file that other workspace files `#include` is checked through the files at the top of those includes, so it can rely on what they include before it, and an error inside it is shown in it. **Nexa: Check Current File** runs it on demand
+- **Errors as you save** — each file is checked by NexaC when it opens and each time it is saved (`NexaC file.nxa --source`, so only the Nexa checks run, not the C++ compiler); errors and warnings show in the editor and the Problems panel. A file that other workspace files `#include` is checked through the files at the top of those includes, so it can rely on what they include before it, and an error inside it is shown in it. A file with no `fn main()` is checked as a library (`--dll`), so library files do not report a missing `main`. **Nexa: Check Current File** runs it on demand
 - **Nexa: Show Generated C++** — the C++ NexaC makes from the file, beside it (also in the editor's right-click menu)
 - Setting **`nexa.nexacPath`** — path to `NexaC` (default: `NexaC` on PATH)
 - Setting **`nexa.checkOnSave`** — turn the checking off (default: on)

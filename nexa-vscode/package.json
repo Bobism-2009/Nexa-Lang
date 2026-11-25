@@ -2,7 +2,7 @@
   "name": "nexa",
   "displayName": "Nexa Language",
   "description": "Syntax highlighting, NexaC errors as you save, completions, parameter hints, hover, rename, go-to definition, outline, folding, and NexaC run/build for Nexa (.nxa)",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "publisher": "nexac",
   "main": "./out/extension.js",
   "engines": {

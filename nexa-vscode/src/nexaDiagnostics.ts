@@ -61,23 +61,51 @@ export function parseNexaOutput(out: string): NexaProblem[] {
   return problems;
 }
 
-/** Runs NexaC with --source into a temp file: the Nexa checks, no C++ compiler. */
+export interface NexacRun {
+  kill(): void;
+}
+
+/**
+ * Runs NexaC with --source into a temp file: the Nexa checks, no C++ compiler.
+ * A file with no fn main() is a library's: it is checked again as one (--dll), since
+ * the missing main would be the only problem shown and is not one.
+ */
 export function runNexacSource(
   filePath: string,
   outCpp: string,
   onDone: (result: { problems: NexaProblem[]; ok: boolean; missing: boolean; killed: boolean }) => void
-): cp.ChildProcess {
-  return cp.execFile(
-    getNexacPath(),
-    [filePath, "--source", outCpp],
-    { cwd: path.dirname(filePath), timeout: 20000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 },
-    (err, stdout, stderr) => {
-      const code = (err as NodeJS.ErrnoException | null)?.code;
-      const missing = code === "ENOENT";
-      const killed = !!(err && (err as cp.ExecException).killed);
-      onDone({ problems: parseNexaOutput(`${stdout}\n${stderr}`), ok: !err, missing, killed });
-    }
-  );
+): NexacRun {
+  let child: cp.ChildProcess;
+  let killed = false;
+  const run = (extra: string[]) => {
+    child = cp.execFile(
+      getNexacPath(),
+      [filePath, "--source", outCpp, ...extra],
+      { cwd: path.dirname(filePath), timeout: 20000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        const code = (err as NodeJS.ErrnoException | null)?.code;
+        const missing = code === "ENOENT";
+        const timedOut = !!(err && (err as cp.ExecException).killed);
+        const problems = parseNexaOutput(`${stdout}\n${stderr}`);
+        if (
+          !killed &&
+          extra.length === 0 &&
+          problems.some((p) => p.severity === "error" && /^No fn main\(\) found/.test(p.message))
+        ) {
+          run(["--dll"]);
+          return;
+        }
+        onDone({ problems, ok: !err, missing, killed: killed || timedOut });
+      }
+    );
+  };
+  run([]);
+  return {
+    kill: () => {
+      killed = true;
+      child.kill();
+    },
+  };
 }
 
 function tempCpp(filePath: string): string {
@@ -188,7 +216,7 @@ export function registerDiagnostics(context: vscode.ExtensionContext): {
 } {
   const collection = vscode.languages.createDiagnosticCollection("nexa");
   context.subscriptions.push(collection);
-  const running = new Map<string, cp.ChildProcess>();
+  const running = new Map<string, NexacRun>();
   /** Per checked file, the problems it found, by the file they are in. */
   const results = new Map<string, Map<string, vscode.Diagnostic[]>>();
   let warnedMissing = false;
