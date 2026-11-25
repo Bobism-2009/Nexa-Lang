@@ -193,11 +193,6 @@ struct Manifest {
     // The small build is the one a project opts into, knowing where it ships.
     // Settled 2026-11-06; size alone is not a reason to turn this around.
     std::string x11;
-    // icon -- a .ico file, relative to this manifest, that a Windows build puts in
-    // the .exe (or .dll) as its icon: what Explorer and the taskbar show. Built with
-    // the toolchain's windres. Other platforms' programs have no icon in the file,
-    // so there it is only checked, not used. Empty means none.
-    std::string icon;
     // targets -- extra platforms "NexaC build" should produce as well as the
     // host's. Names are the ones --target already knows, from
     // "nexapkg target list", plus "windows" and "wasm" which are built in.
@@ -237,7 +232,6 @@ static bool readManifest(const fs::path& path, Manifest& m) {
     m.dll = findStringField(content, "dll");
     m.dllOutput = findStringField(content, "dllOutput");
     m.x11 = findStringField(content, "x11");
-    m.icon = findStringField(content, "icon");
     m.targets = findStringArray(content, "targets");
 
     m.deps.clear();
@@ -272,7 +266,6 @@ static void writeManifest(const fs::path& path, const Manifest& m) {
     if (!m.dll.empty()) out << "  \"dll\": \"" << jsonEscape(m.dll) << "\",\n";
     if (!m.dllOutput.empty()) out << "  \"dllOutput\": \"" << jsonEscape(m.dllOutput) << "\",\n";
     if (!m.x11.empty()) out << "  \"x11\": \"" << jsonEscape(m.x11) << "\",\n";
-    if (!m.icon.empty()) out << "  \"icon\": \"" << jsonEscape(m.icon) << "\",\n";
     if (!m.targets.empty()) {
         out << "  \"targets\": [";
         for (size_t k = 0; k < m.targets.size(); k++) {
