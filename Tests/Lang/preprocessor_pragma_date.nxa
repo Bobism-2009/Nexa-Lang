@@ -1,0 +1,24 @@
+// _Pragma, __DATE__ and __TIME__.
+// _Pragma("text") is #pragma text from a string, so a macro can make one: the messages
+// go to the build's output, and the tokens leave nothing in the program. __DATE__ and
+// __TIME__ change from build to build, so their shape is checked, not their text.
+#include <std/io>
+
+#define DO_PRAGMA(x) _Pragma(#x)
+#define TODO(msg) DO_PRAGMA(message("TODO: " msg))
+
+_Pragma("once")
+TODO("check the shapes")
+
+fn digit(c: char): bool { return c >= '0' && c <= '9'; }
+
+fn main() {
+    _Pragma("message(\"inside a function\")")
+    let d: string = __DATE__;
+    let t: string = __TIME__;
+    io.println(len(d), " ", len(t));
+    io.println(d[3] == ' ' && d[6] == ' ' && digit(d[7]) && digit(d[10]));
+    io.println(t[2] == ':' && t[5] == ':' && digit(t[0]) && digit(t[7]));
+    let months = "JanFebMarAprMayJunJulAugSepOctNovDec";
+    io.println(months.contains(d[0:3]));
+}

@@ -518,6 +518,7 @@ DEFINES
     #line 1 "generated.nxa"            ... and __FILE__ is "generated.nxa"
     #pragma once
     #pragma message("text")            prints the text and builds on
+    _Pragma("message(\"text\")")       #pragma from a string a macro can make
   - __has_include finds what #include finds: a std module that exists, a .nxa
     or a header in quotes beside the file, a .nxa package. <vector>, <stdio.h>
     and the other C and C++ standard headers are 1. Another <header> is looked
@@ -528,9 +529,15 @@ DEFINES
     file name changes __FILE__; error messages keep naming the real file.
   - Every file is read once already, so #pragma once asks for nothing more.
     Another #pragma is ignored with a warning naming it, as C compilers do.
+    #pragma message joins strings side by side, as C does: message("a" "b").
+  - _Pragma("text") is #pragma text, written where a #define can put it:
+      #define DO_PRAGMA(x) _Pragma(#x)
+      #define TODO(msg) DO_PRAGMA(message("TODO: " msg))
+      TODO("tidy this")                   prints TODO: tidy this as it builds
+    It leaves nothing in the program, so write no ; after it.
 
   Predefined (they cannot be #undef'd or redefined)
-    __LINE__  __FILE__  __COUNTER__  __NEXA__
+    __LINE__  __FILE__  __COUNTER__  __DATE__  __TIME__  __NEXA__
     _WIN32 _WIN64     Windows (--win too)
     __linux__ __unix__  Linux, and --target platforms built on it
     __APPLE__ __MACH__  macOS
@@ -539,6 +546,10 @@ DEFINES
   - The names C compilers use, for the target being built for, not the
     machine building it: --win on Linux has _WIN32. __FILE__ is the source
     file's full path; __COUNTER__ is 0, 1, 2 ... across the whole build.
+  - __DATE__ ("Nov 25 2026") and __TIME__ ("14:03:07") are strings: when the
+    build started, in local time, as in C. With SOURCE_DATE_EPOCH set (seconds
+    since 1970) they are that time in UTC instead, as GCC and clang read it, so
+    a build that uses them can be made the same twice.
 
 ARITHMETIC
   + - * / %
@@ -731,6 +742,10 @@ SLICES ([]T)
       let hi = xs.max();   // largest
       let t  = xs.sum();   // total
       let s  = parts.join(", ");   // []string -> string
+
+    sort and sort_desc take no extra memory and are not stable: equal elements
+    may change places, which nothing that sort accepts can show. (sort_by is
+    stable.) 2 million ints sort in about 130ms.
 
     sort / sort_desc / reverse / min / max work on []int, []float and []string,
     and on any other element `<` compares: the other integer widths (short,

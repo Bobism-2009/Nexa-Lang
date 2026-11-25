@@ -117,7 +117,7 @@
         },
         {
           "name": "support.constant.predefined-macro.nexa",
-          "match": "\\b(?:__LINE__|__FILE__|__COUNTER__|__NEXA__|_WIN32|_WIN64|__linux__|__unix__|__APPLE__|__MACH__|__wasm__|__wasm32__|__wasi__|__x86_64__|__aarch64__|__i386__|__arm__|__mips__|__riscv)\\b"
+          "match": "\\b(?:__LINE__|__FILE__|__COUNTER__|__DATE__|__TIME__|_Pragma|__NEXA__|_WIN32|_WIN64|__linux__|__unix__|__APPLE__|__MACH__|__wasm__|__wasm32__|__wasi__|__x86_64__|__aarch64__|__i386__|__arm__|__mips__|__riscv)\\b"
         },
         {
           "name": "meta.preprocessor.include.angle.nexa",

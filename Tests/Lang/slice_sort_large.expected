@@ -1,0 +1,8 @@
+random asc=true desc=true
+sorted asc=true desc=true
+reversed asc=true desc=true
+organ asc=true desc=true
+few asc=true desc=true
+float/string/char/bool ok=true
+falsefalsefalsetruetrue
+truetruefalsefalsefalse

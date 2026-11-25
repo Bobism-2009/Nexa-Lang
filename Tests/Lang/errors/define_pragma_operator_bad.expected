@@ -1,0 +1,1 @@
+_Pragma takes the pragma as one string: _Pragma("message(\"text\")") at line 2

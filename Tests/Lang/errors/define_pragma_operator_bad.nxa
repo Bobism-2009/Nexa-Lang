@@ -1,0 +1,3 @@
+// _Pragma takes the pragma as one string in parentheses; a bare word is refused.
+_Pragma(message)
+fn main() {}

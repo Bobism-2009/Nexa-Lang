@@ -18,7 +18,8 @@
 #              range loops (a..b, a..<b, over chars), an enum taken apart by match (as a statement and as a value, with a guard), a match
 #              on a Result and on ints (with ranges) and strings, and an Option with its methods, ?, m.get and xs.first,
 #              xs.filter / any / all / map / find given function literals, #define / #if / # / __has_include / #pragma, s.tokens,
-#              xs.sort_by (on ints, as filter/map are: a []Item costs a page on Linux), and a range loop with a step -- is
+#              xs.sort_by (on ints, as filter/map are: a []Item costs a page on Linux), xs.sort, _Pragma, __DATE__,
+#              and a range loop with a step -- is
 #              under 64KB, and prints
 #              exactly what the same program built without the slimming
 #              (NEXA_NO_SLIM=1) prints. It does not include std/gfx3d, so the
@@ -88,6 +89,7 @@ cat > "$WORK/every.nxa" <<'EOF'
 #include <std/inline>
 
 #pragma once
+_Pragma("once")
 #define SCALE(x) ((x) * 2)
 #define NAME_OF(x) #x
 #if (defined(_WIN32) || defined(__linux__)) && __has_include(<std/io>)
@@ -197,11 +199,12 @@ fn main() {
     io.println(lw.or("-"), " ", lw.is_some(), " ", loud([]).is_none(), " ", lw.value().len());
     io.println(totals.get("cup").or(0), " ", totals.get("nope").is_none(), " ", words.first().or(""), " ", items.last().value().name);
     bag.sort_by(fn (a, b) { return a > b; });
+    bag.sort();
     let few = bag.filter(fn (x) { return x > 1; });
     io.println(len(few), " ", items.any(fn (it) { return it.qty > 10; }), " ", bag.all(fn (x: int) { return x > 0; }),
                " ", bag.map(fn (x) { return x * sum; }).sum(), " ",
                items.find(fn (it) { return it.name == "cup"; }).value().qty);
-    io.println(SCALE(OS_OK), " ", NAME_OF(items[0]), " ", __LINE__);
+    io.println(SCALE(OS_OK), " ", NAME_OF(items[0]), " ", __LINE__, " ", len(__DATE__));
 }
 EOF
 

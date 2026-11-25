@@ -5,9 +5,11 @@
 //     ((x) * (x)), with ... , __VA_ARGS__ and __VA_OPT__) macros, with # (stringize) and
 //     ## (paste) in a body;
 //   #if, #ifdef, #ifndef, #elif, #elifdef, #elifndef, #else and #endif, with defined;
-//   #error and #warning; #line N ["file"]; #pragma once and #pragma message("text");
+//   #error and #warning; #line N ["file"]; #pragma once and #pragma message("text"),
+//     and _Pragma("...") for a pragma a macro can make;
 //   __has_include(<std/io>) and __has_include("file.nxa") in an #if;
-//   predefined macros: __LINE__, __FILE__, __COUNTER__, __NEXA__ and the target's own,
+//   predefined macros: __LINE__, __FILE__, __COUNTER__, __DATE__, __TIME__, __NEXA__ and
+//     the target's own,
 //     as C compilers name them (_WIN32, __linux__, __APPLE__, __x86_64__, __aarch64__ ...).
 // Expansion follows C's rules -- arguments are expanded before they are put in (except
 // beside # and ##), the result is scanned again, and a macro never expands inside its
@@ -21,6 +23,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <deque>
 #include <functional>
 #include <iostream>
@@ -80,6 +83,37 @@ inline NexaMacroTable nexaPredefinedMacros(const std::string& triple) {
     builtin("__LINE__", NexaMacro::Builtin::Line);
     builtin("__FILE__", NexaMacro::Builtin::File);
     builtin("__COUNTER__", NexaMacro::Builtin::Counter);
+    // __DATE__ "Nov 25 2026" and __TIME__ "14:03:07": when the build started, as C's are.
+    // SOURCE_DATE_EPOCH (seconds since 1970, UTC), when set, is the time instead, as GCC
+    // and clang read it, so a build that names them can still be made the same twice.
+    {
+        std::time_t now = std::time(nullptr);
+        bool utc = false;
+        if (const char* sde = std::getenv("SOURCE_DATE_EPOCH")) {
+            char* end = nullptr;
+            const long long v = std::strtoll(sde, &end, 10);
+            if (*sde && end && *end == '\0' && v >= 0) {
+                now = static_cast<std::time_t>(v);
+                utc = true;
+            }
+        }
+        const std::tm* tm = utc ? std::gmtime(&now) : std::localtime(&now);
+        static const char* const months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                             "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+        char date[32] = "??? ?? ????";
+        char clock[32] = "??:??:??";
+        if (tm) {
+            std::snprintf(date, sizeof(date), "%s %2d %d", months[tm->tm_mon % 12], tm->tm_mday, tm->tm_year + 1900);
+            std::snprintf(clock, sizeof(clock), "%02d:%02d:%02d", tm->tm_hour, tm->tm_min, tm->tm_sec);
+        }
+        auto text = [&t](const char* name, const char* value) {
+            NexaMacro m;
+            m.body.push_back({TokenType::String, value, 0});
+            t[name] = std::move(m);
+        };
+        text("__DATE__", date);
+        text("__TIME__", clock);
+    }
     one("__NEXA__");
     const std::string arch = triple.substr(0, triple.find('-'));
     auto has = [&triple](const char* s) { return triple.find(s) != std::string::npos; };
@@ -152,8 +186,8 @@ public:
     static bool needed(const std::vector<Token>& toks, const NexaMacroTable* predefined) {
         for (const Token& t : toks) {
             if (t.type == TokenType::Define || t.type == TokenType::Undef || t.type == TokenType::Directive) return true;
-            if (predefined && t.type == TokenType::Identifier && !t.value.empty() && t.value[0] == '_' &&
-                predefined->count(t.value)) {
+            if (t.type == TokenType::Identifier && !t.value.empty() && t.value[0] == '_' &&
+                ((predefined && predefined->count(t.value)) || t.value == "_Pragma")) {
                 return true;
             }
         }
@@ -540,18 +574,33 @@ private:
         const std::string name = readName(text, i);
         if (name == "once" && restEmpty(text, i)) return;
         if (name == "message") {
+            // One string or several side by side, joined as C joins them: a macro can
+            // put "TODO: " before its argument's text.
             skipBlanks(text, i);
             const bool paren = i < text.size() && text[i] == '(';
             if (paren) i++;
             skipBlanks(text, i);
-            const size_t close = i < text.size() && text[i] == '"' ? text.find('"', i + 1) : std::string::npos;
-            size_t j = close == std::string::npos ? close : close + 1;
-            if (j != std::string::npos) skipBlanks(text, j);
-            if (paren && j != std::string::npos) j = j < text.size() && text[j] == ')' ? j + 1 : std::string::npos;
-            if (j == std::string::npos || !restEmpty(text, j)) {
+            std::string said;
+            bool any = false, bad = false;
+            while (!bad && i < text.size() && text[i] == '"') {
+                any = true;
+                size_t k = i + 1;
+                for (; k < text.size() && text[k] != '"'; k++) {
+                    if (text[k] == '\\' && k + 1 < text.size()) k++;
+                    said += text[k];
+                }
+                if (k >= text.size()) bad = true;
+                i = k + 1;
+                skipBlanks(text, i);
+            }
+            if (paren && !bad) {
+                if (i < text.size() && text[i] == ')') i++;
+                else bad = true;
+            }
+            if (!any || bad || !restEmpty(text, i)) {
                 fail("#pragma message takes the text in quotes: #pragma message(\"text\")", line);
             }
-            std::cerr << "[Nexa] " << where << "#pragma message: " << text.substr(i + 1, close - i - 1) << "\n";
+            std::cerr << "[Nexa] " << where << "#pragma message: " << said << "\n";
             return;
         }
         std::cerr << "[Nexa] Warning: " << where << "#pragma " << text
@@ -1008,6 +1057,18 @@ private:
                 continue;
             }
             const NexaMacro* found = lookup(t.value);
+            // _Pragma("message(\"text\")"): #pragma's text, from a string a macro can build.
+            if (!found && t.value == "_Pragma") {
+                if (q.size() < 3 || q[0].t.type != TokenType::LParen || q[1].t.type != TokenType::String ||
+                    q[2].t.type != TokenType::RParen) {
+                    fail("_Pragma takes the pragma as one string: _Pragma(\"message(\\\"text\\\")\")", t.line);
+                }
+                const std::string text = q[1].t.value;
+                const size_t line = t.line;
+                q.erase(q.begin(), q.begin() + 3);
+                pragma(text, line, (file_.empty() ? std::string() : file_ + ":") + std::to_string(mapLine(line)) + ": ");
+                continue;
+            }
             if (!found || hidden(h, t.value)) {
                 out.push_back(std::move(h));
                 continue;

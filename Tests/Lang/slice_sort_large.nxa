@@ -1,0 +1,75 @@
+// xs.sort() / sort_desc() past the sizes slice_algorithms pins: an introsort, so a
+// slice of more than 24 goes through the quicksort's splits and the insertion sort at
+// their ends. Each case sorts a few thousand elements in the shapes that break a
+// quicksort -- random, sorted, reversed, organ pipe, few distinct keys -- and checks
+// order and contents (the sum) rather than printing them.
+//
+// []bool and []char are here because the heapsort this replaced swapped through
+// `auto`, which for a []bool's bit proxies swapped two references: [true, false,
+// true, false, false].sort() gave false false true false false.
+// Reference: SYNTAX/Core.txt ("SLICE ALGORITHMS")
+#include <std/io>
+
+fn up(xs: []int): bool {
+    for (i in 1..<len(xs)) { if (xs[i - 1] > xs[i]) { return false; } }
+    return true;
+}
+fn down(xs: []int): bool {
+    for (i in 1..<len(xs)) { if (xs[i - 1] < xs[i]) { return false; } }
+    return true;
+}
+fn total(xs: []int): int {
+    let t = 0;
+    for (x in xs) { t += x; }
+    return t;
+}
+
+fn main() {
+    let r = 12345;
+    let names: []string = ["random", "sorted", "reversed", "organ", "few"];
+    for (shape in 0..<5) {
+        let xs: []int;
+        for (i in 0..<3000) {
+            r = (r * 1103515245 + 12345) % 2147483648;
+            if (shape == 0) { xs.push(r % 100000); }
+            if (shape == 1) { xs.push(i); }
+            if (shape == 2) { xs.push(3000 - i); }
+            if (shape == 3) { if (i < 1500) { xs.push(i); } else { xs.push(3000 - i); } }
+            if (shape == 4) { xs.push(r % 3); }
+        }
+        let before = total(xs);
+        xs.sort();
+        let a = up(xs) && total(xs) == before;
+        xs.sort_desc();
+        let b = down(xs) && total(xs) == before;
+        io.println(names[shape], " asc=", a, " desc=", b);
+    }
+
+    let fs: []float;
+    let ss: []string;
+    let cs: []char;
+    let bs: []bool;
+    for (i in 0..<1000) {
+        r = (r * 1103515245 + 12345) % 2147483648;
+        fs.push((r % 20001 - 10000) * 0.25);
+        ss.push(f"k{r % 500}");
+        cs.push('a' + r % 26);
+        bs.push(r % 2 == 0);
+    }
+    fs.sort();
+    ss.sort_desc();
+    cs.sort();
+    bs.sort();
+    let ok = true;
+    for (i in 1..<1000) {
+        if (fs[i - 1] > fs[i] || ss[i - 1] < ss[i] || cs[i - 1] > cs[i]) { ok = false; }
+        if (bs[i - 1] && !bs[i]) { ok = false; }
+    }
+    io.println("float/string/char/bool ok=", ok);
+
+    let small: []bool = [true, false, true, false, false];
+    small.sort();
+    io.println(small[0], small[1], small[2], small[3], small[4]);
+    small.sort_desc();
+    io.println(small[0], small[1], small[2], small[3], small[4]);
+}

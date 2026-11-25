@@ -950,6 +950,8 @@ public:
         if (needsCstddef && moduleCppIncludes.find("#include <cstddef>\n") == std::string::npos) out << "#include <cstddef>\n";
         if (!moduleCppIncludes.empty() || !inlineCppHoisted.empty() || needsString || needsVector || needsMap || needsFunctional || needsCstdlib || needsCstddef) out << "\n";
         if (needsString) out << "[[maybe_unused]] static std::string __nexa_f2s(double __v) { char __b[32]; std::snprintf(__b, sizeof(__b), \"%g\", __v); return std::string(__b); }\n\n";
+        // xs.sort(): kSortRuntime, put in after the emit only if a call reached it.
+        if (needsVector) out << kSortMarker;
         if (needsFmt) out << kFmtRuntime;
         if (needsCstr) out << "[[maybe_unused]] static std::string __nexa_cstr(const char* __p) { return __p ? std::string(__p) : std::string(); }\n\n";
         if (needsDefer) {
@@ -2015,6 +2017,8 @@ public:
             // Filled in before the dedup, so a line the marker sat in front of is read as itself.
             const size_t at = src.find(kNoneMarker);
             if (at != std::string::npos) src.replace(at, std::string(kNoneMarker).size(), needNoneFail_ ? kNoneRuntime : "");
+            const size_t sat = src.find(kSortMarker);
+            if (sat != std::string::npos) src.replace(sat, std::string(kSortMarker).size(), needSort_ ? kSortRuntime : "");
             const size_t fat = src.find(kFunctionalMarker);
             if (fat != std::string::npos) {
                 src.replace(fat, std::string(kFunctionalMarker).size(),
@@ -2348,34 +2352,6 @@ private:
                m == "find" || m == "any" || m == "all" || m == "filter" || m == "map";
     }
 
-    // xs.sort() / xs.sort_desc(), as an in-place heapsort over the emitted receiver.
-    //
-    // Heapsort rather than std::sort because <algorithm> is not one of the headers a
-    // Nexa program pulls in, and a slice sort is not worth making it one -- the whole
-    // point of the emit is that a program includes only what it reaches. Heapsort is
-    // the one O(n log n) in-place sort that needs no recursion, no scratch buffer and
-    // no median-picking, so it fits in a call-site lambda; insertion sort would have
-    // fitted too, but a quadratic sort behind a one-word method call is a trap.
-    //
-    // The direction is the heap's comparison: a max-heap drains ascending, so `<`
-    // sorts up and `>` sorts down. Heapsort is unstable, which is unobservable here
-    // because a slice of int / float / string holds no payload beside the key.
-    static std::string emitSliceSort(const std::string& recv, bool descending) {
-        const std::string op = descending ? " > " : " < ";
-        return "([&](){ auto& __nexa_v = " + recv + "; size_t __nexa_n = __nexa_v.size();"
-               " auto __nexa_sift = [&](size_t __nexa_r, size_t __nexa_m){"
-               " while (true) {"
-               " size_t __nexa_c = __nexa_r * 2 + 1;"
-               " if (__nexa_c >= __nexa_m) break;"
-               " if (__nexa_c + 1 < __nexa_m && __nexa_v[__nexa_c]" + op + "__nexa_v[__nexa_c + 1]) __nexa_c++;"
-               " if (!(__nexa_v[__nexa_r]" + op + "__nexa_v[__nexa_c])) break;"
-               " auto __nexa_t = __nexa_v[__nexa_r]; __nexa_v[__nexa_r] = __nexa_v[__nexa_c]; __nexa_v[__nexa_c] = __nexa_t;"
-               " __nexa_r = __nexa_c; } };"
-               " for (size_t __nexa_i = __nexa_n / 2; __nexa_i-- > 0; ) __nexa_sift(__nexa_i, __nexa_n);"
-               " for (size_t __nexa_i = __nexa_n; __nexa_i-- > 1; ) {"
-               " auto __nexa_t = __nexa_v[0]; __nexa_v[0] = __nexa_v[__nexa_i]; __nexa_v[__nexa_i] = __nexa_t;"
-               " __nexa_sift(0, __nexa_i); } })()";
-    }
 
     // xs.sort_by(f), in place and stable: elements f does not put apart keep their
     // order, which is the point of sorting records by one field. Runs of 32 are
@@ -4894,7 +4870,8 @@ private:
                 }
                 if (e.value == "sort" || e.value == "sort_desc") {
                     if (e.children.size() != 1) throw std::runtime_error(e.value + " expects no arguments");
-                    return emitSliceSort(recv, e.value == "sort_desc");
+                    needSort_ = true;
+                    return std::string("__nexa_sort<") + (e.value == "sort_desc" ? "true" : "false") + ">(" + recv + ")";
                 }
                 if (e.value == "sort_by") {
                     sortByArgCheck(e, nexaSliceElem(recvBare));
@@ -8635,6 +8612,93 @@ template <class __I> inline const char& __nexa_ix(const std::string& __s, __I __
     static constexpr const char* kShowMarker = "// [nexa:show]";
     // Option.value() on None: an exception a try/catch can catch when the program has
     // one; otherwise say so and stop, as Result.value() on an error does.
+    // xs.sort() / xs.sort_desc(), in place: an introsort, one copy per element type.
+    //
+    // Not std::sort, because <algorithm> is not one of the headers a Nexa program pulls
+    // in, and a slice sort is not worth making it one -- the whole point of the emit is
+    // that a program includes only what it reaches. Quicksort without recursion: the
+    // larger side of each split waits on a fixed stack and the loop goes on with the
+    // smaller, so the stack never holds more than log2(n) + 1 ranges. Median-of-three
+    // picks the pivot; the partition stops on keys equal to it from both sides, so a
+    // slice of few distinct values ([]bool) still splits evenly. Ranges of 24 or fewer
+    // are insertion-sorted. A range split more than 2*log2(n) deep is heapsorted, so no
+    // input is quadratic. Nothing is allocated; elements are moved, never copied.
+    //
+    // __D sorts down. Unstable, which is unobservable: a slice of int / float / string /
+    // char / bool holds nothing beside the key. Temporaries are value_type, not auto, so
+    // a []bool's bit proxies are read as values -- the heapsort this replaced swapped
+    // through `auto`, which swapped two references, and sorted [true, false] wrong.
+    // A function, not a lambda at each call: a program with several sorts of one
+    // element type carries the code once.
+    mutable bool needSort_ = false;
+    static constexpr const char* kSortMarker = "// [nexa:sort]\n";
+    static constexpr const char* kSortRuntime = R"NEXA_SORT(template <bool __D, class __C> static void __nexa_sort(__C& __v) {
+    typedef typename __C::value_type __T;
+    const size_t __n = __v.size();
+    if (__n < 2) return;
+    auto __lt = [](const __T& __a, const __T& __b) { return __D ? __b < __a : __a < __b; };
+    auto __sw = [&](size_t __a, size_t __b) { __T __t = std::move(__v[__a]); __v[__a] = std::move(__v[__b]); __v[__b] = std::move(__t); };
+    size_t __st[3 * 66];
+    size_t __d = 0;
+    for (size_t __k = __n; __k > 1; __k >>= 1) __d += 2;
+    __st[0] = 0; __st[1] = __n; __st[2] = __d;
+    int __sp = 3;
+    while (__sp > 0) {
+        __sp -= 3;
+        size_t __lo = __st[__sp], __hi = __st[__sp + 1];
+        __d = __st[__sp + 2];
+        while (__hi - __lo > 24) {
+            if (__d == 0) {
+                const size_t __m = __hi - __lo;
+                auto __sift = [&](size_t __r, size_t __e) {
+                    while (true) {
+                        size_t __c = __r * 2 + 1;
+                        if (__c >= __e) break;
+                        if (__c + 1 < __e && __lt(__v[__lo + __c], __v[__lo + __c + 1])) __c++;
+                        if (!__lt(__v[__lo + __r], __v[__lo + __c])) break;
+                        __sw(__lo + __r, __lo + __c);
+                        __r = __c;
+                    }
+                };
+                for (size_t __i = __m / 2; __i-- > 0;) __sift(__i, __m);
+                for (size_t __i = __m; __i-- > 1;) { __sw(__lo, __lo + __i); __sift(0, __i); }
+                __lo = __hi;
+                break;
+            }
+            __d--;
+            const size_t __mid = __lo + (__hi - __lo) / 2;
+            if (__lt(__v[__mid], __v[__lo])) __sw(__mid, __lo);
+            if (__lt(__v[__hi - 1], __v[__mid])) {
+                __sw(__hi - 1, __mid);
+                if (__lt(__v[__mid], __v[__lo])) __sw(__mid, __lo);
+            }
+            __sw(__lo, __mid);
+            size_t __i = __lo, __j = __hi;
+            while (true) {
+                while (__lt(__v[++__i], __v[__lo])) if (__i == __hi - 1) break;
+                while (__lt(__v[__lo], __v[--__j])) {}
+                if (__i >= __j) break;
+                __sw(__i, __j);
+            }
+            __sw(__lo, __j);
+            if (__j - __lo < __hi - __j - 1) {
+                __st[__sp] = __j + 1; __st[__sp + 1] = __hi; __st[__sp + 2] = __d; __sp += 3;
+                __hi = __j;
+            } else {
+                __st[__sp] = __lo; __st[__sp + 1] = __j; __st[__sp + 2] = __d; __sp += 3;
+                __lo = __j + 1;
+            }
+        }
+        for (size_t __i = __lo + 1; __i < __hi; __i++) {
+            __T __x = std::move(__v[__i]);
+            size_t __j = __i;
+            for (; __j > __lo && __lt(__x, __v[__j - 1]); __j--) __v[__j] = std::move(__v[__j - 1]);
+            __v[__j] = std::move(__x);
+        }
+    }
+}
+
+)NEXA_SORT";
     mutable bool needNoneFail_ = false;
     static constexpr const char* kNoneMarker = "// [nexa:none]";
     static constexpr const char* kFunctionalMarker = "// [nexa:functional]\n";
