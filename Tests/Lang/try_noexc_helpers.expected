@@ -1,0 +1,12 @@
+true 1 3 2
+contains caught odd: 3
+index_of caught odd: 5
+note b
+note c
+false
+note a
+order caught odd: 1
+3
+Some caught odd: 7
+8
+Box caught odd: 9

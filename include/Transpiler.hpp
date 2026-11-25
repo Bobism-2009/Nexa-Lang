@@ -318,7 +318,7 @@ public:
         // Nexa, so those keep the exception runtime.
         ownErrors_ = ownErrorsAllowed_ && !buildDll_ && !modules_.hasInlineCpp() && !modules_.hasCppHeader() &&
                      ownErrorsEligible();
-        if (!ownErrors_) { mayThrowFns_.clear(); mayThrowMethods_.clear(); ownErrLambdas_.clear(); }
+        if (!ownErrors_) { mayThrowFns_.clear(); mayThrowMethods_.clear(); ownErrLambdas_.clear(); valueCalls_.clear(); fnValuesThrow_ = false; }
 
         if (target_ == CppTarget::Wasm) {
             out << "#define NEXA_WASM 1\n";
@@ -2234,6 +2234,31 @@ private:
     // Function literals that can throw, handed straight to xs.find / any / all / filter /
     // map / sort_by: NexaC writes the loop that calls them, so their errors are its own too.
     std::set<const AstNode*> ownErrLambdas_;
+    // Calls through a function value: f(x) with f a variable or parameter, c.run(x) with run
+    // a field holding a function, an expression called (fs[0](x)), and a slice function
+    // given a function value. When a function value can throw (fnValuesThrow_: a throwing
+    // literal kept or passed, or a throwing function used as a value), each of these is
+    // followed by the flag test. Every one emitted must be one counted here.
+    std::set<const AstNode*> valueCalls_;
+    bool fnValuesThrow_ = false;
+
+    static bool isSliceFnName(const std::string& v) {
+        return v == "find" || v == "any" || v == "all" || v == "filter" || v == "map" || v == "sort_by";
+    }
+
+    // At a call through a function value of type fnType: the call, then the test, when one
+    // can throw. One NexaC did not count, or one at file scope, builds the program with
+    // C++'s exceptions instead.
+    std::string valueCallChecked(const AstNode& e, const std::string& call, const std::string& fnType) const {
+        if (!ownErrors_ || !fnValuesThrow_) return call;
+        std::vector<std::string> params;
+        std::string ret;
+        if (!valueCalls_.count(&e) || emitAtFileScope_ || !nexaSplitFnType(fnType, params, ret)) {
+            ownErrorsReject_ = true;
+            return call;
+        }
+        return errChecked(call, ret == "void");
+    }
 
     static bool isSliceFnCall(const AstNode& n) {
         return n.type == AstNode::Type::FnCall && n.initValue == "." && n.children.size() == 2 &&
@@ -2244,6 +2269,7 @@ private:
 
     // A call that can raise one of NexaC's own errors.
     bool callMayRaise(const AstNode& n) const {
+        if (fnValuesThrow_ && valueCalls_.count(&n)) return true;
         if (n.type != AstNode::Type::FnCall) return false;
         if (n.initValue.empty()) return mayThrowFns_.count(n.value) > 0;
         if (n.initValue != "." && n.initValue != "->") return false;
@@ -2315,6 +2341,26 @@ static std::string __nexa_err_msg;
         if (tryInMain_) return "{ __nexa_uncaught(); return 1; }";
         if (emitFnRet_ == EmitFnRet::VoidFn) return "return;";
         return "return {};";
+    }
+
+    // Pieces of C++ that NexaC is about to put inside a helper lambda of its own: if one
+    // holds a test of the flag (a call that can throw), each is worked out first, in
+    // order, into a name, in a statement expression -- a block of the function, where a
+    // test can leave it -- and the pieces become those names. Returns the opening
+    // "({ ...; " for the caller to close with "; })", or "" when nothing needs it.
+    std::string ownHoist(std::initializer_list<std::string*> parts) const {
+        if (!ownErrors_) return "";
+        bool any = false;
+        for (const std::string* p : parts) any = any || p->find("/*__nexa_chk*/") != std::string::npos;
+        if (!any) return "";
+        std::string pre = "({ ";
+        for (std::string* p : parts) {
+            if (p->empty()) continue;
+            const std::string name = "__nexa_h" + std::to_string(errCounter_++);
+            pre += "auto&& " + name + " = " + *p + "; ";
+            *p = name;
+        }
+        return pre;
     }
 
     // A call to a function that can throw: the call, then the test of the flag.
@@ -2572,19 +2618,41 @@ static std::string __nexa_err_msg;
         if (!astUsesThrow(ast_)) return false;
         // Every function and method, top level or in a struct; true for a method.
         std::vector<std::pair<const AstNode*, bool>> bodies;
+        std::set<std::string> fnNames, fnFields;  // top-level functions; fields holding a function
         for (const AstNode& n : ast_) {
             if (n.type == AstNode::Type::Function) {
                 bodies.push_back({&n, !n.receiverType.empty()});
+                if (n.receiverType.empty()) fnNames.insert(n.value);
             } else if (n.type == AstNode::Type::StructDef) {
                 for (const AstNode& m : n.children) {
                     if (m.type == AstNode::Type::Function) bodies.push_back({&m, true});
                 }
+                for (size_t i = 0; i < n.paramNames.size() && i < n.paramTypes.size(); i++) {
+                    if (nexaIsFnType(n.paramTypes[i])) fnFields.insert(n.paramNames[i]);
+                }
             }
         }
+        // A call through a function value (see valueCalls_). A name that is no function
+        // of the program's is a variable's; reading too much in here only adds tests.
+        auto valueCall = [&](const AstNode& n) -> bool {
+            if (n.type == AstNode::Type::ExprCall) return true;
+            if (n.type != AstNode::Type::FnCall) return false;
+            if (n.initValue.empty()) return !fnNames.count(n.value);
+            if ((n.initValue == "." || n.initValue == "->") && fnFields.count(n.value)) return true;
+            return n.initValue == "." && isSliceFnName(n.value) && n.children.size() == 2 &&
+                   n.children[1].type != AstNode::Type::ExprLambda;
+        };
+        std::function<void(const AstNode&)> noteCalls = [&](const AstNode& n) {
+            if (valueCall(n)) valueCalls_.insert(&n);
+            for (const AstNode& c : n.children) noteCalls(c);
+            for (const AstNode& c : n.paramDefaults) noteCalls(c);
+        };
+        for (const AstNode& n : ast_) noteCalls(n);
         // Whether `n` throws or calls something that can, not counting function literals.
         std::function<bool(const AstNode&)> throws = [&](const AstNode& n) -> bool {
             if (n.type == AstNode::Type::ExprLambda) return false;
             if (n.type == AstNode::Type::Throw) return true;
+            if (fnValuesThrow_ && valueCalls_.count(&n)) return true;
             if (n.type == AstNode::Type::FnCall) {
                 // r.value() and o.value(): an error when the Result or the Option holds none.
                 if (n.initValue == "." && n.value == "value") return true;
@@ -2601,25 +2669,55 @@ static std::string __nexa_err_msg;
             for (const AstNode& c : n.paramDefaults) if (throws(c)) return true;
             return false;
         };
-        for (bool grew = true; grew;) {
-            grew = false;
-            for (const auto& [f, isMethod] : bodies) {
-                std::set<std::string>& into = isMethod ? mayThrowMethods_ : mayThrowFns_;
-                if (into.count(f->value)) continue;
-                bool any = false;
-                for (const AstNode& s : f->children) if (throws(s)) { any = true; break; }
-                if (any) {
-                    into.insert(f->value);
-                    grew = true;
+        auto bodyThrows = [&](const AstNode& lam) {
+            for (const AstNode& s : lam.children) if (throws(s)) return true;
+            return false;
+        };
+        auto fixpoint = [&]() {
+            for (bool grew = true; grew;) {
+                grew = false;
+                for (const auto& [f, isMethod] : bodies) {
+                    std::set<std::string>& into = isMethod ? mayThrowMethods_ : mayThrowFns_;
+                    if (into.count(f->value)) continue;
+                    bool any = false;
+                    for (const AstNode& s : f->children) if (throws(s)) { any = true; break; }
+                    if (any) {
+                        into.insert(f->value);
+                        grew = true;
+                    }
                 }
             }
+        };
+        fixpoint();
+        // Can a function value throw? A literal that can, other than one handed straight to a
+        // slice function, or a function that can, used as a value. Then every call through a
+        // value can, which can make more functions throw: the fixpoint runs again.
+        std::set<const AstNode*> sliceLiterals;
+        std::function<void(const AstNode&)> noteSlice = [&](const AstNode& n) {
+            if (isSliceFnCall(n)) sliceLiterals.insert(&n.children[1]);
+            for (const AstNode& c : n.children) noteSlice(c);
+            for (const AstNode& c : n.paramDefaults) noteSlice(c);
+        };
+        for (const AstNode& n : ast_) noteSlice(n);
+        if (!fnValuesThrow_) {
+            bool any = false;
+            std::function<void(const AstNode&)> look = [&](const AstNode& n) {
+                if (any) return;
+                if (n.type == AstNode::Type::ExprLambda && !sliceLiterals.count(&n) && bodyThrows(n)) any = true;
+                if (n.type == AstNode::Type::ExprVarRef && mayThrowFns_.count(n.value)) any = true;
+                for (const AstNode& c : n.children) look(c);
+                for (const AstNode& c : n.paramDefaults) look(c);
+            };
+            for (const AstNode& n : ast_) look(n);
+            if (any) {
+                fnValuesThrow_ = true;
+                fixpoint();
+            }
         }
-        // The literals handed to a slice function that can throw.
+        // The literals that can throw: their bodies are function bodies for the tests.
         std::function<void(const AstNode&)> noteLambdas = [&](const AstNode& n) {
-            if (isSliceFnCall(n)) {
-                for (const AstNode& s : n.children[1].children) {
-                    if (throws(s)) { ownErrLambdas_.insert(&n.children[1]); break; }
-                }
+            if (n.type == AstNode::Type::ExprLambda && (fnValuesThrow_ || sliceLiterals.count(&n)) && bodyThrows(n)) {
+                ownErrLambdas_.insert(&n);
             }
             for (const AstNode& c : n.children) noteLambdas(c);
             for (const AstNode& c : n.paramDefaults) noteLambdas(c);
@@ -2656,7 +2754,7 @@ static std::string __nexa_err_msg;
                     break;
                 }
                 case AstNode::Type::ExprVarRef:
-                    if (mayThrowFns_.count(n.value)) ok = false;  // a throwing function used as a value
+                    if (mayThrowFns_.count(n.value) && !fnValuesThrow_) ok = false;  // a throwing function used as a value
                     break;
                 default:
                     break;
@@ -5428,13 +5526,16 @@ private:
                     // f say yes to one / to every one. filter: those it says yes to. map: f of each.
                     const std::string ret = sliceFnArgRet(e, nexaSliceElem(recvBare));
                     bareLambda_ = e.children[1].type == AstNode::Type::ExprLambda;
-                    const std::string f = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    // A function value that can throw is guarded as a literal is (ownErrGuard).
+                    const bool valueRaises = ownErrors_ && fnValuesThrow_ && valueCalls_.count(&e) > 0;
+                    std::string f = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                     bareLambda_ = false;
+                    if (valueRaises) f = ownErrGuard(f);
                     const std::string setup = "const auto& __v = " + recv + "; auto&& __f = " + f + "; size_t __i = 0;";
                     const std::string loop = " for (; __i < __v.size(); __i++)";
                     // A literal that can throw: the call is followed by the test of the
                     // flag, as a call to a function that can throw is.
-                    const bool raises = ownErrors_ && ownErrLambdas_.count(&e.children[1]) > 0;
+                    const bool raises = valueRaises || (ownErrors_ && ownErrLambdas_.count(&e.children[1]) > 0);
                     auto done = [&](const std::string& r) { return raises ? errChecked(r, false) : r; };
                     if (e.value == "find") {
                         return done(emitOptionMake(inferExprNexaType(e), setup + loop + " { if (__f(__v[__i])) break; }",
@@ -5514,10 +5615,12 @@ private:
                 if (e.value == "sort_by") {
                     sortByArgCheck(e, nexaSliceElem(recvBare));
                     bareLambda_ = e.children[1].type == AstNode::Type::ExprLambda;
-                    const std::string f = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    const bool valueRaises = ownErrors_ && fnValuesThrow_ && valueCalls_.count(&e) > 0;
+                    std::string f = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                     bareLambda_ = false;
+                    if (valueRaises) f = ownErrGuard(f);
                     const std::string sorted = emitSliceSortBy(recv, f, nexaTypeToCpp(nexaSliceElem(recvBare)), lamOpen());
-                    if (ownErrors_ && ownErrLambdas_.count(&e.children[1])) return errChecked(sorted, true);
+                    if (valueRaises || (ownErrors_ && ownErrLambdas_.count(&e.children[1]))) return errChecked(sorted, true);
                     return sorted;
                 }
                 if (e.value == "join") {
@@ -5725,6 +5828,21 @@ private:
                 throw std::runtime_error("Unknown method '." + e.value + "()'" + near + what + hint +
                                          (at ? " at line " + std::to_string(at) : std::string()));
             }
+            // c.run(x) with run a field holding a function: a call through a value.
+            if (ownErrors_ && fnValuesThrow_) {
+                std::string fieldT;
+                if (isStructDeclType(recvBare)) {
+                    const std::string full = structNameFromDecl(recvBare);
+                    for (const std::string& sn : {full, nexaTypeAppBase(full)}) {
+                        auto fit = structFields_.find(sn);
+                        if (fit == structFields_.end()) continue;
+                        auto ft = fit->second.find(e.value);
+                        if (ft != fit->second.end() && nexaIsFnType(ft->second)) { fieldT = ft->second; break; }
+                    }
+                }
+                if (!fieldT.empty()) return valueCallChecked(e, s, fieldT);
+                if (valueCalls_.count(&e)) ownErrorsReject_ = true;  // counted, but not seen to be one
+            }
             return s;
         }
         if (isHeaderImportedCall(e.value)) {
@@ -5740,7 +5858,7 @@ private:
                 s += emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             }
             s += ")";
-            return s;
+            return valueCallChecked(e, s, calleeDecl);
         }
         std::vector<std::string> argT;
         argT.reserve(e.children.size());
@@ -9005,13 +9123,29 @@ private:
     std::string emitPayloadCtor(const std::string& en, const std::string& variant,
                                 const std::vector<std::pair<std::string, std::string>>& assigns) const {
         const std::string cpp = enumCppNames_.at(en);
+        // Some(half(x)): a value that can throw is worked out before the helper (ownHoist).
+        std::vector<std::string> vals;
+        for (const auto& a : assigns) vals.push_back(a.second);
+        std::string hoist;
+        if (ownErrors_) {
+            bool any = false;
+            for (const std::string& v : vals) any = any || v.find("/*__nexa_chk*/") != std::string::npos;
+            if (any) {
+                hoist = "({ ";
+                for (std::string& v : vals) {
+                    const std::string name = "__nexa_h" + std::to_string(errCounter_++);
+                    hoist += "auto&& " + name + " = " + v + "; ";
+                    v = name;
+                }
+            }
+        }
         std::string s = lamOpen() + " " + cpp + " __n = {}; __n.__tag = " +
             std::to_string(enumVariantIndex(en, variant)) + ";";
-        for (const auto& a : assigns) {
-            s += " __n." + enumFieldCpp(en, variant, a.first) + " = " + a.second + ";";
+        for (size_t i = 0; i < assigns.size(); i++) {
+            s += " __n." + enumFieldCpp(en, variant, assigns[i].first) + " = " + vals[i] + ";";
         }
         s += " return __n; })()";
-        return s;
+        return hoist.empty() ? s : hoist + s + "; })";
     }
     std::string enumPrintfCast(const std::string& ntype, const std::string& expr) const {
         if (isEnumDeclType(ntype) && enumHasPayload(enumNameFromDecl(ntype)))
@@ -13231,7 +13365,9 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         std::vector<std::string> savedCatch;
         savedCatch.swap(errCatchLabels_);
         const bool ownErr = ownErrors_ && ownErrLambdas_.count(&e) > 0;
-        if (ownErr && (!bare || atFileScope)) ownErrorsReject_ = true;  // called somewhere NexaC does not write
+        // Handed to a slice function, NexaC writes the loop that calls it; kept or passed,
+        // each call through a value is tested (fnValuesThrow_). Anything else: C++'s.
+        if (ownErr && (bare ? atFileScope : !fnValuesThrow_)) ownErrorsReject_ = true;
         std::ostringstream body;
         emitBlockStatements(body, e.children, localMap, varIdx, localStr, localConst, localFloat,
                             localChar, localBool, localEnum);
@@ -14292,6 +14428,10 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (m == "__fmt") return emitFmtCall(e, R);
                 std::string A0 = e.children.size() > 1 ? emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) : "";
                 std::string A1 = e.children.size() > 2 ? emitExpr(e.children[2], varMap, varIsString, varIsFloat, varIsChar, varIsBool) : "";
+                // A call that can throw in the receiver or an argument: all three first, in
+                // order, so its test sits in the function and not in a helper's lambda.
+                const std::string hoist = ownHoist({&R, &A0, &A1});
+                auto strBody = [&]() -> std::string {
                 if (m == "upper") return useStr("upper") + "(" + R + ")";
                 if (m == "lower") return useStr("lower") + "(" + R + ")";
                 if (m == "trim") return useStr("trim") + "(" + R + ")";
@@ -14354,6 +14494,9 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     return useStr("tokens") + "(" + R + ", " + D + ")";
                 }
                 return R;
+                };
+                const std::string out = strBody();
+                return hoist.empty() ? out : hoist + out + "; })";
             }
             case AstNode::Type::TimeSeconds: {
                 std::string n = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
@@ -14455,6 +14598,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     s += emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 }
                 s += ")";
+                if (ownErrors_ && fnValuesThrow_) return valueCallChecked(e, s, inferExprNexaType(e.children[0]));
                 return s;
             }
             case AstNode::Type::ExprArrayLiteral: {

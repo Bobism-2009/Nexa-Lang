@@ -9,9 +9,11 @@
 #              main written with a type, whose body is a closure.
 #   lambda     A function literal that throws, handed straight to xs.map: NexaC
 #              writes the loop that calls it, so it is NexaC's own errors too.
-#   fallback   A throw NexaC cannot follow -- here a function literal kept in a
-#              variable and called through it -- keeps C++'s exceptions, and
-#              catches the same.
+#   fnvalue    A throwing literal kept in a variable and called through it is
+#              NexaC's own errors as well (every call through a function value
+#              is tested), and one nothing catches is "Uncaught error", status 1.
+#   fallback   A throw NexaC cannot follow -- here one on another thread --
+#              keeps C++'s exceptions, and catches the same.
 # The cases in Tests/Lang/try_noexc_*.nxa check the behaviour in detail.
 #
 # Usage: Tests/throw_cases.sh [path-to-NexaC]     (run from the repo root)
@@ -120,7 +122,7 @@ fi
 run lambda
 if [ "$rc" = 0 ] && [ "$(cat "$WORK/lambda.o")" = "caught odd 5" ]; then ok "lambda: caught"; else bad "lambda runs" "status $rc, printed [$(cat "$WORK/lambda.o" 2>/dev/null)]"; fi
 
-cat > "$WORK/fallback.nxa" <<'NXA'
+cat > "$WORK/fnvalue.nxa" <<'NXA'
 #include <std/io>
 fn half(n: int): int {
     if (n % 2 != 0) { throw "odd " + n; }
@@ -129,17 +131,47 @@ fn half(n: int): int {
 fn main() {
     let f = fn (x: int): int { return half(x); };
     try { io.println(f(4)); io.println(f(5)); } catch (e) { io.println("caught ", e); }
+    io.println(f(7));
+    io.println("never");
+}
+NXA
+"$NEXAC" "$WORK/fnvalue.nxa" --source "$WORK/fnvalue.cpp" >/dev/null 2>&1
+if grep -q "__nexa_err_msg" "$WORK/fnvalue.cpp" && ! grep -q "try {" "$WORK/fnvalue.cpp"; then
+    ok "fnvalue: a throwing literal kept in a variable is NexaC's own errors"
+else
+    bad fnvalue "the C++ still uses C++ exceptions"
+fi
+run fnvalue
+if [ "$rc" = 1 ] && [ "$(cat "$WORK/fnvalue.o")" = "$(printf '2
+caught odd 5')" ] && [ "$(cat "$WORK/fnvalue.e")" = "Uncaught error: odd 7" ]; then
+    ok "fnvalue: caught, then uncaught with status 1"
+else
+    bad "fnvalue runs" "status $rc, stdout [$(cat "$WORK/fnvalue.o" 2>/dev/null)], stderr [$(cat "$WORK/fnvalue.e" 2>/dev/null)]"
+fi
+
+cat > "$WORK/fallback.nxa" <<'NXA'
+#include <std/io>
+#include <std/thread>
+fn half(n: int): int {
+    if (n % 2 != 0) { throw "odd " + n; }
+    return n / 2;
+}
+fn work(n: int) {
+    try { io.println(half(n)); } catch (e) { io.println("caught ", e); }
+}
+fn main() {
+    let t = thread.spawn(work(5));
+    thread.join(t);
 }
 NXA
 "$NEXAC" "$WORK/fallback.nxa" --source "$WORK/fallback.cpp" >/dev/null 2>&1
 if grep -q "try {" "$WORK/fallback.cpp" && ! grep -q "__nexa_err_msg" "$WORK/fallback.cpp"; then
-    ok "fallback: a throwing literal called through a variable keeps C++ exceptions"
+    ok "fallback: a throw on another thread keeps C++ exceptions"
 else
     bad fallback "expected the C++ exception form"
 fi
 run fallback
-if [ "$rc" = 0 ] && [ "$(cat "$WORK/fallback.o")" = "$(printf '2
-caught odd 5')" ]; then ok "fallback: caught"; else bad "fallback runs" "status $rc, printed [$(cat "$WORK/fallback.o" 2>/dev/null)]"; fi
+if [ "$rc" = 0 ] && [ "$(cat "$WORK/fallback.o")" = "caught odd 5" ]; then ok "fallback: caught"; else bad "fallback runs" "status $rc, printed [$(cat "$WORK/fallback.o" 2>/dev/null)]"; fi
 
 echo
 echo "$pass passed, $fail failed"

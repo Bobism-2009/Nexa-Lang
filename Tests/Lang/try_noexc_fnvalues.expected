@@ -1,0 +1,17 @@
+40
+caught negative -1
+apply 2
+applied 20
+20
+apply -3
+caught negative -3
+4 2
+caught odd: 3
+go 2
+caught zero clicks
+10 2
+caught odd: 5
+caught odd: 7
+[1, 2]
+inside odd: 3
+-1 2

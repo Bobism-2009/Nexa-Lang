@@ -1,0 +1,95 @@
+// Pins errors from function values: a throwing literal kept in a variable, passed
+// to a function, held in a struct field or a list, and a throwing function used
+// as a value. NexaC's own errors, with what C++'s exceptions did: each call
+// through a value passes the error on, a catch around it takes it, and nothing
+// after the throw runs. (One nothing catches: see Tests/throw_cases.sh.)
+// Reference: SYNTAX/ControlFlow.txt (TRY / CATCH)
+#include <std/io>
+
+struct Button {
+    label: string;
+    on_click: fn(int): int;
+}
+
+fn half(n: int): int {
+    if (n % 2 != 0) { throw "odd: " + n; }
+    return n / 2;
+}
+
+fn apply(f: fn(int): int, x: int): int {
+    io.println("apply ", x);
+    let r = f(x);
+    io.println("applied ", r);
+    return r;
+}
+
+fn twice(f: fn(int): int, x: int): int {
+    return f(f(x));
+}
+
+fn main() {
+    let check = fn (x: int): int {
+        if (x < 0) { throw "negative " + x; }
+        return x * 10;
+    };
+    io.println(check(4));
+    try {
+        io.println(check(-1));
+        io.println("not here");
+    } catch (e) {
+        io.println("caught ", e);
+    }
+
+    // passed to a function, called inside it
+    try {
+        io.println(apply(check, 2));
+        io.println(apply(check, -3));
+        io.println("not here");
+    } catch (e) {
+        io.println("caught ", e);
+    }
+
+    // a throwing function used as a value
+    let h = half;
+    io.println(h(8), " ", twice(half, 8));
+    try {
+        io.println(twice(half, 6));
+        io.println("not here");
+    } catch (e) {
+        io.println("caught ", e);
+    }
+
+    // a field holding a function
+    let b = Button { label: "go", on_click: fn (n: int): int { if (n == 0) { throw "zero clicks"; } return n + 1; } };
+    io.println(b.label, " ", b.on_click(1));
+    try {
+        io.println(b.on_click(0));
+    } catch (e) {
+        io.println("caught ", e);
+    }
+
+    // a list of functions
+    let fs: []fn(int): int = [check, half];
+    io.println(fs[0](1), " ", fs[1](4));
+    try {
+        io.println(fs[1](5));
+    } catch (e) {
+        io.println("caught ", e);
+    }
+
+    // a function value given to a slice function
+    let xs = [2, 4, 7, 8];
+    try {
+        let ys = xs.map(half);
+        io.println("not here ", len(ys));
+    } catch (e) {
+        io.println("caught ", e);
+    }
+    io.println([2, 4].map(half));
+
+    // a catch inside the literal keeps its error to itself
+    let safe = fn (x: int): int {
+        try { return half(x); } catch (e) { io.println("inside ", e); return -1; }
+    };
+    io.println(safe(3), " ", safe(4));
+}

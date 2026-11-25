@@ -1,0 +1,63 @@
+// Pins a call that can throw where NexaC writes a helper around it: xs.contains,
+// xs.index_of / last_index_of / count, Some(...) and an enum variant's fields. Its
+// value is worked out first, so its error is NexaC's own, with what C++'s
+// exceptions did: the error goes to the catch, and nothing after it runs.
+// Reference: SYNTAX/ControlFlow.txt (TRY / CATCH)
+#include <std/io>
+
+enum Shape {
+    Dot;
+    Box { w: int; h: int; };
+}
+
+fn half(n: int): int {
+    if (n % 2 != 0) { throw "odd: " + n; }
+    return n / 2;
+}
+
+fn note(s: string): string {
+    io.println("note ", s);
+    return s;
+}
+
+fn main() {
+    let xs = [1, 2, 3, 2];
+    let words = ["a", "b"];
+    io.println(xs.contains(half(4)), " ", xs.index_of(half(4)), " ", xs.last_index_of(half(4)), " ", xs.count(half(4)));
+    try {
+        io.println(xs.contains(half(3)));
+        io.println("not here");
+    } catch (e) {
+        io.println("contains caught ", e);
+    }
+    try {
+        io.println(xs.index_of(half(8), half(5)));
+    } catch (e) {
+        io.println("index_of caught ", e);
+    }
+    // in order: the receiver's call, then the argument's
+    try {
+        io.println(words.contains(note("b") + note("c")));
+        io.println(words.contains(note("a") + half(1)));
+    } catch (e) {
+        io.println("order caught ", e);
+    }
+
+    let o = Some(half(6));
+    io.println(o.value());
+    try {
+        let p = Some(half(7));
+        io.println("not here ", p.value());
+    } catch (e) {
+        io.println("Some caught ", e);
+    }
+
+    let b = Shape.Box { w: half(4), h: half(8) };
+    io.println(match (b) { Shape.Box { w, h } => w * h, Shape.Dot => 0 });
+    try {
+        let c = Shape.Box { w: half(4), h: half(9) };
+        io.println("not here ", match (c) { Shape.Box { w } => w, Shape.Dot => 0 });
+    } catch (e) {
+        io.println("Box caught ", e);
+    }
+}
