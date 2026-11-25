@@ -1,0 +1,34 @@
+// try / catch / throw as NexaC's own errors, not C++ exceptions: r.value() and o.value() caught as errors, and read in place.
+// Each case prints what the exception version printed (checked against it).
+// Reference: SYNTAX/ControlFlow.txt ("ERRORS: TRY / CATCH / THROW")
+#include <std/io>
+fn parse(s: string): Result[int] {
+    if (s == "x") { return err("bad input " + s); }
+    return ok(len(s));
+}
+fn save(ok_: bool): Result[void] {
+    if (!ok_) { return err("disk full"); }
+    return ok();
+}
+fn firstBig(xs: []int): Option[int] {
+    for (x in xs) { if (x > 10) { return Some(x); } }
+    return None;
+}
+fn total(s: string): int {
+    return parse(s).value() * 10;
+}
+fn main() {
+    try { io.println(parse("abc").value()); io.println(parse("x").value()); } catch (e) { io.println("caught ", e); }
+    let s1 = save(true);
+    let s2 = save(false);
+    try { s1.value(); io.println("saved"); s2.value(); io.println("no"); } catch (e) { io.println("caught ", e); }
+    try { io.println(firstBig([1, 20]).value()); io.println(firstBig([1, 2]).value()); } catch (e) { io.println("caught ", e); }
+    try { io.println(total("ab")); io.println(total("x")); } catch (e) { io.println("caught ", e); }
+    let r = parse("hello");
+    try { let v = r.value(); io.println("v ", v); } catch { io.println("no"); }
+    let lst: Result[[]int] = ok([1, 2]);
+    lst.value().push(3);
+    io.println("in place ", len(lst.value()));
+    let empty: Result[int] = err("");
+    try { io.println(empty.value()); } catch (e) { io.println("empty error: ", e); }
+}

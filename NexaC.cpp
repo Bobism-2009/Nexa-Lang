@@ -3330,13 +3330,26 @@ int main(int argc, char* argv[]) {
             : std::filesystem::absolute(std::filesystem::path(cppPath)).string();
         // inline_cpp! names the program's variables and functions as written, so a program
         // with any keeps them (it changes the C++ names only; the binary is the same).
-        nexa::Transpiler transpiler(ast, modules, preserveNames || isLib || modules.hasInlineCpp(), isLib, cppTarget,
+        // try / catch / throw are emitted as NexaC's own errors where it can see every path
+        // one takes. When the C++ shows it could not (a test inside a lambda), the program is
+        // transpiled again with C++ exceptions -- from a copy of the tree, because a
+        // transpile changes the one it is given.
+        std::vector<nexa::AstNode> astForExceptions;
+        if (nexa::Transpiler::astUsesThrow(ast)) astForExceptions = ast;
+        auto transpiler = std::make_unique<nexa::Transpiler>(ast, modules, preserveNames || isLib || modules.hasInlineCpp(), isLib, cppTarget,
                                     debugBuild, absCppPath);  // library: preserve + export C names
         // Name the source file the way parse errors do -- a transpile-stage
         // complaint is still about the program the user handed us.
         std::string cpp;
         try {
-            cpp = transpiler.transpile();
+            cpp = transpiler->transpile();
+            if (transpiler->ownErrorsRejected()) {
+                transpiler = std::make_unique<nexa::Transpiler>(astForExceptions, modules,
+                                    preserveNames || isLib || modules.hasInlineCpp(), isLib, cppTarget,
+                                    debugBuild, absCppPath);
+                transpiler->setOwnErrors(false);
+                cpp = transpiler->transpile();
+            }
         } catch (const std::runtime_error& e) {
             const std::string msg = e.what();
             if (msg.find(absInputPath) == std::string::npos) {
@@ -3350,7 +3363,7 @@ int main(int argc, char* argv[]) {
         // the program is built with exceptions (otherwise it reports the error and aborts), and
         // io.to_int parses with strtol, so neither needs them. RTTI is never emitted by the
         // transpiler, so it is dropped unless inline_cpp is present.
-        const nexa::Modules::CppUsage& usage = transpiler.cppUsage();
+        const nexa::Modules::CppUsage& usage = transpiler->cppUsage();
         // A program that names its shader files gets them compiled for Vulkan,
         // because nothing compiles GLSL at runtime there. The OpenGL renderer
         // needs none of this -- its driver does the compiling -- so a failure

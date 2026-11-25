@@ -1,0 +1,6 @@
+cleanup 1
+ok 1
+cleanup 2
+caught failed at 2
+cleanup 3
+ok 3

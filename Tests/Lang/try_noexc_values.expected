@@ -1,0 +1,11 @@
+3
+caught bad input x
+saved
+caught disk full
+20
+caught Option.value() on None
+20
+caught bad input x
+v 5
+in place 3
+empty error: Result.value() on error

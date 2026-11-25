@@ -1,0 +1,16 @@
+pos(1)
+pos(-2)
+neg -2
+short-circuit ok
+pos(2)
+pos(5)
+5
+pos(3)
+pos(1)
+pos(-1)
+neg -1
+pos(7)
+pos(-8)
+neg -8
+pos(-9)
+neg -9

@@ -1,0 +1,22 @@
+// try / catch / throw as NexaC's own errors, not C++ exceptions: ? beside throw.
+// Each case prints what the exception version printed (checked against it).
+// Reference: SYNTAX/ControlFlow.txt ("ERRORS: TRY / CATCH / THROW")
+#include <std/io>
+fn parse(s: string): Result[int] {
+    if (s == "x") { return err("bad input"); }
+    return ok(5);
+}
+fn twice(s: string): Result[int] {
+    let v = parse(s)?;
+    if (v > 100) { throw "never"; }
+    return ok(v * 2);
+}
+fn main() {
+    try {
+        let r = twice("1");
+        if (r.ok()) { io.println("ok"); }
+        let q = twice("x");
+        io.println(q.ok(), " ", q.error());
+        throw "end";
+    } catch (e) { io.println("caught ", e); }
+}

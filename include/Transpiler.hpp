@@ -313,6 +313,12 @@ public:
     std::string transpile() {
         std::ostringstream out;
         renameKeywordMembers();
+        // try / catch / throw by NexaC itself, not C++ exceptions, where it can see every
+        // path an error takes. Foreign C/C++ can throw its own, a library's caller is not
+        // Nexa, so those keep the exception runtime.
+        ownErrors_ = ownErrorsAllowed_ && !buildDll_ && !modules_.hasInlineCpp() && !modules_.hasCppHeader() &&
+                     ownErrorsEligible();
+        if (!ownErrors_) { mayThrowFns_.clear(); mayThrowMethods_.clear(); }
 
         if (target_ == CppTarget::Wasm) {
             out << "#define NEXA_WASM 1\n";
@@ -554,7 +560,7 @@ public:
                 case AstNode::Type::DllLoad:
                 case AstNode::Type::DllCall: cppUsage.dll = true; break;
                 case AstNode::Type::TryCatch:
-                case AstNode::Type::Throw: cppUsage.exceptions = true; break;
+                case AstNode::Type::Throw: if (!ownErrors_) cppUsage.exceptions = true; break;
                 default: break;
             }
             if (n.declType == "json" || n.fnReturnType == "json" ||
@@ -953,6 +959,7 @@ public:
         // xs.sort(): kSortRuntime, put in after the emit only if a call reached it.
         if (needsVector) out << kSortMarker;
         if (needsFmt) out << kFmtRuntime;
+        if (ownErrors_) out << kOwnErrorsRuntime;
         if (needsCstr) out << "[[maybe_unused]] static std::string __nexa_cstr(const char* __p) { return __p ? std::string(__p) : std::string(); }\n\n";
         if (needsDefer) {
             // A defer runs its body when the guard is destroyed -- at block exit,
@@ -1637,7 +1644,8 @@ public:
                     emitFnRet_ = EmitFnRet::Main;
                     mainRetType_ = (mainRet == "void") ? std::string() : mainRet;
                     if (typedMain) {
-                        out << "    auto __nexa_main = [&]() -> " << nexaTypeToCpp(mainRet) << " {\n";
+                        out << "    auto __nexa_main = [&]() -> " << nexaTypeToCpp(mainRet)
+                            << (ownErrors_ ? " /*__nexa_fnbody*/{\n" : " {\n");
                         emitFnRet_ = EmitFnRet::IntFn;
                         tryFnRet_ = mainRet; tryFnName_ = "main";
                         tryInMain_ = !nexaIsResultType(mainRet);
@@ -2030,6 +2038,8 @@ public:
             size_t at = src.find(kShowMarker);
             if (at != std::string::npos) src.replace(at, std::string(kShowMarker).size(), needShow_ ? kShowRuntime : "");
         }
+        // Own errors: every test of the error flag where a return or goto means what it says.
+        if (ownErrors_ && (ownErrorsReject_ || !ownErrorsTextOk(src))) ownErrorsReject_ = true;
         if (((cppUsage_.gfx && cppUsage_.gfxImage) || (cppUsage_.gfx3d && cppUsage_.gfx3dTexture)) &&
             (target_ == CppTarget::Linux || target_ == CppTarget::Wasm)) {
             // ~8,000 lines of stb, so only a program that can reach the decoder gets it.
@@ -2161,6 +2171,442 @@ private:
     // emitted: every `return` there is checked against it. Empty otherwise.
     std::string mainRetType_;
     mutable int tryCounter_ = 0;
+
+    // ---- try / catch / throw without C++ exceptions ----
+    //
+    // A program that throws is emitted with errors of its own instead of C++'s: one
+    // flag and one message. `throw` sets them, then goes to its catch (a label after
+    // the try block) or returns from the function at once; every call to a function
+    // that can throw is followed by a test of the flag that does the same. Leaving a
+    // function is an ordinary return, so strings and lists are freed and defer runs.
+    // Functions that cannot throw, and calls to them, are as before. The program is
+    // then built without the exception runtime: about 61KB off a small one.
+    //
+    // Only where NexaC can see every path an error takes (ownErrorsEligible). After
+    // emitting, the C++ is read once more (ownErrorsTextOk): a test that landed in a
+    // lambda NexaC wrote would return from the lambda, not the function, so then the
+    // program is built the old way instead -- ownErrorsRejected() -- and NexaC.cpp
+    // transpiles it again with setOwnErrors(false).
+    bool ownErrorsAllowed_ = true;
+    bool ownErrors_ = false;
+    mutable bool ownErrorsReject_ = false;
+    std::set<std::string> mayThrowFns_;      // top-level functions that can throw, by name
+    std::set<std::string> mayThrowMethods_;  // struct methods that can, by method name
+    std::vector<std::string> errCatchLabels_;  // the catch labels of the try blocks open here
+    mutable int errCounter_ = 0;
+
+public:
+    void setOwnErrors(bool on) { ownErrorsAllowed_ = on; }
+    bool ownErrorsRejected() const { return ownErrorsReject_; }
+    // Whether the program uses try, catch or throw: what makes a second transpile possible.
+    static bool astUsesThrow(const std::vector<AstNode>& ast) {
+        std::function<bool(const AstNode&)> has = [&](const AstNode& n) {
+            if (n.type == AstNode::Type::TryCatch || n.type == AstNode::Type::Throw) return true;
+            for (const AstNode& c : n.children) if (has(c)) return true;
+            for (const AstNode& c : n.paramDefaults) if (has(c)) return true;
+            return false;
+        };
+        for (const AstNode& n : ast) if (has(n)) return true;
+        return false;
+    }
+
+private:
+    static constexpr const char* kOwnErrorsRuntime = R"NEXA_ERR(#include <cstdio>
+#include <cstdlib>
+#include <string>
+// try / catch / throw: the error a throw set, until a catch takes it.
+static bool __nexa_err = false;
+static std::string __nexa_err_msg;
+// Raising one, out of line: each site is a test and a call, the rest is here once.
+[[maybe_unused]] __attribute__((noinline, cold)) static void __nexa_raise(std::string __m) {
+    __nexa_err_msg = std::move(__m);
+    __nexa_err = true;
+}
+[[maybe_unused]] __attribute__((noinline, cold)) static void __nexa_raise_result(const std::string& __e) {
+    __nexa_err_msg = __e.empty() ? std::string("Result.value() on error") : __e;
+    __nexa_err = true;
+}
+[[maybe_unused]] __attribute__((noinline, cold)) static void __nexa_raise_none() {
+    __nexa_err_msg = "Option.value() on None";
+    __nexa_err = true;
+}
+// An error nothing caught: what was printed stays, stderr says what it was.
+[[maybe_unused]] static void __nexa_uncaught() {
+    std::fflush(stdout);
+    std::fprintf(stderr, "Uncaught error: %s\n", __nexa_err_msg.c_str());
+}
+
+)NEXA_ERR";
+
+    static bool fnIsVoid(const AstNode& fn) {
+        if (fn.fnReturnType == "void") return true;
+        if (!fn.fnReturnType.empty()) return false;
+        bool hasVal = false, hasVoid = false;
+        stmtsClassifyReturns(fn.children, hasVal, hasVoid);
+        return !hasVal;
+    }
+
+    // Where an error goes from here: the innermost catch in this function, else out of it.
+    std::string errPropagate() const {
+        if (!errCatchLabels_.empty()) return "goto " + errCatchLabels_.back() + ";";
+        if (tryFnName_ == "main") return "{ __nexa_uncaught(); std::exit(1); }";  // main written with a type
+        if (tryInMain_) return "{ __nexa_uncaught(); return 1; }";
+        if (emitFnRet_ == EmitFnRet::VoidFn) return "return;";
+        return "return {};";
+    }
+
+    // A call to a function that can throw: the call, then the test of the flag.
+    std::string errChecked(const std::string& call, bool isVoid) const {
+        const std::string chk = "/*__nexa_chk*/if (__builtin_expect(__nexa_err, 0)) " + errPropagate();
+        if (isVoid) return "({ " + call + "; " + chk + " })";
+        const std::string t = "__nexa_t" + std::to_string(errCounter_++);
+        return "({ auto " + t + " = " + call + "; " + chk + " std::move(" + t + "); })";
+    }
+
+    // The emitted C++, read for where each error test (/*__nexa_chk*/) ended up. A test
+    // has to be in a function or method body of its own: in a lambda -- one of the
+    // helpers NexaC wraps an expression in, a defer, a function literal -- its return
+    // would leave the lambda and not the function, and the error would go unseen; in a
+    // class body or at file scope there is no statement to put it in. Braces are sorted
+    // as they open: a lambda (after a capture list), a function (after a parameter
+    // list), a class, a namespace, or a plain block. Strings, comments, raw strings and
+    // preprocessor lines are skipped. Anything that does not add up -- a brace left open,
+    // a test in the wrong place -- is false, and the program is built the old way. On
+    // true the markers are taken out of `src`.
+    static bool ownErrorsTextOk(std::string& src) {
+        const size_t n = src.size();
+        std::vector<char> stack;                 // B block, F function, M main's closure, L lambda, C class, N namespace
+        std::vector<std::string> parenWord;      // the word before each open '('
+        std::vector<std::pair<size_t, size_t>> markers;
+        std::string lastWord;                    // the last token, when it was a word
+        char lastPunct = 0;                      // the last token, when it was punctuation
+        bool lastWasWord = false;
+        bool headStruct = false, headNamespace = false;  // since the last ; { or }
+        bool afterParams = false;                // only specifiers since a ')'
+        std::string paramsWord;                  // the word before that ')''s '('
+        bool lambdaCapture = false, lambdaParams = false;
+        int lambdaParenDepth = -1;
+        bool arrow = false, fnBodyNext = false, ok = true;
+        auto isId = [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; };
+        auto spec = [](const std::string& w) {
+            return w == "const" || w == "noexcept" || w == "mutable" || w == "override" || w == "final" ||
+                   w == "constexpr" || w == "volatile";
+        };
+        auto resetHead = [&] {
+            headStruct = headNamespace = false;
+            afterParams = lambdaCapture = lambdaParams = arrow = false;
+        };
+        auto punct = [&](char c) { lastPunct = c; lastWasWord = false; lastWord.clear(); };
+        bool lineStart = true;
+        for (size_t i = 0; i < n && ok; i++) {
+            const char c = src[i];
+            if (c == '\n') { lineStart = true; continue; }
+            if (c == ' ' || c == '\t' || c == '\r' || c == '\f' || c == '\v') continue;
+            if (lineStart && c == '#') {  // a preprocessor line, continued by a backslash
+                while (i < n && src[i] != '\n') {
+                    if (src[i] == '\\' && i + 1 < n && src[i + 1] == '\n') i++;
+                    else if (src[i] == '\\' && i + 2 < n && src[i + 1] == '\r' && src[i + 2] == '\n') i += 2;
+                    i++;
+                }
+                lineStart = true;
+                continue;
+            }
+            lineStart = false;
+            if (c == '/' && i + 1 < n && src[i + 1] == '/') {
+                while (i < n && src[i] != '\n') i++;
+                lineStart = true;
+                continue;
+            }
+            if (c == '/' && i + 1 < n && src[i + 1] == '*') {
+                const size_t end = src.find("*/", i + 2);
+                if (end == std::string::npos) return false;
+                const std::string text = src.substr(i, end + 2 - i);
+                if (text == "/*__nexa_chk*/" || text == "/*__nexa_fnbody*/") {
+                    markers.push_back({i, end + 2 - i});
+                    if (text == "/*__nexa_fnbody*/") {
+                        fnBodyNext = true;
+                    } else {
+                        bool good = false;
+                        for (size_t k = stack.size(); k-- > 0;) {
+                            const char kind = stack[k];
+                            if (kind == 'B') continue;
+                            if (kind == 'M') good = true;
+                            if (kind == 'F') {
+                                good = true;
+                                for (size_t j = 0; j < k; j++) {
+                                    if (stack[j] != 'N' && stack[j] != 'C') good = false;
+                                }
+                            }
+                            break;
+                        }
+                        if (!good) ok = false;
+                    }
+                }
+                i = end + 1;
+                continue;
+            }
+            if (c == '"' || c == '\'') {
+                bool raw = false;
+                if (c == '"' && lastWasWord && i > 0 && src[i - 1] == 'R' &&
+                    (lastWord == "R" || lastWord == "u8R" || lastWord == "uR" || lastWord == "UR" || lastWord == "LR")) {
+                    raw = true;
+                }
+                if (raw) {
+                    const size_t open = src.find('(', i + 1);
+                    if (open == std::string::npos) return false;
+                    const std::string close = ")" + src.substr(i + 1, open - i - 1) + "\"";
+                    const size_t end = src.find(close, open + 1);
+                    if (end == std::string::npos) return false;
+                    i = end + close.size() - 1;
+                } else {
+                    size_t j = i + 1;
+                    while (j < n && src[j] != c) {
+                        if (src[j] == '\\') j++;
+                        if (src[j] == '\n') return false;
+                        j++;
+                    }
+                    if (j >= n) return false;
+                    i = j;
+                }
+                // A string after `extern` names the language of a linkage block.
+                if (lastWasWord && lastWord == "extern") headNamespace = true;
+                punct('"');
+                continue;
+            }
+            if (std::isdigit(static_cast<unsigned char>(c))) {
+                size_t j = i;
+                while (j < n && (isId(src[j]) || src[j] == '.' || src[j] == '\'' ||
+                                 ((src[j] == '+' || src[j] == '-') && (src[j - 1] == 'e' || src[j - 1] == 'E' ||
+                                                                       src[j - 1] == 'p' || src[j - 1] == 'P')))) {
+                    j++;
+                }
+                i = j - 1;
+                punct('0');
+                continue;
+            }
+            if (isId(c)) {
+                size_t j = i;
+                while (j < n && isId(src[j])) j++;
+                const std::string w = src.substr(i, j - i);
+                i = j - 1;
+                if (w == "struct" || w == "class" || w == "union" || w == "enum") headStruct = true;
+                if (w == "namespace") headNamespace = true;
+                if (afterParams && !spec(w) && !arrow) afterParams = false;
+                if (lambdaCapture && !lambdaParams && !spec(w)) lambdaCapture = false;
+                if (lambdaParams && lambdaParenDepth < 0 && !spec(w) && !arrow) lambdaCapture = lambdaParams = false;
+                lastWord = w;
+                lastWasWord = true;
+                lastPunct = 0;
+                continue;
+            }
+            // Punctuation.
+            if (c == '-' && i + 1 < n && src[i + 1] == '>') {
+                arrow = true;
+                i++;
+                punct('>');
+                continue;
+            }
+            switch (c) {
+                case '(': {
+                    parenWord.push_back(lastWasWord ? lastWord : std::string(lastPunct == ']' ? "]" : ""));
+                    if (lambdaCapture && !lambdaParams && lambdaParenDepth < 0) {
+                        lambdaParams = true;
+                        lambdaParenDepth = static_cast<int>(parenWord.size()) - 1;
+                    }
+                    afterParams = false;
+                    arrow = false;
+                    punct('(');
+                    break;
+                }
+                case ')': {
+                    if (parenWord.empty()) return false;
+                    paramsWord = parenWord.back();
+                    parenWord.pop_back();
+                    afterParams = true;
+                    arrow = false;
+                    if (lambdaParams && lambdaParenDepth == static_cast<int>(parenWord.size())) lambdaParenDepth = -1;
+                    punct(')');
+                    break;
+                }
+                case '[': {
+                    // A capture list, unless it follows what it could index.
+                    const bool subscript = (lastWasWord && lastWord != "return" && lastWord != "co_return") ||
+                                           lastPunct == ')' || lastPunct == ']' || lastPunct == '0' || lastPunct == '"';
+                    parenWord.push_back(subscript ? "[sub" : "[cap");
+                    punct('[');
+                    break;
+                }
+                case ']': {
+                    if (parenWord.empty()) return false;
+                    const bool capture = parenWord.back() == "[cap";
+                    parenWord.pop_back();
+                    lambdaCapture = capture;
+                    lambdaParams = false;
+                    lambdaParenDepth = -1;
+                    afterParams = false;
+                    punct(']');
+                    break;
+                }
+                case '{': {
+                    char kind = 'B';
+                    if (lambdaCapture && (lastPunct == ']' || (lambdaParams && lambdaParenDepth < 0))) {
+                        kind = fnBodyNext ? 'M' : 'L';
+                    } else if (afterParams) {
+                        const std::string& w = paramsWord;
+                        const bool block = w == "if" || w == "for" || w == "while" || w == "switch" || w == "catch" ||
+                                           w == "constexpr" || w.empty() || w == "]" || w == "return";
+                        kind = block ? 'B' : 'F';
+                    } else if (!lastWasWord && (lastPunct == '=' || lastPunct == ',' || lastPunct == '(' ||
+                                                lastPunct == ':' || lastPunct == '?' || lastPunct == '{')) {
+                        kind = 'B';
+                    } else if (headStruct) {
+                        kind = 'C';
+                    } else if (headNamespace) {
+                        kind = 'N';
+                    }
+                    fnBodyNext = false;
+                    stack.push_back(kind);
+                    resetHead();
+                    punct('{');
+                    break;
+                }
+                case '}':
+                    if (stack.empty()) return false;
+                    stack.pop_back();
+                    resetHead();
+                    punct('}');
+                    break;
+                case ';':
+                    resetHead();
+                    punct(';');
+                    break;
+                default:
+                    if (afterParams && !arrow && c != '&' && c != '*' && c != ':' && c != '<' && c != '>' && c != ',') {
+                        afterParams = false;
+                    }
+                    if (lambdaCapture && c != '&' && c != '*' && c != ':' && c != '<' && c != '>' && c != ',' &&
+                        !(lambdaParams && lambdaParenDepth >= 0)) {
+                        lambdaCapture = lambdaParams = false;
+                    }
+                    punct(c);
+                    break;
+            }
+        }
+        if (!ok || !stack.empty() || !parenWord.empty()) return false;
+        std::string out;
+        out.reserve(src.size());
+        size_t at = 0;
+        for (const auto& m : markers) {
+            out.append(src, at, m.first - at);
+            at = m.first + m.second;
+        }
+        out.append(src, at, std::string::npos);
+        src.swap(out);
+        return true;
+    }
+
+    // Which functions can throw, and whether NexaC can see every way an error travels.
+    bool ownErrorsEligible() {
+        if (!astUsesThrow(ast_)) return false;
+        // Every function and method, top level or in a struct; true for a method.
+        std::vector<std::pair<const AstNode*, bool>> bodies;
+        for (const AstNode& n : ast_) {
+            if (n.type == AstNode::Type::Function) {
+                bodies.push_back({&n, !n.receiverType.empty()});
+            } else if (n.type == AstNode::Type::StructDef) {
+                for (const AstNode& m : n.children) {
+                    if (m.type == AstNode::Type::Function) bodies.push_back({&m, true});
+                }
+            }
+        }
+        // Whether `n` throws or calls something that can, not counting function literals.
+        std::function<bool(const AstNode&)> throws = [&](const AstNode& n) -> bool {
+            if (n.type == AstNode::Type::ExprLambda) return false;
+            if (n.type == AstNode::Type::Throw) return true;
+            if (n.type == AstNode::Type::FnCall) {
+                // r.value() and o.value(): an error when the Result or the Option holds none.
+                if (n.initValue == "." && n.value == "value") return true;
+                if (n.initValue.empty() && mayThrowFns_.count(n.value)) return true;
+                if ((n.initValue == "." || n.initValue == "->") && mayThrowMethods_.count(n.value)) return true;
+            }
+            for (const AstNode& c : n.children) if (throws(c)) return true;
+            for (const AstNode& c : n.paramDefaults) if (throws(c)) return true;
+            return false;
+        };
+        for (bool grew = true; grew;) {
+            grew = false;
+            for (const auto& [f, isMethod] : bodies) {
+                std::set<std::string>& into = isMethod ? mayThrowMethods_ : mayThrowFns_;
+                if (into.count(f->value)) continue;
+                bool any = false;
+                for (const AstNode& s : f->children) if (throws(s)) { any = true; break; }
+                if (any) {
+                    into.insert(f->value);
+                    grew = true;
+                }
+            }
+        }
+        // Anything an error could leave by that NexaC cannot follow keeps C++'s exceptions.
+        bool ok = true;
+        std::function<void(const AstNode&)> scan = [&](const AstNode& n) {
+            if (!ok) return;
+            switch (n.type) {
+                case AstNode::Type::ThreadSpawn:
+                case AstNode::Type::ThreadRun:
+                case AstNode::Type::ThreadWorker:
+                    ok = false;  // an error on another thread
+                    return;
+                case AstNode::Type::ExprLambda: {
+                    // A function literal is called through a value NexaC does not follow.
+                    bool inner = false;
+                    std::function<void(const AstNode&)> any = [&](const AstNode& x) {
+                        if (x.type == AstNode::Type::Throw) inner = true;
+                        if (x.type == AstNode::Type::FnCall && x.initValue == "." && x.value == "value") inner = true;
+                        if (x.type == AstNode::Type::FnCall &&
+                            ((x.initValue.empty() && mayThrowFns_.count(x.value)) ||
+                             ((x.initValue == "." || x.initValue == "->") && mayThrowMethods_.count(x.value)))) {
+                            inner = true;
+                        }
+                        for (const AstNode& c : x.children) any(c);
+                        for (const AstNode& c : x.paramDefaults) any(c);
+                    };
+                    for (const AstNode& c : n.children) any(c);
+                    if (inner) ok = false;
+                    break;
+                }
+                case AstNode::Type::ExprVarRef:
+                    if (mayThrowFns_.count(n.value)) ok = false;  // a throwing function used as a value
+                    break;
+                default:
+                    break;
+            }
+            for (const AstNode& c : n.children) scan(c);
+            for (const AstNode& c : n.paramDefaults) scan(c);
+        };
+        for (const AstNode& n : ast_) scan(n);
+        if (!ok) return false;
+        // A throw or a throwing call outside a function body: a global's value, a default
+        // argument, a field's default. C++ has no statement there to test the flag in.
+        for (const AstNode& n : ast_) {
+            if (n.type == AstNode::Type::Function || n.type == AstNode::Type::MainFunction) {
+                for (const AstNode& d : n.paramDefaults) if (throws(d)) return false;
+            } else if (n.type == AstNode::Type::StructDef) {
+                for (const AstNode& d : n.paramDefaults) if (throws(d)) return false;
+                for (const AstNode& m : n.children) {
+                    if (m.type == AstNode::Type::Function) {
+                        for (const AstNode& d : m.paramDefaults) if (throws(d)) return false;
+                    } else if (throws(m)) {
+                        return false;
+                    }
+                }
+            } else if (throws(n)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+private:
     // Set while emitting a function that wrote no return type and returns a
     // value, so is an int function by inference: its name, for the error a
     // `return` of something that is not a number gets. Empty otherwise.
@@ -3826,6 +4272,46 @@ private:
     // before it on the line. (Pointers keep the piecewise print; they have no text.)
     // A value after the first with a `?` in it is the same case in every program:
     // its error leaves the function (or ends main) from the middle of the line.
+    // A print in a program with NexaC's own errors whose values after the first call
+    // something, with no `?` (that keeps the line-first form): its values are computed
+    // before any is printed, into temporaries, and then printed the ordinary way. As in
+    // the line-first form a program that throws had with C++'s exceptions, nothing of
+    // the line appears when one of them raises, and a call's own output comes before the
+    // line; unlike it, no string is built. A literal or a name is printed where it stands.
+    bool printHoists(const AstNode& p) const {
+        if (!ownErrors_ || p.children.size() < 2) return false;
+        bool raises = false, tried = false;
+        for (size_t i = 0; i < p.children.size(); i++) {
+            const std::string t = inferExprNexaType(p.children[i]);
+            if (isPointerType(t) || t == "null") return false;
+            std::function<void(const AstNode&)> v = [&](const AstNode& n) {
+                if (n.type == AstNode::Type::ExprTry) tried = true;
+                if (i > 0 && (n.type == AstNode::Type::FnCall || n.type == AstNode::Type::ExprCall ||
+                              n.type == AstNode::Type::StrMethod)) {
+                    raises = true;
+                }
+                for (const AstNode& c : n.children) v(c);
+            };
+            v(p.children[i]);
+        }
+        return raises && !tried;
+    }
+
+    static bool printValueStays(const AstNode& a) {
+        switch (a.type) {
+            case AstNode::Type::ExprStringLiteral:
+            case AstNode::Type::ExprIntLiteral:
+            case AstNode::Type::ExprFloatLiteral:
+            case AstNode::Type::ExprCharLiteral:
+            case AstNode::Type::ExprBoolLiteral:
+            case AstNode::Type::ExprVarRef:
+            case AstNode::Type::ExprArrayLiteral:  // a braced list has no type of its own for auto
+                return true;
+            default:
+                return false;
+        }
+    }
+
     bool printLineFirst(const AstNode& p) const {
         if (p.children.size() < 2) return false;
         bool call = false, tried = false;
@@ -3834,14 +4320,25 @@ private:
             if (isPointerType(t) || t == "null") return false;
             if (i == 0) continue;
             std::function<void(const AstNode&)> v = [&](const AstNode& n) {
-                if (n.type == AstNode::Type::FnCall || n.type == AstNode::Type::ExprCall ||
-                    n.type == AstNode::Type::StrMethod) call = true;
+                // With NexaC's own errors it is known which calls can throw; with C++'s,
+                // any call might.
+                if (ownErrors_) {
+                    if (n.type == AstNode::Type::FnCall &&
+                        ((n.initValue.empty() && mayThrowFns_.count(n.value)) ||
+                         ((n.initValue == "." || n.initValue == "->") &&
+                          (n.value == "value" || mayThrowMethods_.count(n.value))))) {
+                        call = true;
+                    }
+                } else if (n.type == AstNode::Type::FnCall || n.type == AstNode::Type::ExprCall ||
+                           n.type == AstNode::Type::StrMethod) {
+                    call = true;
+                }
                 if (n.type == AstNode::Type::ExprTry) tried = true;
                 for (const AstNode& c : n.children) v(c);
             };
             v(p.children[i]);
         }
-        return tried || (cppUsage_.exceptions && call);
+        return tried || ((cppUsage_.exceptions || ownErrors_) && call);
     }
 
     // Whether any of these expressions reads the variable `name`.
@@ -4711,6 +5208,21 @@ private:
             if (nexaIsResultType(recvBare)) {
                 if (e.value == "ok" || e.value == "value" || e.value == "error") {
                     if (e.children.size() != 1) throw std::runtime_error(e.value + " expects no arguments");
+                    if (e.value == "value" && ownErrors_) {
+                        // r.value() on an error is an error a catch takes, as it was with C++'s
+                        // exceptions: the flag is set and the error goes where a throw's would.
+                        if (emitAtFileScope_) { ownErrorsReject_ = true; return recv + ".value()"; }
+                        const std::string fail = "{ __nexa_raise_result(__r.error()); /*__nexa_chk*/" + errPropagate() + " }";
+                        if (nexaResultInner(recvBare) == "void") {
+                            return "({ auto&& __r = " + recv + "; if (!__r.ok()) " + fail + " (void)0; })";
+                        }
+                        // A variable's value is read in place, as value() & returned it; a
+                        // temporary's is moved out, as value() && did.
+                        if (exprIsPlainPlace(e.children[0])) {
+                            return "(*({ auto& __r = " + recv + "; if (!__r.ok()) " + fail + " &__r._value; }))";
+                        }
+                        return "({ auto __r = " + recv + "; if (!__r.ok()) " + fail + " std::move(__r._value); })";
+                    }
                     return recv + "." + e.value + "()";
                 }
                 throw std::runtime_error("Unknown Result method '." + e.value + "()' (use .ok, .value, .error)");
@@ -4730,6 +5242,15 @@ private:
                 if (e.value == "is_some" || e.value == "is_none") {
                     if (e.children.size() != 1) throw std::runtime_error(e.value + " expects no arguments");
                     return "(" + recv + ".__tag " + (e.value == "is_some" ? "==" : "!=") + " " + tag + ")";
+                }
+                if (e.value == "value" && ownErrors_) {
+                    if (e.children.size() != 1) throw std::runtime_error("value expects no arguments");
+                    if (emitAtFileScope_) ownErrorsReject_ = true;
+                    const std::string fail = "{ __nexa_raise_none(); /*__nexa_chk*/" + errPropagate() + " }";
+                    if (plain) {
+                        return "(*({ auto& __o = " + recv + "; if (__o.__tag != " + tag + ") " + fail + " &__o." + fld + "; }))";
+                    }
+                    return "({ auto __o = " + recv + "; if (__o.__tag != " + tag + ") " + fail + " std::move(__o." + fld + "); })";
                 }
                 if (e.value == "value") {
                     if (e.children.size() != 1) throw std::runtime_error("value expects no arguments");
@@ -4988,6 +5509,7 @@ private:
                             s += emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                         }
                         s += ")";
+                        if (ownErrors_ && mayThrowMethods_.count(e.value)) s = errChecked(s, fnIsVoid(*meth));
                         return s;
                     }
                     // g.log(m) and g->log(m) with g a *Game: the method of what it points at
@@ -4997,9 +5519,17 @@ private:
                         s += emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                     }
                     s += ")";
+                    if (ownErrors_ && mayThrowMethods_.count(e.value)) {
+                        if (meth) s = errChecked(s, fnIsVoid(*meth));
+                        else ownErrorsReject_ = true;
+                    }
                     return s;
                 }
             }
+            // A method of a receiver whose type is not known here: if a method by this name
+            // can throw, whether it returns a value is not known either, so the program is
+            // built with C++'s exceptions instead.
+            if (ownErrors_ && mayThrowMethods_.count(e.value)) ownErrorsReject_ = true;
             std::string s = recv;
             s += e.initValue;
             s += e.value;
@@ -5160,6 +5690,7 @@ private:
             }
         }
         s += ")";
+        if (ownErrors_ && mayThrowFns_.count(e.value)) s = errChecked(s, fnIsVoid(fn));
         return s;
     }
 
@@ -10005,6 +10536,43 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                                    varIsBool, varIsEnum, nl, "stderr");
                 }
             } else if ((child.type == AstNode::Type::IoPrintln || child.type == AstNode::Type::IoPrint) &&
+                       printHoists(child)) {
+                out << indent << "{\n";
+                const std::string ind2 = indent + "    ";
+                AstNode synth = child;
+                std::vector<std::string> names;
+                nexaDeclStack_.push_back({});
+                for (size_t ai = 0; ai < child.children.size(); ++ai) {
+                    const AstNode& a = child.children[ai];
+                    if (printValueStays(a)) continue;
+                    const std::string t = inferExprNexaType(a);
+                    const std::string e = emitExpr(a, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                    const std::string name = "__nexa_p" + std::to_string(errCounter_++);
+                    out << ind2 << "auto&& " << name << " = " << e << ";\n";
+                    AstNode ref{AstNode::Type::ExprVarRef, name, {}};
+                    ref.line = a.line;
+                    ref.srcFile = a.srcFile;
+                    synth.children[ai] = ref;
+                    names.push_back(name);
+                    varMap[name] = name;
+                    nexaDeclStack_.back()[name] = t;
+                    varIsString[name] = t == "string";
+                    varIsFloat[name] = nexaIsFloatType(t);
+                    varIsChar[name] = t == "char";
+                    varIsBool[name] = t == "bool";
+                }
+                std::vector<AstNode> one{synth};
+                emitBlock(out, one, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, ind2, inStringSwitchCase);
+                for (const std::string& name : names) {
+                    varMap.erase(name);
+                    varIsString.erase(name);
+                    varIsFloat.erase(name);
+                    varIsChar.erase(name);
+                    varIsBool.erase(name);
+                }
+                nexaDeclStack_.pop_back();
+                out << indent << "}\n";
+            } else if ((child.type == AstNode::Type::IoPrintln || child.type == AstNode::Type::IoPrint) &&
                        printLineFirst(child)) {
                 // io.println("value ", check(-1)) where check can throw: nothing is printed
                 // until every argument has its value, as with one argument.
@@ -10844,6 +11412,65 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                         else nexaDeclStack_.back().erase(valueName);
                     }
                 }
+            } else if (child.type == AstNode::Type::TryCatch && ownErrors_) {
+                if (child.children.size() < 2) {
+                    throw std::runtime_error("internal: try/catch missing try or catch block");
+                }
+                // The try block runs as a plain block; an error in it (a throw, or a call
+                // that set the flag) goes to the label, which only that goto reaches.
+                const std::string label = "__nexa_catch" + std::to_string(errCounter_++);
+                out << indent << "{\n";
+                errCatchLabels_.push_back(label);
+                emitBlock(out, child.children[0].children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indent + "    ", inStringSwitchCase);
+                errCatchLabels_.pop_back();
+                out << indent << "}\n";
+                out << indent << "if (false) {\n";
+                out << indent << label << ":;\n";
+                const std::string indIn = indent + "    ";
+                const std::string& catchNexa = child.value;
+                if (catchNexa.empty()) {
+                    out << indIn << "__nexa_err = false;\n";
+                    out << indIn << "__nexa_err_msg.clear();\n";
+                    emitBlock(out, child.children[1].children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indIn, inStringSwitchCase);
+                } else {
+                    auto it = varMap.find(catchNexa);
+                    const bool hadMap = it != varMap.end();
+                    const std::string prevMapped = hadMap ? it->second : "";
+                    const bool hadStr = varIsString.count(catchNexa) > 0, prevStr = hadStr && varIsString[catchNexa];
+                    const bool hadConst = varIsConst.count(catchNexa) > 0, prevConst = hadConst && varIsConst[catchNexa];
+                    const bool hadFloat = varIsFloat.count(catchNexa) > 0, prevFloat = hadFloat && varIsFloat[catchNexa];
+                    const bool hadChar = varIsChar.count(catchNexa) > 0, prevChar = hadChar && varIsChar[catchNexa];
+                    const bool hadBool = varIsBool.count(catchNexa) > 0, prevBool = hadBool && varIsBool[catchNexa];
+                    const bool hadEnum = varIsEnum.count(catchNexa) > 0, prevEnum = hadEnum && varIsEnum[catchNexa];
+                    const std::string cppCatch = preserveNames_ ? preservedVarName(catchNexa, varMap) : ("__nexa_var_" + std::to_string(varIdx++));
+                    varMap[catchNexa] = cppCatch;
+                    varIsString[catchNexa] = true;
+                    varIsConst[catchNexa] = false;
+                    varIsFloat.erase(catchNexa);
+                    varIsChar.erase(catchNexa);
+                    varIsBool.erase(catchNexa);
+                    varIsEnum.erase(catchNexa);
+                    out << indIn << "std::string " << cppCatch << " = std::move(__nexa_err_msg);\n";
+                    out << indIn << "__nexa_err = false;\n";
+                    out << indIn << "__nexa_err_msg.clear();\n";
+                    std::map<std::string, std::string> inj{{catchNexa, "string"}};
+                    emitBlock(out, child.children[1].children, varMap, varIdx, varIsString, varIsConst, varIsFloat, varIsChar, varIsBool, varIsEnum, indIn, inStringSwitchCase, &inj);
+                    if (hadMap) varMap[catchNexa] = prevMapped; else varMap.erase(catchNexa);
+                    if (hadStr) varIsString[catchNexa] = prevStr; else varIsString.erase(catchNexa);
+                    if (hadConst) varIsConst[catchNexa] = prevConst; else varIsConst.erase(catchNexa);
+                    if (hadFloat) varIsFloat[catchNexa] = prevFloat; else varIsFloat.erase(catchNexa);
+                    if (hadChar) varIsChar[catchNexa] = prevChar; else varIsChar.erase(catchNexa);
+                    if (hadBool) varIsBool[catchNexa] = prevBool; else varIsBool.erase(catchNexa);
+                    if (hadEnum) varIsEnum[catchNexa] = prevEnum; else varIsEnum.erase(catchNexa);
+                }
+                out << indent << "}\n";
+            } else if (child.type == AstNode::Type::Throw && ownErrors_) {
+                if (child.children.empty()) {
+                    throw std::runtime_error("internal: throw without expression");
+                }
+                if (inferExprNexaType(child.children[0]) != "string") ownErrorsReject_ = true;
+                const std::string thrown = emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool);
+                out << indent << "{ __nexa_raise(" << thrown << "); /*__nexa_chk*/" << errPropagate() << " }\n";
             } else if (child.type == AstNode::Type::TryCatch) {
                 if (child.children.size() < 2) {
                     throw std::runtime_error("internal: try/catch missing try or catch block");

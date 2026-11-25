@@ -1,0 +1,28 @@
+// try / catch / throw as NexaC's own errors, not C++ exceptions: break and continue in a try, and in a catch.
+// Each case prints what the exception version printed (checked against it).
+// Reference: SYNTAX/ControlFlow.txt ("ERRORS: TRY / CATCH / THROW")
+#include <std/io>
+fn check(n: int): void {
+    if (n % 3 == 0) { throw "multiple of three: " + n; }
+}
+fn main() {
+    let total = 0;
+    for (i in 1..10) {
+        try {
+            check(i);
+            if (i == 8) { break; }
+            if (i % 2 == 0) { continue; }
+            total += i;
+        } catch (e) {
+            io.println(e);
+            continue;
+        }
+        io.println("after ", i);
+    }
+    io.println("total ", total);
+    let k = 0;
+    while (true) {
+        k += 1;
+        try { check(k); } catch { io.println("stop at ", k); break; }
+    }
+}

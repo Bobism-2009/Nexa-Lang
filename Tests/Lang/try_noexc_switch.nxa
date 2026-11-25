@@ -1,0 +1,16 @@
+// try / catch / throw as NexaC's own errors, not C++ exceptions: errors in a switch case.
+// Each case prints what the exception version printed (checked against it).
+// Reference: SYNTAX/ControlFlow.txt ("ERRORS: TRY / CATCH / THROW")
+#include <std/io>
+fn check(n: int): void { if (n == 2) { throw "two"; } }
+fn main() {
+    for (i in 0..3) {
+        try {
+            switch (i) {
+                case 1: io.println("one"); break;
+                case 2: check(i); io.println("x"); break;
+                default: io.println("other ", i);
+            }
+        } catch (e) { io.println("caught ", e); }
+    }
+}

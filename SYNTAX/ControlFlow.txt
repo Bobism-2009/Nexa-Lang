@@ -367,8 +367,9 @@ ERRORS: TRY / CATCH / THROW
 
   throw or Result? A Result is for a failure the caller is expected to handle
   -- a missing file, bad input -- and it shows in the function's type. throw is
-  for giving up on a whole piece of work from deep inside it. A program with no
-  try, catch or throw is also smaller (CLI.txt, OUTPUT SIZE).
+  for giving up on a whole piece of work from deep inside it. Neither makes a
+  program larger in itself: NexaC handles throw without C++'s exceptions, except
+  where it cannot follow the error (CLI.txt, OUTPUT SIZE).
 
   Example:
     fn half(n: int): int {

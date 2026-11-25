@@ -1,0 +1,12 @@
+// try / catch / throw as NexaC's own errors, not C++ exceptions: an error deep in a recursion.
+// Each case prints what the exception version printed (checked against it).
+// Reference: SYNTAX/ControlFlow.txt ("ERRORS: TRY / CATCH / THROW")
+#include <std/io>
+fn walk(n: int, limit: int): int {
+    if (n > limit) { throw "limit " + limit; }
+    if (n == 10) { return n; }
+    return walk(n + 1, limit);
+}
+fn main() {
+    try { io.println(walk(0, 20)); io.println(walk(0, 5)); } catch (e) { io.println(e); }
+}

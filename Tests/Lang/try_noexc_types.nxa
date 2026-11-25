@@ -1,0 +1,34 @@
+// try / catch / throw as NexaC's own errors, not C++ exceptions: functions of every return type that throw: struct, list, float, bool, string.
+// Each case prints what the exception version printed (checked against it).
+// Reference: SYNTAX/ControlFlow.txt ("ERRORS: TRY / CATCH / THROW")
+#include <std/io>
+struct Point { x: int; y: int; }
+fn pt(n: int): Point {
+    if (n < 0) { throw "negative point"; }
+    return Point { x: n, y: n * 2 };
+}
+fn list(n: int): []int {
+    if (n == 0) { throw "empty list"; }
+    let xs: []int;
+    for (i in 0..<n) { xs.push(i); }
+    return xs;
+}
+fn ratio(a: float, b: float): float {
+    if (b == 0.0) { throw "divide by zero"; }
+    return a / b;
+}
+fn flag(s: string): bool {
+    if (len(s) == 0) { throw "no text"; }
+    return s == "yes";
+}
+fn name(n: int): string {
+    if (n > 5) { throw "no name for " + n; }
+    return "n" + n;
+}
+fn main() {
+    try { let p = pt(3); io.println(p.x, " ", p.y); let q = pt(-1); io.println(q.x); } catch (e) { io.println(e); }
+    try { io.println(len(list(4))); io.println(len(list(0))); } catch (e) { io.println(e); }
+    try { io.println(ratio(3.0, 2.0)); io.println(ratio(1.0, 0.0)); } catch (e) { io.println(e); }
+    try { io.println(flag("yes")); io.println(flag("")); } catch (e) { io.println(e); }
+    try { io.println(name(2) + "/" + name(9)); } catch (e) { io.println(e); }
+}

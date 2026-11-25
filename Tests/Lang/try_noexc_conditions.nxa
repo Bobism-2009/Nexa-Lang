@@ -1,0 +1,17 @@
+// try / catch / throw as NexaC's own errors, not C++ exceptions: errors in conditions, && and ?: (only what runs is called), a + chain, a throw built from a call.
+// Each case prints what the exception version printed (checked against it).
+// Reference: SYNTAX/ControlFlow.txt ("ERRORS: TRY / CATCH / THROW")
+#include <std/io>
+fn pos(n: int): int {
+    io.println("pos(", n, ")");
+    if (n < 0) { throw "neg " + n; }
+    return n;
+}
+fn main() {
+    try { if (pos(1) > 0 && pos(-2) > 0) { io.println("both"); } } catch (e) { io.println(e); }
+    try { if (false && pos(-3) > 0) { io.println("x"); } io.println("short-circuit ok"); } catch (e) { io.println(e); }
+    try { let v = pos(2) > 1 ? pos(5) : pos(-4); io.println(v); } catch (e) { io.println(e); }
+    try { let i = 3; while (pos(i) > 0) { i -= 2; } } catch (e) { io.println(e); }
+    try { let s = "a" + pos(7) + "b" + pos(-8); io.println(s); } catch (e) { io.println(e); }
+    try { throw "built from " + pos(-9); } catch (e) { io.println(e); }
+}

@@ -1,0 +1,24 @@
+// try / catch / throw as NexaC's own errors, not C++ exceptions: return inside try and catch, and a catch that throws on.
+// Each case prints what the exception version printed (checked against it).
+// Reference: SYNTAX/ControlFlow.txt ("ERRORS: TRY / CATCH / THROW")
+#include <std/io>
+fn risky(n: int): int {
+    if (n == 3) { throw "three"; }
+    return n;
+}
+fn find(n: int): int {
+    try {
+        let v = risky(n);
+        return v * 2;
+    } catch (e) {
+        io.println("find caught ", e);
+        return -1;
+    }
+}
+fn chain(n: int): int {
+    try { return risky(n); } catch (e) { throw "chain: " + e; }
+}
+fn main() {
+    io.println(find(2), " ", find(3));
+    try { io.println(chain(1)); io.println(chain(3)); } catch (e) { io.println(e); }
+}

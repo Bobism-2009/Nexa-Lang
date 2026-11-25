@@ -1,0 +1,31 @@
+// try / catch / throw as NexaC's own errors, not C++ exceptions: nested tries, a throw in a catch, a rethrow, an error several calls deep.
+// Each case prints what the exception version printed (checked against it).
+// Reference: SYNTAX/ControlFlow.txt ("ERRORS: TRY / CATCH / THROW")
+#include <std/io>
+fn inner(n: int): int {
+    if (n > 2) { throw "too big: " + n; }
+    return n * 10;
+}
+fn middle(n: int): int {
+    let a = inner(n);
+    io.println("middle got ", a);
+    return a + 1;
+}
+fn main() {
+    for (i in 1..4) {
+        try {
+            io.println("result ", middle(i));
+        } catch (e) {
+            io.println("caught: ", e);
+            try {
+                throw "again " + e;
+            } catch (e2) {
+                io.println("inner caught: ", e2);
+            }
+        }
+    }
+    try {
+        try { middle(9); } catch (e) { throw "rethrown(" + e + ")"; }
+    } catch (e) { io.println("outer: ", e); }
+    io.println("done");
+}

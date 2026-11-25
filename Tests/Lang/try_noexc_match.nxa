@@ -1,0 +1,16 @@
+// try / catch / throw as NexaC's own errors, not C++ exceptions: errors in a match value.
+// Each case prints what the exception version printed (checked against it).
+// Reference: SYNTAX/ControlFlow.txt ("ERRORS: TRY / CATCH / THROW")
+#include <std/io>
+fn half(n: int): int {
+    if (n % 2 != 0) { throw "odd " + n; }
+    return n / 2;
+}
+fn main() {
+    for (i in 1..3) {
+        try {
+            let v = match (i) { 1 => half(2), 2 => half(3), _ => 0 };
+            io.println("v ", v);
+        } catch (e) { io.println("caught ", e); }
+    }
+}

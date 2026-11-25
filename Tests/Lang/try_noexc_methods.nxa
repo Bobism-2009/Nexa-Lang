@@ -1,0 +1,28 @@
+// try / catch / throw as NexaC's own errors, not C++ exceptions: struct methods that throw, and methods calling them.
+// Each case prints what the exception version printed (checked against it).
+// Reference: SYNTAX/ControlFlow.txt ("ERRORS: TRY / CATCH / THROW")
+#include <std/io>
+struct Account {
+    balance: int;
+    fn withdraw(amount: int): int {
+        if (amount > self.balance) { throw "insufficient funds: " + amount; }
+        self.balance = self.balance - amount;
+        return self.balance;
+    }
+    fn twice(amount: int): void {
+        self.withdraw(amount);
+        self.withdraw(amount);
+    }
+}
+fn main() {
+    let a = Account { balance: 100 };
+    try {
+        io.println(a.withdraw(30));
+        a.twice(20);
+        io.println(a.balance);
+        a.twice(20);
+        io.println("not reached");
+    } catch (e) {
+        io.println("caught ", e, " balance ", a.balance);
+    }
+}

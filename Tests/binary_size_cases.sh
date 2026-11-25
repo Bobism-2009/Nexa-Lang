@@ -19,7 +19,8 @@
 #              on a Result and on ints (with ranges) and strings, and an Option with its methods, ?, m.get and xs.first,
 #              xs.filter / any / all / map / find given function literals, #define / #if / # / __has_include / #pragma, s.tokens,
 #              xs.sort_by (on ints, as filter/map are: a []Item costs a page on Linux), xs.sort, _Pragma, __DATE__,
-#              and a range loop with a step -- is
+#              a range loop with a step, and try / catch / throw (NexaC's own errors, with the .value()
+#              calls above caught too) -- is
 #              under 64KB, and prints
 #              exactly what the same program built without the slimming
 #              (NEXA_NO_SLIM=1) prints. It does not include std/gfx3d, so the
@@ -46,8 +47,9 @@
 #              inline_cpp: a throw nothing catches keeps what the program
 #              printed, says "Uncaught error: <text>" on stderr and exits
 #              non-zero. (The stock handler dropped that output when stdout
-#              was a file or a pipe.) Windows and Linux: such a program, which
-#              keeps the exception runtime, is still under 128KB.
+#              was a file or a pipe.) Windows and Linux: that program, whose
+#              errors are NexaC's own and not C++ exceptions, is under 16KB
+#              (it was 62-68KB with the exception runtime).
 #
 #   sh Tests/binary_size_cases.sh           (from the repo root)
 #
@@ -119,6 +121,10 @@ fn twice(s: string): Result[int] {
     return ok(parse(s)? * 2);
 }
 
+fn checked(n: int): int {
+    if (n > 99) { throw "too big: " + n; }
+    return n;
+}
 fn first_long(words: []string): Option[string] {
     for (w in words) {
         if (w.len() > 1) { return Some(w); }
@@ -205,6 +211,11 @@ fn main() {
                " ", bag.map(fn (x) { return x * sum; }).sum(), " ",
                items.find(fn (it) { return it.name == "cup"; }).value().qty);
     io.println(SCALE(OS_OK), " ", NAME_OF(items[0]), " ", __LINE__, " ", len(__DATE__));
+    try {
+        io.println(checked(sum), " ", checked(sum * 100));
+    } catch (e) {
+        io.println("caught ", e);
+    }
 }
 EOF
 
@@ -372,7 +383,7 @@ rm -f "$WORK"/*.debug.cpp 2>/dev/null
 
 if [ "$SLIM" = 1 ] && [ -f "$WORK/uncaught$EXE" ]; then
     size=$(wc -c < "$WORK/uncaught$EXE" | tr -d ' ')
-    if [ "$size" -lt 131072 ]; then ok "uncaught_size ($size bytes)"; else bad uncaught_size "$size bytes, over 128KB"; fi
+    if [ "$size" -lt 16384 ]; then ok "uncaught_size ($size bytes)"; else bad uncaught_size "$size bytes, over 16KB"; fi
 fi
 
 echo

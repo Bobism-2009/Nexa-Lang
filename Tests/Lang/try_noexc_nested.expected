@@ -1,0 +1,10 @@
+middle got 10
+result 11
+middle got 20
+result 21
+caught: too big: 3
+inner caught: again too big: 3
+caught: too big: 4
+inner caught: again too big: 4
+outer: rethrown(too big: 9)
+done
