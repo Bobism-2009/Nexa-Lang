@@ -5,9 +5,18 @@
   </picture>
 </p>
 
-# Nexa & NexaC
+<p align="center">
+  A small systems language with C++-like syntax, compiled to tiny, fast native programs.
+</p>
 
-**Nexa** is a small systems-friendly language with C++-like surface syntax. **NexaC** is its compiler: it parses `.nxa` files, transpiles to a single C++ translation unit, and invokes **clang++** (falling back to **g++** when clang is not installed) to produce a native executable or shared library. Set `NEXA_CXX` to force a specific compiler.
+<p align="center">
+  <a href="#get-nexac">Get NexaC</a> ·
+  <a href="#hello-world">Hello world</a> ·
+  <a href="SYNTAX/">Syntax reference</a> ·
+  <a href="Examples/">Examples</a>
+</p>
+
+**NexaC** is Nexa's compiler: it parses `.nxa` files, transpiles to a single C++ translation unit, and invokes **clang++** (falling back to **g++** when clang is not installed) to produce a native executable or shared library. Set `NEXA_CXX` to force a specific compiler.
 
 | | |
 |---|---|
