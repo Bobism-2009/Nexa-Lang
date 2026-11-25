@@ -422,7 +422,7 @@
         },
         {
           "name": "support.function.builtin.nexa",
-          "match": "(?<=\\.)(upper|lower|trim|len|contains|starts_with|ends_with|index_of|last_index_of|count|replace|substring|repeat|split|join|push|pop|insert|remove|clear|has|keys|values|sort|sort_desc|sort_by|tokens|reverse|min|max|sum|find|any|all|filter|map|first|last|get|is_some|is_none|or|ok|value|error)(?=\\s*\\()"
+          "match": "(?<=\\.)(upper|lower|trim|len|contains|starts_with|ends_with|index_of|last_index_of|count|replace|substring|repeat|split|join|push|pop|insert|remove|clear|has|keys|values|sort|sort_desc|sort_by|tokens|reverse|min|max|sum|find|any|all|filter|map|first|last|get|is_some|is_none|or|ok|value|error|kind|is_null|is_bool|is_number|is_string|is_array|is_object|is_error|as_bool|as_int|as_float|as_string|set)(?=\\s*\\()"
         }
       ]
     },
@@ -430,7 +430,7 @@
       "patterns": [
         {
           "name": "meta.module.access.nexa",
-          "match": "\\b(io|os|dll|file|random|math|crypto|http|tcp|udp|json|time|thread|term|gfx3d|gfx|ui)\\.([a-zA-Z_][a-zA-Z0-9_]*)",
+          "match": "\\b(io|os|dll|file|random|math|crypto|http|tcp|udp|json|time|thread|term|gfx3d|gfx|ui|physics)\\.([a-zA-Z_][a-zA-Z0-9_]*)",
           "captures": {
             "1": { "name": "entity.name.namespace" },
             "2": { "name": "entity.name.function" }

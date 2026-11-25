@@ -1,9 +1,9 @@
 import * as vscode from "vscode";
-import { maskComments } from "./nexaIndex";
+import { maskComments, maskStrings } from "./nexaIndex";
 import { NEXA_PREDEFINED_MACROS } from "./nexaCompletions";
 
 const MODULES =
-  "io|os|dll|file|random|math|crypto|http|tcp|udp|json|time|thread|term|gfx3d|gfx|ui";
+  "io|os|dll|file|random|math|crypto|http|tcp|udp|json|time|thread|term|gfx3d|gfx|ui|physics";
 const MODULE_CALL = new RegExp(
   `\\b(${MODULES})\\.([A-Za-z_][A-Za-z0-9_]*)`,
   "g"
@@ -11,7 +11,7 @@ const MODULE_CALL = new RegExp(
 const INCLUDE_ANGLE = /^\s*(#include)\s*<([^>]+)>/;
 const INCLUDE_QUOTE = /^\s*(#include)\s*"([^"]+)"/;
 const STD_MODULES =
-  "io|os|dll|file|random|math|crypto|network|json|time|thread|term|gfx3d|gfx|ui|inline";
+  "io|os|dll|file|random|math|crypto|network|json|time|thread|term|gfx3d|gfx|ui|physics|inline";
 
 export const SEMANTIC_LEGEND = new vscode.SemanticTokensLegend(
   ["module", "member", "importKeyword", "importModule", "importPrefix", "nexaVariable",
@@ -34,57 +34,12 @@ function macroNames(text: string): Set<string> {
   return names;
 }
 
-const NOT_NAMES = new Set(
+export const NOT_NAMES = new Set(
   ("fn extern new delete sizeof let const struct enum type shape priv if else while for " +
     "switch match case default return break continue defer goto try catch throw in step " +
     "and or not self null true false int short long size_t string bool float float64 " +
     "float32 char void unsigned map Result result").split(" ")
 );
-
-// Blanks string and char literals (keeping f-string {holes}, which hold code), so a
-// word inside quotes is never taken for a variable. Lengths are kept: columns match.
-function maskStrings(s: string): string {
-  const a = s.split("");
-  let i = 0;
-  const blank = (from: number, to: number) => {
-    for (let k = from; k < to && k < a.length; k++) if (a[k] !== "\n" && a[k] !== "\r") a[k] = " ";
-  };
-  while (i < a.length) {
-    const c = a[i];
-    if (c === "R" && a[i + 1] === '"' && !/[A-Za-z0-9_]/.test(a[i - 1] ?? "")) {
-      const open = s.indexOf("(", i + 2);
-      if (open > 0 && open - i < 20) {
-        const close = s.indexOf(")" + s.slice(i + 2, open) + '"', open);
-        const end = close < 0 ? a.length : close + (open - i - 2) + 2;
-        blank(i, end);
-        i = end;
-        continue;
-      }
-    }
-    if (c === '"' || c === "'") {
-      const interp = c === '"' && a[i - 1] === "f" && !/[A-Za-z0-9_]/.test(a[i - 2] ?? "");
-      a[i] = " ";
-      i++;
-      let depth = 0;
-      while (i < a.length && a[i] !== "\n") {
-        if (depth === 0 && a[i] === "\\") { a[i] = " "; if (i + 1 < a.length && a[i + 1] !== "\n") a[i + 1] = " "; i += 2; continue; }
-        if (depth === 0 && a[i] === c) { a[i] = " "; i++; break; }
-        if (interp && a[i] === "{") {
-          if (depth === 0 && a[i + 1] === "{") { a[i] = " "; a[i + 1] = " "; i += 2; continue; }
-          depth++;
-          i++;
-          continue;
-        }
-        if (interp && a[i] === "}" && depth > 0) { depth--; i++; continue; }
-        if (depth === 0) a[i] = " ";
-        i++;
-      }
-      continue;
-    }
-    i++;
-  }
-  return a.join("");
-}
 
 function addParams(list: string, names: Set<string>): void {
   for (const part of list.split(",")) {

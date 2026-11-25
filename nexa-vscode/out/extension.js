@@ -41,6 +41,13 @@ const nexaIndex_1 = require("./nexaIndex");
 const nexaCompletions_1 = require("./nexaCompletions");
 const nexaRun_1 = require("./nexaRun");
 const nexaSemantic_1 = require("./nexaSemantic");
+const nexaDiagnostics_1 = require("./nexaDiagnostics");
+const nexaSignature_1 = require("./nexaSignature");
+const nexaRename_1 = require("./nexaRename");
+const nexaFolding_1 = require("./nexaFolding");
+const nexaSymbols_1 = require("./nexaSymbols");
+const nexaIndex_2 = require("./nexaIndex");
+const nexaTypes_1 = require("./nexaTypes");
 const WORD = (name) => new RegExp(`\\b${escapeRe(name)}\\b`, "g");
 function escapeRe(s) {
     return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -100,24 +107,6 @@ async function allRefsInWorkspace(document, name, token) {
     }
     return out;
 }
-function defKindToSymbol(d) {
-    switch (d.kind) {
-        case "struct":
-            return vscode.SymbolKind.Struct;
-        case "enum":
-            return vscode.SymbolKind.Enum;
-        case "variable":
-            return vscode.SymbolKind.Variable;
-        case "function":
-            return vscode.SymbolKind.Function;
-        case "macro":
-            return vscode.SymbolKind.Constant;
-        default: {
-            const _never = d.kind;
-            return _never;
-        }
-    }
-}
 function defKindToCompletion(kind) {
     switch (kind) {
         case "function":
@@ -130,6 +119,10 @@ function defKindToCompletion(kind) {
             return vscode.CompletionItemKind.Enum;
         case "macro":
             return vscode.CompletionItemKind.Constant;
+        case "type":
+            return vscode.CompletionItemKind.TypeParameter;
+        case "shape":
+            return vscode.CompletionItemKind.Interface;
         default: {
             const _never = kind;
             return _never;
@@ -139,12 +132,32 @@ function defKindToCompletion(kind) {
 function sourceLabel(doc) {
     return path.basename(doc.uri.fsPath);
 }
-function hoverFromDef(doc, d) {
-    const line = doc.lineAt(d.defLine).text.trim();
+/** The definition's head (a function's whole signature), its doc comment, and where it is. */
+function hoverFromDef(doc, d, at) {
     const md = new vscode.MarkdownString();
-    md.appendMarkdown(`**${d.kind}** \`${d.name}\` — ${sourceLabel(doc)}\n\n`);
-    md.appendCodeblock(line, "nexa");
-    return new vscode.Hover(md, d.nameRange);
+    md.appendCodeblock((0, nexaIndex_2.definitionHead)(doc, d), "nexa");
+    const comment = (0, nexaIndex_2.docComment)(doc, d.defLine);
+    if (comment) {
+        md.appendMarkdown("\n\n");
+        md.appendText(comment);
+    }
+    md.appendMarkdown(`\n\n*${d.kind}* — ${sourceLabel(doc)}:${d.defLine + 1}`);
+    return new vscode.Hover(md, at);
+}
+function hoverFromMember(type, m, at) {
+    if (m.def) {
+        const h = hoverFromDef(m.document, m.def, at);
+        return h;
+    }
+    const md = new vscode.MarkdownString();
+    md.appendCodeblock(`${m.name}: ${m.detail}`, "nexa");
+    const comment = (0, nexaIndex_2.docComment)(m.document, m.range.start.line);
+    if (comment) {
+        md.appendMarkdown("\n\n");
+        md.appendText(comment);
+    }
+    md.appendMarkdown(`\n\n*field of ${type}* — ${sourceLabel(m.document)}:${m.range.start.line + 1}`);
+    return new vscode.Hover(md, at);
 }
 function locationsFromLocated(hits) {
     if (hits.length === 1) {
@@ -217,6 +230,25 @@ async function provideCompletions(document, position, token) {
     }
     const strDot = prefix.match(/\.([A-Za-z_]*)$/);
     if (strDot) {
+        // p. on a struct or shape: its fields and methods.
+        const recv = prefix.match(/([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*[A-Za-z_]*$/);
+        if (recv && !/\.\s*\.\s*[A-Za-z_]*$/.test(prefix)) {
+            const before = document.offsetAt(position) - recv[0].length;
+            const found = await (0, nexaTypes_1.membersOfReceiver)(document, recv[1], before, token);
+            if (found?.members && found.members.length) {
+                return found.members.map((m) => {
+                    const c = new vscode.CompletionItem(m.name, m.kind === "field" ? vscode.CompletionItemKind.Field : vscode.CompletionItemKind.Method);
+                    c.detail = m.kind === "field" ? `${m.name}: ${m.detail}` : m.detail;
+                    c.sortText = (m.kind === "field" ? "0" : "1") + m.name;
+                    if (m.def) {
+                        const comment = (0, nexaIndex_2.docComment)(m.document, m.def.defLine);
+                        if (comment)
+                            c.documentation = comment;
+                    }
+                    return c;
+                });
+            }
+        }
         return (0, nexaCompletions_1.stringMethodCompletions)();
     }
     items.push(...(0, nexaCompletions_1.keywordCompletions)());
@@ -274,20 +306,43 @@ async function provideHover(document, position, token) {
     if (word === "null" && nexaCompletions_1.HOVER_DOCS.null) {
         return new vscode.Hover(nexaCompletions_1.HOVER_DOCS.null, wordRange);
     }
-    if (line.includes("extern fn") && word !== "extern" && word !== "fn") {
-        const defs = (0, nexaIndex_1.indexNexaDefinitions)(document).filter((d) => d.name === word && d.kind === "function");
-        if (defs.length) {
-            return new vscode.Hover("extern fn — C FFI declaration", defs[0].nameRange);
+    // p.x and p.move(): the field or method of p's struct.
+    const lineBefore = line.slice(0, wordRange.start.character);
+    const recv = /([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*$/.exec(lineBefore);
+    if (recv && !/\.\s*\.\s*$/.test(lineBefore)) {
+        const before = document.offsetAt(wordRange.start) - recv[0].length;
+        const found = await (0, nexaTypes_1.membersOfReceiver)(document, recv[1], before, token);
+        const member = found?.members?.find((m) => m.name === word);
+        if (found && member) {
+            return hoverFromMember(found.type, member, wordRange);
+        }
+        if (nexaCompletions_1.HOVER_DOCS[word]) {
+            return new vscode.Hover(nexaCompletions_1.HOVER_DOCS[word], wordRange);
+        }
+        return null;
+    }
+    const directive = /^\s*#\s*([a-z]+)/.exec(line);
+    if (directive && directive[1] === word && nexaCompletions_1.HOVER_DOCS[`#${word}`]) {
+        return new vscode.Hover(nexaCompletions_1.HOVER_DOCS[`#${word}`], wordRange);
+    }
+    // Keyword and built-in docs (match, step, Some, ...), unless the file defines the name.
+    if (nexaCompletions_1.HOVER_DOCS[word]) {
+        const own = (0, nexaIndex_1.indexNexaDefinitions)(document).some((d) => d.name === word);
+        if (!own) {
+            return new vscode.Hover(nexaCompletions_1.HOVER_DOCS[word], wordRange);
         }
     }
     const local = (0, nexaIndex_1.indexNexaDefinitions)(document).filter((d) => d.name === word);
     if (local.length) {
-        return hoverFromDef(document, local[0]);
+        // The nearest definition above the cursor, for a name declared more than once.
+        const here = document.offsetAt(position);
+        const above = local.filter((d) => document.offsetAt(d.nameRange.start) <= here);
+        return hoverFromDef(document, (above.length ? above[above.length - 1] : local[0]), wordRange);
     }
     const included = await (0, nexaIndex_1.collectIncludedDefinitions)(document, token);
     const hit = included.find((h) => h.def.name === word);
     if (hit) {
-        return hoverFromDef(hit.document, hit.def);
+        return hoverFromDef(hit.document, hit.def, wordRange);
     }
     return null;
 }
@@ -370,8 +425,29 @@ function activate(context) {
     }));
     context.subscriptions.push(vscode.languages.registerDocumentSymbolProvider(docFilter, {
         provideDocumentSymbols(document) {
-            return (0, nexaIndex_1.indexNexaDefinitions)(document).map((d) => new vscode.DocumentSymbol(d.name, d.kind, defKindToSymbol(d), d.lineRange, d.nameRange));
+            return (0, nexaSymbols_1.documentSymbols)(document);
         },
+    }));
+    const diagnostics = (0, nexaDiagnostics_1.registerDiagnostics)(context);
+    (0, nexaRename_1.registerRename)(context, docFilter);
+    (0, nexaFolding_1.registerFolding)(context, docFilter);
+    context.subscriptions.push(vscode.languages.registerSignatureHelpProvider(docFilter, {
+        provideSignatureHelp(document, position, token) {
+            return (0, nexaSignature_1.provideSignatureHelp)(document, position, token);
+        },
+    }, { triggerCharacters: ["(", ","], retriggerCharacters: [",", ")"] }), vscode.commands.registerCommand("nexa.showCpp", () => {
+        const editor = vscode.window.activeTextEditor;
+        if (editor?.document.languageId === "nexa") {
+            void (0, nexaDiagnostics_1.showGeneratedCpp)(editor.document, diagnostics.check);
+        }
+    }), vscode.commands.registerCommand("nexa.checkFile", async () => {
+        const editor = vscode.window.activeTextEditor;
+        if (editor?.document.languageId === "nexa") {
+            if (editor.document.isDirty) {
+                await editor.document.save();
+            }
+            diagnostics.check(editor.document);
+        }
     }));
     context.subscriptions.push(vscode.languages.registerCompletionItemProvider(docFilter, {
         provideCompletionItems(document, position, token) {

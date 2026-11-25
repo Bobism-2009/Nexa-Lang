@@ -1,11 +1,13 @@
 import * as path from "path";
 import * as vscode from "vscode";
 
-const FN_RE = /\b(?:extern\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
+const FN_RE = /\b(?:extern\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*[(\[]/g;
 const STRUCT_RE = /\bstruct\s+([A-Za-z_][A-Za-z0-9_]*)\b/g;
 const ENUM_RE = /\benum\s+([A-Za-z_][A-Za-z0-9_]*)\b/g;
-const LET_RE = /^\s*let\s+(?:const\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*(?:[:=;]|$)/gm;
-const DEFINE_RE = /^\s*#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)/gm;
+const TYPE_RE = /^[ \t]*(?:priv\s+)?type\s+([A-Za-z_][A-Za-z0-9_]*)/gm;
+const SHAPE_RE = /\bshape\s+([A-Za-z_][A-Za-z0-9_]*)\b/g;
+const LET_RE = /^[ \t]*(?:priv\s+)?(?:let|const)\s+(?:const\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*(?:[:=;]|$)/gm;
+const DEFINE_RE = /^[ \t]*#[ \t]*define[ \t]+([A-Za-z_][A-Za-z0-9_]*)/gm;
 
 /** Replace // and / ** / with spaces. Same length as input for offset mapping. */
 export function maskComments(s: string): string {
@@ -42,7 +44,57 @@ export function maskComments(s: string): string {
   return a.join("");
 }
 
-export type DefKind = "function" | "struct" | "enum" | "variable" | "macro";
+// Blanks string and char literals (keeping f-string {holes}, which hold code), so a
+// word inside quotes is never taken for a variable. Lengths are kept: columns match.
+export function maskStrings(s: string): string {
+  const a = s.split("");
+  let i = 0;
+  const blank = (from: number, to: number) => {
+    for (let k = from; k < to && k < a.length; k++) if (a[k] !== "\n" && a[k] !== "\r") a[k] = " ";
+  };
+  while (i < a.length) {
+    const c = a[i];
+    if (c === "R" && a[i + 1] === '"' && !/[A-Za-z0-9_]/.test(a[i - 1] ?? "")) {
+      const open = s.indexOf("(", i + 2);
+      if (open > 0 && open - i < 20) {
+        const close = s.indexOf(")" + s.slice(i + 2, open) + '"', open);
+        const end = close < 0 ? a.length : close + (open - i - 2) + 2;
+        blank(i, end);
+        i = end;
+        continue;
+      }
+    }
+    if (c === '"' || c === "'") {
+      const interp = c === '"' && a[i - 1] === "f" && !/[A-Za-z0-9_]/.test(a[i - 2] ?? "");
+      a[i] = " ";
+      i++;
+      let depth = 0;
+      while (i < a.length && a[i] !== "\n") {
+        if (depth === 0 && a[i] === "\\") { a[i] = " "; if (i + 1 < a.length && a[i + 1] !== "\n") a[i + 1] = " "; i += 2; continue; }
+        if (depth === 0 && a[i] === c) { a[i] = " "; i++; break; }
+        if (interp && a[i] === "{") {
+          if (depth === 0 && a[i + 1] === "{") { a[i] = " "; a[i + 1] = " "; i += 2; continue; }
+          depth++;
+          i++;
+          continue;
+        }
+        if (interp && a[i] === "}" && depth > 0) { depth--; i++; continue; }
+        if (depth === 0) a[i] = " ";
+        i++;
+      }
+      continue;
+    }
+    i++;
+  }
+  return a.join("");
+}
+
+/** Comments and string/char literals blanked, same length as the input. */
+export function maskCode(s: string): string {
+  return maskStrings(maskComments(s));
+}
+
+export type DefKind = "function" | "struct" | "enum" | "variable" | "macro" | "type" | "shape";
 
 export interface IndexedDef {
   name: string;
@@ -82,6 +134,9 @@ function runPattern(
     if (kind === "macro" && !/^\s*#\s*define\s/.test(line.text)) {
       continue;
     }
+    if (kind === "shape" && !/\bshape\s/.test(line.text)) {
+      continue;
+    }
     const nameStart = doc.positionAt(nameOffset);
     const nameEnd = doc.positionAt(nameOffset + name.length);
     out.push({
@@ -101,11 +156,13 @@ function runPattern(
 }
 
 export function indexNexaDefinitions(doc: vscode.TextDocument): IndexedDef[] {
-  const masked = maskComments(doc.getText());
+  const masked = maskCode(doc.getText());
   const defs = [
     ...runPattern(doc, masked, FN_RE, "function"),
     ...runPattern(doc, masked, STRUCT_RE, "struct"),
     ...runPattern(doc, masked, ENUM_RE, "enum"),
+    ...runPattern(doc, masked, TYPE_RE, "type"),
+    ...runPattern(doc, masked, SHAPE_RE, "shape"),
     ...runPattern(doc, masked, DEFINE_RE, "macro"),
     ...indexLetBindings(doc, masked),
   ];
@@ -325,4 +382,173 @@ export function includeSpecAtPosition(
     }
   }
   return null;
+}
+
+/** The `}` that closes the `{` at `open`, or -1. */
+export function matchBrace(masked: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < masked.length; i++) {
+    const c = masked[i];
+    if (c === "{") {
+      depth++;
+    } else if (c === "}") {
+      depth--;
+      if (depth === 0) {
+        return i;
+      }
+    }
+  }
+  return -1;
+}
+
+/**
+ * From just after a definition's name: where its head stops (the body's `{`, or the
+ * `;` or `=` of a definition with no body) and the body's braces, if any.
+ */
+export function scanHead(
+  masked: string,
+  from: number
+): { stop: number; open: number; close: number } {
+  let paren = 0;
+  let bracket = 0;
+  for (let i = from; i < masked.length; i++) {
+    const c = masked[i];
+    if (c === "(") {
+      paren++;
+    } else if (c === ")") {
+      paren--;
+    } else if (c === "[") {
+      bracket++;
+    } else if (c === "]") {
+      bracket--;
+    } else if (paren <= 0 && bracket <= 0) {
+      if (c === ";" || c === "=") {
+        return { stop: i, open: -1, close: -1 };
+      }
+      if (c === "{") {
+        return { stop: i, open: i, close: matchBrace(masked, i) };
+      }
+    }
+  }
+  return { stop: masked.length, open: -1, close: -1 };
+}
+
+/** A definition's head as one line: `fn add(a: int, b: int): int`, `struct Point`. */
+export function definitionHead(doc: vscode.TextDocument, d: IndexedDef, masked?: string): string {
+  const text = doc.getText();
+  const start = doc.offsetAt(new vscode.Position(d.defLine, 0));
+  const nameEnd = doc.offsetAt(d.nameRange.end);
+  let end: number;
+  if (d.kind === "function") {
+    end = scanHead(masked ?? maskCode(text), nameEnd).stop;
+  } else {
+    end = text.indexOf("\n", nameEnd);
+    if (end < 0) {
+      end = text.length;
+    }
+  }
+  let head = text.slice(start, end).replace(/\s+/g, " ").trim();
+  if (d.kind === "struct" || d.kind === "enum" || d.kind === "shape") {
+    head = head.replace(/\s*\{.*$/, "");
+  }
+  return head.replace(/\s*;$/, "");
+}
+
+/** The // lines or /* block *\/ written just above line `line`, as plain text. */
+export function docComment(doc: vscode.TextDocument, line: number): string {
+  let l = line - 1;
+  if (l >= 0 && /\*\/\s*$/.test(doc.lineAt(l).text)) {
+    const block: string[] = [];
+    while (l >= 0) {
+      const t = doc.lineAt(l).text;
+      block.unshift(t);
+      l--;
+      if (/\/\*/.test(t)) {
+        break;
+      }
+    }
+    return block
+      .join("\n")
+      .replace(/^\s*\/\*+\s?/, "")
+      .replace(/\s*\*+\/\s*$/, "")
+      .split("\n")
+      .map((s) => s.replace(/^\s*\*\s?/, ""))
+      .join("\n")
+      .trim();
+  }
+  const out: string[] = [];
+  while (l >= 0 && /^\s*\/\//.test(doc.lineAt(l).text)) {
+    out.unshift(doc.lineAt(l).text.replace(/^\s*\/\/+\s?/, ""));
+    l--;
+  }
+  return out.join("\n").trim();
+}
+
+export interface BodyMember {
+  name: string;
+  kind: "field" | "variant";
+  /** Offset of the name in the document. */
+  offset: number;
+  /** A field's type, or a variant's payload. */
+  detail: string;
+}
+
+/** The body between `open` and `close` with everything nested deeper blanked. */
+function shallowBody(masked: string, open: number, close: number): string {
+  const out: string[] = [];
+  let depth = 0;
+  for (let i = open + 1; i < close; i++) {
+    const c = masked[i]!;
+    if (c === "{" || c === "(" || c === "[") {
+      depth++;
+      out.push(depth === 1 ? c : " ");
+    } else if (c === "}" || c === ")" || c === "]") {
+      out.push(depth === 1 ? c : " ");
+      depth--;
+    } else {
+      out.push(depth > 0 && c !== "\n" ? " " : c);
+    }
+  }
+  return out.join("");
+}
+
+/** A struct's or shape's fields: `name: type;` at the top of its body (methods are fn defs). */
+export function structFields(masked: string, open: number, close: number): BodyMember[] {
+  const body = shallowBody(masked, open, close);
+  const out: BodyMember[] = [];
+  const re = /(^|[;{}])(\s*(?:priv\s+)?)([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^;{}=]*)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body)) !== null) {
+    const at = m.index + m[1]!.length + m[2]!.length;
+    if (m[3] === "fn") {
+      continue;
+    }
+    const typeAt = m.index + m[0].length - m[4]!.length;
+    const type = masked.slice(open + 1 + typeAt, open + 1 + typeAt + m[4]!.length).replace(/\s+/g, " ").trim();
+    out.push({ name: m[3]!, kind: "field", offset: open + 1 + at, detail: type });
+  }
+  return out;
+}
+
+/**
+ * An enum's variants: the names that start its body's statements, as in
+ * `enum Color { Red; Green; }` or `enum Event { Click { x: int; }; Quit; }`.
+ */
+export function enumVariants(masked: string, open: number, close: number): BodyMember[] {
+  const body = shallowBody(masked, open, close);
+  const out: BodyMember[] = [];
+  const re = /(^|[;,}])(\s*)([A-Za-z_][A-Za-z0-9_]*)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body)) !== null) {
+    const at = m.index + m[1]!.length + m[2]!.length;
+    const after = masked.slice(open + 1 + at + m[3]!.length, close);
+    const payload = /^\s*(\{[^}]*\}|\([^)]*\)|=\s*[^,;}]+)/.exec(after);
+    out.push({
+      name: m[3]!,
+      kind: "variant",
+      offset: open + 1 + at,
+      detail: payload ? payload[1]!.replace(/\s+/g, " ").trim() : "",
+    });
+  }
+  return out;
 }

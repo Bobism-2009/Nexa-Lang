@@ -1,8 +1,8 @@
 {
   "name": "nexa",
   "displayName": "Nexa Language",
-  "description": "Syntax highlighting, snippets, go-to definition, completions, hover, and NexaC run/build for Nexa (.nxa)",
-  "version": "0.2.15",
+  "description": "Syntax highlighting, NexaC errors as you save, completions, parameter hints, hover, rename, go-to definition, outline, folding, and NexaC run/build for Nexa (.nxa)",
+  "version": "0.3.0",
   "publisher": "nexac",
   "main": "./out/extension.js",
   "engines": {
@@ -57,6 +57,11 @@
           "type": "string",
           "default": "NexaC",
           "description": "Path to the NexaC compiler executable (must be on PATH or an absolute path)."
+        },
+        "nexa.checkOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Check a Nexa file with NexaC when it is opened and each time it is saved, and show its errors and warnings in the editor and the Problems panel. Only the Nexa checks run (NexaC --source), not the C++ compiler."
         }
       }
     },
@@ -70,6 +75,15 @@
         "command": "nexa.buildFile",
         "title": "Nexa: Build Current File",
         "icon": "$(tools)"
+      },
+      {
+        "command": "nexa.showCpp",
+        "title": "Nexa: Show Generated C++",
+        "icon": "$(file-code)"
+      },
+      {
+        "command": "nexa.checkFile",
+        "title": "Nexa: Check Current File"
       }
     ],
     "menus": {
@@ -88,6 +102,21 @@
         {
           "command": "nexa.buildFile",
           "when": "resourceLangId == nexa"
+        },
+        {
+          "command": "nexa.showCpp",
+          "when": "resourceLangId == nexa"
+        },
+        {
+          "command": "nexa.checkFile",
+          "when": "resourceLangId == nexa"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "nexa.showCpp",
+          "when": "resourceLangId == nexa",
+          "group": "navigation@90"
         }
       ]
     },
