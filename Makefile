@@ -30,8 +30,9 @@ install-deps:
 
 # Every header: the runtimes (Gfx3dRuntime.hpp and the rest) are compiled into
 # NexaC as text, so editing one has to rebuild it.
-NexaC: NexaC.cpp $(wildcard include/*.hpp)
-	$(CXX) $(CXXFLAGS) NexaC.cpp -o NexaC
+# build.sh: NexaC here; on Windows, NexaC.exe with the Nexa icon (NexaC.rc).
+NexaC: NexaC.cpp NexaC.rc Logo/nexa.ico $(wildcard include/*.hpp)
+	sh build.sh $(CXX)
 
 install: NexaC
 	install -d $(PREFIX)/bin

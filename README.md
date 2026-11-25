@@ -40,31 +40,21 @@ The generated C++ uses the standard library (`std::string`, `std::vector`, threa
 
 **From source (repo root):**
 
-**Windows:** link **statically** so `NexaC.exe` runs on a clean PC (no MinGW/LLVM C++ runtime DLLs):
+Run the build script. It picks `clang++` (else `g++`), or the compiler you name:
 
 ```bash
-clang++ -std=c++17 -O2 -static -static-libgcc -static-libstdc++ NexaC.cpp -o NexaC.exe
+build.cmd            # Windows, from cmd.exe
+sh build.sh          # Git Bash or MSYS2 on Windows, Linux, macOS
+sh build.sh g++      # a compiler of your choice
 ```
 
-To give `NexaC.exe` the Nexa icon, compile `NexaC.rc` first and add the result to that line
-(`windres` with MinGW; with an MSVC-target clang++, `llvm-rc /fo NexaC.res NexaC.rc` and add `NexaC.res`):
-
-```bash
-windres NexaC.rc -O coff -o NexaC-icon.o
-clang++ -std=c++17 -O2 -static -static-libgcc -static-libstdc++ NexaC.cpp NexaC-icon.o -o NexaC.exe
-```
-
-If that fails with your Clang (e.g. MSVC-target toolchain), build with **MinGW g++** instead, same flags:
-
-```bash
-g++ -std=c++17 -O2 -static -static-libgcc -static-libstdc++ NexaC.cpp -o NexaC.exe
-```
-
-**Linux / macOS:**
+On Windows it builds the Nexa icon into `NexaC.exe` from `NexaC.rc`, with `windres` for a MinGW
+compiler or `llvm-rc` for an MSVC-target clang++, and with MinGW it links **statically**, so the exe
+runs on a clean PC (no MinGW/LLVM C++ runtime DLLs). Without either tool it builds the same compiler with no icon.
+On Linux and macOS it is the plain build:
 
 ```bash
 clang++ -std=c++17 -O2 NexaC.cpp -o NexaC
-# Windows: adds .exe — e.g. NexaC.exe
 ```
 
 **Raspberry Pi and other 64-bit ARM Linux:** the same, on the Pi itself — Raspberry Pi OS

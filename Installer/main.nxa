@@ -22,6 +22,7 @@ let mime_xml: string = R"(<?xml version="1.0" encoding="UTF-8"?>
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
   <mime-type type="application/x-nxa">
     <comment>Nexa Source File</comment>
+    <icon name="application-x-nxa"/>
     <glob pattern="*.nxa"/>
   </mime-type>
 </mime-info>
@@ -94,11 +95,29 @@ let darwin_uti_plist: string = R"(<?xml version="1.0" encoding="UTF-8"?>
 </plist>
 )";
 
+// The Nexa mark (Logo/nexa-mark.svg, kept the same): .nxa files' icon in Linux file
+// managers, from the icon theme's scalable folder. NexaC.exe carries it on Windows.
+let nexa_icon_svg: string = R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="10 10 100 100"><polygon points="10,10 86,10 110,34 110,110 34,110 10,86" fill="#E98A6E"/><g fill="#0D0F14"><rect x="33" y="32" width="15" height="56"/><rect x="72" y="32" width="15" height="56"/><polygon points="33,32 48,32 87,88 72,88"/></g></svg>
+)";
+
+// Writes the icon under <Icons>/hicolor: as the .nxa type's icon and as Nexa's own.
+// `Sudo` is "sudo " for the system's icons, "" for the user's.
+fn Install_Nexa_Icon_Linux(Icons: string, Sudo: string) {
+    let Hicolor = Icons + "/hicolor/scalable";
+    file.write("/tmp/nexa-icon.svg", nexa_icon_svg);
+    os.system(Sudo + "mkdir -p \"" + Hicolor + "/mimetypes\" \"" + Hicolor + "/apps\"");
+    os.system(Sudo + "cp /tmp/nexa-icon.svg \"" + Hicolor + "/mimetypes/application-x-nxa.svg\"");
+    os.system(Sudo + "cp /tmp/nexa-icon.svg \"" + Hicolor + "/apps/nexa.svg\"");
+    os.system("rm -f /tmp/nexa-icon.svg");
+    os.system(Sudo + "gtk-update-icon-cache -f -t \"" + Icons + "/hicolor\" >/dev/null 2>&1");
+}
+
 fn Register_Nxa_Mime_Linux_User() {
     let Home = os.getenv("HOME");
     let MimeDir = Home + "/.local/share/mime/packages";
     os.system("mkdir -p " + MimeDir);
     file.write(MimeDir + "/nxa.xml", mime_xml);
+    Install_Nexa_Icon_Linux(Home + "/.local/share/icons", "");
     os.system("update-mime-database " + Home + "/.local/share/mime 2>/dev/null");
 }
 
@@ -106,6 +125,7 @@ fn Register_Nxa_Mime_Linux_System() {
     file.write("/tmp/nxa-mime.xml", mime_xml);
     os.system("sudo mkdir -p /usr/share/mime/packages");
     os.system("sudo cp /tmp/nxa-mime.xml /usr/share/mime/packages/nxa.xml");
+    Install_Nexa_Icon_Linux("/usr/share/icons", "sudo ");
     os.system("sudo update-mime-database /usr/share/mime 2>/dev/null");
 }
 
