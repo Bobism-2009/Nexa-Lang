@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
+import { maskComments } from "./nexaIndex";
 import { getNexacPath } from "./nexaRun";
 
 export interface NexaProblem {
@@ -37,12 +38,13 @@ export function parseNexaOutput(out: string): NexaProblem[] {
     let rest = m[2]!;
     let file: string | null = null;
     let line: number | null = null;
-    const at = /^(.*?\.nxa)(?::(\d+))?: (.*)$/i.exec(rest);
-    if (at) {
+    // An error in an included file names the include chain, outermost first:
+    //   main.nxa: sub\Lib.nxa: Expected ';' at line 3
+    // The innermost file is the one it is in.
+    let at: RegExpExecArray | null;
+    while ((at = /^(.*?\.nxa)(?::(\d+))?: (.*)$/i.exec(rest)) !== null) {
       file = at[1]!;
-      if (at[2]) {
-        line = Number(at[2]);
-      }
+      line = at[2] ? Number(at[2]) : null;
       rest = at[3]!;
     }
     const all = [...rest.matchAll(/ at line (\d+)(?:, column \d+)?/g)];
@@ -83,6 +85,95 @@ function tempCpp(filePath: string): string {
   return path.join(os.tmpdir(), "nexa-vscode", `${base}-${process.pid}.cpp`);
 }
 
+const QUOTE_INCLUDE_RE = /^[ \t]*#[ \t]*include[ \t]*"([^"\n]+)"/gm;
+/** Each file's quoted includes, resolved, kept while its mtime holds. */
+const includeCache = new Map<string, { mtime: number; includes: string[] }>();
+
+function samePath(p: string): string {
+  const n = path.resolve(p);
+  return process.platform === "win32" ? n.toLowerCase() : n;
+}
+
+function includesOf(file: string): string[] {
+  let mtime: number;
+  try {
+    mtime = fs.statSync(file).mtimeMs;
+  } catch {
+    return [];
+  }
+  const hit = includeCache.get(file);
+  if (hit && hit.mtime === mtime) {
+    return hit.includes;
+  }
+  let text = "";
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch {
+    return [];
+  }
+  const includes: string[] = [];
+  const masked = maskComments(text);
+  QUOTE_INCLUDE_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = QUOTE_INCLUDE_RE.exec(masked)) !== null) {
+    const rel = m[1]!;
+    for (const p of /\.[A-Za-z0-9]+$/.test(rel) ? [rel] : [rel, `${rel}.nxa`]) {
+      const abs = path.isAbsolute(p) ? p : path.join(path.dirname(file), p);
+      if (/\.nxa$/i.test(abs) && fs.existsSync(abs)) {
+        includes.push(samePath(abs));
+        break;
+      }
+    }
+  }
+  includeCache.set(file, { mtime, includes });
+  return includes;
+}
+
+/**
+ * The workspace files to check for `file`: the top files that include it (directly or
+ * through other files), since an included file leans on what they include before it.
+ * Just `file` when nothing includes it.
+ */
+export async function checkRootsFor(file: string): Promise<string[]> {
+  const me = samePath(file);
+  let uris: vscode.Uri[] = [];
+  try {
+    uris = await vscode.workspace.findFiles("**/*.nxa", "{**/node_modules/**,**/.git/**}", 3000);
+  } catch {
+    return [file];
+  }
+  const includedBy = new Map<string, string[]>();
+  const real = new Map<string, string>();
+  for (const uri of uris) {
+    const from = uri.fsPath;
+    real.set(samePath(from), from);
+    for (const inc of includesOf(from)) {
+      includedBy.set(inc, [...(includedBy.get(inc) ?? []), samePath(from)]);
+    }
+  }
+  if (!includedBy.has(me)) {
+    return [file];
+  }
+  const roots: string[] = [];
+  const seen = new Set<string>([me]);
+  const queue = [me];
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    const parents = includedBy.get(cur) ?? [];
+    if (parents.length === 0 && cur !== me) {
+      roots.push(real.get(cur) ?? cur);
+    }
+    for (const p of parents) {
+      if (!seen.has(p)) {
+        seen.add(p);
+        queue.push(p);
+      }
+    }
+  }
+  // Files that only include each other in a ring have no top: check the direct includers.
+  return roots.length > 0 ? roots : (includedBy.get(me) ?? []).map((p) => real.get(p) ?? p);
+}
+
 function rangeFor(doc: vscode.TextDocument | undefined, line: number | null): vscode.Range {
   const l = Math.max(0, (line ?? 1) - 1);
   if (!doc || l >= doc.lineCount) {
@@ -98,22 +189,62 @@ export function registerDiagnostics(context: vscode.ExtensionContext): {
   const collection = vscode.languages.createDiagnosticCollection("nexa");
   context.subscriptions.push(collection);
   const running = new Map<string, cp.ChildProcess>();
-  /** The files each checked file put problems on, to clear them on the next check. */
-  const owned = new Map<string, Set<string>>();
+  /** Per checked file, the problems it found, by the file they are in. */
+  const results = new Map<string, Map<string, vscode.Diagnostic[]>>();
   let warnedMissing = false;
 
-  const clear = (key: string) => {
-    for (const uri of owned.get(key) ?? []) {
+  /** A file's problems: those every check found in it, once each. */
+  const publish = (uri: string) => {
+    const all: vscode.Diagnostic[] = [];
+    const seen = new Set<string>();
+    for (const byFile of results.values()) {
+      for (const d of byFile.get(uri) ?? []) {
+        const k = `${d.range.start.line}\0${d.severity}\0${d.message}`;
+        if (!seen.has(k)) {
+          seen.add(k);
+          all.push(d);
+        }
+      }
+    }
+    if (all.length > 0) {
+      collection.set(vscode.Uri.parse(uri), all);
+    } else {
       collection.delete(vscode.Uri.parse(uri));
     }
-    owned.delete(key);
   };
+
+  const setResults = (key: string, byFile: Map<string, vscode.Diagnostic[]> | null) => {
+    const touched = new Set<string>([...(results.get(key)?.keys() ?? []), ...(byFile?.keys() ?? [])]);
+    if (byFile) {
+      results.set(key, byFile);
+    } else {
+      results.delete(key);
+    }
+    for (const uri of touched) {
+      publish(uri);
+    }
+  };
+  const clear = (key: string) => setResults(key, null);
 
   const check = (doc: vscode.TextDocument) => {
     if (doc.languageId !== "nexa" || doc.uri.scheme !== "file") {
       return;
     }
-    const key = doc.uri.fsPath;
+    const file = doc.uri.fsPath;
+    void checkRootsFor(file).then((roots) => {
+      if (!roots.some((r) => samePath(r) === samePath(file))) {
+        // Checked through the files that include it; its own lone check would be wrong.
+        running.get(file)?.kill();
+        running.delete(file);
+        clear(file);
+      }
+      for (const root of roots) {
+        checkFile(root);
+      }
+    });
+  };
+
+  const checkFile = (key: string) => {
     running.get(key)?.kill();
     const out = tempCpp(key);
     fs.mkdirSync(path.dirname(out), { recursive: true });
@@ -135,7 +266,6 @@ export function registerDiagnostics(context: vscode.ExtensionContext): {
       if (killed) {
         return;
       }
-      clear(key);
       const byFile = new Map<string, vscode.Diagnostic[]>();
       for (const p of problems) {
         const file = p.file && fs.existsSync(p.file) ? path.resolve(p.file) : key;
@@ -150,12 +280,7 @@ export function registerDiagnostics(context: vscode.ExtensionContext): {
         const k = uri.toString();
         byFile.set(k, [...(byFile.get(k) ?? []), d]);
       }
-      const mine = new Set<string>();
-      for (const [uri, diags] of byFile) {
-        collection.set(vscode.Uri.parse(uri), diags);
-        mine.add(uri);
-      }
-      owned.set(key, mine);
+      setResults(key, byFile);
     });
     running.set(key, child);
   };
@@ -189,7 +314,7 @@ export function registerDiagnostics(context: vscode.ExtensionContext): {
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("nexa.checkOnSave") && !enabled()) {
         collection.clear();
-        owned.clear();
+        results.clear();
       }
     })
   );
@@ -202,10 +327,13 @@ export async function showGeneratedCpp(doc: vscode.TextDocument, check: (doc: vs
   if (doc.isDirty) {
     await doc.save();
   }
-  const out = path.join(os.tmpdir(), "nexa-vscode", `${path.basename(doc.uri.fsPath, ".nxa")}.cpp`);
+  // A file other files include is made into C++ as part of the first of them.
+  const roots = await checkRootsFor(doc.uri.fsPath);
+  const source = roots.find((r) => samePath(r) === samePath(doc.uri.fsPath)) ?? roots[0] ?? doc.uri.fsPath;
+  const out = path.join(os.tmpdir(), "nexa-vscode", `${path.basename(source, ".nxa")}.cpp`);
   fs.mkdirSync(path.dirname(out), { recursive: true });
   await new Promise<void>((resolve) => {
-    runNexacSource(doc.uri.fsPath, out, async ({ ok, missing, problems }) => {
+    runNexacSource(source, out, async ({ ok, missing, problems }) => {
       if (missing) {
         void vscode.window.showErrorMessage(`NexaC was not found ("${getNexacPath()}"). Set nexa.nexacPath to it.`);
       } else if (!ok || !fs.existsSync(out)) {
