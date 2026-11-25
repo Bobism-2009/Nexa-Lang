@@ -1,14 +1,25 @@
 #!/bin/sh
-# Builds NexaC from this folder:  sh build.sh [compiler]
+# Builds NexaC from this folder:  sh build.sh [--installer] [compiler]
 # The compiler is the argument, else $CXX, else clang++, else g++.
 #
 # Linux and macOS: NexaC, as `clang++ -std=c++17 -O2 NexaC.cpp -o NexaC`.
 # Windows (Git Bash, MSYS2, or a Linux cross-compiler that targets Windows): a
 # static NexaC.exe with the Nexa icon in it -- NexaC.rc, compiled with llvm-rc for an
-# MSVC-target clang++ or with windres for a MinGW one. With neither tool around it
-# says so and builds NexaC.exe without the icon. From cmd.exe, use build.cmd.
+# MSVC-target clang++ or with windres for a MinGW one. With neither tool it says so
+# and builds NexaC.exe without the icon. From cmd.exe, use build.cmd.
+#
+# --installer: then the installer too, built by the NexaC just made from
+# Installer/main.nxa. On Windows it gets the Nexa icon through --link (a resource
+# object, so it stays as small as without; the programs NexaC builds get no icon of
+# their own). Elsewhere programs keep no icon in the file.
 set -e
 cd "$(dirname "$0")"
+
+installer=0
+if [ "${1:-}" = "--installer" ]; then
+    installer=1
+    shift
+fi
 
 CXX=${1:-${CXX:-}}
 if [ -z "$CXX" ]; then
@@ -27,6 +38,11 @@ case "$target" in
     *)
         "$CXX" -std=c++17 -O2 NexaC.cpp -o NexaC
         echo "build.sh: built NexaC with $CXX"
+        if [ "$installer" = 1 ]; then
+            # Not ./Installer: that is the folder of its source.
+            ./NexaC Installer/main.nxa -o Installer/Installer >/dev/null
+            echo "build.sh: built Installer/Installer"
+        fi
         exit 0
         ;;
 esac
@@ -64,3 +80,22 @@ fi
 # shellcheck disable=SC2086
 "$CXX" $flags NexaC.cpp $icon -o NexaC.exe -ladvapi32
 echo "build.sh: built NexaC.exe with $CXX${icon:+, with the Nexa icon}"
+
+if [ "$installer" = 1 ]; then
+    # NexaC builds Windows programs with MinGW, so the installer's icon is a COFF
+    # object from windres: NexaC's own when it was made that way, else a fresh one.
+    obj=""
+    if [ "$icon" = NexaC-icon.o ]; then
+        obj=NexaC-icon.o
+    else
+        rc=$(first_tool x86_64-w64-mingw32-windres llvm-windres windres)
+        if [ -n "$rc" ] && "$rc" NexaC.rc -O coff -o NexaC-icon.o; then obj=NexaC-icon.o; fi
+    fi
+    if [ -z "$obj" ]; then
+        echo "build.sh: no windres found, so Installer.exe gets no icon" >&2
+        ./NexaC.exe Installer/main.nxa -o Installer.exe >/dev/null
+    else
+        ./NexaC.exe Installer/main.nxa --link "$obj" -o Installer.exe >/dev/null
+    fi
+    echo "build.sh: built Installer.exe${obj:+, with the Nexa icon}"
+fi

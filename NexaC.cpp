@@ -790,6 +790,29 @@ static bool nexaCheckProjectSettings() {
     return false;
 }
 
+// Whether every --link input is a COFF object of resources alone -- what windres makes
+// of a .rc (an icon, a version block): sections named .rsrc and nothing else. Such an
+// object has no code, so it needs nothing from the C runtime's startup, and the slim
+// entry point can take it. Anything else, or a file that cannot be read, is not.
+static bool nexaLinkInputsAreResourcesOnly(const std::vector<std::string>& inputs) {
+    for (const std::string& path : inputs) {
+        std::ifstream f(path, std::ios::binary);
+        unsigned char h[20];
+        if (!f.read(reinterpret_cast<char*>(h), sizeof h)) return false;
+        const unsigned machine = h[0] | (h[1] << 8);
+        const unsigned sections = h[2] | (h[3] << 8);
+        const unsigned optional = h[16] | (h[17] << 8);
+        if (machine != 0x8664 && machine != 0x14c && machine != 0xaa64 && machine != 0x1c4) return false;
+        if (optional != 0 || sections == 0 || sections > 16) return false;
+        for (unsigned s = 0; s < sections; s++) {
+            char sh[40];
+            if (!f.read(sh, sizeof sh)) return false;
+            if (std::string(sh, 5) != ".rsrc") return false;
+        }
+    }
+    return true;
+}
+
 #if !defined(_WIN32) && !defined(__APPLE__)
 static std::string nexaPopenTrim(const std::string& cmd) {
     FILE* f = popen(cmd.c_str(), "r");
@@ -3902,7 +3925,7 @@ int main(int argc, char* argv[]) {
         // will not link it -- costs one more build: the ordinary one, which shows its own
         // output as it always did.
         if (slimTarget && noExceptions && cppTarget == nexa::CppTarget::Windows && !buildDll && !buildShared &&
-            linkInputs.empty() && !modules.hasInlineCpp() && !modules.hasCppHeader() &&
+            nexaLinkInputsAreResourcesOnly(linkInputs) && !modules.hasInlineCpp() && !modules.hasCppHeader() &&
             std::getenv("NEXA_NO_SLIM_ENTRY") == nullptr &&
             cpp.find("std::thread") == std::string::npos && cpp.find("thread_local") == std::string::npos &&
             cpp.find("<thread>") == std::string::npos && cpp.find("<mutex>") == std::string::npos &&

@@ -72,7 +72,14 @@ clang++ -std=c++17 -O2 NexaC.cpp NexaC.res -o NexaC.exe -ladvapi32
 ```
 
 Leave the `.o` / `.res` out to build without the icon. `build.cmd` (from cmd.exe) or `sh build.sh`
-(from Git Bash or MSYS2) runs the right lines for the compiler it finds. There is also a
+(from Git Bash or MSYS2) runs the right lines for the compiler it finds. With `--installer` first
+(`build.cmd --installer`) they then build `Installer.exe` with the new NexaC, the Nexa icon linked in:
+
+```bash
+./NexaC.exe Installer/main.nxa --link NexaC-icon.o -o Installer.exe
+```
+
+Programs NexaC builds get no icon of their own; `--link` takes any `.o`, an icon's included. There is also a
 [WIN/Makefile](WIN/Makefile) for building `NexaC.exe` in the `WIN/` folder (`make` in MSYS2 or similar).
 
 **Linux:**
