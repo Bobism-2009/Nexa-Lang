@@ -2,7 +2,7 @@
   "name": "nexa",
   "displayName": "Nexa Language",
   "description": "Syntax highlighting, snippets, go-to definition, completions, hover, and NexaC run/build for Nexa (.nxa)",
-  "version": "0.2.12",
+  "version": "0.2.13",
   "publisher": "nexac",
   "main": "./out/extension.js",
   "engines": {
@@ -38,7 +38,8 @@
       { "id": "member", "superType": "method", "description": "Module member (system, write)" },
       { "id": "importKeyword", "superType": "keyword", "description": "#include keyword" },
       { "id": "importModule", "superType": "namespace", "description": "Import path module name" },
-      { "id": "importPrefix", "superType": "keyword", "description": "std/ in import paths" }
+      { "id": "importPrefix", "superType": "keyword", "description": "std/ in import paths" },
+      { "id": "nexaVariable", "superType": "variable", "description": "A variable or parameter this file declares" }
     ],
     "snippets": [
       {
@@ -105,8 +106,14 @@
             "member": "#DCDCAA",
             "importKeyword": "#C586C0",
             "importModule": "#4EC9B0",
-            "importPrefix": "#569CD6"
+            "importPrefix": "#569CD6",
+            "nexaVariable": "#9CDCFE"
           }
+        }
+      },
+      "editor.semanticTokenColorCustomizations": {
+        "rules": {
+          "nexaVariable": "#9CDCFE"
         }
       }
     }

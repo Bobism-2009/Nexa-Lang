@@ -13,9 +13,89 @@ const STD_MODULES =
   "io|os|dll|file|random|math|crypto|network|json|time|thread|term|gfx3d|gfx|ui|inline";
 
 export const SEMANTIC_LEGEND = new vscode.SemanticTokensLegend(
-  ["module", "member", "importKeyword", "importModule", "importPrefix"],
+  ["module", "member", "importKeyword", "importModule", "importPrefix", "nexaVariable"],
   []
 );
+const VARIABLE = 5;
+
+const NOT_NAMES = new Set(
+  ("fn extern new delete sizeof let const struct enum type shape priv if else while for " +
+    "switch match case default return break continue defer goto try catch throw in step " +
+    "and or not self null true false int short long size_t string bool float float64 " +
+    "float32 char void unsigned map Result result").split(" ")
+);
+
+// Blanks string and char literals (keeping f-string {holes}, which hold code), so a
+// word inside quotes is never taken for a variable. Lengths are kept: columns match.
+function maskStrings(s: string): string {
+  const a = s.split("");
+  let i = 0;
+  const blank = (from: number, to: number) => {
+    for (let k = from; k < to && k < a.length; k++) if (a[k] !== "\n" && a[k] !== "\r") a[k] = " ";
+  };
+  while (i < a.length) {
+    const c = a[i];
+    if (c === "R" && a[i + 1] === '"' && !/[A-Za-z0-9_]/.test(a[i - 1] ?? "")) {
+      const open = s.indexOf("(", i + 2);
+      if (open > 0 && open - i < 20) {
+        const close = s.indexOf(")" + s.slice(i + 2, open) + '"', open);
+        const end = close < 0 ? a.length : close + (open - i - 2) + 2;
+        blank(i, end);
+        i = end;
+        continue;
+      }
+    }
+    if (c === '"' || c === "'") {
+      const interp = c === '"' && a[i - 1] === "f" && !/[A-Za-z0-9_]/.test(a[i - 2] ?? "");
+      a[i] = " ";
+      i++;
+      let depth = 0;
+      while (i < a.length && a[i] !== "\n") {
+        if (depth === 0 && a[i] === "\\") { a[i] = " "; if (i + 1 < a.length && a[i + 1] !== "\n") a[i + 1] = " "; i += 2; continue; }
+        if (depth === 0 && a[i] === c) { a[i] = " "; i++; break; }
+        if (interp && a[i] === "{") {
+          if (depth === 0 && a[i + 1] === "{") { a[i] = " "; a[i + 1] = " "; i += 2; continue; }
+          depth++;
+          i++;
+          continue;
+        }
+        if (interp && a[i] === "}" && depth > 0) { depth--; i++; continue; }
+        if (depth === 0) a[i] = " ";
+        i++;
+      }
+      continue;
+    }
+    i++;
+  }
+  return a.join("");
+}
+
+function addParams(list: string, names: Set<string>): void {
+  for (const part of list.split(",")) {
+    const m = /^\s*(?:\.\.\.\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*(?::|$)/.exec(part);
+    if (m && !NOT_NAMES.has(m[1]!)) names.add(m[1]!);
+  }
+}
+
+// The names this file declares as variables: let/const, function and lambda
+// parameters, for-loop and catch variables. Scopes are not tracked: a name
+// declared anywhere is a variable everywhere it is used, which is what the eye wants.
+function declaredNames(text: string): Set<string> {
+  const names = new Set<string>();
+  const add = (n: string | undefined) => { if (n && !NOT_NAMES.has(n)) names.add(n); };
+  let m: RegExpExecArray | null;
+  const decl = /\b(?:let|const)\s+([A-Za-z_][A-Za-z0-9_]*)/g;
+  while ((m = decl.exec(text)) !== null) add(m[1]);
+  const fn = /\bfn\b(?:\s+[A-Za-z_][A-Za-z0-9_]*)?\s*(?:\[[^\]]*\]\s*)?\(([^)]*)\)/g;
+  while ((m = fn.exec(text)) !== null) addParams(m[1]!, names);
+  const loop = /\bfor\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)(?:\s*,\s*([A-Za-z_][A-Za-z0-9_]*))?\s+in\b/g;
+  while ((m = loop.exec(text)) !== null) { add(m[1]); add(m[2]); }
+  const caught = /\bcatch\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)/g;
+  while ((m = caught.exec(text)) !== null) add(m[1]);
+  return names;
+}
+
+const WORD = /[A-Za-z_][A-Za-z0-9_]*/g;
 
 function pushIncludeAngle(
   builder: vscode.SemanticTokensBuilder,
@@ -56,8 +136,9 @@ export function buildSemanticTokens(
   document: vscode.TextDocument
 ): vscode.SemanticTokens {
   const builder = new vscode.SemanticTokensBuilder(SEMANTIC_LEGEND);
-  const masked = maskComments(document.getText());
+  const masked = maskStrings(maskComments(document.getText()));
   const lines = masked.split(/\r?\n/);
+  const vars = declaredNames(masked);
 
   for (let line = 0; line < lines.length; line++) {
     const lineText = lines[line] ?? "";
@@ -74,18 +155,31 @@ export function buildSemanticTokens(
       continue;
     }
 
+    if (/^\s*#/.test(lineText)) continue;
+
+    const tokens: [number, number, number][] = [];
     MODULE_CALL.lastIndex = 0;
     let call: RegExpExecArray | null;
     while ((call = MODULE_CALL.exec(lineText)) !== null) {
-      builder.push(line, call.index, call[1]!.length, 0, 0);
-      builder.push(
-        line,
-        call.index + call[1]!.length + 1,
-        call[2]!.length,
-        1,
-        0
-      );
+      tokens.push([call.index, call[1]!.length, 0]);
+      tokens.push([call.index + call[1]!.length + 1, call[2]!.length, 1]);
     }
+
+    WORD.lastIndex = 0;
+    let w: RegExpExecArray | null;
+    while ((w = WORD.exec(lineText)) !== null) {
+      const at = w.index;
+      const name = w[0];
+      if (!vars.has(name)) continue;
+      if (/[0-9]/.test(lineText[at - 1] ?? "")) continue;
+      if (/\.\s*$/.test(lineText.slice(0, at)) && !/\.\.\s*$/.test(lineText.slice(0, at))) continue;
+      if (/^\s*\(/.test(lineText.slice(at + name.length))) continue;
+      if (tokens.some(([s, l]) => at >= s && at < s + l)) continue;
+      tokens.push([at, name.length, VARIABLE]);
+    }
+
+    tokens.sort((x, y) => x[0] - y[0]);
+    for (const [start, length, type] of tokens) builder.push(line, start, length, type, 0);
   }
 
   return builder.build();
