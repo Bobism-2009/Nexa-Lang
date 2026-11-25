@@ -1,0 +1,7 @@
+// The empty body C slips into: `while (x);` ends the loop at the ;, so the braces
+// after it run once, apart. Nexa refuses it, and says why.
+fn main() {
+    let i = 0;
+    while (i < 3);
+    { i += 1; }
+}

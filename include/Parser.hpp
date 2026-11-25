@@ -433,6 +433,9 @@ public:
         while (pos_ < tokens_.size()) {
             const Token& t = peek();
             if (t.type == TokenType::Eof) break;
+            // An empty statement, as in C: a lone ';' (or ';;'), such as the one left
+            // after a macro that expands to nothing (_Pragma, an empty #define).
+            if (t.type == TokenType::Semicolon) { advance(); continue; }
             const size_t stmtLine = t.line;
             const size_t stampFrom = ast.size();
             if (t.type == TokenType::Include) {
@@ -2759,6 +2762,9 @@ private:
             const Token& t = peek();
             if (t.type == TokenType::RBrace) break;
             if (singleStatement && t.type == TokenType::Semicolon) { advance(); break; }
+            // An empty statement in a block: skipped, as at the top level. A braceless
+            // body may not be one (`if (x);` stays the error above, C's classic slip).
+            if (t.type == TokenType::Semicolon) { advance(); continue; }
             size_t before = stmts.size();
             const size_t stmtLine = t.line;
             if (t.type == TokenType::Let) {
@@ -2921,8 +2927,18 @@ private:
                 throw std::runtime_error("Expected '}' at line " + std::to_string(peek().line));
             }
         } else {
+            const Token& first = peek();
+            const size_t firstLine = first.line;
+            const bool lone = first.type == TokenType::Semicolon;
             block.children = parseBlock(parentIf, /*singleStatement=*/true);
             if (block.children.empty()) {
+                if (lone) {
+                    // `if (x);` and `while (x);` are C's classic slip: the ; ends the
+                    // statement, and the braces below run either way.
+                    throw std::runtime_error("A ';' alone cannot be the body here: it would end the statement, and "
+                                             "what follows would run anyway. Write {} for a body that does nothing at line " +
+                                             std::to_string(firstLine));
+                }
                 throw std::runtime_error("Expected '{' or a statement at line " + std::to_string(peek().line));
             }
         }
@@ -4058,6 +4074,7 @@ private:
         while (pos_ < tokens_.size()) {
             const Token& t = peek();
             if (t.type == TokenType::RBrace || t.type == TokenType::Case || t.type == TokenType::Default) break;
+            if (t.type == TokenType::Semicolon) { advance(); continue; }  // an empty statement
             const size_t before = stmts.size();
             const size_t stmtLine = t.line;
             if (t.type == TokenType::Let) {

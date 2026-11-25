@@ -760,6 +760,15 @@ static bool nexaEnsureHostTool(const std::string& cmd, const char* wingetId, con
 // the author is sitting at rather than only on Linux.
 static std::string nexaProjectX11;
 
+// "icon": a .ico the manifest names (stored here as a full path), put into a
+// Windows .exe or .dll as its icon. Checked on every platform; used only when the
+// build is for Windows, since nothing else keeps an icon inside the program.
+static std::string nexaProjectIcon;
+
+// The compiled icon (a COFF object from windres) while a Windows build runs, added
+// to its link by nexaBuildCompileCmd. Empty when there is none.
+static std::string nexaWinIconObj;
+
 // The manifest covering a source file: nexapkg.json in its directory, or in
 // the nearest parent that has one. A file built outside any project finds
 // none and keeps the defaults.
@@ -771,7 +780,13 @@ static void nexaLoadProjectSettings(const std::string& sourceFile) {
         fs::path candidate = dir / "nexapkg.json";
         if (fs::exists(candidate, ec)) {
             nexa::pkg::Manifest m;
-            if (nexa::pkg::readManifest(candidate, m)) nexaProjectX11 = m.x11;
+            if (nexa::pkg::readManifest(candidate, m)) {
+                nexaProjectX11 = m.x11;
+                if (!m.icon.empty()) {
+                    fs::path icon(m.icon);
+                    nexaProjectIcon = (icon.is_absolute() ? icon : dir / icon).lexically_normal().string();
+                }
+            }
             return;
         }
         fs::path parent = dir.parent_path();
@@ -783,11 +798,91 @@ static void nexaLoadProjectSettings(const std::string& sourceFile) {
 // Said plainly and early, because the alternative is a link that silently did
 // something other than what the project asked for.
 static bool nexaCheckProjectSettings() {
+    if (!nexaProjectIcon.empty()) {
+        std::error_code ec;
+        std::string ext = std::filesystem::path(nexaProjectIcon).extension().string();
+        for (char& c : ext) c = (char)std::tolower((unsigned char)c);
+        if (ext != ".ico") {
+            std::cerr << "[Nexa] Error: nexapkg.json \"icon\" is \"" << nexaProjectIcon
+                      << "\"; it takes a .ico file (Windows icons are .ico, with the sizes inside it)\n";
+            return false;
+        }
+        if (!std::filesystem::is_regular_file(nexaProjectIcon, ec)) {
+            std::cerr << "[Nexa] Error: nexapkg.json \"icon\": no file " << nexaProjectIcon
+                      << " (the path is relative to nexapkg.json)\n";
+            return false;
+        }
+    }
     if (nexaProjectX11.empty() || nexaProjectX11 == "embed" || nexaProjectX11 == "system") return true;
     std::cerr << "[Nexa] Error: nexapkg.json \"x11\" is \"" << nexaProjectX11
               << "\"; it takes \"embed\" (a static X11 baked in, the default) or "
                  "\"system\" (the shared libX11)\n";
     return false;
+}
+
+// The resource compiler for a Windows build: beside the C++ compiler first, so a
+// toolchain's own tool wins, then on PATH. Empty when there is none.
+static std::string nexaFindWindres(const std::string& cxx) {
+    namespace fs = std::filesystem;
+    const char* names[] = {"x86_64-w64-mingw32-windres", "llvm-windres", "windres"};
+    std::error_code ec;
+    const fs::path dir = fs::path(cxx).parent_path();
+    if (!dir.empty()) {
+        for (const char* n : names) {
+            for (const char* suffix : {"", ".exe"}) {
+                fs::path p = dir / (std::string(n) + suffix);
+                if (fs::is_regular_file(p, ec)) return p.string();
+            }
+        }
+    }
+    for (const char* n : names) {
+#ifdef _WIN32
+        std::string probe = std::string("where ") + n + " >nul 2>&1";
+#else
+        std::string probe = std::string("command -v ") + n + " >/dev/null 2>&1";
+#endif
+        if (std::system(probe.c_str()) == 0) return n;
+    }
+    return "";
+}
+
+// nexapkg.json's "icon", compiled for the link of a Windows program: a one-line .rc
+// beside the generated C++, through windres, to a COFF object. Returns the object,
+// or empty (and says why) when it cannot be made -- the program builds without it.
+static std::string nexaCompileWinIcon(const std::string& cxx, const std::string& cppPath) {
+    const std::string windres = nexaFindWindres(cxx);
+    if (windres.empty()) {
+        std::cerr << "[Nexa] Warning: nexapkg.json names an icon, but there is no windres "
+                     "(it comes with MinGW and llvm-mingw); building without it\n";
+        return "";
+    }
+    const std::string rc = cppPath + ".rc";
+    const std::string obj = cppPath + ".icon.o";
+    {
+        std::string icon = std::filesystem::path(nexaProjectIcon).generic_string();
+        std::string quoted;
+        for (char c : icon) {
+            if (c == '"') quoted += "\"\"";
+            else quoted += c;
+        }
+        std::ofstream f(rc, std::ios::binary);
+        f << "1 ICON \"" << quoted << "\"\n";
+    }
+    std::string cmd = "\"" + windres + "\" \"" + rc + "\" -O coff -o \"" + obj + "\"";
+#ifdef _WIN32
+    cmd = "\"" + cmd + " 2>&1\"";
+#else
+    cmd += " 2>&1";
+#endif
+    const int ret = std::system(cmd.c_str());
+    std::remove(rc.c_str());
+    if (ret != 0) {
+        std::cerr << "[Nexa] Warning: windres could not compile the icon " << nexaProjectIcon
+                  << "; building without it\n";
+        std::remove(obj.c_str());
+        return "";
+    }
+    return obj;
 }
 
 #if !defined(_WIN32) && !defined(__APPLE__)
@@ -2712,6 +2807,8 @@ static std::string nexaBuildCompileCmd(
         cmd += " ";
         cmd += nexaLd;
     }
+    // nexapkg.json's icon, compiled for this Windows build (nexaCompileWinIcon).
+    if (!nexaWinIconObj.empty()) cmd += " \"" + nexaWinIconObj + "\"";
     cmd += " -o \"" + exePath + "\"";
 #if !defined(_WIN32) && !defined(__APPLE__)
     if (modulesHasDll && buildShared) cmd += " -ldl";
@@ -3892,6 +3989,11 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        // The icon joins the link from here on, after the PCH above: the header build
+        // compiles only, and has no use for it.
+        if (cppTarget == nexa::CppTarget::Windows && !nexaProjectIcon.empty()) {
+            nexaWinIconObj = nexaCompileWinIcon(cxx, cppPath);
+        }
         std::string cmd = nexaBuildCompileCmd(cxx, targetFlags + pchFlag, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, linkGfx3d, noExceptions, noRtti, debugBuild, linkInputs);
         int ret = 1;
         bool slimEntryBuilt = false;
@@ -4020,6 +4122,10 @@ int main(int argc, char* argv[]) {
         // Debug builds keep the generated C++: the binary's DWARF refers to it by path, so
         // deleting it would leave the debugger with line numbers and no source to show.
         if (!debugBuild) std::remove(cppPath.c_str());
+        if (!nexaWinIconObj.empty()) {
+            std::remove(nexaWinIconObj.c_str());
+            nexaWinIconObj.clear();
+        }
 
         if (ret != 0) {
             std::cerr << "[Nexa] Compilation failed.\n";

@@ -1,0 +1,27 @@
+// An empty statement, as in C: a lone ; does nothing, at the top of a file, in a
+// block and in a switch case. It is what is left after a macro that expands to
+// nothing, as _Pragma does, so `TODO("x");` reads like any other call.
+// A ; as the whole body of an if or a loop is refused: errors/empty_body_semicolon.
+#include <std/io>
+
+#define DO_PRAGMA(x) _Pragma(#x)
+#define NOTE(msg) DO_PRAGMA(message(msg))
+#define NOTHING
+
+;
+NOTE("top level");
+
+fn main() {
+    io.println("one");;
+    ;
+    NOTE("in a function");
+    NOTHING;
+    let n = 0;
+    for (i in 0..3) { ; n += i; ; }
+    switch (n) {
+        case 6: ; io.println("six"); break;
+        default: io.println("other");
+    }
+    if (n > 0) { ; }
+    io.println("n=", n);
+}

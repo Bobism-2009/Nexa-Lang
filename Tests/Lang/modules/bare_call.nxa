@@ -1,0 +1,4 @@
+fn shout(): void {
+    // Bare: hello is in the file that includes this one, so it is that file's.
+    hello();
+}

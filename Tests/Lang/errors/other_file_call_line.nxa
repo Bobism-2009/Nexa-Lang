@@ -1,0 +1,7 @@
+// A function from another file is called by that file's name. Called bare, the error
+// names the line of the call, in the file it is in (modules/bare_call.nxa, line 3).
+// It used to name no line at all.
+#include <std/io>
+#include "../modules/bare_call.nxa"
+fn hello(): void { io.println("hi"); }
+fn main() { bare_call.shout(); }

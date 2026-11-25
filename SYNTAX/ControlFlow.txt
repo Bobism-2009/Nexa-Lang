@@ -15,6 +15,13 @@ CONDITIONALS
     for (j, 3) io.println(j);
   Use braces { } when the body has more than one statement.
 
+  A ; on its own is an empty statement, as in C: it does nothing, in a block,
+  a switch case or at the top of a file. So io.println("a");; is fine, and so
+  is TODO("x"); for a macro that expands to nothing (a _Pragma, an empty
+  #define). It cannot be the whole body of an if or a loop:
+    while (i < 3);           error: the ; would end the loop, and the { } after
+    { i += 1; }              it would run once, apart. Write {} for an empty body.
+
 WHAT COUNTS AS TRUE
   A condition is usually a comparison, and then there is nothing to decide.
   A plain value can be written instead, and these are the rules:

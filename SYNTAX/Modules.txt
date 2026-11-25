@@ -2389,7 +2389,7 @@ PACKAGES (nexapkg)
 
   Files:
     nexapkg.json   - Manifest: { "name", "entry", "output", "dll", "dllOutput",
-                     "x11", "targets", "dependencies": { "include/path": "source" } }
+                     "x11", "icon", "targets", "dependencies": { "include/path": "source" } }
     dll / dllOutput - Optional. NexaC build also compiles that .nxa as a .dll (Windows),
                       .dylib (macOS), or .so (Linux), with names preserved for dll.call.
     targets         - Optional. Other platforms "NexaC build" should produce as
@@ -2409,6 +2409,17 @@ PACKAGES (nexapkg)
                       A target that fails does not stop the rest -- a
                       multi-platform build is worth more when it reports all of
                       them at once -- but the build still exits non-zero.
+    icon            - Optional. A .ico file, its path relative to nexapkg.json, that
+                      a Windows build puts in the .exe (or .dll) as its icon: what
+                      Explorer, the taskbar and a shortcut show.
+                        "icon": "assets/app.ico"
+                      NexaC compiles it with windres, which comes with MinGW and
+                      llvm-mingw; with no windres it says so and builds the program
+                      without the icon. A .ico holds every size in one file, so
+                      give it 16 to 256 pixels for a sharp icon everywhere.
+                      Linux and macOS programs keep no icon in the file, so there
+                      the setting changes nothing, but a missing file or one that
+                      is not a .ico is an error on every platform.
     x11             - Optional, Linux only, and how a std/gfx or std/ui executable
                       gets Xlib. Build settings live in the manifest rather than
                       behind command-line options, so how a project is built

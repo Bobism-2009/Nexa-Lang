@@ -1,0 +1,6 @@
+{
+  "name": "Installer",
+  "entry": "main.nxa",
+  "output": "Installer",
+  "icon": "../Logo/nexa.ico"
+}

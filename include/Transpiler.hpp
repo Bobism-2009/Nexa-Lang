@@ -3576,6 +3576,18 @@ private:
         if (n.type == AstNode::Type::FnCall && (n.initValue == "." || n.initValue == "->")) noteMethodTypeCall(n);
     }
 
+    // resolveOverload for the call `e`, its refusal said at the call's line: "'f' is in
+    // another file" and "No matching overload" name no place of their own.
+    size_t resolveOverloadAt(const AstNode& e, const std::vector<std::string>& argT) const {
+        try {
+            return resolveOverload(e.value, argT, e.srcFile);
+        } catch (const std::runtime_error& ex) {
+            const std::string what = ex.what();
+            if (what.find(" at line ") != std::string::npos) throw;
+            semError(e, what);
+        }
+    }
+
     size_t resolveOverload(const std::string& name,
                            const std::vector<std::string>& actualArgTypes,
                            const std::string& useFile = "") const {
@@ -4331,7 +4343,7 @@ private:
                 std::vector<std::string> argT;
                 argT.reserve(e.children.size());
                 for (const AstNode& a : e.children) argT.push_back(inferExprNexaType(a));
-                size_t slot = resolveOverload(e.value, argT, e.srcFile);
+                size_t slot = resolveOverloadAt(e, argT);
                 const AstNode& called = ast_[fnOverloadSlots_[slot].astIndex];
                 std::string ret = inferReturnNexaType(called);
                 if (fnHasTypeParams(called)) {
@@ -5096,7 +5108,7 @@ private:
         std::vector<std::string> argT;
         argT.reserve(e.children.size());
         for (const AstNode& a : e.children) argT.push_back(inferExprNexaType(a));
-        size_t slot = resolveOverload(e.value, argT, e.srcFile);
+        size_t slot = resolveOverloadAt(e, argT);
         const FnOverloadSlot& sl = fnOverloadSlots_[slot];
         const AstNode& fn = ast_[sl.astIndex];
         std::string name = cppFnUseName(slot);

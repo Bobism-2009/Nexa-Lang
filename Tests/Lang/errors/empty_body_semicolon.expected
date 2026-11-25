@@ -1,0 +1,1 @@
+A ';' alone cannot be the body here: it would end the statement, and what follows would run anyway. Write {} for a body that does nothing at line 5
