@@ -3715,7 +3715,14 @@ static void __nexa_gfx_fill_poly_pts(const int* xs, const int* ys, int n,
             double t = (double)(y - ya) / (double)(yb - ya);
             hits.push_back((double)xs[i] + t * ((double)xs[j] - (double)xs[i]));
         }
-        std::sort(hits.begin(), hits.end());
+        // A row crosses few edges (two for a convex shape): an insertion sort is the
+        // fast one there, and std::sort on doubles linked libc++'s prebuilt one, ~4KB.
+        for (size_t k = 1; k < hits.size(); k++) {
+            double v = hits[k];
+            size_t m = k;
+            for (; m > 0 && hits[m - 1] > v; m--) hits[m] = hits[m - 1];
+            hits[m] = v;
+        }
         for (size_t k = 0; k + 1 < hits.size(); k += 2) {
             long long xa = (long long)std::ceil(hits[k]);
             long long xb = (long long)std::ceil(hits[k + 1]) - 1;

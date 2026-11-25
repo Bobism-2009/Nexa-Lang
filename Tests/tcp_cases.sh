@@ -159,7 +159,8 @@ emits "handle_is_its_own_condition" \
 # rather than going through std::to_string.
 emits "recv_is_a_string" \
     '    let c = tcp.connect("h", 9);
-    io.println("got " + tcp.recv(c));' \
+    let line = "got " + tcp.recv(c);
+    io.println(line);' \
     'std::string("got ") + __nexa_tcp_recv('
 
 echo "-- codegen: a program carries only the half it calls"

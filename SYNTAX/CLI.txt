@@ -48,6 +48,16 @@ OPTIONS
   inline_cpp or a C/C++ header keeps the stock runtime.
   NEXA_NO_SLIM=1 in the environment builds with the stock runtime instead, to
   compare or to rule it out.
+  Strings cost little per use. A string built from + or an f-string is sized
+  first and copied once (one allocation, not one for each +), and one printed
+  straight away is put together on the stack and written in one go, with no
+  allocation at all: about 180 bytes of code a print on Windows, where it was
+  800 (1.6KB on Linux), and two to four times faster. s.split, trim, upper,
+  lower, replace, substring, index_of, last_index_of, count, repeat, tokens and
+  slicing (xs[a:b], s[a:b]) are each one function in the program, however many
+  times they are called. A literal's .repeat is worked out when the program is
+  built only while the result is under 1KB; a larger one is built when it runs,
+  so the text is not stored in the program.
   On Windows, such a program that also starts no thread begins on NexaC's own
   entry point rather than the MinGW C runtime's startup code, which it has no use
   for: hello world is 4KB, where it was 13.8KB, and every program is about 9KB

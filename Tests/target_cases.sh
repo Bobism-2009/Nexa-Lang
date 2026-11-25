@@ -41,8 +41,21 @@ expect() {
 
 printf '#include <std/io>\nfn main() {\n    io.println("hi");\n}\n' > "$WORK/io.nxa"
 printf '#include <std/gfx>\nfn main() {\n    gfx.open("x", 10, 10, 1);\n}\n' > "$WORK/gfx.nxa"
-# try/catch is what needs exceptions (io.to_int and Result no longer do).
-printf '#include <std/io>\nfn main() {\n    try {\n        io.println("n");\n    } catch (e) {\n        io.println(e);\n    }\n}\n' > "$WORK/exc.nxa"
+# A throw NexaC cannot follow is what needs C++ exceptions -- here one in a function
+# literal xs.map calls. A plain try/catch is NexaC's own errors and needs none
+# (nor do io.to_int and Result).
+cat > "$WORK/exc.nxa" <<'NXA'
+#include <std/io>
+fn half(n: int): int {
+    if (n % 2 != 0) { throw "odd"; }
+    return n / 2;
+}
+fn main() {
+    let xs = [2, 3];
+    try { let ys = xs.map(fn (x) { return half(x); }); io.println(len(ys)); } catch (e) { io.println(e); }
+}
+NXA
+printf '#include <std/io>\nfn main() {\n    try {\n        io.println("n");\n    } catch (e) {\n        io.println(e);\n    }\n}\n' > "$WORK/own.nxa"
 
 # A fixture target: everything --target reads, and nothing to compile.
 make_fixture() {
@@ -103,6 +116,7 @@ expect "unsupported module" "does not support std/gfx"         nexac "$WORK/gfx.
 expect "names what it has"  "(it supports: std/io)"            nexac "$WORK/gfx.nxa" --target fixture --source "$WORK/g.cpp"
 # And a program that throws is refused by a target built without exceptions.
 expect "no exceptions"      "needs C++ exceptions"             nexac "$WORK/exc.nxa" --target fixture --source "$WORK/e.cpp"
+expect "own errors"         "Source written"                   nexac "$WORK/own.nxa" --target fixture --source "$WORK/o.cpp"
 
 expect "--run"              "cannot run a program built for fixture" nexac "$WORK/io.nxa" --target fixture --run
 expect "with --wasm"        "cannot be combined with --wasm"   nexac "$WORK/io.nxa" --target fixture --wasm

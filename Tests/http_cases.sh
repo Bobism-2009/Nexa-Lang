@@ -151,8 +151,9 @@ emits "response_is_the_runtime_struct" \
 # not go through std::to_string.
 emits "response_fields_keep_their_types" \
     '    let r = http.request("GET", "http://h/p", "");
-    io.println("b " + r.value().body + " s " + r.value().status);' \
-    'std::string("b ") + __nexa_var_0.value().body'
+    let line = "b " + r.value().body + " s " + r.value().status;
+    io.println(line);' \
+    '__nexa_str_cat({"b ", __nexa_var_0.value().body, " s "'
 
 echo "-- codegen: the call each http server verb emits"
 

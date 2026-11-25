@@ -960,6 +960,8 @@ public:
         if (needsVector) out << kSortMarker;
         if (needsFmt) out << kFmtRuntime;
         if (ownErrors_) out << kOwnErrorsRuntime;
+        // The string methods a call reached (s.split, s.trim, ...), filled in after the emit.
+        out << kStrMarker;
         if (needsCstr) out << "[[maybe_unused]] static std::string __nexa_cstr(const char* __p) { return __p ? std::string(__p) : std::string(); }\n\n";
         if (needsDefer) {
             // A defer runs its body when the guard is destroyed -- at block exit,
@@ -2027,6 +2029,41 @@ public:
             if (at != std::string::npos) src.replace(at, std::string(kNoneMarker).size(), needNoneFail_ ? kNoneRuntime : "");
             const size_t sat = src.find(kSortMarker);
             if (sat != std::string::npos) src.replace(sat, std::string(kSortMarker).size(), needSort_ ? kSortRuntime : "");
+            const size_t strat = src.find(kStrMarker);
+            if (strat != std::string::npos) {
+                std::string defs;
+                // A piece of a string being built or printed: a string's bytes, or a C
+                // string's (a literal, or a ?: of two).
+                // A number or a char is written into the piece's own b[], with p null, so
+                // a copy of the piece keeps its text. 320: std::to_string's %f of the largest
+                // double is 316 characters.
+                if (strHelpers_.count("cat") || strHelpers_.count("put")) {
+                    defs += "#include <cstdio>\n"
+                            "struct __nexa_sv { const char* p; size_t n; char b[320]; __nexa_sv() : p(nullptr), n(0) {} "
+                            "__nexa_sv(const std::string& __s) : p(__s.data()), n(__s.size()) {} "
+                            "__nexa_sv(const char* __s) : p(__s), n(__builtin_strlen(__s)) {} "
+                            "const char* d() const { return p ? p : b; } };\n"
+                            "[[maybe_unused]] __attribute__((noinline)) static __nexa_sv __nexa_sv_u(unsigned long long __v, bool __neg) { "
+                            "__nexa_sv __o; char __t[24]; int __k = 0; do { __t[__k++] = (char)('0' + __v % 10); __v /= 10; } while (__v); "
+                            "if (__neg) __o.b[__o.n++] = '-'; while (__k) __o.b[__o.n++] = __t[--__k]; return __o; }\n"
+                            "[[maybe_unused]] static __nexa_sv __nexa_sv_n(int __v) { return __nexa_sv_u(__v < 0 ? 0ULL - (unsigned long long)__v : (unsigned long long)__v, __v < 0); }\n"
+                            "[[maybe_unused]] static __nexa_sv __nexa_sv_n(long __v) { return __nexa_sv_u(__v < 0 ? 0ULL - (unsigned long long)__v : (unsigned long long)__v, __v < 0); }\n"
+                            "[[maybe_unused]] static __nexa_sv __nexa_sv_n(long long __v) { return __nexa_sv_u(__v < 0 ? 0ULL - (unsigned long long)__v : (unsigned long long)__v, __v < 0); }\n"
+                            "[[maybe_unused]] static __nexa_sv __nexa_sv_n(unsigned __v) { return __nexa_sv_u(__v, false); }\n"
+                            "[[maybe_unused]] static __nexa_sv __nexa_sv_n(unsigned long __v) { return __nexa_sv_u(__v, false); }\n"
+                            "[[maybe_unused]] static __nexa_sv __nexa_sv_n(unsigned long long __v) { return __nexa_sv_u(__v, false); }\n"
+                            // std::to_string of a float is %f; "..." + a float NexaC knows is %g.
+                            "[[maybe_unused]] __attribute__((noinline)) static __nexa_sv __nexa_sv_fmt(const char* __f, double __v) { "
+                            "__nexa_sv __o; int __k = std::snprintf(__o.b, sizeof(__o.b), __f, __v); "
+                            "if (__k < 0) __k = 0; if (__k >= (int)sizeof(__o.b)) { __o.p = \"\"; __k = 0; } __o.n = (size_t)__k; return __o; }\n"
+                            "[[maybe_unused]] static __nexa_sv __nexa_sv_n(double __v) { return __nexa_sv_fmt(\"%f\", __v); }\n"
+                            "[[maybe_unused]] static __nexa_sv __nexa_sv_n(float __v) { return __nexa_sv_fmt(\"%f\", __v); }\n"
+                            "[[maybe_unused]] static __nexa_sv __nexa_sv_g(double __v) { return __nexa_sv_fmt(\"%g\", __v); }\n"
+                            "[[maybe_unused]] static __nexa_sv __nexa_sv_c(char __c) { __nexa_sv __o; __o.b[0] = __c; __o.n = 1; return __o; }\n";
+                }
+                for (const std::string& h : strHelpers_) defs += strHelperDef(h);
+                src.replace(strat, std::string(kStrMarker).size(), defs);
+            }
             const size_t fat = src.find(kFunctionalMarker);
             if (fat != std::string::npos) {
                 src.replace(fat, std::string(kFunctionalMarker).size(),
@@ -4278,6 +4315,25 @@ private:
     // the line-first form a program that throws had with C++'s exceptions, nothing of
     // the line appears when one of them raises, and a call's own output comes before the
     // line; unlike it, no string is built. A literal or a name is printed where it stands.
+    // io.println(f"a {n} b {s}") and io.println("a " + n + " b " + s): the pieces, each
+    // as + spells it, go to __nexa_str_put, which copies them into a buffer on the stack
+    // and writes the line with one fwrite. Building the line as a string made a temporary
+    // for every +, inlined: ~800 bytes a print on Windows and ~1.6KB on Linux. As before,
+    // every piece has its value before any of the line is written (a braced list is
+    // evaluated in order, all of it, before the call), and the line is one write.
+    // The pieces are the program's own nodes, not copies: what a node resolved to (the
+    // Option a None is, enumLitApplied_) is kept by its address.
+    bool printConcatPieces(const AstNode& p, const std::map<std::string, bool>& varIsString,
+                           std::vector<const AstNode*>& pieces) const {
+        pieces.clear();
+        if (p.children.size() != 1) return false;
+        const AstNode& a = p.children[0];
+        if (a.type != AstNode::Type::ExprAdd || !exprIsString(a, varIsString) || foreignText(a)) return false;
+        if (inferExprNexaType(a) != "string" || tryFoldStringLiteralChain(a, varIsString).has_value()) return false;
+        collectConcatParts(a, varIsString, pieces);
+        return pieces.size() >= 2;
+    }
+
     bool printHoists(const AstNode& p) const {
         if (!ownErrors_ || p.children.size() < 2) return false;
         bool raises = false, tried = false;
@@ -9175,6 +9231,82 @@ template <class __I> inline const char& __nexa_ix(const std::string& __s, __I __
     // element type carries the code once.
     mutable bool needSort_ = false;
     static constexpr const char* kSortMarker = "// [nexa:sort]\n";
+    static constexpr const char* kStrMarker = "// [nexa:str]\n";
+    // The string methods, each one function in the program, written once if a call
+    // reached it. They were a lambda at every call, which the compiler could not
+    // share: s.split cost ~1KB a use, s.replace ~600 bytes, s.trim ~500.
+    mutable std::set<std::string> strHelpers_;
+    std::string useStr(const char* name) const {
+        strHelpers_.insert(name);
+        return std::string("__nexa_str_") + name;
+    }
+    static std::string strHelperDef(const std::string& h) {
+        // noinline: inlined, each call was a copy again. Every one of these builds or
+        // searches a string, which costs far more than the call.
+        const char* pre = "[[maybe_unused]] __attribute__((noinline)) static ";
+        std::string b;
+        if (h == "upper" || h == "lower") {
+            // Two of each that change a copy: a temporary is worked on in place, and a
+            // variable is copied inside, once, not at every call.
+            b = std::string("#include <cctype>\n") + pre + "std::string __nexa_str_" + h +
+                "(std::string&& __s) { for (char& __c : __s) __c = (char)std::to" + h +
+                "((unsigned char)__c); return std::move(__s); }\n" + pre + "std::string __nexa_str_" + h +
+                "(const std::string& __s) { return __nexa_str_" + h + "(std::string(__s)); }\n";
+        } else if (h == "trim") {
+            b = std::string(pre) + "std::string __nexa_str_trim(const std::string& __s) { size_t __a = __s.find_first_not_of(\" \\t\\n\\r\\f\\v\"); "
+                "if (__a == std::string::npos) return std::string(); size_t __b = __s.find_last_not_of(\" \\t\\n\\r\\f\\v\"); return __s.substr(__a, __b - __a + 1); }\n";
+        } else if (h == "index_of") {
+            b = std::string(pre) + "int __nexa_str_index_of(const std::string& __s, const std::string& __p) { size_t __n = __s.find(__p); return __n == std::string::npos ? -1 : (int)__n; }\n";
+        } else if (h == "index_of_from") {
+            b = std::string(pre) + "int __nexa_str_index_of_from(const std::string& __s, const std::string& __p, int __f) { if (__f < 0) __f = 0; if ((size_t)__f > __s.size()) return -1; "
+                "size_t __n = __s.find(__p, (size_t)__f); return __n == std::string::npos ? -1 : (int)__n; }\n";
+        } else if (h == "last_index_of") {
+            b = std::string(pre) + "int __nexa_str_last_index_of(const std::string& __s, const std::string& __p) { size_t __n = __s.rfind(__p); return __n == std::string::npos ? -1 : (int)__n; }\n";
+        } else if (h == "count") {
+            b = std::string(pre) + "int __nexa_str_count(const std::string& __s, const std::string& __p) { if (__p.empty()) return 0; int __c = 0; size_t __i = 0; "
+                "while ((__i = __s.find(__p, __i)) != std::string::npos) { __c++; __i += __p.size(); } return __c; }\n";
+        } else if (h == "repeat") {
+            b = std::string(pre) + "std::string __nexa_str_repeat(const std::string& __s, int __n) { std::string __o; if (__n > 0) __o.reserve(__s.size() * (size_t)__n); "
+                "for (int __i = 0; __i < __n; __i++) __o += __s; return __o; }\n";
+        } else if (h == "replace") {
+            b = std::string(pre) + "std::string __nexa_str_replace(std::string&& __s, const std::string& __f, const std::string& __t) { if (__f.empty()) return std::move(__s); size_t __p = 0; "
+                "while ((__p = __s.find(__f, __p)) != std::string::npos) { __s.replace(__p, __f.size(), __t); __p += __t.size(); } return std::move(__s); }\n" +
+                pre + "std::string __nexa_str_replace(const std::string& __s, const std::string& __f, const std::string& __t) { return __nexa_str_replace(std::string(__s), __f, __t); }\n";
+        } else if (h == "substring") {
+            b = std::string(pre) + "std::string __nexa_str_substring(const std::string& __s, int __a, int __n) { if (__a < 0) __a = 0; if ((size_t)__a >= __s.size()) return std::string(); "
+                "return __s.substr((size_t)__a, __n < 0 ? std::string::npos : (size_t)__n); }\n";
+        } else if (h == "split") {
+            b = std::string("#include <vector>\n") + pre + "std::vector<std::string> __nexa_str_split(const std::string& __s, const std::string& __sep) { std::vector<std::string> __out; "
+                "if (__sep.empty()) { __out.push_back(__s); return __out; } size_t __p = 0, __q; "
+                "while ((__q = __s.find(__sep, __p)) != std::string::npos) { __out.push_back(__s.substr(__p, __q - __p)); __p = __q + __sep.size(); } "
+                "__out.push_back(__s.substr(__p)); return __out; }\n";
+        } else if (h == "cat") {
+            // The pieces sized, one allocation, each copied in (__nexa_sv: see the marker).
+            b = std::string(pre) +
+                "std::string __nexa_str_cat(std::initializer_list<__nexa_sv> __l) { size_t __n = 0; for (const __nexa_sv& __p : __l) __n += __p.n; "
+                "std::string __o; __o.reserve(__n); for (const __nexa_sv& __p : __l) __o.append(__p.d(), __p.n); return __o; }\n";
+        } else if (h == "put") {
+            // A line of pieces: into a buffer on the stack, out in one fwrite. A line too
+            // long for it goes out piece by piece, every value already in hand.
+            b = std::string("#include <cstdio>\n") + pre +
+                "void __nexa_str_put(FILE* __f, bool __nl, std::initializer_list<__nexa_sv> __l) { char __b[512]; size_t __n = 0; "
+                "for (const __nexa_sv& __p : __l) { if (__p.n > sizeof(__b) - 1 - __n) { "
+                "for (const __nexa_sv& __q : __l) fwrite(__q.d(), 1, __q.n, __f); if (__nl) fputc('\\n', __f); return; } "
+                "__builtin_memcpy(__b + __n, __p.d(), __p.n); __n += __p.n; } "
+                "if (__nl) __b[__n++] = '\\n'; fwrite(__b, 1, __n, __f); }\n";
+        } else if (h == "slice") {
+            // xs[a:b] and s[a:b]: what it gives, __R, is named by the call, as the lambda did.
+            b = "template <class __R, class __V> __attribute__((noinline)) static __R __nexa_str_slice(const __V& __s, int __a, int __b) { "
+                "int __n = (int)__s.size(); if (__a < 0) __a = __n + __a; if (__b < 0) __b = __n + __b; if (__a < 0) __a = 0; if (__b < 0) __b = 0; "
+                "if (__a > __n) __a = __n; if (__b > __n) __b = __n; if (__b < __a) __b = __a; return __R(__s.begin() + __a, __s.begin() + __b); }\n";
+        } else if (h == "tokens") {
+            b = std::string("#include <vector>\n") + pre + "std::vector<std::string> __nexa_str_tokens(const std::string& __s, const std::string& __d) { bool __t[256] = {}; "
+                "for (char __c : __d) __t[(unsigned char)__c] = true; std::vector<std::string> __out; size_t __n = __s.size(), __i = 0; while (__i < __n) { "
+                "while (__i < __n && __t[(unsigned char)__s[__i]]) __i++; size_t __b = __i; while (__i < __n && !__t[(unsigned char)__s[__i]]) __i++; "
+                "if (__i > __b) __out.emplace_back(__s.data() + __b, __i - __b); } return __out; }\n";
+        }
+        return b;
+    }
     static constexpr const char* kSortRuntime = R"NEXA_SORT(template <bool __D, class __C> static void __nexa_sort(__C& __v) {
     typedef typename __C::value_type __T;
     const size_t __n = __v.size();
@@ -10220,6 +10352,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                    const std::string& indent = "    ", bool inStringSwitchCase = false) {
         for (const AstNode& child : children) {
             LineMarkScope lineMark(lineDirectives_, out, child, indent);
+            std::vector<const AstNode*> printPieces;  // a print whose lone + chain is printed piece by piece
             if (child.type == AstNode::Type::LetDestructure) {
                 if (child.children.empty()) {
                     throw std::runtime_error("let destructure has no value");
@@ -10524,6 +10657,17 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 }
                 swapTypes();  // and from here on, the new variable's
                 varMap[child.value] = vname;
+            } else if ((child.type == AstNode::Type::IoPrintln || child.type == AstNode::Type::IoPrint) &&
+                       printConcatPieces(child, varIsString, printPieces)) {
+                const bool err = child.initValue == "stderr";
+                std::string call = useStr("put") + std::string("(") + (err ? "stderr" : "stdout") + ", " +
+                                   (child.type == AstNode::Type::IoPrintln ? "true" : "false") + ", {";
+                for (size_t i = 0; i < printPieces.size(); ++i) {
+                    if (i) call += ", ";
+                    call += emitCatPiece(*printPieces[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                }
+                // io.eprintln flushes stdout first, so what was printed before comes out before it.
+                out << indent << (err ? "fflush(stdout); " : "") << call << "});\n";
             } else if ((child.type == AstNode::Type::IoPrintln || child.type == AstNode::Type::IoPrint) &&
                        child.initValue == "stderr" && !printLineFirst(child)) {
                 // io.eprint / io.eprintln: each argument written straight to stderr, as
@@ -13332,7 +13476,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     std::string p = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                     return "([](const std::string& __w, const std::string& __p){ auto __nst = [](const std::string& __t)->std::string { size_t __a = __t.find_first_not_of(\" \\t\\n\\r\\f\\v\"); if (__a == std::string::npos) return std::string(); size_t __b = __t.find_last_not_of(\" \\t\\n\\r\\f\\v\"); return __t.substr(__a, __b - __a + 1); }; std::string __s = __nst(__w); if (!__p.empty() && __s.size() >= __p.size() && __s.compare(0, __p.size(), __p) == 0) return __nst(__s.substr(__p.size())); return __s; })(" + w + ", " + p + ")";
                 }
-                return "([](const std::string& __nexa_t){ size_t __a = __nexa_t.find_first_not_of(\" \\t\\n\\r\\f\\v\"); if (__a == std::string::npos) return std::string(); size_t __b = __nexa_t.find_last_not_of(\" \\t\\n\\r\\f\\v\"); return __nexa_t.substr(__a, __b - __a + 1); })(" + w + ")";
+                return useStr("trim") + "(" + w + ")";
             }
             case AstNode::Type::RandomInt: {
                 std::string minExpr = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
@@ -14077,12 +14221,9 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (m == "__fmt") return emitFmtCall(e, R);
                 std::string A0 = e.children.size() > 1 ? emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool) : "";
                 std::string A1 = e.children.size() > 2 ? emitExpr(e.children[2], varMap, varIsString, varIsFloat, varIsChar, varIsBool) : "";
-                if (m == "upper")
-                    return "([](std::string __s){ for (char& __c : __s) __c = (char)std::toupper((unsigned char)__c); return __s; })(" + R + ")";
-                if (m == "lower")
-                    return "([](std::string __s){ for (char& __c : __s) __c = (char)std::tolower((unsigned char)__c); return __s; })(" + R + ")";
-                if (m == "trim")
-                    return "([](const std::string& __s){ size_t __a = __s.find_first_not_of(\" \\t\\n\\r\\f\\v\"); if (__a == std::string::npos) return std::string(); size_t __b = __s.find_last_not_of(\" \\t\\n\\r\\f\\v\"); return __s.substr(__a, __b - __a + 1); })(" + R + ")";
+                if (m == "upper") return useStr("upper") + "(" + R + ")";
+                if (m == "lower") return useStr("lower") + "(" + R + ")";
+                if (m == "trim") return useStr("trim") + "(" + R + ")";
                 if (m == "len") {
                     if (inferExprNexaType(e.children[0]) == "json") return R + ".len()";
                     return "([](const std::string& __s){ return (int)__s.size(); })(" + R + ")";
@@ -14113,17 +14254,15 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                             "; int __nexa_i = (int)(" + from + "); if (__nexa_i < 0) __nexa_i = 0;"
                             " for (; __nexa_i < (int)__nexa_v.size(); __nexa_i++) { if (__nexa_v[(size_t)__nexa_i] == __nexa_x) return __nexa_i; } return -1; })()";
                     }
-                    if (A1.empty()) {
-                        return "([](const std::string& __s, const std::string& __p){ size_t __n = __s.find(__p); return __n == std::string::npos ? -1 : (int)__n; })(" + R + ", " + A0 + ")";
-                    }
-                    return "([](const std::string& __s, const std::string& __p, int __f){ if (__f < 0) __f = 0; if ((size_t)__f > __s.size()) return -1; size_t __n = __s.find(__p, (size_t)__f); return __n == std::string::npos ? -1 : (int)__n; })(" + R + ", " + A0 + ", " + from + ")";
+                    if (A1.empty()) return useStr("index_of") + "(" + R + ", " + A0 + ")";
+                    return useStr("index_of_from") + "(" + R + ", " + A0 + ", " + from + ")";
                 }
                 if (m == "last_index_of") {
                     if (nexaIsSliceType(inferExprNexaType(e.children[0]))) {
                         return lamOpen() + " const auto& __nexa_v = " + R + "; const auto& __nexa_x = " + A0 +
                             "; for (int __nexa_i = (int)__nexa_v.size() - 1; __nexa_i >= 0; __nexa_i--) { if (__nexa_v[(size_t)__nexa_i] == __nexa_x) return __nexa_i; } return -1; })()";
                     }
-                    return "([](const std::string& __s, const std::string& __p){ size_t __n = __s.rfind(__p); return __n == std::string::npos ? -1 : (int)__n; })(" + R + ", " + A0 + ")";
+                    return useStr("last_index_of") + "(" + R + ", " + A0 + ")";
                 }
                 if (m == "count") {
                     // Non-overlapping, left to right, as replace() walks: "aaaa".count("aa") is 2.
@@ -14131,26 +14270,17 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                         return lamOpen() + " const auto& __nexa_v = " + R + "; const auto& __nexa_x = " + A0 +
                             "; int __nexa_c = 0; for (const auto& __nexa_e : __nexa_v) { if (__nexa_e == __nexa_x) __nexa_c++; } return __nexa_c; })()";
                     }
-                    return "([](const std::string& __s, const std::string& __p){ if (__p.empty()) return 0; int __c = 0; size_t __i = 0; while ((__i = __s.find(__p, __i)) != std::string::npos) { __c++; __i += __p.size(); } return __c; })(" + R + ", " + A0 + ")";
+                    return useStr("count") + "(" + R + ", " + A0 + ")";
                 }
-                if (m == "repeat")
-                    return "([](const std::string& __s, int __n){ std::string __o; for (int __i = 0; __i < __n; __i++) __o += __s; return __o; })(" + R + ", " + A0 + ")";
-                if (m == "replace")
-                    return "([](std::string __s, const std::string& __f, const std::string& __t){ if (__f.empty()) return __s; size_t __p = 0; while ((__p = __s.find(__f, __p)) != std::string::npos) { __s.replace(__p, __f.size(), __t); __p += __t.size(); } return __s; })(" + R + ", " + A0 + ", " + A1 + ")";
-                if (m == "substring")
-                    return "([](const std::string& __s, int __a, int __n){ if (__a < 0) __a = 0; if ((size_t)__a >= __s.size()) return std::string(); return __s.substr((size_t)__a, __n < 0 ? std::string::npos : (size_t)__n); })(" + R + ", " + A0 + ", " + A1 + ")";
-                if (m == "split")
-                    return "([](const std::string& __s, const std::string& __sep){ std::vector<std::string> __out; if (__sep.empty()) { __out.push_back(__s); return __out; } size_t __p = 0, __q; while ((__q = __s.find(__sep, __p)) != std::string::npos) { __out.push_back(__s.substr(__p, __q - __p)); __p = __q + __sep.size(); } __out.push_back(__s.substr(__p)); return __out; })(" + R + ", " + A0 + ")";
+                if (m == "repeat") return useStr("repeat") + "(" + R + ", " + A0 + ")";
+                if (m == "replace") return useStr("replace") + "(" + R + ", " + A0 + ", " + A1 + ")";
+                if (m == "substring") return useStr("substring") + "(" + R + ", " + A0 + ", " + A1 + ")";
+                if (m == "split") return useStr("split") + "(" + R + ", " + A0 + ")";
                 if (m == "tokens") {
                     // strtok's rule without its state: any of the delimiter bytes ends a
                     // token, and a run of them yields no empty tokens. No delims: whitespace.
                     const std::string D = e.children.size() > 1 ? A0 : "std::string(\" \\t\\n\\r\\f\\v\")";
-                    return "([](const std::string& __s, const std::string& __d){ bool __t[256] = {}; for (char __c : __d) __t[(unsigned char)__c] = true; "
-                           "std::vector<std::string> __out; size_t __n = __s.size(), __i = 0; while (__i < __n) { "
-                           "while (__i < __n && __t[(unsigned char)__s[__i]]) __i++; size_t __b = __i; "
-                           "while (__i < __n && !__t[(unsigned char)__s[__i]]) __i++; "
-                           "if (__i > __b) __out.emplace_back(__s.data() + __b, __i - __b); } return __out; })(" +
-                           R + ", " + D + ")";
+                    return useStr("tokens") + "(" + R + ", " + D + ")";
                 }
                 return R;
             }
@@ -14284,6 +14414,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 std::string baseT = inferExprNexaType(e.children[0]);
                 std::string startExpr = "0";
                 std::string endExpr = "(int)__nexa_s.size()";
+                const bool sliceKnown = baseT == "string" || nexaIsSliceType(baseT);
                 if (e.initValue == "both" && e.children.size() >= 3) {
                     startExpr = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                     endExpr = emitExpr(e.children[2], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
@@ -14298,6 +14429,12 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     " if (__nexa_a < 0) __nexa_a = 0; if (__nexa_b < 0) __nexa_b = 0;"
                     " if (__nexa_a > __nexa_n) __nexa_a = __nexa_n; if (__nexa_b > __nexa_n) __nexa_b = __nexa_n;"
                     " if (__nexa_b < __nexa_a) __nexa_b = __nexa_a; ";
+                if (sliceKnown) {
+                    // No end: past it, which the bounds take as the end.
+                    const std::string endArg = endExpr == "(int)__nexa_s.size()" ? std::string("2147483647") : endExpr;
+                    const std::string resT = baseT == "string" ? std::string("std::string") : nexaTypeToCpp(baseT);
+                    return useStr("slice") + "<" + resT + ">(" + asCppStdString(v) + ", " + startExpr + ", " + endArg + ")";
+                }
                 if (baseT == "string") {
                     return lamOpen() + " const auto& __nexa_s = " + asCppStdString(v) + "; " + bounds +
                         "return __nexa_s.substr((size_t)__nexa_a, (size_t)(__nexa_b - __nexa_a)); })()";
@@ -14711,6 +14848,9 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             if (e.children.size() < 2) return std::nullopt;
             auto nrep = tryFoldIntLiteral(e.children[1]);
             if (!nrep) return std::nullopt;
+            // Folded, the text is in the exe as data: "0123456789".repeat(12000) was
+            // 120KB of it. Past a small size the call builds it at run time instead.
+            if (*nrep > 0 && s.size() * static_cast<size_t>(*nrep) > 1024) return std::nullopt;
             std::string out;
             for (int i = 0; i < *nrep; i++) out += s;
             return out;
@@ -15099,6 +15239,44 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         return out;
     }
 
+    // The pieces of a string + chain, left to right: a + b is a string either way it is
+    // grouped, so both sides open up. What folds to one literal stays one piece.
+    void collectConcatParts(const AstNode& n, const std::map<std::string, bool>& varIsString,
+                            std::vector<const AstNode*>& parts) const {
+        if (n.type == AstNode::Type::ExprAdd && n.children.size() == 2 && exprIsString(n, varIsString) &&
+            !tryFoldStringLiteralChain(n, varIsString).has_value()) {
+            collectConcatParts(n.children[0], varIsString, parts);
+            collectConcatParts(n.children[1], varIsString, parts);
+            return;
+        }
+        parts.push_back(&n);
+    }
+
+    // A piece of __nexa_str_cat / __nexa_str_put: emitConcatOperand's choices, step for
+    // step, but a number or a char is formatted into the piece itself (__nexa_sv_n is
+    // std::to_string's overloads and text, __nexa_sv_g is __nexa_f2s's %g) rather than
+    // into a std::string made and freed at every use.
+    std::string emitCatPiece(const AstNode& child,
+                             const std::map<std::string, std::string>& varMap,
+                             const std::map<std::string, bool>& varIsString,
+                             const std::map<std::string, bool>& varIsFloat,
+                             const std::map<std::string, bool>& varIsChar,
+                             const std::map<std::string, bool>& varIsBool) {
+        if ((child.type == AstNode::Type::ExprAdd && exprIsString(child, varIsString)) || foreignText(child)) {
+            return emitConcatOperand(child, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+        }
+        auto E = [&]() { return emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool); };
+        if (child.type == AstNode::Type::ExprAdd) {
+            return (exprIsFloat(child, varIsFloat) ? "__nexa_sv_g(" : "__nexa_sv_n(") + E() + ")";
+        }
+        if (exprIsString(child, varIsString) || exprProducesString(child)) return E();
+        if (child.type == AstNode::Type::FnCall && inferExprNexaType(child) == "string") return E();
+        if (exprIsFloat(child, varIsFloat) || nexaIsFloatType(inferExprNexaType(child))) return "__nexa_sv_g(" + E() + ")";
+        if (exprIsChar(child, varIsChar)) return "__nexa_sv_c(" + E() + ")";
+        if (exprIsBool(child, varIsBool)) return "((" + E() + ") ? \"true\" : \"false\")";
+        return "__nexa_sv_n(" + E() + ")";
+    }
+
     std::string emitConcatOperand(const AstNode& child,
                                   const std::map<std::string, std::string>& varMap,
                                   const std::map<std::string, bool>& varIsString,
@@ -15112,6 +15290,19 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         if (child.type == AstNode::Type::ExprAdd && exprIsString(child, varIsString)) {
             if (auto folded = tryFoldStringLiteralChain(child, varIsString)) {
                 return emitCppStringValue(*folded);
+            }
+            // Three pieces or more: one call that sizes the result, allocates once and
+            // copies each piece in. A chain of + made a temporary at each step, inlined:
+            // ~460 bytes a use on Windows, 1.2KB on Linux, and an allocation a step.
+            std::vector<const AstNode*> parts;
+            collectConcatParts(child, varIsString, parts);
+            if (parts.size() >= 3) {
+                std::string s = useStr("cat") + "({";
+                for (size_t i = 0; i < parts.size(); ++i) {
+                    if (i) s += ", ";
+                    s += emitCatPiece(*parts[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                }
+                return s + "})";
             }
             return "(" + emitConcatChain(child, varMap, varIsString, varIsFloat, varIsChar, varIsBool) + ")";
         }

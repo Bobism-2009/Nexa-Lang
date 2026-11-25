@@ -1,0 +1,74 @@
+// Pins what the string work must keep: a print of an f-string or a + chain prints
+// each piece as "..." + value spells it, and gets every value before any of the
+// line is out; a chain of + builds the same string however it is grouped; the
+// string methods and slices give what they gave, on variables and on temporaries.
+// Reference: SYNTAX/Core.txt (F-STRINGS, STRINGS)
+#include <std/io>
+
+struct Item {
+    name: string;
+    price: float;
+}
+
+fn loud(s: string): string {
+    io.println("(loud ", s, ")");
+    return s.upper();
+}
+
+fn main(args: []string) {
+    let n = len(args) + 41;
+    let x = 2.5;
+    let ok = n > 40;
+    let c = 'q';
+    let s = "  Mixed Case  ";
+    let it = Item { name: "pen", price: 1.25 };
+    let xs = [5, 6, 7, 8, 9];
+
+    // prints, piece by piece
+    io.println(f"n={n} x={x} ok={ok} c={c} s=[{s}]");
+    io.println("n=" + n + " x=" + x + " ok=" + ok + " c=" + c);
+    io.println(f"{it.name} costs {it.price:.2f}, twice {it.price * 2.0}");
+    io.println(f"{n + 1}{n - 1}");
+    io.println(f"");
+    io.println((1 + 2) + " then " + (3 + 4));
+    io.print(f"no newline {n}");
+    io.println("");
+    // a call in a piece runs before any of the line is printed
+    io.println(f"before [{loud("hey")}] after");
+    io.println("a " + loud("b") + " c " + loud("d"));
+
+    // building strings
+    let t = "a" + n + "b" + x + "c" + ok + c;
+    io.println(t, " ", len(t));
+    let u = s + (t + "!") + ("[" + n + "]");
+    io.println(u);
+    let parts: []string = [];
+    for (i in 0..3) {
+        parts.push("item " + i + " of " + 3);
+    }
+    io.println(parts);
+    let w = f"{n}-{s.trim()}-{xs[1]}";
+    io.println(w);
+
+    // methods on a variable and on a temporary
+    io.println(s.trim(), "|", s.upper(), "|", s.lower(), "|");
+    io.println(s.trim().upper(), "|", (s + "x").lower(), "|");
+    io.println("a,b,,c".split(","), " ", (s + ",z").split(","), " ", s.split(""));
+    io.println(" a  b c ".tokens(), " ", "x;y;;z".tokens(";"));
+    io.println(s.replace(" ", "_"), "|", (s + s).replace("Case", "C"), "|", s.replace("", "z"));
+    io.println(s.substring(2, 5), "|", s.substring(-3, 2), "|", s.substring(40, 2), "|", s.substring(2, -1));
+    io.println(s.index_of("e"), " ", s.index_of("e", 7), " ", s.index_of("e", 99), " ", s.last_index_of("e"), " ", s.count(" "));
+    io.println("ab".repeat(3), "|", s.trim().repeat(n - 40), "|", "x".repeat(0), "|", "y".repeat(-2), "|");
+    let big = "0123456789".repeat(200);
+    io.println(len(big), " ", big.substring(1995, 10));
+    // longer than the line buffer: the pieces go out one by one
+    io.println("long " + big + " end " + n + " " + x + " " + c);
+    let built = "long " + big + " end " + n;
+    io.println(len(built), " ", built.substring(2000, 20));
+
+    // slices
+    io.println(xs[1:3], " ", xs[:2], " ", xs[3:], " ", xs[-2:], " ", xs[1:-1], " ", xs[4:1], " ", xs[-9:99]);
+    io.println(s[2:7], "|", s[:3], "|", s[-4:], "|", s[5:2], "|");
+    let names: []string = ["a", "b", "c", "d"];
+    io.println(names[1:3], " ", len(names[2:]));
+}

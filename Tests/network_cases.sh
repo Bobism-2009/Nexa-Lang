@@ -259,11 +259,13 @@ emits "handle_is_its_own_condition" \
 # concatenate as strings rather than going through std::to_string.
 emits "recv_is_a_string" \
     '    let s = udp.open(0);
-    io.println("got " + udp.recv(s));' \
+    let line = "got " + udp.recv(s);
+    io.println(line);' \
     'std::string("got ") + __nexa_udp_recv('
 emits "sender_is_a_string" \
     '    let s = udp.open(0);
-    io.println("from " + udp.sender(s));' \
+    let who = "from " + udp.sender(s);
+    io.println(who);' \
     'std::string("from ") + __nexa_udp_sender('
 
 # A program that never asks who sent a packet carries no table for the answer,

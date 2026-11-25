@@ -19,7 +19,9 @@
 #              on a Result and on ints (with ranges) and strings, and an Option with its methods, ?, m.get and xs.first,
 #              xs.filter / any / all / map / find given function literals, #define / #if / # / __has_include / #pragma, s.tokens,
 #              xs.sort_by (on ints, as filter/map are: a []Item costs a page on Linux), xs.sort, _Pragma, __DATE__,
-#              a range loop with a step, and try / catch / throw (NexaC's own errors, with the .value()
+#              a range loop with a step, s.trim / upper / replace / substring / index_of / count /
+#              repeat and s[a:b] / xs[a:] (each one function, however often called), a string
+#              built from + and one printed from it, and try / catch / throw (NexaC's own errors, with the .value()
 #              calls above caught too) -- is
 #              under 64KB, and prints
 #              exactly what the same program built without the slimming
@@ -154,6 +156,11 @@ fn main() {
     }
     io.println(f"{len(items)} items, {totals["cup"]:>4} cups, sum {sum}, {2.5 * sum:.2}");
     io.println(totals, " ", words, " ", 1 + 2 + 3);
+    // The string methods and slices, one function each, and a string built in one go.
+    let line = " Pen, Cup " + sum + " x" + len(words) + "!";
+    io.println(line.trim().upper(), "|", line.replace(" ", "_"), "|", line.substring(1, 3), "|",
+               line.index_of("Cup"), "|", line.count(" "), "|", line[1:4], "|", words[1:], "|", "ab".repeat(sum % 3 + 1));
+    io.println("built " + line + " of " + len(line));
     // io.parse_int's error text once brought the exception runtime back
     // (libc++'s prebuilt "text" + s): 16KB became 90KB.
     let p = io.parse_int("12x");
