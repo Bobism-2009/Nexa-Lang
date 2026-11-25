@@ -1,0 +1,5 @@
+// NexaC.exe's icon (Windows only). Compile this and link the result with NexaC.cpp:
+//   llvm-mingw / MinGW:  windres NexaC.rc -O coff -o NexaC-icon.o   (then add NexaC-icon.o)
+//   clang++ for MSVC:    llvm-rc /fo NexaC.res NexaC.rc             (then add NexaC.res)
+// Leaving it out builds the same compiler, without the icon.
+1 ICON "Logo/nexa.ico"

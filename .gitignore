@@ -41,3 +41,4 @@ dist/
 # Test scratch output
 Tests/_io_roundtrip.txt
 Tests/_write_status.txt
+NexaC.res

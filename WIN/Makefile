@@ -45,15 +45,24 @@ HEADERS = $(SRCDIR)/include/Lexer.hpp $(SRCDIR)/include/Parser.hpp \
           $(SRCDIR)/include/Transpiler.hpp $(SRCDIR)/include/Modules.hpp \
           $(SRCDIR)/include/PlatformEmit.hpp
 
-NexaC$(SUFFIX): $(SOURCES) $(HEADERS)
-	$(CXX) $(CXXFLAGS) $(SOURCES) -o NexaC$(SUFFIX) || \
+# The icon (../NexaC.rc -> Logo/nexa.ico), when a windres is found; without one NexaC
+# builds the same, iconless.
+WINDRES := $(firstword $(foreach w,$(if $(MINGW_PREFIX),$(MINGW_PREFIX)-windres) x86_64-w64-mingw32-windres llvm-windres windres,$(shell command -v $(w) 2>/dev/null)))
+ICON_OBJ := $(if $(WINDRES),NexaC-icon.o,)
+.DEFAULT_GOAL := NexaC$(SUFFIX)
+
+NexaC-icon.o: $(SRCDIR)/NexaC.rc $(SRCDIR)/Logo/nexa.ico
+	cd $(SRCDIR) && $(WINDRES) NexaC.rc -O coff -o WIN/NexaC-icon.o
+
+NexaC$(SUFFIX): $(SOURCES) $(HEADERS) $(ICON_OBJ)
+	$(CXX) $(CXXFLAGS) $(SOURCES) $(ICON_OBJ) -o NexaC$(SUFFIX) || \
 	(if [ -n "$(FALLBACK_CXX)" ]; then \
 		echo "clang++ failed, retrying with $(FALLBACK_CXX)..."; \
-		$(FALLBACK_CXX) $(filter-out -target x86_64-w64-mingw32,$(CXXFLAGS)) $(SOURCES) -o NexaC$(SUFFIX); \
+		$(FALLBACK_CXX) $(filter-out -target x86_64-w64-mingw32,$(CXXFLAGS)) $(SOURCES) $(ICON_OBJ) -o NexaC$(SUFFIX); \
 	else \
 		exit 1; \
 	fi)
 
 .PHONY: clean
 clean:
-	rm -f NexaC.exe NexaC
+	rm -f NexaC.exe NexaC NexaC-icon.o

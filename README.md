@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="Logo/nexa-logo-on-dark.svg">
+    <img src="Logo/nexa-logo-on-light.svg" alt="Nexa" width="360">
+  </picture>
+</p>
+
 # Nexa & NexaC
 
 **Nexa** is a small systems-friendly language with C++-like surface syntax. **NexaC** is its compiler: it parses `.nxa` files, transpiles to a single C++ translation unit, and invokes **clang++** (falling back to **g++** when clang is not installed) to produce a native executable or shared library. Set `NEXA_CXX` to force a specific compiler.
@@ -37,6 +44,14 @@ The generated C++ uses the standard library (`std::string`, `std::vector`, threa
 
 ```bash
 clang++ -std=c++17 -O2 -static -static-libgcc -static-libstdc++ NexaC.cpp -o NexaC.exe
+```
+
+To give `NexaC.exe` the Nexa icon, compile `NexaC.rc` first and add the result to that line
+(`windres` with MinGW; with an MSVC-target clang++, `llvm-rc /fo NexaC.res NexaC.rc` and add `NexaC.res`):
+
+```bash
+windres NexaC.rc -O coff -o NexaC-icon.o
+clang++ -std=c++17 -O2 -static -static-libgcc -static-libstdc++ NexaC.cpp NexaC-icon.o -o NexaC.exe
 ```
 
 If that fails with your Clang (e.g. MSVC-target toolchain), build with **MinGW g++** instead, same flags:
