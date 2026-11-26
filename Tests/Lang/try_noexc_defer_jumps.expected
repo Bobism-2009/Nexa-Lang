@@ -1,0 +1,30 @@
+defer 0
+defer 1
+defer 2
+defer 3
+caught defer threw at 3
+defer 0
+defer 1
+defer 2
+defer 3
+caught defer threw at 3
+defer 10
+defer 11
+defer 12
+defer 13
+defer 14
+quiet 5
+defer 12
+defer 2
+in switch
+after switch
+defer 3
+caught defer threw at 3
+defer 2
+k 1
+defer 3
+loop caught defer threw at 3
+k 2
+defer 4
+main end
+defer 4

@@ -1,0 +1,84 @@
+// Pins a break, continue or return from main that leaves the block of a defer that can
+// throw, as NexaC's own errors: the defer runs as the jump leaves, its error goes to the
+// catch around it, and with none the jump goes on. An outer and an inner defer, a switch
+// inside the block, and a try block inside a loop.
+// Reference: SYNTAX/ControlFlow.txt (DEFER, TRY / CATCH)
+#include <std/io>
+
+fn check(n: int) {
+    io.println("defer ", n);
+    if (n == 3) { throw "defer threw at " + n; }
+}
+
+fn brk(): int {
+    let total = 0;
+    for (i, 10) {
+        defer check(i);
+        total = total + i;
+        if (i == 3) { break; }
+    }
+    return total;
+}
+
+fn cont(): int {
+    let total = 0;
+    for (i, 10) {
+        defer check(i);
+        if (i % 2 == 0) { continue; }
+        total = total + i;
+    }
+    return total;
+}
+
+fn quiet(): int {
+    let total = 0;
+    for (i, 6) {
+        defer check(i + 10);
+        if (i == 4) { break; }
+        if (i == 1) { continue; }
+        total = total + i;
+    }
+    return total;
+}
+
+fn nested(): int {
+    let n = 0;
+    while (n < 10) {
+        n = n + 1;
+        if (n == 2) {
+            defer check(n);
+            defer check(n + 10);
+            continue;
+        }
+        if (n == 3) {
+            defer check(n);
+            switch (n) {
+                case 3: io.println("in switch"); break;
+                default: break;
+            }
+            io.println("after switch");
+            break;
+        }
+    }
+    return n;
+}
+
+fn main() {
+    try { io.println("brk ", brk()); } catch (e) { io.println("caught ", e); }
+    try { io.println("cont ", cont()); } catch (e) { io.println("caught ", e); }
+    io.println("quiet ", quiet());
+    try { io.println("nested ", nested()); } catch (e) { io.println("caught ", e); }
+    for (k, 3) {
+        try {
+            defer check(k + 2);
+            if (k == 0) { continue; }
+            io.println("k ", k);
+            break;
+        } catch (e) { io.println("loop caught ", e); }
+    }
+    defer check(4);
+    io.println("main end");
+    if (len("ab") == 2) { return 0; }
+    io.println("not here");
+    return 0;
+}

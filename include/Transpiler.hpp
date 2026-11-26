@@ -319,7 +319,7 @@ public:
         // is not Nexa: see dllWrapsErrors.
         ownErrors_ = ownErrorsAllowed_ && !modules_.hasInlineCpp() && !modules_.hasThrowingHeader() &&
                      ownErrorsEligible();
-        if (!ownErrors_) { mayThrowFns_.clear(); mayThrowMethods_.clear(); ownErrLambdas_.clear(); valueCalls_.clear(); fnValuesThrow_ = false; throwingDefers_.clear(); }
+        if (!ownErrors_) { mayThrowFns_.clear(); mayThrowMethods_.clear(); ownErrLambdas_.clear(); valueCalls_.clear(); fnValuesThrow_ = false; throwingDefers_.clear(); throwingGlobals_.clear(); deferJumps_.clear(); deferJumpKinds_.clear(); }
 
         if (target_ == CppTarget::Wasm) {
             out << "#define NEXA_WASM 1\n";
@@ -1824,22 +1824,22 @@ public:
                 std::string c = node.isConst ? "const " : "";
                 std::string decl = nexaDeclFromVariableAst(node);
                 if (!nexaIsSliceType(decl)) decl = arrayInitProducesString(node.children[0], globalVarIsString) ? "[]string" : "[]int";
-                out << c << nexaTypeToCpp(decl) << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
+                out << c << nexaTypeToCpp(decl) << " " << vname << " = " << globalInitCpp(node, globalVarMap, globalVarIsString, globalVarIsFloat, globalVarIsChar, globalVarIsBool) << ";\n";
             } else if (!node.children.empty()) {
                 std::string c = node.isConst ? "const " : "";
                 if (!node.declType.empty() && isPointerType(node.declType)) {
-                    out << c << nexaTypeToCpp(node.declType) << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
+                    out << c << nexaTypeToCpp(node.declType) << " " << vname << " = " << globalInitCpp(node, globalVarMap, globalVarIsString, globalVarIsFloat, globalVarIsChar, globalVarIsBool) << ";\n";
                 } else if (!node.declType.empty() && nexaIsNumericIntType(node.declType)) {
-                    out << c << nexaTypeToCpp(node.declType) << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
+                    out << c << nexaTypeToCpp(node.declType) << " " << vname << " = " << globalInitCpp(node, globalVarMap, globalVarIsString, globalVarIsFloat, globalVarIsChar, globalVarIsBool) << ";\n";
                 } else if (!node.declType.empty() && isEnumDeclType(node.declType)) {
                     std::string en = enumNameFromDecl(node.declType);
-                    out << c << enumCppNames_.at(en) << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
+                    out << c << enumCppNames_.at(en) << " " << vname << " = " << globalInitCpp(node, globalVarMap, globalVarIsString, globalVarIsFloat, globalVarIsChar, globalVarIsBool) << ";\n";
                 } else if (!node.declType.empty() && isStructDeclType(node.declType)) {
-                    out << c << nexaTypeToCpp(node.declType) << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
+                    out << c << nexaTypeToCpp(node.declType) << " " << vname << " = " << globalInitCpp(node, globalVarMap, globalVarIsString, globalVarIsFloat, globalVarIsChar, globalVarIsBool) << ";\n";
                 } else if (!node.declType.empty() && isCppDeclType(node.declType)) {
-                    out << c << nexaTypeToCpp(node.declType) << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
+                    out << c << nexaTypeToCpp(node.declType) << " " << vname << " = " << globalInitCpp(node, globalVarMap, globalVarIsString, globalVarIsFloat, globalVarIsChar, globalVarIsBool) << ";\n";
                 } else if (!node.declType.empty() && (nexaIsSliceType(node.declType) || nexaIsMapType(node.declType) || nexaIsFnType(node.declType) || nexaIsResultType(node.declType) || node.declType == "json")) {
-                    out << c << nexaTypeToCpp(node.declType) << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
+                    out << c << nexaTypeToCpp(node.declType) << " " << vname << " = " << globalInitCpp(node, globalVarMap, globalVarIsString, globalVarIsFloat, globalVarIsChar, globalVarIsBool) << ";\n";
                 } else {
                     bool useBool = !node.declType.empty() ? (node.declType == "bool") : node.initIsBool;
                     bool useInt = !node.declType.empty() ? nexaIsNumericIntType(node.declType) : node.initIsInt;
@@ -1867,16 +1867,16 @@ public:
                         }
                     }
                     if (!inferred.empty() && isPointerType(inferred)) {
-                        out << c << nexaTypeToCpp(inferred) << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
+                        out << c << nexaTypeToCpp(inferred) << " " << vname << " = " << globalInitCpp(node, globalVarMap, globalVarIsString, globalVarIsFloat, globalVarIsChar, globalVarIsBool) << ";\n";
                     } else if (!inferred.empty() && nexaIsNumericIntType(inferred)) {
-                        out << c << nexaTypeToCpp(inferred) << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
+                        out << c << nexaTypeToCpp(inferred) << " " << vname << " = " << globalInitCpp(node, globalVarMap, globalVarIsString, globalVarIsFloat, globalVarIsChar, globalVarIsBool) << ";\n";
                     } else if (!inferred.empty() && isEnumDeclType(inferred) && enumHasPayload(enumNameFromDecl(inferred))) {
-                        out << c << nexaTypeToCpp(inferred) << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
+                        out << c << nexaTypeToCpp(inferred) << " " << vname << " = " << globalInitCpp(node, globalVarMap, globalVarIsString, globalVarIsFloat, globalVarIsChar, globalVarIsBool) << ";\n";
                     } else if (!inferred.empty() && (nexaIsFnType(inferred) || nexaIsSliceType(inferred) || nexaIsMapType(inferred) || nexaIsResultType(inferred) || isStructDeclType(inferred) || inferred == "json")) {
-                        out << c << nexaTypeToCpp(inferred) << " " << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
+                        out << c << nexaTypeToCpp(inferred) << " " << vname << " = " << globalInitCpp(node, globalVarMap, globalVarIsString, globalVarIsFloat, globalVarIsChar, globalVarIsBool) << ";\n";
                     } else {
                         std::string cppType = c + (useBool ? "bool " : useFloat ? (use32 ? "float " : "double ") : useChar ? "char " : (useInt ? "int " : "std::string "));
-                        out << cppType << vname << " = " << emitExpr(node.children[0], globalVarMap, &globalVarIsString, &globalVarIsFloat, &globalVarIsChar, &globalVarIsBool) << ";\n";
+                        out << cppType << vname << " = " << globalInitCpp(node, globalVarMap, globalVarIsString, globalVarIsFloat, globalVarIsChar, globalVarIsBool) << ";\n";
                     }
                 }
             } else if (node.initIsBool || (!node.declType.empty() && node.declType == "bool")) {
@@ -2277,6 +2277,18 @@ private:
     bool fnValuesThrow_ = false;
     // Defers whose body can throw, each with a scope of its own and a test after it.
     std::set<const AstNode*> throwingDefers_;
+    // Globals whose value can throw: worked out in a function of their own as the program
+    // starts (globalInitCpp), where an error nothing catches ends it.
+    std::set<const AstNode*> throwingGlobals_;
+    // A break, continue or return from main that leaves the scope of a defer that can
+    // throw, and the outermost such defer: it jumps to a landing after that scope, which
+    // takes the defer's error on and then breaks, continues or returns. What each defer
+    // has jump to it (kDeferBreak...), and the landings' numbers as they are written.
+    std::map<const AstNode*, const AstNode*> deferJumps_;
+    std::map<const AstNode*, int> deferJumpKinds_;
+    std::map<const AstNode*, int> deferJumpIds_;
+    std::map<const AstNode*, int> deferJumpUsed_;
+    static constexpr int kDeferBreak = 1, kDeferContinue = 2, kDeferReturn = 4;
 
     static bool isSliceFnName(const std::string& v) {
         return v == "find" || v == "any" || v == "all" || v == "filter" || v == "map" || v == "sort_by";
@@ -2780,34 +2792,48 @@ static std::string __nexa_err_msg;
         for (const AstNode& n : ast_) noteLambdas(n);
         // A defer that can throw gets a scope to the end of its block, and its error is
         // taken on as the scope closes -- by the test after the scope, or by the caller's
-        // test when a return leaves through it. A break, continue or goto out of the scope
-        // would jump past that test, and so would a return from main, which has no caller
-        // to test: those keep C++'s exceptions.
+        // test when a return leaves through it. A break or continue out of the scope, and
+        // a return from main, which has no caller to test, would jump past that test: they
+        // go to a landing after the scope instead (deferJumps_). A goto out of it, and a
+        // return from a main written with a type (its body is a closure), keep C++'s
+        // exceptions. An outer defer is seen first, so a jump goes to the outermost scope.
         bool deferOk = true;
-        std::function<void(const AstNode&, bool, bool, bool)> escapes = [&](const AstNode& x, bool loop, bool sw, bool inMain) {
+        // inMain: 0 not in main, 1 in main, 2 in a main written with a type
+        std::function<void(const AstNode&, bool, bool, int, const AstNode*)> escapes =
+            [&](const AstNode& x, bool loop, bool sw, int inMain, const AstNode* d) {
             if (!deferOk || x.type == AstNode::Type::ExprLambda) return;
-            if ((x.type == AstNode::Type::Break && !loop && !sw) || (x.type == AstNode::Type::Continue && !loop) ||
-                x.type == AstNode::Type::Goto || (x.type == AstNode::Type::Return && inMain)) {
+            int kind = 0;
+            if (x.type == AstNode::Type::Break && !loop && !sw) kind = kDeferBreak;
+            if (x.type == AstNode::Type::Continue && !loop) kind = kDeferContinue;
+            if (x.type == AstNode::Type::Return && inMain) kind = kDeferReturn;
+            if (x.type == AstNode::Type::Goto || (kind == kDeferReturn && inMain == 2)) {
                 deferOk = false;
+                return;
+            }
+            if (kind) {
+                if (deferJumps_.emplace(&x, d).second) deferJumpKinds_[d] |= kind;
                 return;
             }
             const bool isLoop = x.type == AstNode::Type::While || x.type == AstNode::Type::For || x.type == AstNode::Type::ForIn;
             const bool isSw = x.type == AstNode::Type::Switch;
-            for (const AstNode& c : x.children) escapes(c, loop || isLoop, sw || isSw || isLoop, inMain);
+            for (const AstNode& c : x.children) escapes(c, loop || isLoop, sw || isSw || isLoop, inMain, d);
         };
-        std::function<void(const AstNode&, bool)> noteDefers = [&](const AstNode& n, bool inMain) {
-            if (n.type == AstNode::Type::MainFunction) inMain = true;
-            if (n.type == AstNode::Type::Function || n.type == AstNode::Type::ExprLambda) inMain = false;
+        std::function<void(const AstNode&, int)> noteDefers = [&](const AstNode& n, int inMain) {
+            if (n.type == AstNode::Type::MainFunction) {
+                const std::string& r = n.fnReturnType;
+                inMain = (!r.empty() && r != "void" && r != "int") ? 2 : 1;
+            }
+            if (n.type == AstNode::Type::Function || n.type == AstNode::Type::ExprLambda) inMain = 0;
             for (size_t i = 0; i < n.children.size(); i++) {
                 const AstNode& d = n.children[i];
                 if (d.type == AstNode::Type::Defer && !d.children.empty() && throws(d.children[0])) {
                     throwingDefers_.insert(&d);
-                    for (size_t j = i + 1; j < n.children.size(); j++) escapes(n.children[j], false, false, inMain);
+                    for (size_t j = i + 1; j < n.children.size(); j++) escapes(n.children[j], false, false, inMain, &d);
                 }
                 noteDefers(d, inMain);
             }
         };
-        for (const AstNode& n : ast_) noteDefers(n, false);
+        for (const AstNode& n : ast_) noteDefers(n, 0);
         if (!deferOk) return false;
         // Anything an error could leave by that NexaC cannot follow keeps C++'s exceptions.
         bool ok = true;
@@ -2820,6 +2846,7 @@ static std::string __nexa_err_msg;
                     if (ownErrLambdas_.count(&n)) break;
                     bool inner = false;
                     std::function<void(const AstNode&)> any = [&](const AstNode& x) {
+                        if (x.type == AstNode::Type::ExprLambda) return;  // scanned on its own
                         if (x.type == AstNode::Type::Throw) inner = true;
                         if (x.type == AstNode::Type::FnCall && x.initValue == "." && x.value == "value") inner = true;
                         if (x.type == AstNode::Type::FnCall &&
@@ -2845,22 +2872,21 @@ static std::string __nexa_err_msg;
         };
         for (const AstNode& n : ast_) scan(n);
         if (!ok) return false;
-        // A throw or a throwing call outside a function body: a global's value, a default
-        // argument, a field's default. C++ has no statement there to test the flag in.
+        // A throw or a throwing call outside a function body. A default argument is written
+        // out at each call, in the caller, and is tested there like the rest of the call; a
+        // global's value is worked out in a function of its own (throwingGlobals_). A
+        // field's default is in the struct, where C++ has no statement to test the flag in.
         for (const AstNode& n : ast_) {
             if (n.type == AstNode::Type::Function || n.type == AstNode::Type::MainFunction) {
-                for (const AstNode& d : n.paramDefaults) if (throws(d)) return false;
+                continue;
             } else if (n.type == AstNode::Type::StructDef) {
                 for (const AstNode& d : n.paramDefaults) if (throws(d)) return false;
                 for (const AstNode& m : n.children) {
-                    if (m.type == AstNode::Type::Function) {
-                        for (const AstNode& d : m.paramDefaults) if (throws(d)) return false;
-                    } else if (throws(m)) {
-                        return false;
-                    }
+                    if (m.type != AstNode::Type::Function && throws(m)) return false;
                 }
             } else if (throws(n)) {
-                return false;
+                if (n.type != AstNode::Type::Variable) return false;
+                throwingGlobals_.insert(&n);
             }
         }
         return true;
@@ -2969,6 +2995,30 @@ private:
     // The opening of a helper lambda: a global let's initializer has no frame to capture,
     // and C++ refuses [&] at file scope.
     std::string lamOpen() const { return emitAtFileScope_ ? "([](){" : "([&](){"; }
+    // A break, continue or return that leaves the scope of a defer that can throw: the
+    // goto to that scope's landing (see deferJumps_). Otherwise `plain`, the statement.
+    int deferJumpSeq_ = 0;
+    std::string deferJump(const AstNode& jump, int kind, const char* plain) {
+        const auto it = deferJumps_.find(&jump);
+        if (!ownErrors_ || it == deferJumps_.end() || !deferJumpIds_.count(it->second)) return std::string(plain) + "\n";
+        deferJumpUsed_[it->second] |= kind;
+        const char* label = kind == kDeferBreak ? "__nexa_djb" : kind == kDeferContinue ? "__nexa_djc" : "__nexa_djr";
+        return "goto " + std::string(label) + std::to_string(deferJumpIds_.at(it->second)) + ";\n";
+    }
+    // A global's value. One that can throw is worked out in a function of its own, run as
+    // the program starts: there the flag can be tested, and an error nothing catches ends
+    // the program with "Uncaught error", as an uncaught C++ exception there did.
+    template <class VM, class B>
+    std::string globalInitCpp(const AstNode& node, VM& vm, B& isStr, B& isFloat, B& isChar, B& isBool) {
+        if (!throwingGlobals_.count(&node)) return emitExpr(node.children[0], vm, &isStr, &isFloat, &isChar, &isBool);
+        const bool savedExit = errOnThread_;
+        emitAtFileScope_ = false;
+        errOnThread_ = true;
+        const std::string v = emitExpr(node.children[0], vm, &isStr, &isFloat, &isChar, &isBool);
+        errOnThread_ = savedExit;
+        emitAtFileScope_ = true;
+        return "[]() /*__nexa_fnbody*/{ return " + v + "; }()";
+    }
 
     std::string canonicalParamType(const AstNode& fn, size_t i) const {
         if (specAst_ == &fn && i < specTypes_.size()) {
@@ -5499,6 +5549,83 @@ private:
         return s;
     }
 
+    // Whether working out `n` can raise one of NexaC's own errors: a call in it that can,
+    // not counting the bodies of function literals.
+    bool exprMayRaise(const AstNode& n) const {
+        if (n.type == AstNode::Type::ExprLambda) return false;
+        if (callMayRaise(n)) return true;
+        for (const AstNode& c : n.children) if (exprMayRaise(c)) return true;
+        return false;
+    }
+
+    // xs.sum(), xs.join(sep), xs.insert(i, x), m.get(k)...: the helper NexaC writes for a
+    // list or map method is a lambda of its own, where a test of the flag would leave the
+    // lambda and not the function. So when the receiver or an argument can raise one of
+    // NexaC's own errors, each is worked out first, in order, into a name in a statement
+    // expression -- a block of the function -- and the method is called on the names.
+    // Literals and plain names have nothing to do first and stay; so do function literals.
+    std::optional<std::string> hoistedMethodCall(const AstNode& e,
+                                                 const std::map<std::string, std::string>& varMap,
+                                                 const std::map<std::string, bool>* varIsString,
+                                                 const std::map<std::string, bool>* varIsFloat,
+                                                 const std::map<std::string, bool>* varIsChar,
+                                                 const std::map<std::string, bool>* varIsBool) {
+        bool any = false;
+        for (const AstNode& c : e.children) any = any || exprMayRaise(c);
+        if (!any) return std::nullopt;
+        auto stays = [](const AstNode& c) {
+            switch (c.type) {
+                case AstNode::Type::ExprLambda: case AstNode::Type::ExprVarRef:
+                case AstNode::Type::ExprIntLiteral: case AstNode::Type::ExprFloatLiteral:
+                case AstNode::Type::ExprCharLiteral: case AstNode::Type::ExprBoolLiteral:
+                case AstNode::Type::ExprStringLiteral:
+                    return true;
+                default:
+                    return false;
+            }
+        };
+        std::map<std::string, std::string> vm = varMap;
+        std::map<std::string, bool> isStr, isFloat, isChar, isBool;
+        if (varIsString) isStr = *varIsString;
+        if (varIsFloat) isFloat = *varIsFloat;
+        if (varIsChar) isChar = *varIsChar;
+        if (varIsBool) isBool = *varIsBool;
+        std::string pre = "({ ";
+        std::map<std::string, std::string> decls;
+        AstNode& m = const_cast<AstNode&>(e);
+        std::vector<std::pair<size_t, AstNode>> saved;
+        for (size_t i = 0; i < m.children.size(); i++) {
+            AstNode& c = m.children[i];
+            if (stays(c)) continue;
+            const std::string t = inferExprNexaType(c);
+            const std::string name = "__nexa_h" + std::to_string(errCounter_++);
+            pre += "auto&& " + name + " = " + emitExpr(c, varMap, varIsString, varIsFloat, varIsChar, varIsBool) + "; ";
+            vm[name] = name;
+            isStr[name] = t == "string";
+            isFloat[name] = nexaIsFloatType(t);
+            isChar[name] = t == "char";
+            isBool[name] = t == "bool";
+            decls[name] = t;
+            AstNode ref{AstNode::Type::ExprVarRef, name};
+            ref.line = c.line;
+            ref.srcFile = c.srcFile;
+            saved.push_back({i, std::move(c)});
+            c = std::move(ref);
+        }
+        nexaDeclStack_.push_back(std::move(decls));
+        std::string call;
+        try {
+            call = emitFnCallCpp(e, vm, &isStr, &isFloat, &isChar, &isBool);
+        } catch (...) {
+            nexaDeclStack_.pop_back();
+            for (auto& [i, n] : saved) m.children[i] = std::move(n);
+            throw;
+        }
+        nexaDeclStack_.pop_back();
+        for (auto& [i, n] : saved) m.children[i] = std::move(n);
+        return pre + call + "; })";
+    }
+
     std::string emitFnCallCpp(const AstNode& e,
                               const std::map<std::string, std::string>& varMap,
                               const std::map<std::string, bool>* varIsString,
@@ -5512,6 +5639,9 @@ private:
             std::string recvT = inferExprNexaType(e.children[0]);
             std::string recvBare = recvT;
             if (isPointerType(recvBare)) recvBare = pointerPointeeType(recvBare);
+            if (ownErrors_ && e.value != "push" && (nexaIsSliceType(recvBare) || nexaIsMapType(recvBare))) {
+                if (auto h = hoistedMethodCall(e, varMap, varIsString, varIsFloat, varIsChar, varIsBool)) return *h;
+            }
             std::string recv = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
             // Through a pointer, out.push(x) calls the method on what it points at,
             // as p.method() does for a struct.
@@ -10667,7 +10797,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                    std::map<std::string, bool>& varIsBool, std::map<std::string, bool>& varIsEnum,
                    const std::string& indent = "    ", bool inStringSwitchCase = false) {
         markPushMoves(children);
-        int deferScopes = 0;  // scopes opened for a defer that can throw (closed after the loop)
+        std::vector<const AstNode*> deferOpen;  // scopes opened for a defer that can throw (closed after the loop)
         for (const AstNode& child : children) {
             LineMarkScope lineMark(lineDirectives_, out, child, indent);
             std::vector<const AstNode*> printPieces;  // a print whose lone + chain is printed piece by piece
@@ -11137,8 +11267,14 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 // error already on its way out is put aside while the body runs, and back after.
                 const bool ownDefer = ownErrors_ && throwingDefers_.count(&child) > 0;
                 if (ownDefer) {
+                    if (deferJumpKinds_.count(&child)) {
+                        const int id = deferJumpSeq_++;
+                        deferJumpIds_[&child] = id;
+                        deferJumpUsed_[&child] = 0;
+                        if (deferJumpKinds_[&child] & kDeferReturn) out << indent << "int __nexa_dr" << id << " = 0;\n";
+                    }
                     out << indent << "{\n";
-                    deferScopes++;
+                    deferOpen.push_back(&child);
                 }
                 out << indent << "auto __nexa_defer_" << (deferSeq_++) << " = __nexa_make_defer([&]() {\n";
                 const AstNode& deferBody = child.children[0];
@@ -12049,7 +12185,15 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     out << indent << "throw (" << thrown << ");\n";
                 }
             } else if (child.type == AstNode::Type::Return) {
-                if (child.children.empty()) {
+                if (ownErrors_ && deferJumps_.count(&child) && deferJumpIds_.count(deferJumps_.at(&child))) {
+                    if (!child.children.empty()) {
+                        checkMainReturn(child);
+                        const int id = deferJumpIds_.at(deferJumps_.at(&child));
+                        out << indent << "__nexa_dr" << id << " = "
+                            << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
+                    }
+                    out << indent << deferJump(child, kDeferReturn, "");
+                } else if (child.children.empty()) {
                     if (emitFnRet_ == EmitFnRet::Main) {
                         out << indent << "return 0;\n";
                     } else if (emitFnRet_ == EmitFnRet::VoidFn) {
@@ -12066,9 +12210,9 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                     out << indent << "return " << emitExpr(child.children[0], varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ";\n";
                 }
             } else if (child.type == AstNode::Type::Break) {
-                if (!inStringSwitchCase) out << indent << "break;\n";
+                if (!inStringSwitchCase) out << indent << deferJump(child, kDeferBreak, "break;");
             } else if (child.type == AstNode::Type::Continue) {
-                if (!inStringSwitchCase) out << indent << "continue;\n";
+                if (!inStringSwitchCase) out << indent << deferJump(child, kDeferContinue, "continue;");
             } else if (child.type == AstNode::Type::Goto) {
                 out << indent << "goto nxa_lbl_" << child.value << ";\n";
             } else if (child.type == AstNode::Type::Label) {
@@ -12089,8 +12233,17 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         }
         // A defer that can throw has a scope of its own, to the end of this block: it
         // runs as the scope closes, and the test after it takes its error on from there.
-        for (; deferScopes > 0; deferScopes--) {
-            out << indent << "}\n" << indent << "/*__nexa_chk*/if (__builtin_expect(__nexa_err, 0)) " << errPropagate() << "\n";
+        for (; !deferOpen.empty(); deferOpen.pop_back()) {
+            const std::string chk = "/*__nexa_chk*/if (__builtin_expect(__nexa_err, 0)) " + errPropagate();
+            out << indent << "}\n" << indent << chk << "\n";
+            // The landings of the jumps out of the scope: the defer has run, its error is
+            // taken on, and the jump goes on to where it was going.
+            const auto used = deferJumpUsed_.find(deferOpen.back());
+            if (used == deferJumpUsed_.end() || !used->second) continue;
+            const std::string id = std::to_string(deferJumpIds_.at(deferOpen.back()));
+            if (used->second & kDeferBreak) out << indent << "if (false) { __nexa_djb" << id << ":; " << chk << " break; }\n";
+            if (used->second & kDeferContinue) out << indent << "if (false) { __nexa_djc" << id << ":; " << chk << " continue; }\n";
+            if (used->second & kDeferReturn) out << indent << "if (false) { __nexa_djr" << id << ":; " << chk << " return __nexa_dr" << id << "; }\n";
         }
     }
 

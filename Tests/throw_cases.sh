@@ -13,8 +13,11 @@
 #              NexaC's own errors as well (every call through a function value
 #              is tested), and one nothing catches is "Uncaught error", status 1.
 #   defer      A throw in a defer is NexaC's own errors and reaches the catch
-#              around the call; with a break out of the defer's block it keeps
+#              around the call; so is one a break, continue or return from
+#              main leaves the block of. With a goto out of the block it keeps
 #              C++'s exceptions, and is caught there too.
+#   global     A global whose value throws: NexaC's own errors too, "Uncaught
+#              error" and status 1, before main.
 #   thread     A throw on another thread is NexaC's own errors (one per thread);
 #              one nothing on that thread catches is "Uncaught error", status 1.
 #   library    A --dll / --shared library catches its own errors; one it does
@@ -197,14 +200,65 @@ fn work(n: int) {
 }
 fn main() {
     try { work(4); work(5); } catch (e) { io.println("caught ", e); }
+    defer io.println(half(7));
+    io.println("main ends");
+    return 3;
 }
 NXA
 "$NEXAC" "$WORK/deferx.nxa" --source "$WORK/deferx.cpp" >/dev/null 2>&1
 run deferx
-if grep -q "try {" "$WORK/deferx.cpp" && [ "$rc" = 0 ] && [ "$(tail -2 "$WORK/deferx.o")" = "$(printf 'work 5\ncaught odd 5')" ]; then
-    ok "defer: a break past it keeps C++ exceptions, and is caught"
+if grep -q "__nexa_err_msg" "$WORK/deferx.cpp" && ! grep -q "try {" "$WORK/deferx.cpp" && [ "$rc" = 1 ] &&
+   [ "$(tail -2 "$WORK/deferx.o")" = "$(printf 'caught odd 5\nmain ends')" ] && grep -q "Uncaught error: odd 7" "$WORK/deferx.e"; then
+    ok "defer: a break or return from main past it is NexaC's own errors, and is caught"
 else
     bad "deferx" "status $rc, printed [$(cat "$WORK/deferx.o" 2>/dev/null)]"
+fi
+
+cat > "$WORK/defergoto.nxa" <<'NXA'
+#include <std/io>
+fn half(n: int): int {
+    if (n % 2 != 0) { throw "odd " + n; }
+    return n / 2;
+}
+fn work(n: int) {
+    if (n > 0) {
+        defer { io.println(half(n)); }
+        io.println("work ", n);
+        goto out;
+    }
+out:
+    io.println("out");
+}
+fn main() {
+    try { work(4); work(5); } catch (e) { io.println("caught ", e); }
+}
+NXA
+"$NEXAC" "$WORK/defergoto.nxa" --source "$WORK/defergoto.cpp" >/dev/null 2>&1
+run defergoto
+if grep -q "try {" "$WORK/defergoto.cpp" && [ "$rc" = 0 ] && [ "$(tail -2 "$WORK/defergoto.o")" = "$(printf 'work 5\ncaught odd 5')" ]; then
+    ok "defer: a goto past it keeps C++ exceptions, and is caught"
+else
+    bad "defergoto" "status $rc, printed [$(cat "$WORK/defergoto.o" 2>/dev/null)]"
+fi
+
+cat > "$WORK/global.nxa" <<'NXA'
+#include <std/io>
+fn half(n: int): int {
+    if (n % 2 != 0) { throw "odd " + n; }
+    return n / 2;
+}
+let A = half(8);
+let B = half(A + 1);
+fn main() {
+    io.println("not here");
+}
+NXA
+"$NEXAC" "$WORK/global.nxa" --source "$WORK/global.cpp" >/dev/null 2>&1
+run global
+if grep -q "__nexa_err_msg" "$WORK/global.cpp" && [ "$rc" = 1 ] && [ ! -s "$WORK/global.o" ] && grep -q "Uncaught error: odd 5" "$WORK/global.e"; then
+    ok "global: a global's throw is NexaC's own errors, uncaught with status 1"
+else
+    bad "global" "status $rc, printed [$(cat "$WORK/global.o" 2>/dev/null)] [$(cat "$WORK/global.e" 2>/dev/null)]"
 fi
 
 cat > "$WORK/thread.nxa" <<'NXA'

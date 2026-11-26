@@ -1,0 +1,45 @@
+// Pins a call that can throw outside a function body, as NexaC's own errors: a global's
+// value (worked out before main), a default argument (written out at each call, so its
+// error goes to the catch around the call), and a function literal inside another that
+// itself throws nothing.
+// Reference: SYNTAX/ControlFlow.txt (TRY / CATCH), SYNTAX/Core.txt
+#include <std/io>
+
+fn half(n: int): int {
+    if (n % 2 != 0) { throw "odd: " + n; }
+    return n / 2;
+}
+
+fn hs(n: int): string {
+    return "s" + half(n);
+}
+
+let A = half(8);
+let S = hs(4) + hs(A);
+let L = [half(2), half(A * 2)];
+
+fn twice(n: int = half(6)): int {
+    return n * 2;
+}
+
+fn odd(n: int = half(5)): int {
+    return n;
+}
+
+fn main() {
+    io.println(A, " ", S, " ", len(L), " ", L[1]);
+    io.println(twice(), " ", twice(10));
+    try {
+        io.println(odd());
+        io.println("not here");
+    } catch (e) {
+        io.println("default caught ", e);
+    }
+    io.println(odd(7));
+    let outer = fn (): int {
+        let inner = fn (x: int): int { return half(x); };
+        try { return inner(3); } catch (e) { io.println("inner caught ", e); }
+        return inner(4);
+    };
+    io.println(outer());
+}
