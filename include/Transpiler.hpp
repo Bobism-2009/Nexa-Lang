@@ -327,6 +327,7 @@ public:
 
         Modules::CppUsage& cppUsage = cppUsage_;
         cppUsage = Modules::CppUsage{};
+        cppUsage.wasm = target_ == CppTarget::Wasm;
         std::function<void(const AstNode&)> detectCppUsage = [&](const AstNode& n) {
             if (n.initFromDllLoad) cppUsage.dll = true;
             if (n.initFromReadln) cppUsage.ioReadln = true;

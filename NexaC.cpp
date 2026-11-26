@@ -1766,6 +1766,8 @@ static std::string nexaWasmCompileCmd(
     bool linkGfx,
     bool linkGfx3d,
     bool singleFile,
+    bool sleeps,
+    bool closure,
     const std::vector<std::string>& linkInputs
 ) {
 #ifdef _WIN32
@@ -1781,13 +1783,31 @@ static std::string nexaWasmCompileCmd(
     }
     if (noRtti) cmd += " -fno-rtti";
     if (noExceptions) cmd += " -fno-exceptions";
+    // A program that keeps C++'s exceptions (inline_cpp, a C++ header) needs them
+    // caught: Emscripten's default only throws, so the first throw aborted. The
+    // WebAssembly instructions for them are in every browser since 2022 and node 17,
+    // and are smaller and faster than Emscripten's JavaScript ones.
+    else if (tool.kind == WasmKind::Emscripten) cmd += " -fwasm-exceptions";
     cmd += " \"" + cppPath + "\"";
     if (tool.kind == WasmKind::Emscripten) {
         cmd += " -sALLOW_MEMORY_GROWTH=1 -sEXIT_RUNTIME=1";
+        // The stack Emscripten gives is 64KB, where a desktop program has 1MB (Windows)
+        // or 8MB: a long expression or deep recursion ran out of it. 1MB is memory
+        // reserved, not bytes in the file.
+        cmd += " -sSTACK_SIZE=1MB";
+        // Size, as for the desktop: emmalloc is the small allocator (about 5KB less
+        // than dlmalloc, within a few percent of its speed), and the loader is only
+        // for a page and for node, not for d8 or a bare worker. A thread's worker is
+        // added back by -pthread itself.
+        cmd += " -sMALLOC=emmalloc -sENVIRONMENT=web,node";
+        // Closure shrinks the loader by half or more. Only for a program whose
+        // JavaScript is all Emscripten's: std/gfx, std/gfx3d and std/http bring
+        // their own, which it would rename.
+        if (closure) cmd += " --closure 1";
         if (linkHttp) cmd += " -sFETCH=1";
         // gfx3d.present yields with emscripten_sleep so the page can
-        // composite, exactly as std/gfx does.
-        if (linkHttp || linkGfx || linkGfx3d) cmd += " -sASYNCIFY";
+        // composite, exactly as std/gfx does; so does time.sleep on the page's thread.
+        if (linkHttp || linkGfx || linkGfx3d || sleeps) cmd += " -sASYNCIFY";
         if (linkThread) cmd += " -pthread -sPTHREAD_POOL_SIZE=4";
         // FORCE_FILESYSTEM is gfx's: the file picker and the drop path need it.
         if (linkGfx) cmd += " -sFORCE_FILESYSTEM=1";
@@ -3750,9 +3770,13 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
             const bool singleFile = (wasmTool.kind == WasmKind::Emscripten) && !wasmSplit;
-            std::string cmd = nexaWasmCompileCmd(wasmTool, cppPath, wasmOut, opt, noExceptions, noRtti,
-                modules.hasHttp() && usage.http, modules.hasThread() && usage.thread,
-                modules.hasGfx() && usage.gfx, linkGfx3d, singleFile, linkInputs);
+            // --small is -Oz on wasm: Emscripten's -Os keeps more of its loader.
+            const std::string wasmOpt = (optimizeSize && !debugBuild) ? "-Oz" : opt;
+            const bool closure = !debugBuild && !linkHttp && !linkGfx && !linkGfx3d && !modules.hasInlineCpp() &&
+                                 !modules.hasCppHeader() && linkInputs.empty();
+            std::string cmd = nexaWasmCompileCmd(wasmTool, cppPath, wasmOut, wasmOpt, noExceptions, noRtti,
+                linkHttp, modules.hasThread() && usage.thread,
+                linkGfx, linkGfx3d, singleFile, modules.hasTime() && usage.timeSleep, closure, linkInputs);
             int ret = std::system(cmd.c_str());
             std::remove(cppPath.c_str());
             if (ret != 0) {

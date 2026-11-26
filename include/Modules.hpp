@@ -138,6 +138,7 @@ public:
         bool str = false;
         bool time = false;
         bool timeSleep = false;
+        bool wasm = false;  // the build is for wasm: set by the transpiler, not by a call
         bool timeChrono = false;
         bool timeWall = false;      // time.unix / unix_ms: the wall clock
         bool timeCalendar = false;  // ...broken into a date: the parts, and format
@@ -2363,11 +2364,26 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
             out += "#include <cctype>\n";
         }
         if (hasTime() && usage.timeSleep) {
+            // On wasm the page's thread must hand control back to the browser to sleep
+            // (emscripten_sleep, built with ASYNCIFY); a thread of the program is a worker,
+            // which may block, so it waits as natively.
             out += "#ifdef __EMSCRIPTEN__\n#include <emscripten.h>\n";
+            if (usage.wasm) out += "#include <time.h>\n#ifdef __EMSCRIPTEN_PTHREADS__\n#include <emscripten/threading.h>\n#endif\n";
             out += "#elif defined(_WIN32)\n#include <windows.h>\n#else\n#include <time.h>\n#endif\n";
             out += "static void __nexa_time_sleep_ms(int __ms) {\n";
             out += "  if (__ms < 0) __ms = 0;\n";
             out += "#ifdef __EMSCRIPTEN__\n";
+            if (usage.wasm) {
+                out += "#ifdef __EMSCRIPTEN_PTHREADS__\n";
+                out += "  if (!emscripten_is_main_browser_thread()) {\n";
+                out += "    struct timespec __ts;\n";
+                out += "    __ts.tv_sec = __ms / 1000;\n";
+                out += "    __ts.tv_nsec = static_cast<long>((__ms % 1000) * 1000000L);\n";
+                out += "    nanosleep(&__ts, nullptr);\n";
+                out += "    return;\n";
+                out += "  }\n";
+                out += "#endif\n";
+            }
             out += "  emscripten_sleep(static_cast<unsigned>(__ms));\n";
             out += "#elif defined(_WIN32)\n";
             out += "  Sleep(static_cast<DWORD>(__ms));\n";

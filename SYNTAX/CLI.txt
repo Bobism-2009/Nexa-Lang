@@ -150,6 +150,18 @@ OPTIONS
             The page is a canvas for a std/gfx program and a text console
             otherwise, so io.println has somewhere to land.
             WASI-SDK emits a bare .wasm with no loader and no page.
+            Size: the loader is closure-compiled and the allocator is
+            Emscripten's small one, so hello world is 6.6KB, the loader
+            with the program in it (10.9KB before); an empty program is
+            4KB, and a program with strings, lists and maps 15-25KB. A
+            program using std/gfx, std/gfx3d or std/http has JavaScript
+            of its own and its loader is left as it is. --small builds
+            -Oz: hello world 5.2KB, a few percent slower.
+            The stack is 1MB, as on Windows (Emscripten's own is 64KB).
+            time.sleep hands the page back to the browser for the wait;
+            on a thread it blocks, as natively. A program that keeps
+            C++'s exceptions (inline_cpp, a C++ header) catches them.
+            size_t is 32 bits in wasm32; long is 64 bits, as everywhere.
   --wasm-split   Write the three files separately instead: <out>.html, the
             <out>.js loader, and <out>.wasm beside it. Serve them from one
             directory over http:// -- file:// will not load the .wasm.
