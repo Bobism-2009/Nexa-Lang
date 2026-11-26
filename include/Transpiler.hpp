@@ -2118,7 +2118,7 @@ public:
             src += gfxStbImageRuntimeCpp();
         }
         if (cppUsage_.ui) src += uiRuntimeCpp();
-        if (target_ == CppTarget::Wasm && !ownErrors_ && (cppUsage_.exceptions || modules_.hasInlineCpp())) {
+        if (target_ == CppTarget::Wasm && !ownErrors_ && (cppUsage_.exceptions || modules_.inlineCppNeedsCxxRuntime())) {
             // A C++ exception nothing catches leaves a wasm main for JavaScript, which reports
             // an unhandled rejection: std::terminate, whose handler prints "Uncaught error" and
             // flushes what was printed, never runs. Catching it at main calls it, as natively.

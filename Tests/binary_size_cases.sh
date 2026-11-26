@@ -322,6 +322,31 @@ if [ -n "$NET_HTTP_MAX" ]; then
     fi
 fi
 
+# inline_cpp! used to cost a program the exception runtime, RTTI and NexaC's own
+# entry point whatever the C++ said: one extern "C" function doubling an int made
+# hello world 226KB on Windows. Now only C++ that throws, catches or asks for a
+# type pays for it -- and that C++ still catches what it throws.
+if [ "$SLIM" = 1 ]; then
+    printf '#include <std/io>\n#include <std/inline>\ninline_cpp! {\n#include <cstdio>\nextern "C" int nt_twice(int x) { return x * 2; }\n}\nextern fn nt_twice(x: int): int;\nfn main() {\n    let s = "n=" + nt_twice(21);\n    io.println(s);\n}\n' > "$WORK/icpp.nxa"
+    if "$NEXAC" "$WORK/icpp.nxa" -o "$WORK/icpp$EXE" > "$WORK/bi.log" 2>&1; then
+        size=$(wc -c < "$WORK/icpp$EXE" | tr -d ' ')
+        out=$("$WORK/icpp$EXE" | tr -d "$CR")
+        if [ "$size" -ge 32768 ]; then bad inline_cpp "$size bytes, 32KB or more"
+        elif [ "$out" != "n=42" ]; then bad inline_cpp "printed [$out]"
+        else ok "inline_cpp ($size bytes)"; fi
+    else
+        bad inline_cpp "build failed: $(tail -3 "$WORK/bi.log")"
+    fi
+    printf '#include <std/io>\n#include <std/inline>\ninline_cpp! {\n#include <stdexcept>\nextern "C" int nt_safe(int x) {\n    try { if (x < 0) throw std::runtime_error("neg"); return x; }\n    catch (const std::exception&) { return -1; }\n}\n}\nextern fn nt_safe(x: int): int;\nfn main() { io.println("" + nt_safe(-5) + " " + nt_safe(3)); }\n' > "$WORK/icppt.nxa"
+    if "$NEXAC" "$WORK/icppt.nxa" -o "$WORK/icppt$EXE" > "$WORK/bi.log" 2>&1; then
+        out=$("$WORK/icppt$EXE" | tr -d "$CR")
+        if [ "$out" != "-1 3" ]; then bad inline_cpp_throws "printed [$out]"
+        else ok "inline_cpp_throws"; fi
+    else
+        bad inline_cpp_throws "build failed: $(tail -3 "$WORK/bi.log")"
+    fi
+fi
+
 cat > "$WORK/value.nxa" <<'EOF'
 #include <std/io>
 fn load(): Result[string] { return err("no such file"); }

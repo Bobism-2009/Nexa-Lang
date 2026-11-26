@@ -49,6 +49,20 @@ because C++ does not allow #include inside a function body.
 There is no automatic #include <iostream>; add the headers you need inside the
 block (they will be hoisted) or rely on headers already included by the runtime.
 
+What it costs
+-------------
+C++ that throws, catches or asks for a type at run time (try, catch, throw,
+dynamic_cast, typeid, std::exception and the like), or that includes a header of
+its own ("mine.h", <lib/thing.hpp>), builds the whole program with C++ exceptions
+and RTTI, off NexaC's own entry point: about 190KB on Windows. Any other block --
+extern "C" helpers over the C library, the standard headers, <windows.h> -- costs
+only its own code: a block with one function is a 6KB program on Windows, not
+226KB. Compiled that way, a standard-library throw inside it ends the program
+with its message, as an uncaught one did.
+
+<fstream> and <iostream> bring libc++'s streams and locales (about 300KB on
+Windows) wherever they are used; fopen/fseek/fwrite do the same work for little.
+
 CLI
 ---
   NexaC --help std/inline
@@ -67,7 +81,8 @@ Enable
   #include <std/inline>
 
 The same include as inline_cpp!. What a program gives up for C++ of its own --
-the name checks, the slim runtime, RTTI -- is given up for an inline_cpp! block,
+the name checks, and for C++ that throws the slim runtime and RTTI -- is given up
+for an inline_cpp! block,
 not for the include, so a program whose only foreign code is inline_asm! keeps
 all of it (NexaC's own entry point too). Without the include,
 inline_asm! is rejected at parse time.

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <cctype>
 #include <set>
 #include <sstream>
 #include "CryptoRuntime.hpp"
@@ -382,8 +383,84 @@ public:
     bool hasInlineCpp() const {
         return inlineCppBlocks_;
     }
-    void noteInlineCppBlock() {
+    void noteInlineCppBlock(const std::string& body = std::string()) {
         inlineCppBlocks_ = true;
+        if (!inlineCppNeedsCxxRuntime_ && inlineCppNeedsCxxRuntime(body)) inlineCppNeedsCxxRuntime_ = true;
+    }
+    // Whether the program's inline_cpp! needs C++ exceptions or RTTI. Only then is the
+    // whole program built with them (and off NexaC's own startup): C++ that is a few
+    // extern "C" functions over the C library or the standard headers has no use for
+    // them. Compiled without exceptions, a standard-library throw inside such a block
+    // aborts with its message, the end an uncaught one came to with them.
+    bool inlineCppNeedsCxxRuntime() const {
+        return inlineCppNeedsCxxRuntime_;
+    }
+
+    // Read from the text: a word that throws, catches or asks for a type at run time,
+    // or a header that is neither the system's nor the standard library's (one of the
+    // program's own, or a library's under a folder, may throw in its inline code).
+    // Comments and literals are skipped, so a word in either costs nothing.
+    static bool inlineCppNeedsCxxRuntime(const std::string& s) {
+        static const char* const words[] = {"try", "catch", "throw", "dynamic_cast", "typeid", "type_info",
+                                            "exception", "exception_ptr", "current_exception",
+                                            "rethrow_exception", "set_terminate", "terminate",
+                                            "uncaught_exceptions", "nested_exception"};
+        const size_t n = s.size();
+        size_t i = 0;
+        bool lineStart = true;
+        while (i < n) {
+            const char c = s[i];
+            if (c == '/' && i + 1 < n && s[i + 1] == '/') {
+                while (i < n && s[i] != '\n') ++i;
+                continue;
+            }
+            if (c == '/' && i + 1 < n && s[i + 1] == '*') {
+                const size_t e = s.find("*/", i + 2);
+                i = e == std::string::npos ? n : e + 2;
+                continue;
+            }
+            if (c == '\n') { lineStart = true; ++i; continue; }
+            if (c == ' ' || c == '\t' || c == '\r') { ++i; continue; }
+            if (c == '#' && lineStart) {
+                size_t j = i + 1;
+                while (j < n && (s[j] == ' ' || s[j] == '\t')) ++j;
+                if (s.compare(j, 7, "include") == 0) {
+                    j += 7;
+                    while (j < n && (s[j] == ' ' || s[j] == '\t')) ++j;
+                    if (j >= n || s[j] != '<') return true;  // "own.h", or a macro
+                    const size_t e = s.find('>', j);
+                    if (e == std::string::npos) return true;
+                    const std::string h = s.substr(j + 1, e - j - 1);
+                    const bool cHeader = h.size() > 2 && h.compare(h.size() - 2, 2, ".h") == 0;
+                    if (!cHeader && h.find_first_of("./") != std::string::npos) return true;
+                    i = e + 1;
+                    lineStart = false;
+                    continue;
+                }
+            }
+            lineStart = false;
+            if (c == '"' || c == '\'') {
+                // A raw string's body could hold anything; it is rare enough to stop at.
+                if (c == '"' && i > 0 && s[i - 1] == 'R') return true;
+                size_t j = i + 1;
+                while (j < n && s[j] != c && s[j] != '\n') j += s[j] == '\\' ? 2 : 1;
+                i = j + 1;
+                continue;
+            }
+            if (std::isalpha((unsigned char)c) || c == '_') {
+                size_t j = i;
+                while (j < n && (std::isalnum((unsigned char)s[j]) || s[j] == '_')) ++j;
+                const std::string w = s.substr(i, j - i);
+                for (const char* k : words) {
+                    if (w == k) return true;
+                }
+                if (w.rfind("__cxa", 0) == 0 || w.rfind("_Unwind", 0) == 0) return true;
+                i = j;
+                continue;
+            }
+            ++i;
+        }
+        return false;
     }
 
     bool hasThread() const {
@@ -428,7 +505,7 @@ public:
         // aborts without flushing stdout, so what the program printed before an uncaught
         // error was lost whenever stdout was a file or a pipe; this one flushes, then says
         // what was thrown. Installed before main; C++ in the program can still set its own.
-        if (usage.exceptions || hasInlineCpp()) {
+        if (usage.exceptions || inlineCppNeedsCxxRuntime()) {
             out += "#include <cstdio>\n#include <cstdlib>\n#include <exception>\n#include <string>\n";
             out += "#if defined(__cpp_exceptions)\n"
                    "[[noreturn]] static void __nexa_terminate() {\n"
@@ -2801,6 +2878,7 @@ static __nexa_mutex_t* __nexa_mutex_at(int id) {
 private:
     std::set<std::string> enabled_;
     bool inlineCppBlocks_ = false;
+    bool inlineCppNeedsCxxRuntime_ = false;
     bool hasCppHeader_ = false;
     bool hasThrowingHeader_ = false;
 };

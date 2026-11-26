@@ -482,7 +482,7 @@ public:
                 if (!modules_.inlineEnabled()) {
                     throw std::runtime_error("inline_cpp! requires #include <std/inline> at line " + std::to_string(t.line));
                 }
-                modules_.noteInlineCppBlock();
+                modules_.noteInlineCppBlock(peek().value);
                 const Token& tok = peek();
                 std::string body = tok.value;
                 advance();
@@ -2814,7 +2814,7 @@ private:
                 if (!modules_.inlineEnabled()) {
                     throw std::runtime_error("inline_cpp! requires #include <std/inline> at line " + std::to_string(t.line));
                 }
-                modules_.noteInlineCppBlock();
+                modules_.noteInlineCppBlock(peek().value);
                 const Token& tok = peek();
                 std::string body = tok.value;
                 advance();
@@ -4122,7 +4122,7 @@ private:
                 if (!modules_.inlineEnabled()) {
                     throw std::runtime_error("inline_cpp! requires #include <std/inline> at line " + std::to_string(t.line));
                 }
-                modules_.noteInlineCppBlock();
+                modules_.noteInlineCppBlock(peek().value);
                 const Token& tok = peek();
                 std::string body = tok.value;
                 advance();
