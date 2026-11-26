@@ -5626,6 +5626,27 @@ private:
         return pre + call + "; })";
     }
 
+    // The defaults of the parameters a method call leaves out, each with a ", " before it
+    // unless it is the first argument written. As for a function, a default is written out
+    // at the call, in the caller's names. e.children[0] is the receiver.
+    std::string methodDefaultArgs(const AstNode& meth, const AstNode& e, bool afterArg,
+                                  const std::map<std::string, std::string>& varMap,
+                                  const std::map<std::string, bool>* varIsString,
+                                  const std::map<std::string, bool>* varIsFloat,
+                                  const std::map<std::string, bool>* varIsChar,
+                                  const std::map<std::string, bool>* varIsBool) {
+        std::string s;
+        for (size_t i = e.children.size() - 1; i < meth.paramNames.size(); i++) {
+            if (i >= meth.paramHasDefault.size() || !meth.paramHasDefault[i] || i >= meth.paramDefaults.size()) {
+                throw std::runtime_error("Internal: missing default for parameter in call to '" + e.value + "'");
+            }
+            if (afterArg) s += ", ";
+            afterArg = true;
+            s += emitExpr(meth.paramDefaults[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+        }
+        return s;
+    }
+
     std::string emitFnCallCpp(const AstNode& e,
                               const std::map<std::string, std::string>& varMap,
                               const std::map<std::string, bool>* varIsString,
@@ -5969,6 +5990,7 @@ private:
                             s += ", ";
                             s += emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                         }
+                        s += methodDefaultArgs(*meth, e, true, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                         s += ")";
                         if (ownErrors_ && mayThrowMethods_.count(e.value)) s = errChecked(s, fnIsVoid(*meth));
                         return s;
@@ -5979,6 +6001,7 @@ private:
                         if (i > 1) s += ", ";
                         s += emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                     }
+                    if (meth) s += methodDefaultArgs(*meth, e, e.children.size() > 1, varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                     s += ")";
                     if (ownErrors_ && mayThrowMethods_.count(e.value)) {
                         if (meth) s = errChecked(s, fnIsVoid(*meth));

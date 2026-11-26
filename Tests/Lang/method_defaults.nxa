@@ -1,0 +1,42 @@
+// Pins default arguments on struct methods: left out at the call, each is written out
+// there as for a function -- several, strings, a global, through a pointer, from another
+// method, on a generic method, and one that throws, caught around the call.
+// Reference: SYNTAX/Core.txt (Default argument values)
+#include <std/io>
+
+let BASE = 100;
+
+fn half(n: int): int {
+    if (n % 2 != 0) { throw "odd: " + n; }
+    return n / 2;
+}
+
+struct Box {
+    v: int;
+    fn add(a: int = 1, b: int = BASE): int { return self.v + a + b; }
+    fn tag(pre: string = "<", post: string = ">"): string { return pre + self.v + post; }
+    fn twice(): int { return self.add() * 2; }
+    fn bump(by: int = 5) { self.v += by; }
+    fn halve(n: int = half(3)): int { return self.v + n; }
+    fn pick[T](x: T, y: int = 9): int { return y; }
+}
+
+fn main() {
+    let b = Box{v: 1};
+    io.println(b.add(), " ", b.add(10), " ", b.add(10, 20));
+    io.println(b.tag(), " ", b.tag("["), " ", b.tag("(", ")"));
+    io.println(b.twice());
+    let p = &b;
+    p.bump();
+    io.println(b.v, " ", p.add());
+    b.bump(2);
+    io.println(b.v);
+    io.println(b.pick("s"), " ", b.pick(1.5, 3));
+    try {
+        io.println(b.halve());
+        io.println("not here");
+    } catch (e) {
+        io.println("caught ", e);
+    }
+    io.println(b.halve(1));
+}
