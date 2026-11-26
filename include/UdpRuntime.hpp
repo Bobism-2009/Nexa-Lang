@@ -18,10 +18,10 @@ namespace nexa {
 // `needSender` gates udp.sender/udp.sender_port and the one-entry table behind
 // them, so a program that never asks who sent a packet carries no bookkeeping
 // for the answer -- the same needs-driven emission as tcp.connect/tcp.listen.
-// The table is thread_local: the thread that did the read is the thread that
-// asks, so an accept-loop-style program in std/thread cannot have one worker's
-// packet answer another worker's question.
-inline std::string udpRuntimeCpp(bool needSender = true) {
+// In a program with threads the table is thread_local: the thread that did
+// the read is the thread that asks, so an accept-loop-style program in
+// std/thread cannot have one worker's packet answer another worker's question.
+inline std::string udpRuntimeCpp(bool needSender = true, bool threads = true) {
     std::string out = R"NEXA_UDP(
 #include <string>
 #include <cstring>
@@ -48,6 +48,10 @@ inline std::string udpRuntimeCpp(bool needSender = true) {
     std::string real;
 
     if (needSender) {
+        // Per thread only when there are threads: thread_local is what kept a
+        // program off NexaC's own entry point on Windows (about 9KB of the C
+        // runtime's startup, there for the TLS callbacks).
+        real += threads ? "#define __NEXA_UDP_TLS thread_local\n" : "#define __NEXA_UDP_TLS\n";
         real += R"NEXA_UDP_PEER(
 #include <map>
 #include <cstdlib>
@@ -58,7 +62,7 @@ struct __nexa_udp_peer {
   int port;
 };
 [[maybe_unused]] static std::map<int, __nexa_udp_peer>& __nexa_udp_peers() {
-  static thread_local std::map<int, __nexa_udp_peer> m;
+  static __NEXA_UDP_TLS std::map<int, __nexa_udp_peer> m;
   return m;
 }
 )NEXA_UDP_PEER";

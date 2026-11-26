@@ -30,6 +30,12 @@ namespace nexa {
 // transports, and the client transport itself is emitted only when something
 // above it calls -- so a program carries only what its calls can reach, the
 // same needs-driven emission as std/gfx and std/crypto.
+//
+// Size. Requests and responses are put together and taken apart in one growable
+// byte buffer (__nexa_hb) and by pointer, not as chains of std::string + and
+// substr: each of those inlined its own allocation and copy, which made the Linux
+// client 34KB and the Windows one 15KB. A std::string is made only for what the
+// program gets back -- the body and the header lines.
 inline std::string httpRuntimeCpp(bool needSimple = true, bool needResponse = true,
                                   bool needServer = false) {
     // The simple verbs and http.request are the only callers of the client
@@ -40,7 +46,53 @@ inline std::string httpRuntimeCpp(bool needSimple = true, bool needResponse = tr
 #include <vector>
 #include <cstring>
 #include <cstdlib>
+#include <cstdio>
 
+// A growable run of bytes, freed when it goes out of scope. `bad` is set when
+// memory ran out; what was put before then is still there.
+struct __nexa_hb {
+  char* p = nullptr;
+  size_t n = 0, cap = 0;
+  bool bad = false;
+  __nexa_hb() {}
+  __nexa_hb(const __nexa_hb&) = delete;
+  __nexa_hb& operator=(const __nexa_hb&) = delete;
+  ~__nexa_hb() { std::free(p); }
+  // Room for k more bytes at p + n, or nullptr.
+  char* room(size_t k) {
+    if (n + k > cap) {
+      size_t c = cap ? cap * 2 : 256;
+      while (c < n + k) c *= 2;
+      char* q = (char*)std::realloc(p, c);
+      if (!q) { bad = true; return nullptr; }
+      p = q;
+      cap = c;
+    }
+    return p + n;
+  }
+  void put(const char* s, size_t k) {
+    char* d = room(k);
+    if (d && k) { std::memcpy(d, s, k); n += k; }
+  }
+  void str(const char* s) { put(s, std::strlen(s)); }
+  void num(long long v) {
+    char b[24];
+    int k = std::snprintf(b, sizeof b, "%lld", v);
+    if (k > 0) put(b, (size_t)k);
+  }
+  void swap(__nexa_hb& o) {
+    char* tp = p; p = o.p; o.p = tp;
+    size_t t = n; n = o.n; o.n = t;
+    t = cap; cap = o.cap; o.cap = t;
+  }
+};
+// Where "\r\n\r\n" starts in p[0..n), or (size_t)-1.
+[[maybe_unused]] static size_t __nexa_http_blank_line(const char* p, size_t n) {
+  for (size_t i = 0; i + 4 <= n; i++) {
+    if (p[i] == '\r' && p[i + 1] == '\n' && p[i + 2] == '\r' && p[i + 3] == '\n') return i;
+  }
+  return (size_t)-1;
+}
 // "Content-Type: text/html" -> name "Content-Type", value "text/html".
 // A line with no ':' is not a header and is dropped.
 [[maybe_unused]] static bool __nexa_http_split_header(const std::string& line, std::string& name, std::string& value) {
@@ -66,10 +118,10 @@ inline std::string httpRuntimeCpp(bool needSimple = true, bool needResponse = tr
   }
   return true;
 }
-[[maybe_unused]] static bool __nexa_http_contains_ci(const std::string& hay, const char* needle) {
+[[maybe_unused]] static bool __nexa_http_contains_ci(const char* hay, size_t hn, const char* needle) {
   size_t n = std::strlen(needle);
-  if (n == 0 || hay.size() < n) return false;
-  for (size_t i = 0; i + n <= hay.size(); i++) {
+  if (n == 0 || hn < n) return false;
+  for (size_t i = 0; i + n <= hn; i++) {
     size_t k = 0;
     while (k < n) {
       char a = hay[i + k], b = needle[k];
@@ -82,37 +134,43 @@ inline std::string httpRuntimeCpp(bool needSimple = true, bool needResponse = tr
   }
   return false;
 }
-[[maybe_unused]] static std::string __nexa_http_header_value(const std::vector<std::string>& hs, const char* name) {
+// The value of the first header line named `name`: a pointer into that line and
+// its length, leading blanks and the line's end left off. nullptr when no line
+// has the name.
+[[maybe_unused]] static const char* __nexa_http_hval(const std::vector<std::string>& hs, const char* name, size_t* len) {
+  const size_t nl = std::strlen(name);
   for (size_t i = 0; i < hs.size(); i++) {
     if (!__nexa_http_header_named(hs[i], name)) continue;
-    std::string n, v;
-    if (__nexa_http_split_header(hs[i], n, v)) return v;
+    const char* p = hs[i].data() + nl + 1;
+    const char* e = hs[i].data() + hs[i].size();
+    while (p < e && (*p == ' ' || *p == '\t')) p++;
+    while (e > p && (e[-1] == '\r' || e[-1] == '\n')) e--;
+    *len = (size_t)(e - p);
+    return p;
   }
-  return std::string();
+  *len = 0;
+  return nullptr;
 }
 // Split a raw CRLF header block into lines, dropping the status line and the
 // blank terminator. Continuation lines (leading space) fold onto the previous.
-[[maybe_unused]] static std::vector<std::string> __nexa_http_split_headers(const std::string& blob) {
-  std::vector<std::string> outv;
-  size_t i = 0;
-  while (i < blob.size()) {
-    size_t e = blob.find('\n', i);
-    std::string line = (e == std::string::npos) ? blob.substr(i) : blob.substr(i, e - i);
-    i = (e == std::string::npos) ? blob.size() : e + 1;
-    while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) line.pop_back();
-    if (line.empty()) continue;
-    if (line.size() >= 5 && line.compare(0, 5, "HTTP/") == 0) continue;
-    if ((line[0] == ' ' || line[0] == '\t') && !outv.empty()) {
-      size_t s = 0;
-      while (s < line.size() && (line[s] == ' ' || line[s] == '\t')) s++;
-      outv.back() += " ";
-      outv.back() += line.substr(s);
-      continue;
+[[maybe_unused]] static void __nexa_http_split_headers(const char* p, size_t n, std::vector<std::string>& outv) {
+  const char* e = p + n;
+  while (p < e) {
+    const char* nl = (const char*)std::memchr(p, '\n', (size_t)(e - p));
+    const char* le = nl ? nl : e;
+    const char* next = nl ? nl + 1 : e;
+    while (le > p && (le[-1] == '\r' || le[-1] == '\n')) le--;
+    const size_t k = (size_t)(le - p);
+    if (k == 0 || (k >= 5 && std::memcmp(p, "HTTP/", 5) == 0)) { p = next; continue; }
+    if ((*p == ' ' || *p == '\t') && !outv.empty()) {
+      while (p < le && (*p == ' ' || *p == '\t')) p++;
+      outv.back().push_back(' ');
+      outv.back().append(p, (size_t)(le - p));
+    } else if (std::memchr(p, ':', k)) {
+      outv.emplace_back(p, k);
     }
-    if (line.find(':') == std::string::npos) continue;
-    outv.push_back(line);
+    p = next;
   }
-  return outv;
 }
 )NEXA_HTTP";
     if (needClient) {
@@ -123,25 +181,19 @@ inline std::string httpRuntimeCpp(bool needSimple = true, bool needResponse = tr
 #endif
 #include <windows.h>
 #include <winhttp.h>
-static std::wstring __nexa_http_widen(const std::string& s) {
-  if (s.empty()) return std::wstring();
-  int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
-  std::wstring w((size_t)n, L'\0');
-  MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &w[0], n);
+// UTF-8 -> a NUL-terminated wide string for WinHTTP, from malloc: free() it.
+static wchar_t* __nexa_http_wide(const char* s, size_t n) {
+  int k = n ? MultiByteToWideChar(CP_UTF8, 0, s, (int)n, nullptr, 0) : 0;
+  wchar_t* w = (wchar_t*)std::malloc(((size_t)k + 1) * sizeof(wchar_t));
+  if (!w) return nullptr;
+  if (k) MultiByteToWideChar(CP_UTF8, 0, s, (int)n, w, k);
+  w[k] = 0;
   return w;
-}
-static std::string __nexa_http_narrow(const std::wstring& w) {
-  if (w.empty()) return std::string();
-  int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), nullptr, 0, nullptr, nullptr);
-  std::string s((size_t)n, '\0');
-  WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), &s[0], n, nullptr, nullptr);
-  return s;
 }
 static std::string __nexa_http_perform(const std::string& method, const std::string& url,
                                        const std::string& body, const std::vector<std::string>& headers,
                                        int* status, std::string* respBody,
                                        std::vector<std::string>* respHeaders) {
-  std::wstring wurl = __nexa_http_widen(url);
   URL_COMPONENTS uc;
   memset(&uc, 0, sizeof(uc));
   uc.dwStructSize = sizeof(uc);
@@ -149,40 +201,52 @@ static std::string __nexa_http_perform(const std::string& method, const std::str
   uc.lpszHostName = host; uc.dwHostNameLength = 256;
   uc.lpszUrlPath = path; uc.dwUrlPathLength = 2048;
   uc.lpszExtraInfo = extra; uc.dwExtraInfoLength = 2048;
-  if (!WinHttpCrackUrl(wurl.c_str(), (DWORD)wurl.size(), 0, &uc)) return "invalid URL";
-  std::wstring wpath = std::wstring(path, uc.dwUrlPathLength) + std::wstring(extra, uc.dwExtraInfoLength);
-  if (wpath.empty()) wpath = L"/";
+  wchar_t* wurl = __nexa_http_wide(url.data(), url.size());
+  BOOL cracked = wurl && WinHttpCrackUrl(wurl, 0, 0, &uc);
+  std::free(wurl);
+  if (!cracked || uc.dwHostNameLength >= 256) return "invalid URL";
+  host[uc.dwHostNameLength] = 0;
+  // The path and the query after it, as one; "/" when the URL has neither.
+  wchar_t wpath[4097];
+  const size_t pl = uc.dwUrlPathLength, el = uc.dwExtraInfoLength;
+  if (pl + el > 4096) return "invalid URL";
+  memcpy(wpath, path, pl * sizeof(wchar_t));
+  memcpy(wpath + pl, extra, el * sizeof(wchar_t));
+  wpath[pl + el] = 0;
+  if (pl + el == 0) { wpath[0] = L'/'; wpath[1] = 0; }
   HINTERNET hSession = WinHttpOpen(L"NexaHTTP/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
   if (!hSession) return "could not open HTTP session";
   INTERNET_PORT port = uc.nPort ? uc.nPort : (uc.nScheme == INTERNET_SCHEME_HTTPS ? INTERNET_DEFAULT_HTTPS_PORT : INTERNET_DEFAULT_HTTP_PORT);
-  HINTERNET hConnect = WinHttpConnect(hSession, std::wstring(host, uc.dwHostNameLength).c_str(), port, 0);
+  HINTERNET hConnect = WinHttpConnect(hSession, host, port, 0);
   if (!hConnect) { WinHttpCloseHandle(hSession); return "could not connect"; }
   DWORD flags = (uc.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
-  std::wstring wmethod = __nexa_http_widen(method);
-  HINTERNET hRequest = WinHttpOpenRequest(hConnect, wmethod.c_str(), wpath.c_str(), nullptr,
-    WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+  wchar_t* wmethod = __nexa_http_wide(method.data(), method.size());
+  HINTERNET hRequest = wmethod ? WinHttpOpenRequest(hConnect, wmethod, wpath, nullptr,
+    WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags) : nullptr;
+  std::free(wmethod);
   if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return "could not open request"; }
-  std::wstring extraHdrs;
+  // The caller's header lines, CRLF after each, made wide once.
+  __nexa_hb hdr;
   bool userType = false;
   for (size_t i = 0; i < headers.size(); i++) {
     if (headers[i].empty()) continue;
     if (__nexa_http_header_named(headers[i], "Content-Type")) userType = true;
-    extraHdrs += __nexa_http_widen(headers[i]);
-    extraHdrs += L"\r\n";
+    hdr.put(headers[i].data(), headers[i].size());
+    hdr.put("\r\n", 2);
   }
   // The default the POSIX path sends, and the one the reference promises:
   // "a Content-Type you supply replaces the default application/octet-stream".
   // WinHTTP adds none of its own, so a PUT or PATCH from Windows went out
   // without one while the same program on Linux sent it.
-  if (!body.empty() && !userType) {
-    extraHdrs += L"Content-Type: application/octet-stream\r\n";
-  }
+  if (!body.empty() && !userType) hdr.str("Content-Type: application/octet-stream\r\n");
+  wchar_t* whdr = hdr.n ? __nexa_http_wide(hdr.p, hdr.n) : nullptr;
   BOOL ok = WinHttpSendRequest(hRequest,
-    extraHdrs.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : extraHdrs.c_str(),
-    extraHdrs.empty() ? 0 : (DWORD)-1L,
+    whdr ? whdr : WINHTTP_NO_ADDITIONAL_HEADERS,
+    whdr ? (DWORD)-1L : 0,
     body.empty() ? WINHTTP_NO_REQUEST_DATA : (LPVOID)body.data(),
     (DWORD)body.size(), (DWORD)body.size(), 0);
+  std::free(whdr);
   if (!ok || !WinHttpReceiveResponse(hRequest, nullptr)) {
     // WinHTTP follows redirects itself and gives up after its own limit.
     // That is the condition the POSIX path reports as "too many redirects",
@@ -210,21 +274,25 @@ static std::string __nexa_http_perform(const std::string& method, const std::str
   WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_HEADER_NAME_BY_INDEX,
     WINHTTP_NO_OUTPUT_BUFFER, &rawLen, WINHTTP_NO_HEADER_INDEX);
   if (rawLen > 0) {
-    std::wstring raw(rawLen / sizeof(wchar_t) + 1, L'\0');
-    if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_HEADER_NAME_BY_INDEX,
-          &raw[0], &rawLen, WINHTTP_NO_HEADER_INDEX)) {
-      *respHeaders = __nexa_http_split_headers(__nexa_http_narrow(raw.c_str()));
+    wchar_t* raw = (wchar_t*)std::malloc(rawLen + sizeof(wchar_t));
+    if (raw && WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_HEADER_NAME_BY_INDEX,
+          raw, &rawLen, WINHTTP_NO_HEADER_INDEX)) {
+      raw[rawLen / sizeof(wchar_t)] = 0;
+      int k = WideCharToMultiByte(CP_UTF8, 0, raw, -1, nullptr, 0, nullptr, nullptr);
+      char* a = k > 0 ? (char*)std::malloc((size_t)k) : nullptr;
+      if (a) {
+        WideCharToMultiByte(CP_UTF8, 0, raw, -1, a, k, nullptr, nullptr);
+        __nexa_http_split_headers(a, std::strlen(a), *respHeaders);
+        std::free(a);
+      }
     }
+    std::free(raw);
   }
+  char buf[8192];
   for (;;) {
-    DWORD avail = 0;
-    if (!WinHttpQueryDataAvailable(hRequest, &avail)) break;
-    if (avail == 0) break;
-    std::string chunk(avail, '\0');
     DWORD read = 0;
-    if (!WinHttpReadData(hRequest, &chunk[0], avail, &read)) break;
-    chunk.resize(read);
-    *respBody += chunk;
+    if (!WinHttpReadData(hRequest, buf, (DWORD)sizeof(buf), &read) || read == 0) break;
+    respBody->append(buf, (size_t)read);
   }
   WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
   return std::string();
@@ -364,10 +432,12 @@ static std::string __nexa_http_perform(const std::string& method, const std::str
   if (fetch->data && fetch->numBytes) respBody->assign(fetch->data, fetch->numBytes);
   size_t hdrLen = emscripten_fetch_get_response_headers_length(fetch);
   if (hdrLen > 0) {
-    std::string blob(hdrLen + 1, '\0');
-    emscripten_fetch_get_response_headers(fetch, &blob[0], hdrLen + 1);
-    blob.resize(std::strlen(blob.c_str()));
-    *respHeaders = __nexa_http_split_headers(blob);
+    char* blob = (char*)std::malloc(hdrLen + 1);
+    if (blob) {
+      emscripten_fetch_get_response_headers(fetch, blob, hdrLen + 1);
+      __nexa_http_split_headers(blob, std::strlen(blob), *respHeaders);
+      std::free(blob);
+    }
   }
   emscripten_fetch_close(fetch);
   return std::string();
@@ -398,10 +468,9 @@ struct __nexa_SslApi {
   long (*SSL_ctrl)(void*, int, long, void*);
   int (*SSL_set1_host)(void*, const char*);
 };
-static int __nexa_ssl_sym(void* lib, void** out, const char* name) {
-  *out = dlsym(lib, name);
-  return *out != nullptr;
-}
+// libssl's functions by name, in __nexa_SslApi's order after `lib`. A name with
+// '?' in front may be missing; the rest must be there. TLS_client_method falls
+// back to its OpenSSL 1.0 name.
 static const __nexa_SslApi* __nexa_ssl_api() {
   static __nexa_SslApi a;
   static int once = 0;
@@ -417,60 +486,60 @@ static const __nexa_SslApi* __nexa_ssl_api() {
     if (a.lib) break;
   }
   if (!a.lib) return nullptr;
-  void* p = nullptr;
-  if (__nexa_ssl_sym(a.lib, &p, "OPENSSL_init_ssl")) a.OPENSSL_init_ssl = (int (*)(unsigned long, const void*))p;
-  if (__nexa_ssl_sym(a.lib, &p, "SSL_library_init")) a.SSL_library_init = (int (*)())p;
-  if (!__nexa_ssl_sym(a.lib, &p, "TLS_client_method")) {
-    if (!__nexa_ssl_sym(a.lib, &p, "SSLv23_client_method")) { dlclose(a.lib); a.lib = nullptr; return nullptr; }
+  static const char* const names[] = {
+    "?OPENSSL_init_ssl", "?SSL_library_init", "TLS_client_method", "SSL_CTX_new", "SSL_CTX_free",
+    "?SSL_CTX_set_default_verify_paths", "SSL_new", "SSL_set_fd", "SSL_connect", "SSL_write",
+    "SSL_read", "?SSL_shutdown", "SSL_free", "?SSL_set_verify", "?SSL_get_verify_result",
+    "?SSL_ctrl", "?SSL_set1_host" };
+  void** slot = (void**)&a.OPENSSL_init_ssl;
+  for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+    const bool optional = names[i][0] == '?';
+    void* p = dlsym(a.lib, names[i] + (optional ? 1 : 0));
+    if (!p && i == 2) p = dlsym(a.lib, "SSLv23_client_method");
+    if (!p && !optional) { dlclose(a.lib); a.lib = nullptr; return nullptr; }
+    slot[i] = p;
   }
-  a.TLS_client_method = (const void* (*)())p;
-  if (!__nexa_ssl_sym(a.lib, &p, "SSL_CTX_new")) { dlclose(a.lib); a.lib = nullptr; return nullptr; }
-  a.SSL_CTX_new = (void* (*)(const void*))p;
-  if (!__nexa_ssl_sym(a.lib, &p, "SSL_CTX_free")) { dlclose(a.lib); a.lib = nullptr; return nullptr; }
-  a.SSL_CTX_free = (void (*)(void*))p;
-  if (__nexa_ssl_sym(a.lib, &p, "SSL_CTX_set_default_verify_paths"))
-    a.SSL_CTX_set_default_verify_paths = (int (*)(void*))p;
-  if (!__nexa_ssl_sym(a.lib, &p, "SSL_new")) { dlclose(a.lib); a.lib = nullptr; return nullptr; }
-  a.SSL_new = (void* (*)(void*))p;
-  if (!__nexa_ssl_sym(a.lib, &p, "SSL_set_fd")) { dlclose(a.lib); a.lib = nullptr; return nullptr; }
-  a.SSL_set_fd = (int (*)(void*, int))p;
-  if (!__nexa_ssl_sym(a.lib, &p, "SSL_connect")) { dlclose(a.lib); a.lib = nullptr; return nullptr; }
-  a.SSL_connect = (int (*)(void*))p;
-  if (!__nexa_ssl_sym(a.lib, &p, "SSL_write")) { dlclose(a.lib); a.lib = nullptr; return nullptr; }
-  a.SSL_write = (int (*)(void*, const void*, int))p;
-  if (!__nexa_ssl_sym(a.lib, &p, "SSL_read")) { dlclose(a.lib); a.lib = nullptr; return nullptr; }
-  a.SSL_read = (int (*)(void*, void*, int))p;
-  if (__nexa_ssl_sym(a.lib, &p, "SSL_shutdown")) a.SSL_shutdown = (int (*)(void*))p;
-  if (!__nexa_ssl_sym(a.lib, &p, "SSL_free")) { dlclose(a.lib); a.lib = nullptr; return nullptr; }
-  a.SSL_free = (void (*)(void*))p;
-  if (__nexa_ssl_sym(a.lib, &p, "SSL_set_verify")) a.SSL_set_verify = (void (*)(void*, int, void*))p;
-  if (__nexa_ssl_sym(a.lib, &p, "SSL_get_verify_result")) a.SSL_get_verify_result = (long (*)(const void*))p;
-  if (__nexa_ssl_sym(a.lib, &p, "SSL_ctrl")) a.SSL_ctrl = (long (*)(void*, int, long, void*))p;
-  if (__nexa_ssl_sym(a.lib, &p, "SSL_set1_host")) a.SSL_set1_host = (int (*)(void*, const char*))p;
   if (a.OPENSSL_init_ssl) a.OPENSSL_init_ssl(0, nullptr);
   else if (a.SSL_library_init) a.SSL_library_init();
   return &a;
 }
-static bool __nexa_http_parse_url(const std::string& url, std::string& scheme, std::string& host, int& port, std::string& path) {
-  scheme.clear(); host.clear(); path = "/"; port = 80;
-  size_t sp = url.find("://");
-  if (sp == std::string::npos) return false;
-  scheme = url.substr(0, sp);
-  size_t start = sp + 3;
-  size_t slash = url.find('/', start);
-  std::string hostport = (slash == std::string::npos) ? url.substr(start) : url.substr(start, slash - start);
-  if (slash != std::string::npos) path = url.substr(slash);
-  size_t colon = hostport.rfind(':');
-  size_t bracket = hostport.find(']');
-  if (colon != std::string::npos && (hostport[0] != '[' || (bracket != std::string::npos && colon > bracket))) {
-    host = hostport.substr(0, colon);
-    port = std::atoi(hostport.c_str() + colon + 1);
-  } else {
-    host = hostport;
-    port = (scheme == "https") ? 443 : 80;
+// http[s]://host[:port]/path?query, taken apart in place: the host is copied out
+// (brackets off an IPv6 one), the path points into the URL. tls is -1 for a
+// scheme that is neither. false when there is no "://" or no host.
+struct __nexa_http_url { int tls; int port; char host[256]; const char* path; size_t pathLen; };
+static bool __nexa_http_parse_url(const char* u, size_t n, __nexa_http_url& o) {
+  const char* e = u + n;
+  const char* s = nullptr;
+  for (const char* q = u; q + 3 <= e; q++) {
+    if (q[0] == ':' && q[1] == '/' && q[2] == '/') { s = q; break; }
   }
-  if (host.size() >= 2 && host[0] == '[' && host.back() == ']') host = host.substr(1, host.size() - 2);
-  return !host.empty();
+  if (!s) return false;
+  const size_t sl = (size_t)(s - u);
+  o.tls = (sl == 5 && std::memcmp(u, "https", 5) == 0) ? 1 : (sl == 4 && std::memcmp(u, "http", 4) == 0) ? 0 : -1;
+  const char* h = s + 3;
+  const char* slash = (const char*)std::memchr(h, '/', (size_t)(e - h));
+  const char* he = slash ? slash : e;
+  o.path = slash ? slash : "/";
+  o.pathLen = slash ? (size_t)(e - slash) : 1;
+  const char* colon = nullptr;
+  for (const char* q = he; q > h;) {
+    if (*--q == ':') { colon = q; break; }
+  }
+  const char* br = (const char*)std::memchr(h, ']', (size_t)(he - h));
+  const char* hs = h;
+  const char* hostEnd = he;
+  if (colon && (*h != '[' || (br && colon > br))) {
+    hostEnd = colon;
+    o.port = std::atoi(colon + 1);
+  } else {
+    o.port = o.tls == 1 ? 443 : 80;
+  }
+  if (hostEnd - hs >= 2 && *hs == '[' && hostEnd[-1] == ']') { hs++; hostEnd--; }
+  const size_t hl = (size_t)(hostEnd - hs);
+  if (hl == 0 || hl >= sizeof o.host) return false;
+  std::memcpy(o.host, hs, hl);
+  o.host[hl] = 0;
+  return true;
 }
 static int __nexa_http_io_write(int fd, void* ssl, const __nexa_SslApi* api, const char* p, size_t n) {
   while (n > 0) {
@@ -482,68 +551,80 @@ static int __nexa_http_io_write(int fd, void* ssl, const __nexa_SslApi* api, con
   }
   return 1;
 }
-// Strip `Transfer-Encoding: chunked` framing. WinHTTP and CFNetwork do this
-// inside the stack; on raw sockets it is ours to do, or the hex chunk sizes
-// leak into the body the program sees.
-static std::string __nexa_http_dechunk(const std::string& in) {
-  std::string out;
-  size_t i = 0;
-  while (i < in.size()) {
-    size_t eol = in.find("\r\n", i);
-    if (eol == std::string::npos) break;
-    std::string sizeLine = in.substr(i, eol - i);
-    size_t semi = sizeLine.find(';');          // chunk extensions
-    if (semi != std::string::npos) sizeLine = sizeLine.substr(0, semi);
-    unsigned long n = std::strtoul(sizeLine.c_str(), nullptr, 16);
+// Strip `Transfer-Encoding: chunked` framing, in place; the length left. WinHTTP
+// and CFNetwork do this inside the stack; on raw sockets it is ours to do, or the
+// hex chunk sizes leak into the body the program sees.
+static size_t __nexa_http_dechunk(char* p, size_t n) {
+  size_t i = 0, o = 0;
+  while (i < n) {
+    size_t eol = i;
+    while (eol + 1 < n && !(p[eol] == '\r' && p[eol + 1] == '\n')) eol++;
+    if (eol + 1 >= n) break;
+    // The size, in hex; a ';' and chunk extensions after it are left alone.
+    size_t j = i;
+    while (j < eol && (p[j] == ' ' || p[j] == '\t')) j++;
+    unsigned long k = 0;
+    for (; j < eol; j++) {
+      const char c = p[j];
+      int d = (c >= '0' && c <= '9') ? c - '0' : (c >= 'a' && c <= 'f') ? c - 'a' + 10 :
+              (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
+      if (d < 0) break;
+      k = k * 16 + (unsigned long)d;
+    }
     i = eol + 2;
-    if (n == 0) break;                          // last chunk; trailers ignored
-    size_t avail = in.size() - i;
-    size_t take = ((size_t)n < avail) ? (size_t)n : avail;   // truncated response
-    out.append(in, i, take);
+    if (k == 0) break;                          // last chunk; trailers ignored
+    const size_t avail = n - i;
+    const size_t take = ((size_t)k < avail) ? (size_t)k : avail;   // truncated response
+    std::memmove(p + o, p + i, take);
+    o += take;
     i += take + 2;                              // chunk data is CRLF-terminated
   }
-  return out;
+  return o;
 }
-// Turn a Location value into an absolute URL against the request it answered.
-static std::string __nexa_http_resolve_url(const std::string& base, const std::string& loc) {
-  if (loc.empty()) return std::string();
-  if (loc.find("://") != std::string::npos) return loc;
-  std::string scheme, host, path; int port = 80;
-  if (!__nexa_http_parse_url(base, scheme, host, port, path)) return std::string();
-  std::string origin = scheme + "://" + host;
-  if (!((scheme == "http" && port == 80) || (scheme == "https" && port == 443))) {
-    origin += ":" + std::to_string(port);
+// A Location, made absolute against the URL it answered, into `out`.
+static bool __nexa_http_resolve(const char* base, size_t baseLen, const char* loc, size_t locLen, __nexa_hb& out) {
+  if (!locLen) return false;
+  for (size_t i = 0; i + 3 <= locLen; i++) {
+    if (loc[i] == ':' && loc[i + 1] == '/' && loc[i + 2] == '/') { out.put(loc, locLen); return true; }
   }
-  if (loc[0] == '/') return origin + loc;
-  size_t q = path.find_first_of("?#");
-  if (q != std::string::npos) path = path.substr(0, q);
-  size_t slash = path.rfind('/');
-  std::string dir = (slash == std::string::npos) ? std::string("/") : path.substr(0, slash + 1);
-  return origin + dir + loc;
+  __nexa_http_url u;
+  if (!__nexa_http_parse_url(base, baseLen, u)) return false;
+  out.str(u.tls == 1 ? "https://" : "http://");
+  out.str(u.host);
+  if (u.port != (u.tls == 1 ? 443 : 80)) { out.put(":", 1); out.num(u.port); }
+  if (loc[0] != '/') {
+    // The directory of the request's path, its query and fragment left off.
+    size_t pl = u.pathLen;
+    for (size_t i = 0; i < pl; i++) {
+      if (u.path[i] == '?' || u.path[i] == '#') { pl = i; break; }
+    }
+    while (pl > 0 && u.path[pl - 1] != '/') pl--;
+    if (pl == 0) out.put("/", 1);
+    else out.put(u.path, pl);
+  }
+  out.put(loc, locLen);
+  return !out.bad;
 }
-// One request/response over one connection. Returns "" when a response came
-// back, an error message when the exchange never got that far.
-static std::string __nexa_http_once(const std::string& method, const std::string& url,
-                                    const std::string& body, const std::vector<std::string>& headers,
+// One request/response over one connection: nullptr when a response came back,
+// what went wrong when the exchange never got that far.
+static const char* __nexa_http_once(const char* method, const char* url, size_t urlLen,
+                                    const char* body, size_t bodyLen, const std::vector<std::string>& headers,
                                     int* status, std::string* respBody,
                                     std::vector<std::string>* respHeaders) {
-  std::string scheme, host, path; int port = 80;
-  if (!__nexa_http_parse_url(url, scheme, host, port, path)) return "invalid URL";
-  int tls = 0;
-  if (scheme == "https") tls = 1;
-  else if (scheme != "http") return "unsupported URL scheme";
+  __nexa_http_url u;
+  if (!__nexa_http_parse_url(url, urlLen, u)) return "invalid URL";
+  if (u.tls < 0) return "unsupported URL scheme";
   const __nexa_SslApi* api = nullptr;
-  if (tls) {
+  if (u.tls) {
     api = __nexa_ssl_api();
     if (!api) return "HTTPS requires libssl";
   }
   addrinfo hints; memset(&hints, 0, sizeof(hints));
   hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_STREAM;
   addrinfo* res = nullptr;
-  std::string portStr = std::to_string(port);
-  if (getaddrinfo(host.c_str(), portStr.c_str(), &hints, &res) != 0 || !res) {
-    return "could not resolve host";
-  }
+  char portStr[8];
+  std::snprintf(portStr, sizeof portStr, "%d", u.port);
+  if (getaddrinfo(u.host, portStr, &hints, &res) != 0 || !res) return "could not resolve host";
   int fd = -1;
   for (addrinfo* p = res; p; p = p->ai_next) {
     fd = (int)socket(p->ai_family, p->ai_socktype, p->ai_protocol);
@@ -555,7 +636,8 @@ static std::string __nexa_http_once(const std::string& method, const std::string
   if (fd < 0) return "could not connect";
   void* ctx = nullptr;
   void* ssl = nullptr;
-  if (tls) {
+  const char* err = nullptr;
+  if (u.tls) {
     const void* meth = api->TLS_client_method();
     ctx = meth ? api->SSL_CTX_new(meth) : nullptr;
     if (!ctx) { close(fd); return "TLS setup failed"; }
@@ -563,67 +645,62 @@ static std::string __nexa_http_once(const std::string& method, const std::string
     ssl = api->SSL_new(ctx);
     if (!ssl) { api->SSL_CTX_free(ctx); close(fd); return "TLS setup failed"; }
     if (api->SSL_set_verify) api->SSL_set_verify(ssl, 1, nullptr);
-    if (api->SSL_set1_host) api->SSL_set1_host(ssl, host.c_str());
-    if (api->SSL_ctrl) api->SSL_ctrl(ssl, 55, 0, (void*)host.c_str());
+    if (api->SSL_set1_host) api->SSL_set1_host(ssl, u.host);
+    if (api->SSL_ctrl) api->SSL_ctrl(ssl, 55, 0, (void*)u.host);
     if (!api->SSL_set_fd(ssl, fd) || api->SSL_connect(ssl) != 1) {
       api->SSL_free(ssl);
       api->SSL_CTX_free(ctx);
       close(fd);
       return "TLS handshake failed";
     }
-    if (api->SSL_get_verify_result && api->SSL_get_verify_result(ssl) != 0) {
-      if (api->SSL_shutdown) api->SSL_shutdown(ssl);
-      api->SSL_free(ssl);
-      api->SSL_CTX_free(ctx);
-      close(fd);
-      return "TLS certificate verify failed";
+    if (api->SSL_get_verify_result && api->SSL_get_verify_result(ssl) != 0) err = "TLS certificate verify failed";
+  }
+  __nexa_hb raw;
+  if (!err) {
+    // Content-Length and Connection belong to this transport, so a caller's copy
+    // is ignored; Host and Content-Type are the caller's to override.
+    bool userHost = false, userType = false;
+    for (size_t i = 0; i < headers.size(); i++) {
+      if (__nexa_http_header_named(headers[i], "Host")) userHost = true;
+      else if (__nexa_http_header_named(headers[i], "Content-Type")) userType = true;
     }
-  }
-  // Content-Length and Connection belong to this transport, so a caller's copy
-  // is ignored; Host and Content-Type are the caller's to override.
-  bool userHost = false, userType = false;
-  for (size_t i = 0; i < headers.size(); i++) {
-    if (__nexa_http_header_named(headers[i], "Host")) userHost = true;
-    else if (__nexa_http_header_named(headers[i], "Content-Type")) userType = true;
-  }
-  std::string req = method + " " + path + " HTTP/1.1\r\n";
-  if (!userHost) {
-    std::string hostHdr = host;
-    if (!((scheme == "http" && port == 80) || (scheme == "https" && port == 443))) {
-      hostHdr += ":";
-      hostHdr += std::to_string(port);
+    __nexa_hb req;
+    req.str(method);
+    req.put(" ", 1);
+    req.put(u.path, u.pathLen);
+    req.str(" HTTP/1.1\r\n");
+    if (!userHost) {
+      req.str("Host: ");
+      req.str(u.host);
+      if (u.port != (u.tls == 1 ? 443 : 80)) { req.put(":", 1); req.num(u.port); }
+      req.put("\r\n", 2);
     }
-    req += "Host: " + hostHdr + "\r\n";
-  }
-  req += "Connection: close\r\n";
-  for (size_t i = 0; i < headers.size(); i++) {
-    if (headers[i].empty()) continue;
-    if (__nexa_http_header_named(headers[i], "Content-Length")) continue;
-    if (__nexa_http_header_named(headers[i], "Connection")) continue;
-    req += headers[i];
-    req += "\r\n";
-  }
-  if (!body.empty()) {
-    req += "Content-Length: " + std::to_string(body.size()) + "\r\n";
-    if (!userType) req += "Content-Type: application/octet-stream\r\n";
-  }
-  req += "\r\n";
-  req += body;
-  if (!__nexa_http_io_write(fd, ssl, api, req.data(), req.size())) {
-    if (ssl) {
-      if (api->SSL_shutdown) api->SSL_shutdown(ssl);
-      api->SSL_free(ssl);
-      api->SSL_CTX_free(ctx);
+    req.str("Connection: close\r\n");
+    for (size_t i = 0; i < headers.size(); i++) {
+      if (headers[i].empty()) continue;
+      if (__nexa_http_header_named(headers[i], "Content-Length")) continue;
+      if (__nexa_http_header_named(headers[i], "Connection")) continue;
+      req.put(headers[i].data(), headers[i].size());
+      req.put("\r\n", 2);
     }
-    close(fd);
-    return "request failed";
+    if (bodyLen) {
+      req.str("Content-Length: ");
+      req.num((long long)bodyLen);
+      req.put("\r\n", 2);
+      if (!userType) req.str("Content-Type: application/octet-stream\r\n");
+    }
+    req.put("\r\n", 2);
+    req.put(body, bodyLen);
+    if (req.bad || !__nexa_http_io_write(fd, ssl, api, req.p, req.n)) err = "request failed";
   }
-  std::string raw;
-  char buf[4096];
-  for (;;) {
-    int n = ssl ? api->SSL_read(ssl, buf, (int)sizeof(buf)) : (int)recv(fd, buf, sizeof(buf), 0);
-    if (n <= 0) break;
-    raw.append(buf, (size_t)n);
+  if (!err) {
+    for (;;) {
+      char* d = raw.room(16384);
+      if (!d) break;
+      int n = ssl ? api->SSL_read(ssl, d, 16384) : (int)recv(fd, d, 16384, 0);
+      if (n <= 0) break;
+      raw.n += (size_t)n;
+    }
   }
   if (ssl) {
     if (api->SSL_shutdown) api->SSL_shutdown(ssl);
@@ -631,31 +708,33 @@ static std::string __nexa_http_once(const std::string& method, const std::string
     api->SSL_CTX_free(ctx);
   }
   close(fd);
-  if (raw.empty()) return "no response";
-  size_t hdrEnd = raw.find("\r\n\r\n");
-  if (hdrEnd == std::string::npos) {
-    *respBody = raw;
-    return std::string();
+  if (err) return err;
+  if (raw.n == 0) return "no response";
+  const size_t hdrEnd = __nexa_http_blank_line(raw.p, raw.n);
+  if (hdrEnd == (size_t)-1) {
+    respBody->assign(raw.p, raw.n);
+    return nullptr;
   }
-  std::string blob = raw.substr(0, hdrEnd + 2);
-  *respHeaders = __nexa_http_split_headers(blob);
-  size_t sp1 = blob.find(' ');
-  if (blob.compare(0, 5, "HTTP/") == 0 && sp1 != std::string::npos) {
-    *status = std::atoi(blob.c_str() + sp1 + 1);
+  __nexa_http_split_headers(raw.p, hdrEnd + 2, *respHeaders);
+  if (hdrEnd >= 5 && std::memcmp(raw.p, "HTTP/", 5) == 0) {
+    const char* sp = (const char*)std::memchr(raw.p, ' ', hdrEnd + 2);
+    if (sp) *status = std::atoi(sp + 1);
   }
-  std::string payload = raw.substr(hdrEnd + 4);
-  std::string te = __nexa_http_header_value(*respHeaders, "Transfer-Encoding");
-  if (__nexa_http_contains_ci(te, "chunked")) {
-    payload = __nexa_http_dechunk(payload);
+  char* payload = raw.p + hdrEnd + 4;
+  size_t plen = raw.n - (hdrEnd + 4);
+  size_t vl = 0;
+  const char* te = __nexa_http_hval(*respHeaders, "Transfer-Encoding", &vl);
+  if (te && __nexa_http_contains_ci(te, vl, "chunked")) {
+    plen = __nexa_http_dechunk(payload, plen);
   } else {
-    std::string cl = __nexa_http_header_value(*respHeaders, "Content-Length");
-    if (!cl.empty()) {
-      unsigned long want = std::strtoul(cl.c_str(), nullptr, 10);
-      if (want < payload.size()) payload.resize((size_t)want);
+    const char* cl = __nexa_http_hval(*respHeaders, "Content-Length", &vl);
+    if (cl && vl) {
+      unsigned long want = std::strtoul(cl, nullptr, 10);
+      if (want < plen) plen = (size_t)want;
     }
   }
-  *respBody = payload;
-  return std::string();
+  respBody->assign(payload, plen);
+  return nullptr;
 }
 static std::string __nexa_http_perform(const std::string& method, const std::string& url,
                                        const std::string& body, const std::vector<std::string>& headers,
@@ -663,25 +742,28 @@ static std::string __nexa_http_perform(const std::string& method, const std::str
                                        std::vector<std::string>* respHeaders) {
   // WinHTTP and CFNetwork follow redirects for us; do the same here, bounded,
   // and demote to GET the way both of those stacks do on 301/302/303.
-  std::string target = url;
-  std::string verb = method;
-  std::string payload = body;
+  __nexa_hb target;
+  target.put(url.data(), url.size());
+  const char* verb = method.c_str();
+  size_t bodyLen = body.size();
   for (int hop = 0; hop < 5; hop++) {
     *status = 0;
     respBody->clear();
     respHeaders->clear();
-    std::string err = __nexa_http_once(verb, target, payload, headers, status, respBody, respHeaders);
-    if (!err.empty()) return err;
-    if (*status != 301 && *status != 302 && *status != 303 && *status != 307 && *status != 308) {
-      return std::string();
-    }
-    std::string loc = __nexa_http_resolve_url(target, __nexa_http_header_value(*respHeaders, "Location"));
-    if (loc.empty()) return std::string();
-    if (*status != 307 && *status != 308 && verb != "GET" && verb != "HEAD") {
+    const char* err = __nexa_http_once(verb, target.p ? target.p : "", target.n, body.data(), bodyLen,
+                                       headers, status, respBody, respHeaders);
+    if (err) return err;
+    const int s = *status;
+    if (s != 301 && s != 302 && s != 303 && s != 307 && s != 308) return std::string();
+    size_t ll = 0;
+    const char* loc = __nexa_http_hval(*respHeaders, "Location", &ll);
+    __nexa_hb next;
+    if (!loc || !__nexa_http_resolve(target.p, target.n, loc, ll, next)) return std::string();
+    if (s != 307 && s != 308 && std::strcmp(verb, "GET") != 0 && std::strcmp(verb, "HEAD") != 0) {
       verb = "GET";
-      payload.clear();
+      bodyLen = 0;
     }
-    target = loc;
+    target.swap(next);
   }
   return "too many redirects";
 }
@@ -702,7 +784,9 @@ static __nexa_result<std::string> __nexa_http_simple(const std::string& method, 
   std::string err = __nexa_http_perform(method, url, body, headers, &status, &respBody, &respHeaders);
   if (!err.empty()) return __nexa_result<std::string>::make_err(err);
   if (status < 200 || status >= 300) {
-    return __nexa_result<std::string>::make_err("HTTP " + std::to_string(status));
+    char b[24];
+    std::snprintf(b, sizeof b, "HTTP %d", status);
+    return __nexa_result<std::string>::make_err(b);
   }
   return __nexa_result<std::string>::make_ok(respBody);
 }
@@ -869,34 +953,28 @@ static int __nexa_http_send_all(__nexa_sock_t s, const char* p, size_t n) {
   __nexa_http_server srv;
   srv.port = 0;
   srv.socket = -1;
-  if (!__nexa_sock_start()) return __nexa_result<__nexa_http_server>::make_err("sockets unavailable");
-  __nexa_sock_t fd = socket(AF_INET, SOCK_STREAM, 0);
-  if (fd == __NEXA_SOCK_BAD) return __nexa_result<__nexa_http_server>::make_err("could not open socket");
-  int one = 1;
-  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&one, (socklen_t)sizeof(one));
-  struct sockaddr_in addr;
-  memset(&addr, 0, sizeof(addr));
-  addr.sin_family = AF_INET;
-  addr.sin_port = htons((unsigned short)port);
-  addr.sin_addr.s_addr = htonl(0x7f000001u);          // 127.0.0.1, always
-  if (bind(fd, (struct sockaddr*)&addr, (socklen_t)sizeof(addr)) != 0) {
-    __nexa_sock_close(fd);
-    return __nexa_result<__nexa_http_server>::make_err("could not bind 127.0.0.1");
+  const char* err = nullptr;
+  __nexa_sock_t fd = __NEXA_SOCK_BAD;
+  if (!__nexa_sock_start()) err = "sockets unavailable";
+  else if ((fd = socket(AF_INET, SOCK_STREAM, 0)) == __NEXA_SOCK_BAD) err = "could not open socket";
+  if (!err) {
+    int one = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&one, (socklen_t)sizeof(one));
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((unsigned short)port);
+    addr.sin_addr.s_addr = htonl(0x7f000001u);          // 127.0.0.1, always
+    socklen_t blen = (socklen_t)sizeof(addr);
+    if (bind(fd, (struct sockaddr*)&addr, (socklen_t)sizeof(addr)) != 0) err = "could not bind 127.0.0.1";
+    else if (listen(fd, 16) != 0) err = "could not listen";
+    // Port 0 asked the OS to pick; read back which one it picked, so a caller
+    // never has to guess a free port.
+    else if (getsockname(fd, (struct sockaddr*)&addr, &blen) != 0) err = "could not read the bound port";
+    if (err) __nexa_sock_close(fd);
+    srv.port = (int)ntohs(addr.sin_port);
   }
-  if (listen(fd, 16) != 0) {
-    __nexa_sock_close(fd);
-    return __nexa_result<__nexa_http_server>::make_err("could not listen");
-  }
-  // Port 0 asked the OS to pick; read back which one it picked, so a caller
-  // never has to guess a free port.
-  struct sockaddr_in bound;
-  memset(&bound, 0, sizeof(bound));
-  socklen_t blen = (socklen_t)sizeof(bound);
-  if (getsockname(fd, (struct sockaddr*)&bound, &blen) != 0) {
-    __nexa_sock_close(fd);
-    return __nexa_result<__nexa_http_server>::make_err("could not read the bound port");
-  }
-  srv.port = (int)ntohs(bound.sin_port);
+  if (err) return __nexa_result<__nexa_http_server>::make_err(err);
   srv.socket = (int)fd;
   return __nexa_result<__nexa_http_server>::make_ok(srv);
 }
@@ -909,43 +987,52 @@ static int __nexa_http_send_all(__nexa_sock_t s, const char* p, size_t n) {
   int one = 1;
   setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, (const char*)&one, (socklen_t)sizeof(one));
 #endif
-  std::string data;
-  char buf[4096];
-  size_t hdrEnd = std::string::npos;
+  // Read until the blank line that ends the headers, then as much body as
+  // Content-Length says, all into one buffer.
+  __nexa_hb data;
+  size_t hdrEnd = (size_t)-1;
+  size_t from = 0;  // where the search for the blank line goes on from
   for (;;) {
-    hdrEnd = data.find("\r\n\r\n");
-    if (hdrEnd != std::string::npos) break;
-    int n = (int)recv(fd, buf, (int)sizeof(buf), 0);
+    size_t at = __nexa_http_blank_line(data.p + from, data.n - from);
+    if (at != (size_t)-1) { hdrEnd = from + at; break; }
+    from = data.n > 3 ? data.n - 3 : 0;
+    char* d = data.room(4096);
+    if (!d) break;
+    int n = (int)recv(fd, d, 4096, 0);
     if (n <= 0) break;
-    data.append(buf, (size_t)n);
+    data.n += (size_t)n;
   }
-  if (hdrEnd == std::string::npos) {
+  if (hdrEnd == (size_t)-1) {
     __nexa_sock_close(fd);
     return __nexa_result<__nexa_http_incoming>::make_err("malformed request");
   }
   // "GET /path HTTP/1.1" is not a header line, so it is split off before the
   // rest goes through the same header parser the client's responses use.
-  std::string head = data.substr(0, hdrEnd + 2);
-  size_t eol = head.find("\r\n");
-  std::string line = head.substr(0, eol);
-  req.headers = __nexa_http_split_headers(head.substr(eol + 2));
-  size_t sp1 = line.find(' ');
-  if (sp1 != std::string::npos) {
-    req.method = line.substr(0, sp1);
-    size_t sp2 = line.find(' ', sp1 + 1);
-    req.path = (sp2 == std::string::npos) ? line.substr(sp1 + 1)
-                                          : line.substr(sp1 + 1, sp2 - sp1 - 1);
+  size_t eol = 0;
+  while (!(data.p[eol] == '\r' && data.p[eol + 1] == '\n')) eol++;
+  __nexa_http_split_headers(data.p + eol + 2, hdrEnd - eol, req.headers);
+  const char* line = data.p;
+  const char* sp1 = (const char*)std::memchr(line, ' ', eol);
+  if (sp1) {
+    req.method.assign(line, (size_t)(sp1 - line));
+    const char* rest = sp1 + 1;
+    const char* le = line + eol;
+    const char* sp2 = (const char*)std::memchr(rest, ' ', (size_t)(le - rest));
+    req.path.assign(rest, (size_t)((sp2 ? sp2 : le) - rest));
   }
-  std::string body = data.substr(hdrEnd + 4);
-  std::string cl = __nexa_http_header_value(req.headers, "Content-Length");
-  size_t want = cl.empty() ? (size_t)0 : (size_t)std::strtoul(cl.c_str(), nullptr, 10);
-  while (body.size() < want) {
-    int n = (int)recv(fd, buf, (int)sizeof(buf), 0);
+  size_t vl = 0;
+  const char* cl = __nexa_http_hval(req.headers, "Content-Length", &vl);
+  const size_t want = (cl && vl) ? (size_t)std::strtoul(cl, nullptr, 10) : (size_t)0;
+  const size_t start = hdrEnd + 4;
+  while (data.n - start < want) {
+    char* d = data.room(4096);
+    if (!d) break;
+    int n = (int)recv(fd, d, 4096, 0);
     if (n <= 0) break;
-    body.append(buf, (size_t)n);
+    data.n += (size_t)n;
   }
-  if (body.size() > want) body.resize(want);
-  req.body = body;
+  const size_t have = data.n - start;
+  req.body.assign(data.p + start, have < want ? have : want);
   req.socket = (int)fd;
   return __nexa_result<__nexa_http_incoming>::make_ok(req);
 }
@@ -954,19 +1041,25 @@ static int __nexa_http_send_all(__nexa_sock_t s, const char* p, size_t n) {
 // program that wants to frame a response itself reaches for http.raw.
 [[maybe_unused]] static int __nexa_http_reply(const __nexa_http_incoming& req, int status, const std::string& body,
                              const std::vector<std::string>& headers) {
-  std::string out = "HTTP/1.1 " + std::to_string(status) + " " + __nexa_http_reason(status) + "\r\n";
+  __nexa_hb out;
+  out.str("HTTP/1.1 ");
+  out.num(status);
+  out.put(" ", 1);
+  out.str(__nexa_http_reason(status));
+  out.put("\r\n", 2);
   for (size_t i = 0; i < headers.size(); i++) {
     if (headers[i].empty()) continue;
     if (__nexa_http_header_named(headers[i], "Content-Length")) continue;
     if (__nexa_http_header_named(headers[i], "Connection")) continue;
-    out += headers[i];
-    out += "\r\n";
+    out.put(headers[i].data(), headers[i].size());
+    out.put("\r\n", 2);
   }
-  out += "Content-Length: " + std::to_string(body.size()) + "\r\n";
-  out += "Connection: close\r\n\r\n";
-  out += body;
+  out.str("Content-Length: ");
+  out.num((long long)body.size());
+  out.str("\r\nConnection: close\r\n\r\n");
+  out.put(body.data(), body.size());
   __nexa_sock_t fd = (__nexa_sock_t)req.socket;
-  int ok = __nexa_http_send_all(fd, out.data(), out.size());
+  int ok = !out.bad && __nexa_http_send_all(fd, out.p, out.n);
   __nexa_sock_close(fd);
   return ok;
 }

@@ -293,6 +293,35 @@ fn main() {
     fi
 fi
 
+# Networking. The http client was 15KB on Windows and 34KB on Linux while it put
+# requests together as chains of std::string + and substr; a udp program with
+# nobody's threads was 20KB on Windows because the sender table's thread_local
+# kept it off NexaC's own entry point. Now 11.8KB / 22.1KB and 9.7KB (14KB on
+# Linux): the ceilings leave room for a toolchain, not for those to come back.
+NET_HTTP_MAX=; NET_UDP_MAX=
+[ "$WINDOWS" = 1 ] && { NET_HTTP_MAX=14336; NET_UDP_MAX=12288; }
+[ "$HELLO_MAX" = 6144 ] && [ "$WINDOWS" != 1 ] && { NET_HTTP_MAX=26624; NET_UDP_MAX=16384; }
+if [ -n "$NET_HTTP_MAX" ]; then
+    printf '#include <std/network>\n#include <std/io>\nfn main() {\n    let r = http.get("http://127.0.0.1:1/x");\n    io.println(r.ok());\n}\n' > "$WORK/hget.nxa"
+    if "$NEXAC" "$WORK/hget.nxa" -o "$WORK/hget$EXE" > "$WORK/bn.log" 2>&1; then
+        size=$(wc -c < "$WORK/hget$EXE" | tr -d ' ')
+        if [ "$size" -ge "$NET_HTTP_MAX" ]; then bad http_client "$size bytes, $NET_HTTP_MAX or more"
+        else ok "http_client ($size bytes)"; fi
+    else
+        bad http_client "build failed: $(tail -3 "$WORK/bn.log")"
+    fi
+    printf '#include <std/network>\n#include <std/io>\nfn main() {\n    let u = udp.open(0);\n    udp.send(u, "127.0.0.1", udp.port(u), "hi");\n    io.println(udp.recv(u), " ", udp.sender(u));\n}\n' > "$WORK/udp.nxa"
+    if "$NEXAC" "$WORK/udp.nxa" -o "$WORK/udp$EXE" > "$WORK/bu.log" 2>&1; then
+        size=$(wc -c < "$WORK/udp$EXE" | tr -d ' ')
+        out=$("$WORK/udp$EXE" | tr -d "$CR")
+        if [ "$size" -ge "$NET_UDP_MAX" ]; then bad udp "$size bytes, $NET_UDP_MAX or more"
+        elif [ "$out" != "hi 127.0.0.1" ]; then bad udp "printed [$out]"
+        else ok "udp ($size bytes)"; fi
+    else
+        bad udp "build failed: $(tail -3 "$WORK/bu.log")"
+    fi
+fi
+
 cat > "$WORK/value.nxa" <<'EOF'
 #include <std/io>
 fn load(): Result[string] { return err("no such file"); }

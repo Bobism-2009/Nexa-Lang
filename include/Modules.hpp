@@ -2228,7 +2228,7 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
             out += tcpRuntimeCpp(usage.tcpConnect, usage.tcpListen);
         }
         if (hasUdp() && usage.udp) {
-            out += udpRuntimeCpp(usage.udpSender);
+            out += udpRuntimeCpp(usage.udpSender, usage.thread);
         }
         // std/gfx and std/gfx3d both play sound, and there is one mixer between
         // them -- emitted once ahead of both, the same way socketPlatformCpp is
