@@ -3992,7 +3992,7 @@ int main(int argc, char* argv[]) {
         // will not link it -- costs one more build: the ordinary one, which shows its own
         // output as it always did.
         if (slimTarget && noExceptions && cppTarget == nexa::CppTarget::Windows && !buildDll && !buildShared &&
-            nexaLinkInputsAreResourcesOnly(linkInputs) && !modules.inlineCppNeedsCxxRuntime() && !modules.hasCppHeader() &&
+            nexaLinkInputsAreResourcesOnly(linkInputs) && !modules.inlineCppNeedsCxxRuntime() && !modules.hasForeignHeader() &&
             std::getenv("NEXA_NO_SLIM_ENTRY") == nullptr &&
             cpp.find("std::thread") == std::string::npos && cpp.find("thread_local") == std::string::npos &&
             cpp.find("<thread>") == std::string::npos && cpp.find("<mutex>") == std::string::npos &&
@@ -4016,7 +4016,7 @@ int main(int argc, char* argv[]) {
         // The same below glibc's startup files (see kNexaLinuxEntry). Threads need nothing
         // from them, so a program that starts one is no exception here.
         if (slimTarget && noExceptions && cppTarget == nexa::CppTarget::Linux && !buildWin && !buildDll &&
-            !buildShared && linkInputs.empty() && !modules.inlineCppNeedsCxxRuntime() && !modules.hasCppHeader() &&
+            !buildShared && linkInputs.empty() && !modules.inlineCppNeedsCxxRuntime() && !modules.hasForeignHeader() &&
             std::getenv("NEXA_NO_SLIM_ENTRY") == nullptr && nexaGlibcHasStartMainInit()) {
             { std::ofstream eo(cppPath, std::ios::app); eo << kNexaLinuxEntry; }
             const std::string log = cppPath + ".log";

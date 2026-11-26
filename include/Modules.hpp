@@ -296,6 +296,22 @@ public:
             if (name == std::string(h) + ".h" || name == "c" + std::string(h)) isStd = true;
         }
         if (!isStd) hasThrowingHeader_ = true;
+        // The C++ standard library's own (<cstring>, <fstream>, <vector>) start nothing
+        // and need nothing from the C runtime's startup; a header of the program's own or
+        // a library's ("mine.h", <SDL2/SDL.h>), or the standard's threads, may.
+        static const char* const threads[] = {"thread", "mutex", "future", "condition_variable", "shared_mutex",
+                                              "stop_token", "latch", "barrier", "semaphore"};
+        bool foreign = !isStd && (name.empty() || name.find_first_of("./") != std::string::npos);
+        for (const char* h : threads) {
+            if (name == h) foreign = true;
+        }
+        if (foreign) hasForeignHeader_ = true;
+    }
+
+    // Whether a header other than the C and C++ standard libraries' was included (see
+    // noteCppHeader): only that keeps a program off NexaC's own entry point.
+    bool hasForeignHeader() const {
+        return hasForeignHeader_;
     }
 
     // Whether a header other than the C standard library's was included (see noteCppHeader).
@@ -497,6 +513,12 @@ public:
         out += "#if defined(__EMSCRIPTEN__) || defined(__wasi__)\n";
         out += "#ifndef NEXA_WASM\n#define NEXA_WASM 1\n#endif\n";
         out += "#endif\n";
+        // Winsock 2 ahead of anything that includes <windows.h>, which otherwise brings
+        // Winsock 1 with it, and the two disagree (a compiler warning in every program
+        // with sockets and a file or os call). <winsock2.h> includes <windows.h> itself.
+        if ((hasTcp() && usage.tcp) || (hasUdp() && usage.udp) || (hasHttp() && usage.http && usage.httpServer)) {
+            out += "#if defined(_WIN32) && !defined(__EMSCRIPTEN__) && !defined(__wasi__)\n#include <winsock2.h>\n#endif\n";
+        }
         if (usage.exceptions) {
             out += "#include <stdexcept>\n";
         }
@@ -2880,6 +2902,7 @@ private:
     bool inlineCppBlocks_ = false;
     bool inlineCppNeedsCxxRuntime_ = false;
     bool hasCppHeader_ = false;
+    bool hasForeignHeader_ = false;
     bool hasThrowingHeader_ = false;
 };
 

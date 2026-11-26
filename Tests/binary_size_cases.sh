@@ -345,6 +345,17 @@ if [ "$SLIM" = 1 ]; then
     else
         bad inline_cpp_throws "build failed: $(tail -3 "$WORK/bi.log")"
     fi
+    # A standard header kept a program off NexaC's own entry point as if it were a
+    # library's: hello world with #include <cstring> was 13.8KB on Windows, 14.4KB
+    # on Linux. Only a header of the program's own or a library's does that now.
+    printf '#include <std/io>\n#include <cstring>\nfn main() {\n    io.println("hi");\n}\n' > "$WORK/hdr.nxa"
+    if "$NEXAC" "$WORK/hdr.nxa" -o "$WORK/hdr$EXE" > "$WORK/bi.log" 2>&1; then
+        size=$(wc -c < "$WORK/hdr$EXE" | tr -d ' ')
+        if [ "$size" -ge 10240 ]; then bad std_header "$size bytes, 10KB or more"
+        else ok "std_header ($size bytes)"; fi
+    else
+        bad std_header "build failed: $(tail -3 "$WORK/bi.log")"
+    fi
 fi
 
 cat > "$WORK/value.nxa" <<'EOF'
