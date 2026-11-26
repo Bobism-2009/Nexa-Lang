@@ -15,6 +15,11 @@
 #   the rest            strings, lists, maps, files, own errors, defers, switch
 #
 #   sleep     time.sleep on the page's thread prints both sides of it, in order.
+#   uncaught  a kept C++ exception nothing catches: "Uncaught error", status 1,
+#             nothing printed lost (it escaped to JavaScript, unreported).
+#   browser   in headless Chrome, when there is one: std/http from a page (it
+#             failed every request: a synchronous fetch is a worker's only),
+#             and std/gfx's mouse, wheel, keys and typed text, closure-compiled.
 #   budget    hello world and an empty program stay small: the loader with the
 #             module inside it, the file a page downloads.
 #
@@ -101,6 +106,124 @@ else
     echo "FAIL sleep: time.sleep on the page's thread"
     run sl "$WORK/sl.js" 2>&1 | head -3 | sed 's/^/  /'
     fails=$((fails + 1))
+fi
+
+# --- uncaught ---------------------------------------------------------------
+# Kept C++ exceptions: one nothing catches says so and the status is 1, and what
+# was printed is all there -- a line with no newline yet comes out as the program
+# ends, after the message, as with NexaC's own errors on wasm.
+cp "$HERE/Lang/throw_header_text.hpp" "$WORK/"
+cat > "$WORK/un.nxa" <<'EOF'
+#include "throw_header_text.hpp"
+#include <std/io>
+fn main() {
+    io.print("partial ");
+    throw header_text();
+}
+EOF
+if "$NEXAC" "$WORK/un.nxa" --wasm -o "$WORK/un.js" > "$WORK/un.log" 2>&1; then
+    run un "$WORK/un.js" > "$WORK/un.out"; st=$?
+    if [ "$(tr -d '\r' < "$WORK/un.out" | tr '\n' '|')" = "Uncaught error: from std::string|partial |" ] && [ $st -eq 1 ]; then
+        passes=$((passes + 1))
+    else
+        echo "FAIL uncaught: a C++ exception nothing catches (status $st)"
+        run un "$WORK/un.js" 2>&1 | head -4 | sed 's/^/  /'
+        fails=$((fails + 1))
+    fi
+else
+    echo "FAIL uncaught: the build failed"; fails=$((fails + 1))
+fi
+
+# --- browser ----------------------------------------------------------------
+# What node cannot run: std/http (the browser's fetch) and std/gfx input, in
+# headless Chrome through Tests/wasm_browser.mjs. NEXA_CHROME names a browser;
+# otherwise the usual places. Skipped without one.
+chrome=${NEXA_CHROME:-}
+if [ -z "$chrome" ]; then
+    for c in "/c/Program Files/Google/Chrome/Application/chrome.exe" \
+             "/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe" \
+             "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"; do
+        [ -x "$c" ] && { chrome=$c; break; }
+    done
+fi
+if [ -z "$chrome" ]; then
+    for c in google-chrome google-chrome-stable chromium chromium-browser; do
+        command -v "$c" >/dev/null 2>&1 && { chrome=$(command -v "$c"); break; }
+    done
+fi
+if [ -z "$chrome" ]; then
+    echo "skip browser: no Chrome or Chromium (set NEXA_CHROME)"
+else
+    drive() { node "$HERE/wasm_browser.mjs" "$chrome" "$@" 2>&1 | tr -d '\r'; }
+
+    port=$((18000 + $$ % 1000))
+    cat > "$WORK/net.nxa" <<EOF
+#include <std/network>
+#include <std/io>
+fn main() {
+    io.println(http.get("http://127.0.0.1:$port/x").value());
+    io.println(http.post("http://127.0.0.1:$port/p", "payload").value());
+    io.println(http.get("http://127.0.0.1:$port/h", ["X-T: tok"]).value());
+    io.println("missing ok=", http.get("http://127.0.0.1:$port/missing").ok());
+}
+EOF
+    echo '[["wait",3000],["eval","document.getElementById(\"nexa-out\").textContent"]]' > "$WORK/net.json"
+    want='eval: "GET /x [] \nPOST /p [payload] \nGET /h [] tok\nmissing ok=false\n"'
+    if "$NEXAC" "$WORK/net.nxa" --wasm -o "$WORK/net.js" > "$WORK/net.log" 2>&1; then
+        got=$(drive "$WORK/net.html" "$WORK/net.json" --serve $port)
+        if [ "$got" = "$want" ]; then
+            passes=$((passes + 1))
+        else
+            echo "FAIL browser http: GET, POST, a header and a 404 from the page"
+            printf '%s\n' "$got" | head -5 | sed 's/^/  /'
+            fails=$((fails + 1))
+        fi
+    else
+        echo "FAIL browser http: the build failed"; fails=$((fails + 1))
+    fi
+
+    cat > "$WORK/inp.nxa" <<'EOF'
+#include <std/gfx>
+#include <std/io>
+#include <std/time>
+fn main() {
+    gfx.open("input", 200, 120, 2);
+    let wheel = 0;
+    let typed = "";
+    let last = "";
+    let n = 0;
+    while (gfx.closed() != 1 && n < 100000) {
+        gfx.poll();
+        n++;
+        wheel = wheel + gfx.wheel();
+        typed = typed + gfx.typed();
+        let s = f"m={gfx.mouse_x()},{gfx.mouse_y()} left={gfx.mouse("left")} a={gfx.key("a")} wheel={wheel} typed={typed}";
+        if (s != last) { io.println(s); last = s; }
+        gfx.clear(20, 20, 60);
+        gfx.present();
+        time.sleep(16);
+    }
+}
+EOF
+    cat > "$WORK/inp.json" <<'EOF'
+[["wait",1500],["canvas"],
+ ["move",100,100],["wait",150],["down",100,100],["wait",150],["up",100,100],["wait",150],
+ ["wheel",100,100,-120],["wait",150],
+ ["keydown","a","KeyA",65,"a"],["wait",150],["keyup","a","KeyA",65],["wait",150]]
+EOF
+    if "$NEXAC" "$WORK/inp.nxa" --wasm -o "$WORK/inp.js" > "$WORK/inp.log" 2>&1; then
+        got=$(drive "$WORK/inp.html" "$WORK/inp.json" | sed 's/^console\.log: //' | tr '\n' '|')
+        want="m=0,0 left=0 a=0 wheel=0 typed=|m=50,50 left=0 a=0 wheel=0 typed=|m=50,50 left=1 a=0 wheel=0 typed=|m=50,50 left=0 a=0 wheel=0 typed=|m=50,50 left=0 a=0 wheel=1 typed=|m=50,50 left=0 a=1 wheel=1 typed=a|m=50,50 left=0 a=0 wheel=1 typed=a|"
+        if [ "$got" = "$want" ]; then
+            passes=$((passes + 1))
+        else
+            echo "FAIL browser gfx: mouse, button, wheel, key and typed text on the canvas"
+            printf '%s\n' "$got" | tr '|' '\n' | head -8 | sed 's/^/  /'
+            fails=$((fails + 1))
+        fi
+    else
+        echo "FAIL browser gfx: the build failed"; fails=$((fails + 1))
+    fi
 fi
 
 # --- budget -----------------------------------------------------------------

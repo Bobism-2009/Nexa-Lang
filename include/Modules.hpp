@@ -454,6 +454,28 @@ public:
                    "}\n"
                    "[[maybe_unused]] static const bool __nexa_terminate_set = (std::set_terminate(__nexa_terminate), true);\n"
                    "#endif\n";
+            if (usage.wasm) {
+                const std::string fl = "static void __nexa_terminate() {\n    std::fflush(stdout);\n";
+                const size_t at = out.rfind(fl);
+                if (at != std::string::npos) {
+                    // abort on wasm is a JavaScript RuntimeError with a stack trace after the
+                    // message. exit() cannot stand in: Emscripten exits by throwing, and a
+                    // throw out of a terminate handler terminates again. Under node the
+                    // process is ended with status 1, what an uncaught error ends with; a
+                    // page has no process to end, and aborts.
+                    const size_t end = out.find("__nexa_terminate_set", at);
+                    for (size_t p = out.find("std::abort();", at); p != std::string::npos && p < end;
+                         p = out.find("std::abort();", p)) {
+                        out.replace(p, 13, "__nexa_wasm_die();");
+                    }
+                    out.insert(out.rfind("[[noreturn]] static void __nexa_terminate()", at),
+                               "[[noreturn]] static void __nexa_wasm_die() {\n"
+                               "    EM_ASM({ if (typeof process == 'object' && process.exit) process.exit(1); });\n"
+                               "    std::abort();\n"
+                               "}\n");
+                    out.insert(out.rfind("#if defined(__cpp_exceptions)\n", at), "#include <emscripten.h>\n");
+                }
+            }
         }
         if (hasIo() && (usage.ioPrint || usage.ioReadln || usage.ioFlush)) {
             out += "#include <cstdio>\n";

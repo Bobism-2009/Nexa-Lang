@@ -304,6 +304,10 @@ static std::string __nexa_http_perform(const std::string& method, const std::str
 }
 #elif defined(__EMSCRIPTEN__)
 #include <emscripten/fetch.h>
+#include <emscripten.h>
+#ifdef __EMSCRIPTEN_PTHREADS__
+#include <emscripten/threading.h>
+#endif
 #include <cstring>
 static std::string __nexa_http_perform(const std::string& method, const std::string& url,
                                        const std::string& body, const std::vector<std::string>& headers,
@@ -313,7 +317,21 @@ static std::string __nexa_http_perform(const std::string& method, const std::str
   emscripten_fetch_attr_init(&attr);
   std::memset(attr.requestMethod, 0, sizeof(attr.requestMethod));
   std::strncpy(attr.requestMethod, method.c_str(), sizeof(attr.requestMethod) - 1);
-  attr.attributes = EMSCRIPTEN_FETCH_LOAD_TO_MEMORY | EMSCRIPTEN_FETCH_SYNCHRONOUS;
+  // A synchronous fetch is only had on a worker: on the page's thread emscripten_fetch
+  // refuses it and every request failed. There the request runs asynchronously and the
+  // call waits with emscripten_sleep (the program is built with ASYNCIFY), so the page
+  // goes on while it does.
+  bool onWorker = false;
+#ifdef __EMSCRIPTEN_PTHREADS__
+  onWorker = !emscripten_is_main_browser_thread();
+#endif
+  volatile int done = 0;
+  attr.attributes = EMSCRIPTEN_FETCH_LOAD_TO_MEMORY | (onWorker ? EMSCRIPTEN_FETCH_SYNCHRONOUS : 0);
+  if (!onWorker) {
+    attr.userData = (void*)&done;
+    attr.onsuccess = [](emscripten_fetch_t* f) { *(volatile int*)f->userData = 1; };
+    attr.onerror = [](emscripten_fetch_t* f) { *(volatile int*)f->userData = 1; };
+  }
   // requestHeaders is a null-terminated name,value,name,value,... array that
   // has to outlive the fetch, so the split pieces are kept alive alongside it.
   std::vector<std::string> parts;
@@ -336,6 +354,12 @@ static std::string __nexa_http_perform(const std::string& method, const std::str
   }
   emscripten_fetch_t* fetch = emscripten_fetch(&attr, url.c_str());
   if (!fetch) return "request failed";
+  while (!onWorker && !done) emscripten_sleep(1);
+  // A request the browser would not make (no server, CORS) ends with status 0.
+  if (fetch->status == 0) {
+    emscripten_fetch_close(fetch);
+    return "request failed";
+  }
   *status = (int)fetch->status;
   if (fetch->data && fetch->numBytes) respBody->assign(fetch->data, fetch->numBytes);
   size_t hdrLen = emscripten_fetch_get_response_headers_length(fetch);

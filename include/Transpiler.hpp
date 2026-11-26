@@ -2118,6 +2118,32 @@ public:
             src += gfxStbImageRuntimeCpp();
         }
         if (cppUsage_.ui) src += uiRuntimeCpp();
+        if (target_ == CppTarget::Wasm && !ownErrors_ && (cppUsage_.exceptions || modules_.hasInlineCpp())) {
+            // A C++ exception nothing catches leaves a wasm main for JavaScript, which reports
+            // an unhandled rejection: std::terminate, whose handler prints "Uncaught error" and
+            // flushes what was printed, never runs. Catching it at main calls it, as natively.
+            for (const char* sig : {"int main() {\n", "int main(int argc, char** argv) {\n"}) {
+                const std::string s = std::string("\n") + sig;
+                const size_t at = src.find(s);
+                if (at == std::string::npos || src.find(s, at + 1) != std::string::npos) continue;
+                const bool args = s.find("argc") != std::string::npos;
+                src.replace(at + 1, s.size() - 1, args ? "static int __nexa_user_main(int argc, char** argv) {\n"
+                                                       : "static int __nexa_user_main() {\n");
+                // Reported here and returned from, not handed to std::terminate: an ordinary
+                // exit is what writes out the rest of stdout (a line with no newline yet).
+                // catch (...) also catches JavaScript's own exceptions, and exit() is one of
+                // them (Emscripten unwinds with it): only a C++ exception has a
+                // current_exception, and the rest go on.
+                src += args ? "int main(int argc, char** argv) {\n    try { return __nexa_user_main(argc, argv); }\n"
+                            : "int main() {\n    try { return __nexa_user_main(); }\n";
+                src += "    catch (const std::exception& __e) { std::fflush(stdout); std::fprintf(stderr, \"Uncaught error: %s\\n\", __e.what()); }\n"
+                       "    catch (const std::string& __e) { std::fflush(stdout); std::fprintf(stderr, \"Uncaught error: %s\\n\", __e.c_str()); }\n"
+                       "    catch (const char* __e) { std::fflush(stdout); std::fprintf(stderr, \"Uncaught error: %s\\n\", __e ? __e : \"\"); }\n"
+                       "    catch (...) { if (!std::current_exception()) throw; std::fflush(stdout); std::fputs(\"Uncaught error\\n\", stderr); }\n"
+                       "    return 1;\n}\n";
+                break;
+            }
+        }
         // Last, once nothing else will add or drop a line: turn the statement markers into
         // `#line` directives. The appended gfx runtime carries no markers, and the final
         // snap-back before it already points line info back at the generated file.

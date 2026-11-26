@@ -1800,9 +1800,9 @@ static std::string nexaWasmCompileCmd(
         // for a page and for node, not for d8 or a bare worker. A thread's worker is
         // added back by -pthread itself.
         cmd += " -sMALLOC=emmalloc -sENVIRONMENT=web,node";
-        // Closure shrinks the loader by half or more. Only for a program whose
-        // JavaScript is all Emscripten's: std/gfx, std/gfx3d and std/http bring
-        // their own, which it would rename.
+        // Closure shrinks the loader by half or more (std/gfx's 98KB to 54KB). Not
+        // with inline_cpp, a C++ header or a linked object, whose JavaScript (EM_JS,
+        // EM_ASM) NexaC has not seen and closure could rename.
         if (closure) cmd += " --closure 1";
         if (linkHttp) cmd += " -sFETCH=1";
         // gfx3d.present yields with emscripten_sleep so the page can
@@ -3772,7 +3772,7 @@ int main(int argc, char* argv[]) {
             const bool singleFile = (wasmTool.kind == WasmKind::Emscripten) && !wasmSplit;
             // --small is -Oz on wasm: Emscripten's -Os keeps more of its loader.
             const std::string wasmOpt = (optimizeSize && !debugBuild) ? "-Oz" : opt;
-            const bool closure = !debugBuild && !linkHttp && !linkGfx && !linkGfx3d && !modules.hasInlineCpp() &&
+            const bool closure = !debugBuild && !modules.hasInlineCpp() &&
                                  !modules.hasCppHeader() && linkInputs.empty();
             std::string cmd = nexaWasmCompileCmd(wasmTool, cppPath, wasmOut, wasmOpt, noExceptions, noRtti,
                 linkHttp, modules.hasThread() && usage.thread,
