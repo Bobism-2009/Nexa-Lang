@@ -314,11 +314,12 @@ public:
         std::ostringstream out;
         renameKeywordMembers();
         // try / catch / throw by NexaC itself, not C++ exceptions, where it can see every
-        // path an error takes. Foreign C/C++ can throw its own, a library's caller is not
-        // Nexa, so those keep the exception runtime.
-        ownErrors_ = ownErrorsAllowed_ && !buildDll_ && !modules_.hasInlineCpp() && !modules_.hasCppHeader() &&
+        // path an error takes. Foreign C/C++ can throw its own, so that keeps the exception
+        // runtime -- not the C standard library's headers, which cannot. A library's caller
+        // is not Nexa: see dllWrapsErrors.
+        ownErrors_ = ownErrorsAllowed_ && !modules_.hasInlineCpp() && !modules_.hasThrowingHeader() &&
                      ownErrorsEligible();
-        if (!ownErrors_) { mayThrowFns_.clear(); mayThrowMethods_.clear(); ownErrLambdas_.clear(); valueCalls_.clear(); fnValuesThrow_ = false; }
+        if (!ownErrors_) { mayThrowFns_.clear(); mayThrowMethods_.clear(); ownErrLambdas_.clear(); valueCalls_.clear(); fnValuesThrow_ = false; throwingDefers_.clear(); }
 
         if (target_ == CppTarget::Wasm) {
             out << "#define NEXA_WASM 1\n";
@@ -541,7 +542,7 @@ public:
                     break;
                 case AstNode::Type::ThreadSpawn:
                     cppUsage.thread = true;
-                    if (!n.children.empty()) cppUsage.threadLambda = true;
+                    if (!n.children.empty() || (ownErrors_ && mayThrowFns_.count(n.value))) cppUsage.threadLambda = true;
                     break;
                 case AstNode::Type::ThreadJoin: cppUsage.thread = true; break;
                 case AstNode::Type::ExprBits: cppUsage.bits = true; break;
@@ -959,21 +960,36 @@ public:
         // xs.sort(): kSortRuntime, put in after the emit only if a call reached it.
         if (needsVector) out << kSortMarker;
         if (needsFmt) out << kFmtRuntime;
-        if (ownErrors_) out << kOwnErrorsRuntime;
+        if (ownErrors_) {
+            // With threads, each has its own error: one thread's throw is not another's.
+            std::string rt = kOwnErrorsRuntime;
+            if (cppUsage_.thread || buildDll_) {
+                for (const char* v : {"static bool __nexa_err", "static std::string __nexa_err_msg"}) {
+                    const size_t at = rt.find(v);
+                    if (at != std::string::npos) rt.insert(at + 7, "thread_local ");
+                }
+            }
+            out << rt;
+        }
+        if (ownErrors_ && !throwingDefers_.empty()) out << kOwnDeferRuntime;
         // The string methods a call reached (s.split, s.trim, ...), filled in after the emit.
         out << kStrMarker;
         if (needsCstr) out << "[[maybe_unused]] static std::string __nexa_cstr(const char* __p) { return __p ? std::string(__p) : std::string(); }\n\n";
         if (needsDefer) {
             // A defer runs its body when the guard is destroyed -- at block exit,
             // by any path, in reverse order of the defers in the block.
+            // With C++'s exceptions, one thrown in a defer goes on to the catch around it, as
+            // NexaC's own do: a destructor is noexcept unless it says otherwise.
+            const bool deferMayThrow = !ownErrors_ && astUsesThrow(ast_);
             out << "template <class __NxF> struct __nexa_Defer {\n"
                    "    __NxF __f; bool __on;\n"
                    "    __nexa_Defer(__NxF __fn) : __f(__fn), __on(true) {}\n"
                    "    __nexa_Defer(__nexa_Defer&& __o) : __f(__o.__f), __on(__o.__on) { __o.__on = false; }\n"
                    "    __nexa_Defer(const __nexa_Defer&) = delete;\n"
                    "    __nexa_Defer& operator=(const __nexa_Defer&) = delete;\n"
-                   "    ~__nexa_Defer() { if (__on) __f(); }\n"
-                   "};\n"
+                   << (deferMayThrow ? "    ~__nexa_Defer() noexcept(false) { if (__on) __f(); }\n"
+                                     : "    ~__nexa_Defer() { if (__on) __f(); }\n")
+                   << "};\n"
                    "template <class __NxF> __nexa_Defer<__NxF> __nexa_make_defer(__NxF __fn) { return __nexa_Defer<__NxF>(__fn); }\n\n";
         }
 
@@ -1399,7 +1415,7 @@ public:
                     } else {
                         retCpp = hasValRet ? "int" : "void";
                     }
-                    out << ((buildDll_ && !shapeSpecs) ? "extern \"C\" NEXA_EXPORT " : "static ") << retCpp << " " << cppName << "(";
+                    out << ((buildDll_ && !shapeSpecs && !dllWrapsErrors(fn)) ? "extern \"C\" NEXA_EXPORT " : "static ") << retCpp << " " << cppName << "(";
                     for (size_t i = 0; i < fn.paramNames.size(); i++) {
                         if (i > 0) out << ", ";
                         std::string nexaT = "int";
@@ -1518,7 +1534,7 @@ public:
                     voidFn = !hasValRet;
                     retCpp = hasValRet ? "int" : "void";
                 }
-                out << ((buildDll_ && !shapeSpecs) ? "extern \"C\" NEXA_EXPORT " : "static ") << retCpp << " " << cppName << "(";
+                out << ((buildDll_ && !shapeSpecs && !dllWrapsErrors(fn)) ? "extern \"C\" NEXA_EXPORT " : "static ") << retCpp << " " << cppName << "(";
                 std::map<std::string, std::string> varMap = globalVarMap;
                 int varIdx = 0;
                 std::vector<std::pair<std::string, std::string>> dllStringParams;
@@ -1580,6 +1596,21 @@ public:
                 varStructPop();
                 emitImplicitFnTail(out, fn, hasValRet);
                 out << "}\n\n";
+                if (!shapeSpecs && dllWrapsErrors(fn)) {
+                    out << "extern \"C\" NEXA_EXPORT " << retCpp << " " << cppSafeName(fn.value) << "(";
+                    std::string args;
+                    for (size_t i = 0; i < fn.paramNames.size(); i++) {
+                        std::string nexaT = "int";
+                        if (i < fn.paramTypes.size() && !fn.paramTypes[i].empty()) nexaT = canonicalParamType(fn, i);
+                        const std::string a = "__nexa_a" + std::to_string(i);
+                        out << (i ? ", " : "") << (nexaT == "string" ? std::string("const char*") : paramSigCpp(fn, i)) << " " << a;
+                        args += (i ? ", " : "") + a;
+                    }
+                    const std::string call = cppName + "(" + args + ")";
+                    const std::string chk = "if (__builtin_expect(__nexa_err, 0)) { __nexa_uncaught(); std::exit(1); }";
+                    if (voidFn) out << ") {\n    " << call << ";\n    " << chk << "\n}\n\n";
+                    else out << ") {\n    auto __nexa_r = " << call << ";\n    " << chk << "\n    return __nexa_r;\n}\n\n";
+                }
                 if (emitPtr != &node) paramByRef_.erase(emitPtr);
                 specAst_ = nullptr;
                 specTypes_.clear();
@@ -2201,6 +2232,9 @@ private:
     std::string tryFnRet_;
     std::string tryFnName_;
     bool tryInMain_ = true;
+    // Emitting the job a thread runs: an error nothing in it catches ends the program,
+    // as an uncaught C++ exception on a thread does (there is no caller to hand it to).
+    bool errOnThread_ = false;
     // main with a return type other than int or void is a closure, where
     // `return 1;` is not how a failed `?` ends the program.
     bool tryMainExit_ = false;
@@ -2241,6 +2275,8 @@ private:
     // followed by the flag test. Every one emitted must be one counted here.
     std::set<const AstNode*> valueCalls_;
     bool fnValuesThrow_ = false;
+    // Defers whose body can throw, each with a scope of its own and a test after it.
+    std::set<const AstNode*> throwingDefers_;
 
     static bool isSliceFnName(const std::string& v) {
         return v == "find" || v == "any" || v == "all" || v == "filter" || v == "map" || v == "sort_by";
@@ -2326,6 +2362,24 @@ static std::string __nexa_err_msg;
 
 )NEXA_ERR";
 
+    // A defer that can throw. An error on its way out when it starts is put aside, so the
+    // body runs as it would have; after it, back it goes -- unless the body threw too,
+    // which (as with C++'s exceptions) ends the program.
+    static constexpr const char* kOwnDeferRuntime = R"NEXA_ERR([[maybe_unused]] static bool __nexa_defer_in(std::string& __m) {
+    if (__builtin_expect(!__nexa_err, 1)) return false;
+    __m = std::move(__nexa_err_msg);
+    __nexa_err = false;
+    return true;
+}
+[[maybe_unused]] static void __nexa_defer_out(bool __was, std::string& __m) {
+    if (__builtin_expect(!__was, 1)) return;
+    if (__nexa_err) { __nexa_uncaught(); std::exit(1); }
+    __nexa_err_msg = std::move(__m);
+    __nexa_err = true;
+}
+
+)NEXA_ERR";
+
     static bool fnIsVoid(const AstNode& fn) {
         if (fn.fnReturnType == "void") return true;
         if (!fn.fnReturnType.empty()) return false;
@@ -2337,6 +2391,7 @@ static std::string __nexa_err_msg;
     // Where an error goes from here: the innermost catch in this function, else out of it.
     std::string errPropagate() const {
         if (!errCatchLabels_.empty()) return "goto " + errCatchLabels_.back() + ";";
+        if (errOnThread_) return "{ __nexa_uncaught(); std::_Exit(1); }";
         if (tryFnName_ == "main") return "{ __nexa_uncaught(); std::exit(1); }";  // main written with a type
         if (tryInMain_) return "{ __nexa_uncaught(); return 1; }";
         if (emitFnRet_ == EmitFnRet::VoidFn) return "return;";
@@ -2723,16 +2778,42 @@ static std::string __nexa_err_msg;
             for (const AstNode& c : n.paramDefaults) noteLambdas(c);
         };
         for (const AstNode& n : ast_) noteLambdas(n);
+        // A defer that can throw gets a scope to the end of its block, and its error is
+        // taken on as the scope closes -- by the test after the scope, or by the caller's
+        // test when a return leaves through it. A break, continue or goto out of the scope
+        // would jump past that test, and so would a return from main, which has no caller
+        // to test: those keep C++'s exceptions.
+        bool deferOk = true;
+        std::function<void(const AstNode&, bool, bool, bool)> escapes = [&](const AstNode& x, bool loop, bool sw, bool inMain) {
+            if (!deferOk || x.type == AstNode::Type::ExprLambda) return;
+            if ((x.type == AstNode::Type::Break && !loop && !sw) || (x.type == AstNode::Type::Continue && !loop) ||
+                x.type == AstNode::Type::Goto || (x.type == AstNode::Type::Return && inMain)) {
+                deferOk = false;
+                return;
+            }
+            const bool isLoop = x.type == AstNode::Type::While || x.type == AstNode::Type::For || x.type == AstNode::Type::ForIn;
+            const bool isSw = x.type == AstNode::Type::Switch;
+            for (const AstNode& c : x.children) escapes(c, loop || isLoop, sw || isSw || isLoop, inMain);
+        };
+        std::function<void(const AstNode&, bool)> noteDefers = [&](const AstNode& n, bool inMain) {
+            if (n.type == AstNode::Type::MainFunction) inMain = true;
+            if (n.type == AstNode::Type::Function || n.type == AstNode::Type::ExprLambda) inMain = false;
+            for (size_t i = 0; i < n.children.size(); i++) {
+                const AstNode& d = n.children[i];
+                if (d.type == AstNode::Type::Defer && !d.children.empty() && throws(d.children[0])) {
+                    throwingDefers_.insert(&d);
+                    for (size_t j = i + 1; j < n.children.size(); j++) escapes(n.children[j], false, false, inMain);
+                }
+                noteDefers(d, inMain);
+            }
+        };
+        for (const AstNode& n : ast_) noteDefers(n, false);
+        if (!deferOk) return false;
         // Anything an error could leave by that NexaC cannot follow keeps C++'s exceptions.
         bool ok = true;
         std::function<void(const AstNode&)> scan = [&](const AstNode& n) {
             if (!ok) return;
             switch (n.type) {
-                case AstNode::Type::ThreadSpawn:
-                case AstNode::Type::ThreadRun:
-                case AstNode::Type::ThreadWorker:
-                    ok = false;  // an error on another thread
-                    return;
                 case AstNode::Type::ExprLambda: {
                     // A function literal is called through a value NexaC does not follow --
                     // unless it is handed straight to a slice function, whose loop NexaC writes.
@@ -4315,9 +4396,20 @@ private:
         return zs[0];
     }
 
+    // A library function that can throw: its body is a function of the library's own
+    // (name__nexa_in), which the library's Nexa calls and catches the errors of, and what
+    // is exported under the name is a wrapper that calls it -- an error that comes out
+    // there, to a caller that is not Nexa, ends the program with "Uncaught error", as an
+    // uncaught C++ exception does.
+    bool dllWrapsErrors(const AstNode& fn) const {
+        return buildDll_ && ownErrors_ && fn.type == AstNode::Type::Function && fn.receiverType.empty() &&
+               !fn.isExtern && !fnHasShapeParams(fn) && !fnHasTypeParams(fn) && mayThrowFns_.count(fn.value) > 0;
+    }
+
     std::string cppFnNameForSlot(size_t slotIdx) const {
         const FnOverloadSlot& sl = fnOverloadSlots_.at(slotIdx);
         if (ast_[sl.astIndex].isExtern) return ast_[sl.astIndex].value;
+        if (dllWrapsErrors(ast_[sl.astIndex])) return cppSafeName(ast_[sl.astIndex].value) + "__nexa_in";
         if (preserveNames_) return cppSafeName(ast_[sl.astIndex].value);
         return "__nexa_fn_" + std::to_string(slotIdx);
     }
@@ -4558,8 +4650,37 @@ private:
             const std::map<std::string, bool>& varIsBool) {
         if (e.children.empty()) {
             size_t z = slotForZeroArgFunctionNamed(e.value);
-            return "&" + cppFnUseName(z);
+            if (!(ownErrors_ && mayThrowFns_.count(e.value))) return "&" + cppFnUseName(z);
+            return "[]() /*__nexa_fnbody*/{ (void)" + cppFnUseName(z) + "(); /*__nexa_chk*/if (__builtin_expect(__nexa_err, 0)) "
+                   "{ __nexa_uncaught(); std::_Exit(1); } }";
         }
+        // The job is a function of its own for NexaC's errors: one nothing in it catches
+        // ends the program, and none goes to a catch of the function that started it.
+        struct JobErrScope {
+            Transpiler& t;
+            std::vector<std::string> catches;
+            EmitFnRet ret;
+            std::string tryRet, tryName, mainRet;
+            bool inMain, onThread;
+            explicit JobErrScope(Transpiler& tr)
+                : t(tr), ret(tr.emitFnRet_), tryRet(tr.tryFnRet_), tryName(tr.tryFnName_), mainRet(tr.mainRetType_),
+                  inMain(tr.tryInMain_), onThread(tr.errOnThread_) {
+                catches.swap(t.errCatchLabels_);
+                t.emitFnRet_ = EmitFnRet::VoidFn;
+                t.tryFnRet_ = "void"; t.tryFnName_ = "a thread's job"; t.tryInMain_ = false;
+                t.mainRetType_.clear();
+                t.errOnThread_ = true;
+            }
+            ~JobErrScope() {
+                catches.swap(t.errCatchLabels_);
+                t.emitFnRet_ = ret;
+                t.tryFnRet_ = tryRet; t.tryFnName_ = tryName; t.mainRetType_ = mainRet;
+                t.tryInMain_ = inMain; t.errOnThread_ = onThread;
+            }
+        };
+        std::optional<JobErrScope> jobErr;
+        if (ownErrors_) jobErr.emplace(*this);
+        const char* jobBody = ownErrors_ ? " /*__nexa_fnbody*/{" : " {";
         std::ostringstream body;
         int spawnVarIdx = 0;
         std::map<std::string, std::string> spawnVarMap = varMap;
@@ -4597,7 +4718,7 @@ private:
             emitBlockStatements(body, stmts, spawnVarMap, spawnVarIdx, spawnStr, spawnConst,
                 spawnFloat, spawnChar, spawnBool, spawnEnum, "", false);
             nexaDeclStack_.pop_back();
-            return "[=" + captures + "]() mutable {" + (lineDirectives_ ? "\n" : " ") + body.str() + "}";
+            return "[=" + captures + "]() mutable" + jobBody + (lineDirectives_ ? "\n" : " ") + body.str() + "}";
         }
         emitBlockStatements(body, e.children, spawnVarMap, spawnVarIdx, spawnStr, spawnConst,
             spawnFloat, spawnChar, spawnBool, spawnEnum, "", false);
@@ -4620,7 +4741,7 @@ private:
         // This lambda is spliced into the middle of an expression, so the body's first statement
         // would otherwise start on the same line as the `{`. A `#line` marker there could not be
         // rewritten (directives must start a line), so debug builds break the line first.
-        return capture + "() {" + (lineDirectives_ ? "\n" : " ") + body.str() + "}";
+        return capture + "()" + jobBody + (lineDirectives_ ? "\n" : " ") + body.str() + "}";
     }
 
     std::string cppFnNameForAstIndex(size_t astIndex) const {
@@ -10546,6 +10667,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                    std::map<std::string, bool>& varIsBool, std::map<std::string, bool>& varIsEnum,
                    const std::string& indent = "    ", bool inStringSwitchCase = false) {
         markPushMoves(children);
+        int deferScopes = 0;  // scopes opened for a defer that can throw (closed after the loop)
         for (const AstNode& child : children) {
             LineMarkScope lineMark(lineDirectives_, out, child, indent);
             std::vector<const AstNode*> printPieces;  // a print whose lone + chain is printed piece by piece
@@ -11010,10 +11132,44 @@ static std::string __nexa_show(const std::map<K, V>& m) {
             } else if (child.type == AstNode::Type::TermCall) {
                 out << indent << "(void)(" << emitExpr(child, varMap, &varIsString, &varIsFloat, &varIsChar, &varIsBool) << ");\n";
             } else if (child.type == AstNode::Type::Defer) {
+                // One that can throw (NexaC's own errors): its body is a function body for the
+                // tests in it, whose error leaves the body and is taken on after the scope. An
+                // error already on its way out is put aside while the body runs, and back after.
+                const bool ownDefer = ownErrors_ && throwingDefers_.count(&child) > 0;
+                if (ownDefer) {
+                    out << indent << "{\n";
+                    deferScopes++;
+                }
                 out << indent << "auto __nexa_defer_" << (deferSeq_++) << " = __nexa_make_defer([&]() {\n";
                 const AstNode& deferBody = child.children[0];
-                emitBlock(out, deferBody.children, varMap, varIdx, varIsString, varIsConst, varIsFloat,
-                          varIsChar, varIsBool, varIsEnum, indent + "    ");
+                if (ownDefer) {
+                    out << indent << "    std::string __nexa_dm; const bool __nexa_dw = __nexa_defer_in(__nexa_dm);\n"
+                        << indent << "    [&]() /*__nexa_fnbody*/{\n";
+                    std::vector<std::string> savedCatch;
+                    savedCatch.swap(errCatchLabels_);
+                    const EmitFnRet savedRet = emitFnRet_;
+                    const std::string savedTryRet = tryFnRet_, savedTryName = tryFnName_, savedMainRet = mainRetType_,
+                                      savedInferred = inferredIntFn_;
+                    const bool savedTryMain = tryInMain_, savedOnThread = errOnThread_;
+                    errOnThread_ = false;
+                    emitFnRet_ = EmitFnRet::VoidFn;
+                    tryFnRet_ = "void"; tryFnName_ = "a defer"; tryInMain_ = false;
+                    mainRetType_.clear();
+                    inferredIntFn_.clear();
+                    emitBlock(out, deferBody.children, varMap, varIdx, varIsString, varIsConst, varIsFloat,
+                              varIsChar, varIsBool, varIsEnum, indent + "        ");
+                    errCatchLabels_.swap(savedCatch);
+                    emitFnRet_ = savedRet;
+                    tryFnRet_ = savedTryRet; tryFnName_ = savedTryName; tryInMain_ = savedTryMain;
+                    errOnThread_ = savedOnThread;
+                    mainRetType_ = savedMainRet;
+                    inferredIntFn_ = savedInferred;
+                    out << indent << "    }();\n"
+                        << indent << "    __nexa_defer_out(__nexa_dw, __nexa_dm);\n";
+                } else {
+                    emitBlock(out, deferBody.children, varMap, varIdx, varIsString, varIsConst, varIsFloat,
+                              varIsChar, varIsBool, varIsEnum, indent + "    ");
+                }
                 out << indent << "});\n";
             } else if (child.type == AstNode::Type::FileWrite) {
                 emitFileWriteOrAppend(out, indent, child, varMap, varIsString, varIsFloat, varIsChar, varIsBool, 0);
@@ -11930,6 +12086,11 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 std::string v = cppVarName(varMap, child.value);
                 out << indent << v << " = " << v << " - 1;\n";
             }
+        }
+        // A defer that can throw has a scope of its own, to the end of this block: it
+        // runs as the scope closes, and the test after it takes its error on from there.
+        for (; deferScopes > 0; deferScopes--) {
+            out << indent << "}\n" << indent << "/*__nexa_chk*/if (__builtin_expect(__nexa_err, 0)) " << errPropagate() << "\n";
         }
     }
 
@@ -13358,6 +13519,8 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         const std::string savedTryRet = tryFnRet_, savedTryName = tryFnName_;
         const bool savedTryMain = tryInMain_;
         tryFnRet_ = ret; tryFnName_ = "a function literal"; tryInMain_ = false;
+        const bool savedOnThread = errOnThread_;
+        errOnThread_ = false;
         const std::string savedMainRet = mainRetType_;
         mainRetType_.clear();
         // An error in the literal leaves the literal (return {}), never for a catch of the
@@ -13376,6 +13539,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
         emitFnRet_ = savedRet;
         inferredIntFn_ = savedInferred;
         tryFnRet_ = savedTryRet; tryFnName_ = savedTryName; tryInMain_ = savedTryMain;
+        errOnThread_ = savedOnThread;
         mainRetType_ = savedMainRet;
         varStructPop();
         nexaDeclStack_.pop_back();
@@ -14539,7 +14703,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 return "__nexa_time_part(" + t + ", " + std::to_string(k) + ")";
             }
             case AstNode::Type::ThreadSpawn: {
-                if (e.children.empty()) {
+                if (e.children.empty() && !(ownErrors_ && mayThrowFns_.count(e.value))) {
                     size_t z = slotForZeroArgFunctionNamed(e.value);
                     return "__nexa_thread_spawn(&" + cppFnUseName(z) + ")";
                 }

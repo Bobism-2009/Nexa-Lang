@@ -12,8 +12,17 @@
 #   fnvalue    A throwing literal kept in a variable and called through it is
 #              NexaC's own errors as well (every call through a function value
 #              is tested), and one nothing catches is "Uncaught error", status 1.
-#   fallback   A throw NexaC cannot follow -- here one on another thread --
-#              keeps C++'s exceptions, and catches the same.
+#   defer      A throw in a defer is NexaC's own errors and reaches the catch
+#              around the call; with a break out of the defer's block it keeps
+#              C++'s exceptions, and is caught there too.
+#   thread     A throw on another thread is NexaC's own errors (one per thread);
+#              one nothing on that thread catches is "Uncaught error", status 1.
+#   library    A --dll / --shared library catches its own errors; one it does
+#              not catch ends the host with "Uncaught error", status 1.
+#   cheader    A C standard library header (<math.h>) cannot throw: own errors.
+#   fallback   A throw NexaC cannot follow -- here in a program with a C++
+#              header, which may throw its own -- keeps C++'s exceptions, and
+#              catches the same.
 # The cases in Tests/Lang/try_noexc_*.nxa check the behaviour in detail.
 #
 # Usage: Tests/throw_cases.sh [path-to-NexaC]     (run from the repo root)
@@ -149,7 +158,56 @@ else
     bad "fnvalue runs" "status $rc, stdout [$(cat "$WORK/fnvalue.o" 2>/dev/null)], stderr [$(cat "$WORK/fnvalue.e" 2>/dev/null)]"
 fi
 
-cat > "$WORK/fallback.nxa" <<'NXA'
+cat > "$WORK/defer.nxa" <<'NXA'
+#include <std/io>
+fn half(n: int): int {
+    if (n % 2 != 0) { throw "odd " + n; }
+    return n / 2;
+}
+fn work(n: int) {
+    defer { io.println(half(n)); }
+    io.println("work ", n);
+}
+fn main() {
+    try { work(4); work(5); } catch (e) { io.println("caught ", e); }
+}
+NXA
+"$NEXAC" "$WORK/defer.nxa" --source "$WORK/defer.cpp" >/dev/null 2>&1
+if grep -q "__nexa_err_msg" "$WORK/defer.cpp" && ! grep -q "try {" "$WORK/defer.cpp"; then
+    ok "defer: a throw in a defer is NexaC's own errors"
+else
+    bad defer "the C++ still uses C++ exceptions"
+fi
+want=$(printf 'work 4\n2\nwork 5\ncaught odd 5')
+run defer
+if [ "$rc" = 0 ] && [ "$(cat "$WORK/defer.o")" = "$want" ]; then ok "defer: caught"; else bad "defer runs" "status $rc, printed [$(cat "$WORK/defer.o" 2>/dev/null)]"; fi
+# A break out of the defer's block would jump past the test: C++'s exceptions, same output.
+cat > "$WORK/deferx.nxa" <<'NXA'
+#include <std/io>
+fn half(n: int): int {
+    if (n % 2 != 0) { throw "odd " + n; }
+    return n / 2;
+}
+fn work(n: int) {
+    while (true) {
+        defer { io.println(half(n)); }
+        io.println("work ", n);
+        break;
+    }
+}
+fn main() {
+    try { work(4); work(5); } catch (e) { io.println("caught ", e); }
+}
+NXA
+"$NEXAC" "$WORK/deferx.nxa" --source "$WORK/deferx.cpp" >/dev/null 2>&1
+run deferx
+if grep -q "try {" "$WORK/deferx.cpp" && [ "$rc" = 0 ] && [ "$(tail -2 "$WORK/deferx.o")" = "$(printf 'work 5\ncaught odd 5')" ]; then
+    ok "defer: a break past it keeps C++ exceptions, and is caught"
+else
+    bad "deferx" "status $rc, printed [$(cat "$WORK/deferx.o" 2>/dev/null)]"
+fi
+
+cat > "$WORK/thread.nxa" <<'NXA'
 #include <std/io>
 #include <std/thread>
 fn half(n: int): int {
@@ -159,14 +217,117 @@ fn half(n: int): int {
 fn work(n: int) {
     try { io.println(half(n)); } catch (e) { io.println("caught ", e); }
 }
+fn boom() {
+    io.println(half(3));
+}
 fn main() {
     let t = thread.spawn(work(5));
     thread.join(t);
+    let u = thread.spawn(boom);
+    thread.join(u);
+    io.println("never");
+}
+NXA
+"$NEXAC" "$WORK/thread.nxa" --source "$WORK/thread.cpp" >/dev/null 2>&1
+if grep -q "thread_local bool __nexa_err" "$WORK/thread.cpp" && ! grep -q "try {" "$WORK/thread.cpp"; then
+    ok "thread: a throw on another thread is NexaC's own errors"
+else
+    bad thread "the C++ still uses C++ exceptions"
+fi
+run thread
+if [ "$rc" = 1 ] && [ "$(cat "$WORK/thread.o")" = "caught odd 5" ] && [ "$(cat "$WORK/thread.e")" = "Uncaught error: odd 3" ]; then
+    ok "thread: caught, then uncaught on a thread with status 1"
+else
+    bad "thread runs" "status $rc, stdout [$(cat "$WORK/thread.o" 2>/dev/null)], stderr [$(cat "$WORK/thread.e" 2>/dev/null)]"
+fi
+
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) libflag=--dll; libfile="$WORK/errlib.dll" ;;
+    Darwin) libflag=--shared; libfile="$WORK/errlib.dylib" ;;
+    *) libflag=--shared; libfile="$WORK/errlib.so" ;;
+esac
+cat > "$WORK/errlib.nxa" <<'NXA'
+#include <std/io>
+fn half(n: int): int {
+    if (n % 2 != 0) { throw "odd " + n; }
+    return n / 2;
+}
+fn Safe(n: int): int {
+    try { let r = half(n); io.println("safe ", r); return r; } catch (e) { io.println("lib caught ", e); }
+    return -1;
+}
+fn Say(s: string) {
+    io.println("say ", s, " ", half(s.len()));
+}
+fn Both(n: int) {
+    try { Say("xyz"); } catch (e) { io.println("both caught ", e); }
+    io.println("both ", Safe(n));
+}
+NXA
+# The host loads it by the path the OS knows (C:/... on Windows, not /tmp/...).
+libpath=$libfile
+command -v cygpath >/dev/null 2>&1 && libpath=$(cygpath -m "$libfile")
+cat > "$WORK/errhost.nxa" <<NXA
+#include <std/io>
+#include <std/dll>
+fn main() {
+    let h = dll.load("$libpath");
+    dll.call(h, "Safe", 8);
+    dll.call(h, "Safe", 3);
+    dll.call(h, "Both", 6);
+    dll.call(h, "Say", "abc");
+    io.println("never");
+}
+NXA
+"$NEXAC" "$WORK/errlib.nxa" $libflag --source "$WORK/errlib.cpp" >/dev/null 2>&1
+if "$NEXAC" "$WORK/errlib.nxa" $libflag -o "$libfile" >"$WORK/errlib.log" 2>&1 &&
+   grep -q "__nexa_err_msg" "$WORK/errlib.cpp" && ! grep -q "try {" "$WORK/errlib.cpp"; then
+    ok "library: a library's errors are NexaC's own"
+    run errhost
+    want=$(printf 'safe 4\nlib caught odd 3\nboth caught odd 3\nsafe 3\nboth 3')
+    if [ "$rc" = 1 ] && [ "$(cat "$WORK/errhost.o")" = "$want" ] && [ "$(cat "$WORK/errhost.e")" = "Uncaught error: odd 3" ]; then
+        ok "library: caught inside, uncaught at the caller with status 1"
+    else
+        bad "library runs" "status $rc, stdout [$(cat "$WORK/errhost.o" 2>/dev/null)], stderr [$(cat "$WORK/errhost.e" 2>/dev/null)]"
+    fi
+else
+    bad library "$(head -5 "$WORK/errlib.log")"
+fi
+
+cat > "$WORK/cheader.nxa" <<'NXA'
+#include <std/io>
+#include <math.h>
+fn root(x: float): float {
+    if (x < 0.0) { throw "negative"; }
+    return sqrt(x);
+}
+fn main() {
+    try { io.println(root(16.0)); io.println(root(-1.0)); } catch (e) { io.println("caught ", e); }
+}
+NXA
+"$NEXAC" "$WORK/cheader.nxa" --source "$WORK/cheader.cpp" >/dev/null 2>&1
+if grep -q "__nexa_err_msg" "$WORK/cheader.cpp" && ! grep -q "try {" "$WORK/cheader.cpp"; then
+    ok "cheader: a C standard library header keeps NexaC's own errors"
+else
+    bad cheader "the C++ still uses C++ exceptions"
+fi
+run cheader
+if [ "$rc" = 0 ] && [ "$(cat "$WORK/cheader.o")" = "$(printf '4\ncaught negative')" ]; then ok "cheader: caught"; else bad "cheader runs" "status $rc, printed [$(cat "$WORK/cheader.o" 2>/dev/null)]"; fi
+
+cat > "$WORK/fallback.nxa" <<'NXA'
+#include <std/io>
+#include <algorithm>
+fn half(n: int): int {
+    if (n % 2 != 0) { throw "odd " + n; }
+    return n / 2;
+}
+fn main() {
+    try { io.println(half(5)); } catch (e) { io.println("caught ", e); }
 }
 NXA
 "$NEXAC" "$WORK/fallback.nxa" --source "$WORK/fallback.cpp" >/dev/null 2>&1
 if grep -q "try {" "$WORK/fallback.cpp" && ! grep -q "__nexa_err_msg" "$WORK/fallback.cpp"; then
-    ok "fallback: a throw on another thread keeps C++ exceptions"
+    ok "fallback: a C++ header keeps C++ exceptions"
 else
     bad fallback "expected the C++ exception form"
 fi

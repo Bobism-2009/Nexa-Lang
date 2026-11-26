@@ -44,13 +44,20 @@ OPTIONS
   is not called again. One kept in a variable, passed to a function, held in a
   struct field or a list, and a throwing function used as a value: every call
   through a function value is then followed by the test.
-  A program keeps C++'s exceptions where NexaC cannot follow an error: threads,
-  a throw in a defer, a --dll or --shared library, inline_cpp or a C/C++ header,
-  and a call that can throw in the few places NexaC wraps in code of its own that
-  it cannot pass the error out of. What it prints is the same
-  either way; such a program is 60-100KB rather than 140-260KB, without what the
-  exception runtime can do without (the C++ demangler among it). A program with
-  inline_cpp or a C/C++ header keeps the stock runtime.
+  So are defers (one that throws hands its error on as its block ends) and
+  threads: each thread has its own error, and one nothing on it catches ends
+  the program with "Uncaught error", as an uncaught C++ exception does. In a
+  --dll or --shared library, an error the library does not catch ends the
+  program the same way when it reaches the caller.
+  A program keeps C++'s exceptions where NexaC cannot follow an error:
+  inline_cpp, a C/C++ header other than the C standard library's (<string.h>,
+  <cmath> and the like cannot throw), a break, continue, goto, or a return from
+  main, that leaves the block of a defer that can throw, and a call that can
+  throw in the few places NexaC wraps in code of its own that it cannot pass the
+  error out of. What it prints is the same either way; such a program is
+  60-100KB rather than 140-260KB, without what the exception runtime can do
+  without (the C++ demangler among it). A program with inline_cpp or a C/C++
+  header keeps the stock runtime.
   NEXA_NO_SLIM=1 in the environment builds with the stock runtime instead, to
   compare or to rule it out.
   Strings cost little per use. A string built from + or an f-string is sized

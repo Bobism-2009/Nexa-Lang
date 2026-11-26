@@ -330,6 +330,12 @@ DEFER
                              pair a cleanup with the thing it undoes, next to each other:
                                  term.raw(true);
                                  defer term.raw(false);   // restored however this block ends
+                             A defer can throw, or call something that does: the error goes
+                             to the catch around it once the defers of the function have
+                             run, as one from the block itself would. One that runs while
+                             another error is on its way out still runs in full (and can
+                             catch its own errors); if it throws then too, the program ends
+                             with "Uncaught error: <what the defer threw>".
 
 ERRORS: TRY / CATCH / THROW
   throw "message";                  - stop here and hand the message to the

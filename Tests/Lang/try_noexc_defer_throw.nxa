@@ -1,0 +1,46 @@
+// Pins a throw in a defer as NexaC's own errors: it goes on to the catch around the call,
+// after the other defers of the function have run. A defer runs as before while another
+// error is on its way out, and one in a function literal or a try block of main is
+// caught there too.
+// Reference: SYNTAX/ControlFlow.txt (DEFER, TRY / CATCH)
+#include <std/io>
+fn half(n: int): int {
+    if (n % 2 != 0) { throw "odd: " + n; }
+    return n / 2;
+}
+fn nested(n: int): string {
+    defer { io.println("outer ", half(n)); }
+    if (n > 0) {
+        defer { io.println("inner ", half(n + 1)); }
+        io.println("in block");
+    }
+    io.println("after block");
+    return "done";
+}
+fn both() {
+    defer { io.println("defer ok ", half(4)); try { half(3); } catch (e) { io.println("defer inner caught ", e); } }
+    throw "first";
+}
+fn main() {
+    try { both(); } catch (e) { io.println("caught ", e); }
+    try { io.println(nested(4)); } catch (e) { io.println("caught ", e); }
+    try { io.println(nested(-2)); } catch (e) { io.println("caught ", e); }
+    let f = fn (n: int): int {
+        defer { io.println("lit defer ", half(n)); }
+        return n * 10;
+    };
+    io.println(f(2));
+    try { io.println(f(1)); } catch (e) { io.println("lit caught ", e); }
+    try {
+        defer { io.println("try defer ", half(7)); }
+        io.println("in try");
+    } catch (e) { io.println("main caught ", e); }
+    let i = 0;
+    while (i < 3) {
+        defer { io.println("w ", i); }
+        i = i + 1;
+        if (i == 2) { continue; }
+    }
+    defer { io.println("main defer ", half(8)); }
+    io.println("end");
+}

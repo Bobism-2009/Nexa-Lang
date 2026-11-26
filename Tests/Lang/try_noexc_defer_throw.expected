@@ -1,0 +1,19 @@
+defer ok 2
+defer inner caught odd: 3
+caught first
+in block
+outer 2
+caught odd: 5
+after block
+outer -1
+done
+lit defer 1
+20
+lit caught odd: 1
+in try
+main caught odd: 7
+w 1
+w 2
+w 3
+end
+main defer 4

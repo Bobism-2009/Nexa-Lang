@@ -281,8 +281,24 @@ public:
         enabled_.insert(path);
     }
 
-    void noteCppHeader() {
+    // A C/C++ header, by the name it was included as. One of the C standard library's
+    // (<string.h>, <cmath>, ...) declares functions that cannot throw; any other may
+    // throw C++ exceptions of its own, for a try/catch of the program to catch.
+    void noteCppHeader(const std::string& name = std::string()) {
         hasCppHeader_ = true;
+        static const char* const cStd[] = {"assert", "ctype", "errno", "fenv", "float", "inttypes", "iso646",
+                                           "limits", "locale", "math", "signal", "stdarg", "stdbool", "stddef",
+                                           "stdint", "stdio", "stdlib", "string", "time", "uchar", "wchar", "wctype"};
+        bool isStd = false;
+        for (const char* h : cStd) {
+            if (name == std::string(h) + ".h" || name == "c" + std::string(h)) isStd = true;
+        }
+        if (!isStd) hasThrowingHeader_ = true;
+    }
+
+    // Whether a header other than the C standard library's was included (see noteCppHeader).
+    bool hasThrowingHeader() const {
+        return hasThrowingHeader_;
     }
 
     // Some file names the built-in Option[T] (and declares no Option of its own), so
@@ -2748,6 +2764,7 @@ private:
     std::set<std::string> enabled_;
     bool inlineCppBlocks_ = false;
     bool hasCppHeader_ = false;
+    bool hasThrowingHeader_ = false;
 };
 
 }  // namespace nexa

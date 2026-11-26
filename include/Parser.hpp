@@ -2390,7 +2390,7 @@ private:
                 return {{AstNode::Type::Include, path, {}}};
             }
             if (isCppHeaderIncludePath(path) || isBareCppStdHeader(path)) {
-                modules_.noteCppHeader();
+                modules_.noteCppHeader(path);
                 return {{AstNode::Type::CppHeaderInclude, trimIncludeRaw(raw), {}}};
             }
             // #include <pkg/module> - package

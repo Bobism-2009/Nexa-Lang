@@ -41,21 +41,19 @@ expect() {
 
 printf '#include <std/io>\nfn main() {\n    io.println("hi");\n}\n' > "$WORK/io.nxa"
 printf '#include <std/gfx>\nfn main() {\n    gfx.open("x", 10, 10, 1);\n}\n' > "$WORK/gfx.nxa"
-# A throw NexaC cannot follow is what needs C++ exceptions -- here one in a defer,
-# which runs as its block ends. A plain try/catch is NexaC's own errors and needs
-# none (nor do io.to_int, Result, or a throwing function literal).
+# A throw NexaC cannot follow is what needs C++ exceptions -- here in a program
+# with a C++ header, which may throw its own. A plain try/catch is NexaC's own
+# errors and needs none (nor do io.to_int, Result, a throwing function literal,
+# a defer or a thread).
 cat > "$WORK/exc.nxa" <<'NXA'
 #include <std/io>
+#include <algorithm>
 fn half(n: int): int {
     if (n % 2 != 0) { throw "odd"; }
     return n / 2;
 }
-fn work() {
-    defer { io.println(half(3)); }
-    io.println("working");
-}
 fn main() {
-    try { work(); } catch (e) { io.println(e); }
+    try { io.println(half(3)); } catch (e) { io.println(e); }
 }
 NXA
 printf '#include <std/io>\nfn main() {\n    try {\n        io.println("n");\n    } catch (e) {\n        io.println(e);\n    }\n}\n' > "$WORK/own.nxa"
