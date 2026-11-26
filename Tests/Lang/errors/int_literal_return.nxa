@@ -1,0 +1,10 @@
+// The same as a return value.
+#include <std/io>
+
+fn code(): unsigned short {
+    return 65536;
+}
+
+fn main() {
+    io.println(code());
+}

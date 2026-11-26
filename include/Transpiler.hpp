@@ -7525,6 +7525,13 @@ private:
         }
         if (!fn.receiverType.empty()) semDeclare("self", fn.receiverType);
         for (const AstNode& d : fn.paramDefaults) semExpr(d);
+        for (size_t i = 0; i < fn.paramDefaults.size() && i < fn.paramNames.size(); i++) {
+            if (i < fn.paramHasDefault.size() && fn.paramHasDefault[i] && fn.type != AstNode::Type::MainFunction) {
+                semCheckIntLiteralFits(fn.paramDefaults[i], canonicalParamType(fn, i), "the default of '" + fn.paramNames[i] + "'");
+            }
+        }
+        const std::string savedRet = semFnRet_;
+        semFnRet_ = (fn.type == AstNode::Type::MainFunction || fnHasTypeParams(fn)) ? std::string() : fn.fnReturnType;
 
         const int savedLoop = semLoopDepth_;
         const int savedSwitch = semSwitchDepth_;
@@ -7533,9 +7540,11 @@ private:
         semBlock(fn.children);
         semLoopDepth_ = savedLoop;
         semSwitchDepth_ = savedSwitch;
+        semFnRet_ = savedRet;
         nexaDeclStack_.pop_back();
         semTypeParamBound_ = std::move(savedBounds);
     }
+    std::string semFnRet_;  // the return type of the function being checked, for its returns
 
     // A type NexaC defines, as opposed to one a C/C++ header or inline_cpp brings in.
     bool semIsNexaType(const std::string& t) const {
@@ -7651,6 +7660,9 @@ private:
                     semTypeLetFromFields(s);
                 }
                 semCheckVariableInit(s);
+                if (!s.declType.empty() && !s.isFixedArray && s.children.size() == 1) {
+                    semCheckIntLiteralFits(s.children[0], s.declType, "'" + s.value + "'");
+                }
                 semDeclare(s.value, nexaDeclFromVariableAst(s));
                 break;
             }
@@ -7851,6 +7863,9 @@ private:
             case AstNode::Type::DecPost:
                 semCheckNameUse(s, s.value);
                 for (const AstNode& c : s.children) semExpr(c);
+                if (s.type == AstNode::Type::Assignment && s.children.size() == 1) {
+                    semCheckIntLiteralFits(s.children[0], lookupNexaDecl(s.value), "'" + s.value + "'");
+                }
                 break;
             case AstNode::Type::IoPrint:
             case AstNode::Type::IoPrintln:
@@ -7879,6 +7894,9 @@ private:
             }
             default:
                 semExpr(s);
+                if (s.type == AstNode::Type::Return && semLambdaRets_.empty() && s.children.size() == 1) {
+                    semCheckIntLiteralFits(s.children[0], semFnRet_, "the return value");
+                }
                 if (s.type == AstNode::Type::Return && !semLambdaRets_.empty() && semLambdaRets_.back()) {
                     semLambdaRets_.back()->push_back(s.children.empty() ? std::string("void")
                                                                         : inferExprNexaType(s.children[0]));
@@ -8188,6 +8206,7 @@ private:
             case AstNode::Type::ExprCall:
                 for (const AstNode& c : e.children) semExpr(c);
                 semCheckSliceAlgo(e);
+                semCheckCallLiterals(e);
                 if ((e.initValue == "." || e.initValue == "->") && !e.children.empty()) {
                     std::string recvT = inferExprNexaType(e.children[0]);
                     if (isPointerType(recvT)) recvT = pointerPointeeType(recvT);
@@ -9284,6 +9303,61 @@ private:
             for (const auto& kv : methods->second) offer(kv.first);
         }
         semError(e, "Struct '" + sname + "' has no field '" + e.value + "'" + near.text());
+    }
+
+    // An integer literal written where a declared integer type takes it -- a typed let, an
+    // assignment, an argument, a return, a struct field -- that the type cannot hold. It
+    // used to wrap without a word (let b: short = 70000 was 4464), and how far depends on
+    // the target for size_t, which is 32 bits on wasm32. A hex or octal literal that fits
+    // the unsigned type of the same width is a bit pattern (0xFFFFFFFF in an int) and stays.
+    void semCheckIntLiteralFits(const AstNode& e, std::string t, const std::string& place) {
+        if (e.type != AstNode::Type::ExprIntLiteral || t.empty()) return;
+        const NexaIntRange r = nexaIntTypeRange(t);
+        if (!r.valid) return;
+        const IntLiteralText lit = parseIntLiteralText(e.value);
+        if (!lit.valid) return;
+        const bool fits = lit.negative ? lit.magnitude <= r.maxNegMagnitude : lit.magnitude <= r.maxValue;
+        if (fits) return;
+        if (!lit.negative && lit.base != 10 && r.maxNegMagnitude != 0 && lit.magnitude <= r.maxValue * 2 + 1) return;
+        std::string range = (r.maxNegMagnitude ? "-" + std::to_string(r.maxNegMagnitude) : std::string("0")) +
+                            " to " + std::to_string(r.maxValue);
+        std::string what = t;
+        if (t == "size_t" && target_ == CppTarget::Wasm) what = "size_t (32 bits on wasm)";
+        const char* art = (what[0] == 'i' || what[0] == 'u') ? "an " : "a ";
+        semError(e, e.value + " does not fit " + place + ", " + art + what + " (" + range + ")");
+    }
+
+    // f(70000) with f's parameter a short: the literal arguments of a call to the one
+    // function of that name, or to a struct's method. An overloaded name is chosen by its
+    // arguments' types, and a generic one takes the literal's, so both are left alone.
+    void semCheckCallLiterals(const AstNode& e) {
+        const AstNode* fn = nullptr;
+        size_t first = 0;  // e.children index of the first argument
+        if ((e.initValue == "." || e.initValue == "->") && !e.children.empty()) {
+            std::string recvT = inferExprNexaType(e.children[0]);
+            if (isPointerType(recvT)) recvT = pointerPointeeType(recvT);
+            if (!isStructDeclType(recvT)) return;
+            auto mit = structMethods_.find(structNameFromDecl(recvT));
+            if (mit == structMethods_.end()) return;
+            auto fit = mit->second.find(e.value);
+            if (fit == mit->second.end() || !fit->second) return;
+            fn = fit->second;
+            first = 1;
+        } else if (e.initValue.empty()) {
+            size_t n = 0;
+            for (const FnOverloadSlot& sl : fnOverloadSlots_) {
+                if (sl.name != e.value) continue;
+                n++;
+                fn = &ast_[sl.astIndex];
+            }
+            if (n != 1) return;
+        }
+        if (!fn || fnHasTypeParams(*fn) || fn->isVariadic) return;
+        for (size_t i = first; i < e.children.size(); i++) {
+            const size_t p = i - first;
+            if (p >= fn->paramNames.size()) break;
+            semCheckIntLiteralFits(e.children[i], canonicalParamType(*fn, p), "'" + fn->paramNames[p] + "' of " + e.value);
+        }
     }
 
     // Why a value of type t cannot be printed, or "" when it can. Slices and maps print as

@@ -1,0 +1,10 @@
+// The same as an argument: the parameter names the type.
+#include <std/io>
+
+fn half(x: short): short {
+    return x / 2;
+}
+
+fn main() {
+    io.println(half(40000));
+}

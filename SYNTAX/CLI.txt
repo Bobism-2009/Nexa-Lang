@@ -25,7 +25,10 @@ OPTIONS
   -o <name>       Output executable or library name
   --source <f>    Emit C++ only, do not compile
   --preserve-names, -p  Keep function names (readability)
-  --small         Optimize for smaller output (-Os)
+  --small         Optimize for smaller output: -Os (-Oz with --wasm). Built at
+                  -O2 as well and the smaller kept, since -Os comes out larger
+                  for about one program in four (one in twelve on wasm); the
+                  build takes that much longer.
 
   OUTPUT SIZE
   Programs are built without the C++ exception runtime. On Windows and Linux that

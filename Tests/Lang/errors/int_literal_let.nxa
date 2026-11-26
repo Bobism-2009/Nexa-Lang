@@ -1,0 +1,7 @@
+// An integer literal its declared type cannot hold: it used to wrap without a word.
+#include <std/io>
+
+fn main() {
+    let b: short = 70000;
+    io.println(b);
+}

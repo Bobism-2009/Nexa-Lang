@@ -3778,6 +3778,29 @@ int main(int argc, char* argv[]) {
                 linkHttp, modules.hasThread() && usage.thread,
                 linkGfx, linkGfx3d, singleFile, modules.hasTime() && usage.timeSleep, closure, linkInputs);
             int ret = std::system(cmd.c_str());
+            // --small is -Oz, and -Oz is not always the smaller: it came out larger for one
+            // program in twelve (by up to 5KB). The one-file build is made at -O2 too, quietly,
+            // and the smaller kept. A split build's loader names its .wasm, so it stays as made.
+            if (ret == 0 && singleFile && wasmOpt == "-Oz") {
+                std::filesystem::path ap(wasmOut);
+                ap.replace_filename(ap.stem().string() + ".nexa-o2" + ap.extension().string());
+                const std::string alt = ap.string();
+                std::string c2 = nexaWasmCompileCmd(wasmTool, cppPath, alt, "-O2", noExceptions, noRtti,
+                    linkHttp, modules.hasThread() && usage.thread,
+                    linkGfx, linkGfx3d, singleFile, modules.hasTime() && usage.timeSleep, closure, linkInputs);
+#ifdef _WIN32
+                c2 += " >nul 2>&1";
+#else
+                c2 += " >/dev/null 2>&1";
+#endif
+                std::error_code ec;
+                if (std::system(c2.c_str()) == 0 && std::filesystem::exists(alt, ec) &&
+                    std::filesystem::file_size(alt, ec) < std::filesystem::file_size(wasmOut, ec)) {
+                    std::filesystem::remove(wasmOut, ec);
+                    std::filesystem::rename(alt, wasmOut, ec);
+                }
+                std::filesystem::remove(alt, ec);
+            }
             std::remove(cppPath.c_str());
             if (ret != 0) {
                 std::cerr << "[Nexa] Compilation failed.\n";
@@ -3902,59 +3925,66 @@ int main(int argc, char* argv[]) {
         // inputs, which the header build would try to compile. Anything that goes wrong
         // costs nothing but the saving: no PCH, or one clang rejects, and the build is the
         // one it always was.
-        std::string pchFlag;
-        std::string pchFile;
-        if (slimTarget && linkInputs.empty() && cxx.find("clang") != std::string::npos &&
-            std::getenv("NEXA_NO_PCH") == nullptr) {
-            std::string hdr;
-            size_t at = 0;
-            while (cpp.compare(at, 10, "#include <") == 0) {
-                const size_t nl = cpp.find('\n', at);
-                if (nl == std::string::npos) break;
-                hdr += cpp.substr(at, nl - at + 1);
-                at = nl + 1;
-            }
-            if (!hdr.empty()) {
-                const std::string hflags = targetFlags + " -x c++-header -Wno-unused-command-line-argument";
-                const std::string probe = nexaCompileOnly(nexaBuildCompileCmd(cxx, hflags, "@", "@", opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, linkGfx3d, noExceptions, noRtti, debugBuild, linkInputs));
-                unsigned long long h = 1469598103934665603ULL;  // FNV-1a over what the PCH depends on
-                for (char c : probe + "\n" + hdr + "\n" + NEXAC_VERSION) { h ^= (unsigned char)c; h *= 1099511628211ULL; }
-                char name[32];
-                std::snprintf(name, sizeof name, "%016llx", h);
-                std::error_code ec;
-                const std::filesystem::path dir = std::filesystem::path(nexa::pkg::getHome()) / ".nexa" / "cache" / "pch";
-                const std::filesystem::path hpath = dir / (std::string(name) + ".hpp");
-                const std::filesystem::path ppath = dir / (std::string(name) + ".pch");
-                if (!std::filesystem::exists(ppath, ec)) {
-                    std::filesystem::create_directories(dir, ec);
-                    { std::ofstream hf(hpath, std::ios::binary); hf << hdr; }
-                    // Written beside the final name and moved into place, so a build running
-                    // alongside never reads half a PCH.
-                    const std::filesystem::path tmp = dir / (std::string(name) + "." + std::filesystem::path(cppPath).stem().string() + ".tmp");
-                    std::string pcmd = nexaCompileOnly(nexaBuildCompileCmd(cxx, hflags, hpath.string(), tmp.string(), opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, linkGfx3d, noExceptions, noRtti, debugBuild, linkInputs));
-                    if (std::getenv("NEXA_PCH_DEBUG")) {
-                        std::cout << "[Nexa] PCH: " << pcmd << "\n";
-                        std::cout.flush();
-                    } else {
-#ifdef _WIN32
-                        pcmd += " >nul 2>&1";
-#else
-                        pcmd += " >/dev/null 2>&1";
-#endif
+        // The PCH for optimization flags o (and everything else this build has): its
+        // -include-pch flag and file, or "" when there is none to be had.
+        auto pchFor = [&](const std::string& o, std::string& file) -> std::string {
+            std::string flag;
+            if (slimTarget && linkInputs.empty() && cxx.find("clang") != std::string::npos &&
+                std::getenv("NEXA_NO_PCH") == nullptr) {
+                std::string hdr;
+                size_t at = 0;
+                while (cpp.compare(at, 10, "#include <") == 0) {
+                    const size_t nl = cpp.find('\n', at);
+                    if (nl == std::string::npos) break;
+                    hdr += cpp.substr(at, nl - at + 1);
+                    at = nl + 1;
+                }
+                if (!hdr.empty()) {
+                    const std::string hflags = targetFlags + " -x c++-header -Wno-unused-command-line-argument";
+                    const std::string probe = nexaCompileOnly(nexaBuildCompileCmd(cxx, hflags, "@", "@", o, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, linkGfx3d, noExceptions, noRtti, debugBuild, linkInputs));
+                    unsigned long long h = 1469598103934665603ULL;  // FNV-1a over what the PCH depends on
+                    for (char c : probe + "\n" + hdr + "\n" + NEXAC_VERSION) { h ^= (unsigned char)c; h *= 1099511628211ULL; }
+                    char name[32];
+                    std::snprintf(name, sizeof name, "%016llx", h);
+                    std::error_code ec;
+                    const std::filesystem::path dir = std::filesystem::path(nexa::pkg::getHome()) / ".nexa" / "cache" / "pch";
+                    const std::filesystem::path hpath = dir / (std::string(name) + ".hpp");
+                    const std::filesystem::path ppath = dir / (std::string(name) + ".pch");
+                    if (!std::filesystem::exists(ppath, ec)) {
+                        std::filesystem::create_directories(dir, ec);
+                        { std::ofstream hf(hpath, std::ios::binary); hf << hdr; }
+                        // Written beside the final name and moved into place, so a build running
+                        // alongside never reads half a PCH.
+                        const std::filesystem::path tmp = dir / (std::string(name) + "." + std::filesystem::path(cppPath).stem().string() + ".tmp");
+                        std::string pcmd = nexaCompileOnly(nexaBuildCompileCmd(cxx, hflags, hpath.string(), tmp.string(), o, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, linkGfx3d, noExceptions, noRtti, debugBuild, linkInputs));
+                        if (std::getenv("NEXA_PCH_DEBUG")) {
+                            std::cout << "[Nexa] PCH: " << pcmd << "\n";
+                            std::cout.flush();
+                        } else {
+    #ifdef _WIN32
+                            pcmd += " >nul 2>&1";
+    #else
+                            pcmd += " >/dev/null 2>&1";
+    #endif
+                        }
+                        if (std::system(pcmd.c_str()) == 0) std::filesystem::rename(tmp, ppath, ec);
+                        std::filesystem::remove(tmp, ec);
                     }
-                    if (std::system(pcmd.c_str()) == 0) std::filesystem::rename(tmp, ppath, ec);
-                    std::filesystem::remove(tmp, ec);
-                }
-                if (std::filesystem::exists(ppath, ec)) {
-                    pchFile = ppath.string();
-                    pchFlag = " -include-pch \"" + pchFile + "\"";
+                    if (std::filesystem::exists(ppath, ec)) {
+                        file = ppath.string();
+                        flag = " -include-pch \"" + file + "\"";
+                    }
                 }
             }
-        }
+            return flag;
+        };
+        std::string pchFile;
+        std::string pchFlag = pchFor(opt, pchFile);
 
         std::string cmd = nexaBuildCompileCmd(cxx, targetFlags + pchFlag, cppPath, exePath, opt, buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, linkGfx3d, noExceptions, noRtti, debugBuild, linkInputs);
         int ret = 1;
         bool slimEntryBuilt = false;
+        std::string slimEntryFlags;  // the link flags the slim entry was built with, for a rebuild
 #ifdef _WIN32
         // Below the C runtime's floor (see nexaWinEntryCpp): tried first, quietly, for an
         // executable that throws nothing, starts no thread and carries no C++ of its own.
@@ -3971,7 +4001,8 @@ int main(int argc, char* argv[]) {
             const bool withArgs = cpp.find("int main(int argc, char** argv)") != std::string::npos;
             { std::ofstream eo(cppPath, std::ios::app); eo << nexaWinEntryCpp(withArgs, noConsole); }
             const std::string log = cppPath + ".log";
-            const std::string scmd = cmd + " -nostartfiles -Wl,-e,__nexa_entry -Wl,--disable-runtime-pseudo-reloc";
+            slimEntryFlags = " -nostartfiles -Wl,-e,__nexa_entry -Wl,--disable-runtime-pseudo-reloc";
+            const std::string scmd = cmd + slimEntryFlags;
             if (std::system((scmd + " > \"" + log + "\" 2>&1").c_str()) == 0) {
                 ret = 0;
                 slimEntryBuilt = true;
@@ -3989,7 +4020,8 @@ int main(int argc, char* argv[]) {
             std::getenv("NEXA_NO_SLIM_ENTRY") == nullptr && nexaGlibcHasStartMainInit()) {
             { std::ofstream eo(cppPath, std::ios::app); eo << kNexaLinuxEntry; }
             const std::string log = cppPath + ".log";
-            const std::string scmd = cmd + " -nostartfiles -Wl,-z,noseparate-code";
+            slimEntryFlags = " -nostartfiles -Wl,-z,noseparate-code";
+            const std::string scmd = cmd + slimEntryFlags;
             if (std::system((scmd + " > \"" + log + "\" 2>&1").c_str()) == 0) {
                 ret = 0;
                 slimEntryBuilt = true;
@@ -4075,6 +4107,32 @@ int main(int argc, char* argv[]) {
                 }
             }
 #endif
+        }
+
+        // --small asks for the smallest program, and -Os is not always it: it keeps libc++'s
+        // string internals out of line, where -O2 inlines and folds them, so about one
+        // program in four came out larger (9.7KB against 7.2KB at worst). So the program is
+        // built at -O2 as well, quietly, and the smaller of the two is kept.
+        if (ret == 0 && optimizeSize && !debugBuild && !buildDll && !buildShared && opt == "-Os") {
+            std::filesystem::path ap(exePath);
+            ap.replace_filename(ap.stem().string() + ".nexa-o2" + ap.extension().string());
+            const std::string alt = ap.string();
+            std::string pch2File;
+            const std::string pch2 = pchFile.empty() ? std::string() : pchFor("-O2", pch2File);
+            std::string c2 = nexaBuildCompileCmd(cxx, targetFlags + pch2, cppPath, alt, "-O2", buildDll, buildShared, buildWin, modules.hasDll(), noConsole, linkUser32, linkHttp, linkSockets, linkGfx, linkGfx3d, noExceptions, noRtti, debugBuild, linkInputs);
+            c2 += slimEntryFlags;
+#ifdef _WIN32
+            c2 += " >nul 2>&1";
+#else
+            c2 += " >/dev/null 2>&1";
+#endif
+            std::error_code ec;
+            if (std::system(c2.c_str()) == 0 && std::filesystem::exists(alt, ec) &&
+                std::filesystem::file_size(alt, ec) < std::filesystem::file_size(exePath, ec)) {
+                std::filesystem::remove(exePath, ec);
+                std::filesystem::rename(alt, exePath, ec);
+            }
+            std::filesystem::remove(alt, ec);
         }
 
         // Debug builds keep the generated C++: the binary's DWARF refers to it by path, so

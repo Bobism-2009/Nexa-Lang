@@ -338,6 +338,11 @@ VARIABLES
     long / unsigned long:   let L: long = 1000;  let ul: unsigned long;
                             (64-bit on every platform, Windows and wasm included)
     size_t: let n: size_t = 64;   (C++ std::size_t; use for sizes / array lengths)
+    An integer literal has to fit the type it is written for -- in a typed let,
+    an assignment, an argument, a return: let s: short = 70000; is an error that
+    gives the range (-32768 to 32767), not a value that wraps. A hex or octal
+    literal may be the bit pattern of the unsigned type of the same width:
+    let mask: int = 0xFFFFFFFF; is -1. size_t is 32 bits on wasm.
     string: let s = "hello";  let name: string = io.readln();  let msg: string;
     bool:   let ok = true;  let flag: bool = false;  let b: bool;
             As text -- printed, joined with +, in an f-string -- a bool is true

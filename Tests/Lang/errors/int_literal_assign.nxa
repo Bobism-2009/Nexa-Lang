@@ -1,0 +1,8 @@
+// The same in an assignment, and a negative into an unsigned type.
+#include <std/io>
+
+fn main() {
+    let n: unsigned int = 3;
+    n = -1;
+    io.println(n);
+}
