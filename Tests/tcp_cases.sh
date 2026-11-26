@@ -189,6 +189,30 @@ carries "client_only_carries_no_listener" \
     '    let c = tcp.connect("h", 9);
     io.println(tcp.send(c, "x"));
     tcp.close(c);' yes no
+# The time limits ride with tcp.timeout or a third argument to tcp.connect, and
+# nothing else: a program that sets none has none of their code.
+timeouts() {
+    label=$1
+    transpile "$label" "$2" || return
+    if grep -q "__nexa_tcp_timeout" "$WORK/$label.cpp"; then have=yes; else have=no; fi
+    if [ "$have" != "$3" ]; then
+        echo "FAIL $label: __nexa_tcp_timeout present=$have, expected $3"
+        fails=$((fails + 1))
+        return
+    fi
+    echo "ok $label"
+}
+timeouts "no_limit_carries_no_timeout" \
+    '    let c = tcp.connect("h", 9);
+    io.println(tcp.recv(c));' no
+timeouts "connect_limit_carries_timeout" \
+    '    let c = tcp.connect("h", 9, 500);
+    io.println(tcp.recv(c));' yes
+timeouts "timeout_call_carries_timeout" \
+    '    let c = tcp.connect("h", 9);
+    tcp.timeout(c, 500);
+    io.println(tcp.recv(c));' yes
+
 carries "server_only_carries_no_resolver" \
     '    let l = tcp.listen(9);
     let a = tcp.accept(l);
@@ -418,6 +442,30 @@ else
     else
         echo "FAIL server: output moved"
         sed 's/^/  /' "$WORK/server_test.diff" | head -n 30
+        fails=$((fails + 1))
+    fi
+fi
+
+# --- timeout: tcp.connect's time limit and tcp.timeout ----------------------
+
+echo "-- timeout: a silent peer and a refused port, with time limits"
+
+if [ -z "$CXX" ]; then
+    echo "skip timeout: no C++ compiler on this machine"
+    skips=$((skips + 1))
+elif ! "$NEXAC" "$SUITE/tcp_timeout_test.nxa" -o "$WORK/timeout_test" \
+        > "$WORK/timeout_test.log" 2>&1; then
+    echo "FAIL timeout: could not build tcp_timeout_test.nxa"
+    sed 's/^/  /' "$WORK/timeout_test.log" | head -n 20
+    fails=$((fails + 1))
+else
+    "$WORK/timeout_test" > "$WORK/timeout_test.out" 2>&1
+    if diff -u --strip-trailing-cr "$SUITE/tcp_timeout_test.expected" "$WORK/timeout_test.out" \
+            > "$WORK/timeout_test.diff" 2>&1; then
+        echo "ok timeout"
+    else
+        echo "FAIL timeout: output moved"
+        sed 's/^/  /' "$WORK/timeout_test.diff" | head -n 30
         fails=$((fails + 1))
     fi
 fi

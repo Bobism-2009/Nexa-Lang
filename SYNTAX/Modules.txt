@@ -53,8 +53,8 @@ ARGUMENT TYPES
   io.to_float(s)    - The same for a float: "2.5", "-1e3" (failure -> 0.0). Like to_int
                       it reads a leading number and ignores what follows: "12abc" is 12
   io.parse_int(s)   - Result[int]: the int, or an error when s is not one. Strict: the
-  io.parse_float(s)   whole text must be the number (surrounding whitespace aside), so
-                      "12abc", "" and "3.5" are errors for parse_int, and a number too
+  io.parse_long(s)    whole text must be the number (surrounding whitespace aside), so
+  io.parse_float(s)   "12abc", "" and "3.5" are errors for parse_int, and a number too
                       big for its type is "out of range". Use these where 0 is a real
                       answer and a typo must not become one:
                         let r = io.parse_int(io.readln());
@@ -393,12 +393,17 @@ ARGUMENT TYPES
   kept back to mean "no socket". There is no struct and no Result -- a handle
   is all a raw socket is, and 0-on-failure is the shape os.spawn already uses.
   tcp.connect(host, port)  - Dial out; returns a handle, 0 on failure
+  tcp.connect(host, port, ms) - The same, giving up on a host that has not answered
+                             in ms milliseconds; the socket keeps ms as its timeout
   tcp.listen(port)         - Listen on every interface; returns a handle, 0 on failure
   tcp.accept(listener)     - Wait for one connection; returns its handle, 0 on failure
   tcp.send(handle, data)   - Write all of data; returns the bytes written
   tcp.recv(handle)         - Read what has arrived, up to 64K; returns a string
   tcp.recv(handle, max)    - Same, capped at max bytes
   tcp.port(handle)         - The port this end is on (0 on failure)
+  tcp.timeout(handle, ms)  - Wait at most ms in each tcp.recv/tcp.send on it (0: no
+                             limit, how a socket starts); returns 1/0. A read that
+                             times out is "", as a hang-up is
   tcp.close(handle)        - Close it; returns 1
   Use: let c = tcp.connect("example.com", 7);
        if (c) {
@@ -427,7 +432,10 @@ ARGUMENT TYPES
   short count is a broken connection.
   A handle is a handle, not a value: close it once, and a closed one is spent
   the way any use-after-close is. Both ends of tcp.connect/tcp.accept are
-  blocking.
+  blocking, with no time limit unless one is given: a host that drops the
+  packets keeps a plain tcp.connect waiting for the OS's own limit (about 21s
+  on Windows), and a peer that never writes keeps tcp.recv waiting for good.
+  tcp.connect(host, port, ms) and tcp.timeout(handle, ms) put a bound on both.
   A program carries only the half it calls: tcp.connect and tcp.listen/accept
   are emitted independently, so a program that only serves carries no name
   resolution.
@@ -2220,14 +2228,17 @@ ARGUMENT TYPES
 
 #include <std/file>
   file.read(path)       - Read entire file as binary, returns string
-  file.lines(path)      - The file as a []string of lines: split at 
-, a 
- before it
+  file.lines(path)      - The file as a []string of lines: split at \n, a \r before it
                           dropped (so Windows text reads the same), a blank line kept,
                           and no empty last line for the newline a text file ends
                           with. A missing file is an empty list.
   file.write(path, c)   - Write bytes to file (overwrites, binary); statement or returns 1/0
   file.append(path, c)  - Append bytes to file (binary); statement or returns 1/0
+  file.write_at(path, c, offset) - Write bytes at a byte offset (long), the rest of
+                          the file kept; returns 1/0. A missing file is created, and an
+                          offset past the end grows it (the gap reads back as zeros),
+                          so file.write_at(p, "\x00", size - 1) makes a file of size
+                          bytes. Pieces that arrive out of order go straight to place.
   file.exists(path)     - Returns 1 if exists, 0 otherwise
   file.mkdir(path)      - Create directory (and parents); statement or returns 1/0
   file.remove(path) / file.delete(path) - Delete a file or empty directory; returns 1/0

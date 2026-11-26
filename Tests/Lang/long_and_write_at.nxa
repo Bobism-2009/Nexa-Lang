@@ -1,0 +1,43 @@
+// io.parse_long, a literal past an int, ok(int) as a Result[long], and
+// file.write_at.
+#include <std/io>
+#include <std/file>
+#include <std/crypto>
+
+fn widen(n: int): Result[long] { return ok(n); }
+fn big(): Result[long] { return ok(5000000000); }
+
+fn main() {
+    let a = io.parse_long("5000000000");
+    io.println(a.ok(), " ", a.value() + 1);
+    let b = io.parse_long(" -42 ");
+    io.println(b.ok(), " ", b.value());
+    let c = io.parse_long("12x");
+    io.println(c.ok(), " ", c.error());
+    let d = io.parse_long("99999999999999999999");
+    io.println(d.ok(), " ", d.error());
+    let e = io.parse_long("");
+    io.println(e.ok());
+
+    // An int cannot hold it, so it is a long: this printed 705032704.
+    let x = 5000000000;
+    io.println(x, " ", x * 2);
+    let m = -2147483648;
+    io.println(m);
+    io.println(widen(7).value(), " ", big().value());
+
+    let p = "long_and_write_at.tmp";
+    file.remove(p);
+    // A missing file is created, and the gap before the offset reads as zeros.
+    io.println(file.write_at(p, "AB", 10), " ", file.size(p));
+    // The rest of the file is kept.
+    io.println(file.write_at(p, "xy", 0), " ", file.size(p));
+    let off: long = 4;
+    file.write_at(p, "Q", off);
+    io.println(crypto.hex_encode(file.read(p)));
+    // Past the end grows it.
+    io.println(file.write_at(p, "end", file.size(p)), " ", file.size(p));
+    io.println(file.write_at(p, "z", -1));
+    io.println(file.read(p).substring(12, 3));
+    file.remove(p);
+}

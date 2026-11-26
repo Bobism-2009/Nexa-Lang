@@ -415,7 +415,7 @@ reject file_bad_join      "$FILE" '    let p = file.join("d", 2);' \
     'file.join(a, b) expects text for b, but got a number'
 
 reject tcp_bad_connect    "$NET" '    let c = tcp.connect(80, "127.0.0.1");' \
-    'tcp.connect(host, port) expects text for host, but got a number'
+    'tcp.connect(host, port[, ms]) expects text for host, but got a number'
 reject tcp_bad_send       "$NET" '    let c = tcp.connect("127.0.0.1", 80);
     let s = tcp.send(c, 42);' \
     'tcp.send(handle, data) expects text for data, but got a number'

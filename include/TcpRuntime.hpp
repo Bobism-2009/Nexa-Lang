@@ -25,7 +25,10 @@ namespace nexa {
 // only dials carries no bind/listen/accept and a program that only serves
 // carries no name resolution: the same needs-driven emission as http.* and
 // std/gfx. send/recv/port/close sit under both and are always emitted.
-inline std::string tcpRuntimeCpp(bool needConnect = true, bool needListen = true) {
+//
+// `needTimeout` is tcp.timeout and tcp.connect's third argument, the time limits:
+// a program that sets none carries none of the code for them.
+inline std::string tcpRuntimeCpp(bool needConnect = true, bool needListen = true, bool needTimeout = false) {
     std::string out = R"NEXA_TCP(
 #include <string>
 #include <cstring>
@@ -38,6 +41,13 @@ inline std::string tcpRuntimeCpp(bool needConnect = true, bool needListen = true
     if (needConnect) {
         wasm += "[[maybe_unused]] static int __nexa_tcp_connect(const std::string& host, int port) "
                 "{ (void)host; (void)port; return 0; }\n";
+    }
+    if (needTimeout) {
+        wasm += "[[maybe_unused]] static int __nexa_tcp_timeout(int h, int ms) { (void)h; (void)ms; return 0; }\n";
+        if (needConnect) {
+            wasm += "[[maybe_unused]] static int __nexa_tcp_connect_ms(const std::string& host, int port, int ms) "
+                    "{ (void)host; (void)port; (void)ms; return 0; }\n";
+        }
     }
     if (needListen) {
         wasm += "[[maybe_unused]] static int __nexa_tcp_listen(int port) { (void)port; return 0; }\n";
@@ -78,6 +88,105 @@ inline std::string tcpRuntimeCpp(bool needConnect = true, bool needListen = true
   return __nexa_net_handle(fd);
 }
 )NEXA_TCP_CONNECT";
+    }
+
+    if (needTimeout) {
+        real += R"NEXA_TCP_TIMEOUT(
+#ifndef _WIN32
+#include <sys/time.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <errno.h>
+#endif
+// tcp.timeout: how long a tcp.recv or tcp.send on this socket waits, in
+// milliseconds, before it gives up the way a closed connection does ("" or a
+// short count). 0 is no limit, which is what a socket starts with.
+[[maybe_unused]] static int __nexa_tcp_timeout(int h, int ms) {
+  if (ms < 0) ms = 0;
+#ifdef _WIN32
+  DWORD t = (DWORD)ms;
+#else
+  struct timeval t;
+  t.tv_sec = ms / 1000;
+  t.tv_usec = (ms % 1000) * 1000;
+#endif
+  __nexa_net_sock_t s = (__nexa_net_sock_t)h;
+  return setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&t, (socklen_t)sizeof(t)) == 0 &&
+         setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&t, (socklen_t)sizeof(t)) == 0;
+}
+)NEXA_TCP_TIMEOUT";
+        if (needConnect) {
+            real += R"NEXA_TCP_CMS(
+// One address, waiting at most ms for it to answer: the connect is started
+// without blocking and then waited on, so a host that drops the packets costs
+// ms and not the OS's own limit (about 21s on Windows, minutes on Linux).
+static bool __nexa_tcp_connect_wait(__nexa_net_sock_t fd, const struct sockaddr* a, socklen_t n, int ms) {
+#ifdef _WIN32
+  u_long on = 1;
+  if (ioctlsocket(fd, FIONBIO, &on) != 0) return false;
+  bool ok = connect(fd, a, n) == 0;
+  if (!ok && WSAGetLastError() == WSAEWOULDBLOCK) {
+    fd_set w, e;
+    FD_ZERO(&w);
+    FD_ZERO(&e);
+    FD_SET(fd, &w);
+    FD_SET(fd, &e);
+    struct timeval t;
+    t.tv_sec = ms / 1000;
+    t.tv_usec = (ms % 1000) * 1000;
+    ok = select(0, nullptr, &w, &e, &t) > 0 && FD_ISSET(fd, &w);
+  }
+  u_long off = 0;
+  if (ioctlsocket(fd, FIONBIO, &off) != 0) ok = false;
+#else
+  int fl = fcntl(fd, F_GETFL, 0);
+  if (fl < 0 || fcntl(fd, F_SETFL, fl | O_NONBLOCK) < 0) return false;
+  bool ok = connect(fd, a, n) == 0;
+  if (!ok && errno == EINPROGRESS) {
+    struct pollfd p;
+    p.fd = fd;
+    p.events = POLLOUT;
+    p.revents = 0;
+    int r;
+    do r = poll(&p, 1, ms); while (r < 0 && errno == EINTR);
+    int err = 0;
+    socklen_t len = (socklen_t)sizeof(err);
+    ok = r > 0 && getsockopt(fd, SOL_SOCKET, SO_ERROR, (char*)&err, &len) == 0 && err == 0;
+  }
+  if (fcntl(fd, F_SETFL, fl) < 0) ok = false;
+#endif
+  return ok;
+}
+// tcp.connect(host, port, ms): tcp.connect with a time limit, which the socket
+// keeps for its reads and writes (tcp.timeout changes it). ms is per address
+// the name resolves to.
+[[maybe_unused]] static int __nexa_tcp_connect_ms(const std::string& host, int port, int ms) {
+  if (ms <= 0) return __nexa_tcp_connect(host, port);
+  if (!__nexa_net_start()) return 0;
+  struct addrinfo hints;
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  struct addrinfo* res = nullptr;
+  std::string portStr = std::to_string(port);
+  if (getaddrinfo(host.c_str(), portStr.c_str(), &hints, &res) != 0 || !res) return 0;
+  __nexa_net_sock_t fd = __NEXA_NET_BAD;
+  for (struct addrinfo* p = res; p; p = p->ai_next) {
+    fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+    if (fd == __NEXA_NET_BAD) continue;
+    if (__nexa_tcp_connect_wait(fd, p->ai_addr, (socklen_t)p->ai_addrlen, ms)) break;
+    __nexa_net_shut(fd);
+    fd = __NEXA_NET_BAD;
+  }
+  freeaddrinfo(res);
+  if (fd == __NEXA_NET_BAD) return 0;
+  __nexa_net_nosigpipe(fd);
+  int h = __nexa_net_handle(fd);
+  if (h) __nexa_tcp_timeout(h, ms);
+  return h;
+}
+)NEXA_TCP_CMS";
+        }
     }
 
     if (needListen) {

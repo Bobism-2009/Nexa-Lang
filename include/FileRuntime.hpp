@@ -20,6 +20,37 @@ static int __nexa_file_write(const char* __path, const char* __data, size_t __n,
 )NEXA_FILE_WR";
 }
 
+// file.write_at: the bytes at an offset, the rest of the file left as it was --
+// what a download that arrives out of order writes with. A missing file is
+// created; an offset past the end grows the file, the gap read back as zeros.
+// 64-bit offsets everywhere; a 32-bit off_t refuses one it cannot hold.
+inline std::string fileWriteAtRuntimeCpp() {
+    return R"NEXA_FILE_WA(
+#include <cerrno>
+#include <cstdio>
+#include <string>
+#if !defined(_WIN32)
+#include <sys/types.h>
+#endif
+static int __nexa_file_write_at(const char* __path, const std::string& __data, long long __off) {
+  if (__off < 0) return 0;
+  FILE* __f = std::fopen(__path, "r+b");
+  // Created only when there is none: "w+b" on a file r+b could not open (locked,
+  // read-only) would empty it.
+  if (!__f && errno == ENOENT) __f = std::fopen(__path, "w+b");
+  if (!__f) return 0;
+#ifdef _WIN32
+  int __ok = _fseeki64(__f, __off, SEEK_SET) == 0;
+#else
+  int __ok = (long long)(off_t)__off == __off && fseeko(__f, (off_t)__off, SEEK_SET) == 0;
+#endif
+  if (__ok && !__data.empty() && std::fwrite(__data.data(), 1, __data.size(), __f) != __data.size()) __ok = 0;
+  if (std::fclose(__f) != 0) __ok = 0;
+  return __ok;
+}
+)NEXA_FILE_WA";
+}
+
 // read — C stdio + std::string.
 inline std::string fileReadRuntimeCpp() {
     return R"NEXA_FILE_RD(

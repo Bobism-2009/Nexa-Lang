@@ -1,0 +1,8 @@
+connected: true
+silent peer, connect's limit: [] true
+timeout set: 1
+silent peer, 200ms: true
+then data: hello
+no limit: 1
+still reads: again
+refused: 0 true

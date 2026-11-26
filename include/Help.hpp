@@ -236,6 +236,7 @@ ENVIRONMENT
   text    io.to_int(s)             parse a decimal int (failure is 0)
           io.to_float(s)           parse a float (failure is 0.0)
           io.parse_int(s)          Result[int]: an error, not 0, for bad text
+          io.parse_long(s)         Result[long], the same past 2^31
           io.parse_float(s)        Result[float], the same
           io.getline(text[, n])    line n of a buffer, 1-based
           io.getline(text, "key")  the line starting "key:", from the key on
@@ -313,6 +314,7 @@ os.setenv("PORT", 8080) -- with os.getprocessid(name) the one exception.
           file.lines(path)           the file as a []string of lines
           file.write(path, content)  overwrite; statement, or 1/0
           file.append(path, content) append; statement, or 1/0
+          file.write_at(path, data, offset) write at a byte offset; 1/0
   ask     file.exists(path)  file.isdir(path)  file.isfile(path)
           file.size(path)            bytes (long), or -1
           file.modified(path)        last written, unix seconds (long), or -1
@@ -496,9 +498,9 @@ datagram links no HTTP transport at all.
                 http.close(server)
                     One request per connection: reply and raw both answer and
                     close. Loopback only. Not available on wasm.
-  tcp           tcp.connect(host, port)   tcp.listen(port)   tcp.accept(l)
+  tcp           tcp.connect(host, port[, ms])  tcp.listen(port)  tcp.accept(l)
                 tcp.send(h, data)         tcp.recv(h[, max])
-                tcp.port(h)               tcp.close(h)
+                tcp.timeout(h, ms)        tcp.port(h)        tcp.close(h)
                     Int handles, 0 means no socket. tcp.recv is ONE read, not
                     a whole message -- read until you have one. "" means the
                     peer hung up. tcp.listen binds every interface.

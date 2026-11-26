@@ -32,6 +32,7 @@ public:
         bool ioToInt = false;
         bool ioToFloat = false;
         bool ioParseInt = false;    // io.parse_int / io.parse_float, which answer a Result
+        bool ioParseLong = false;   // io.parse_long: the same for a 64-bit long
         bool ioParseFloat = false;
         bool osSystem = false;
         bool osExec = false;
@@ -84,6 +85,7 @@ public:
         bool fileStem = false;
         bool fileLines = false;
         bool fileWalk = false;
+        bool fileWriteAt = false;    // file.write_at
         bool random = false;
         bool randomFloat = false;    // random.float, and random.chance on top of it
         bool randomChance = false;
@@ -131,6 +133,7 @@ public:
         // is tcp.listen and tcp.accept. send/recv/port/close sit under both and
         // ride along with either.
         bool tcpConnect = false;
+        bool tcpTimeout = false;   // tcp.timeout, or tcp.connect with a time limit
         bool tcpListen = false;
         bool udp = false;
         // udp.sender/udp.sender_port and the per-handle table behind them. A
@@ -2170,6 +2173,9 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
             out += "#include <string>\n";
             out += fileReadRuntimeCpp();
         }
+        if (hasFile() && usage.fileWriteAt) {
+            out += fileWriteAtRuntimeCpp();
+        }
         if (hasFile() && usage.fileFs) {
             out += fileRuntimeCpp();
             out += fileExtraRuntimeCpp(usage.fileSize64, usage.fileModified, usage.fileStem, usage.fileLines,
@@ -2295,7 +2301,7 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
         // io.parse_int / io.parse_float: strict where to_int is lenient. The whole
         // text has to be the number (surrounding whitespace aside), and anything
         // else is an error saying what the text was.
-        if (hasIo() && (usage.ioParseInt || usage.ioParseFloat)) {
+        if (hasIo() && (usage.ioParseInt || usage.ioParseLong || usage.ioParseFloat)) {
             out += "static bool __nexa_parse_rest(const char* e) { while (*e == ' ' || *e == '\\t' || *e == '\\r' || *e == '\\n') e++; return *e == 0; }\n";
         }
         if (hasIo() && usage.ioParseInt) {
@@ -2304,6 +2310,13 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
                    "if (e == s.c_str() || !__nexa_parse_rest(e)) return __nexa_result<int>::make_err(std::string(\"not an int: \\\"\") + s + \"\\\"\"); "
                    "if (errno == ERANGE || v < INT_MIN || v > INT_MAX) return __nexa_result<int>::make_err(std::string(\"out of range for an int: \\\"\") + s + \"\\\"\"); "
                    "return __nexa_result<int>::make_ok((int)v); }\n";
+        }
+        if (hasIo() && usage.ioParseLong) {
+            out += "static __nexa_result<long long> __nexa_parse_long(const std::string& s) { errno = 0; char* e = nullptr; "
+                   "long long v = std::strtoll(s.c_str(), &e, 10); "
+                   "if (e == s.c_str() || !__nexa_parse_rest(e)) return __nexa_result<long long>::make_err(std::string(\"not a long: \\\"\") + s + \"\\\"\"); "
+                   "if (errno == ERANGE) return __nexa_result<long long>::make_err(std::string(\"out of range for a long: \\\"\") + s + \"\\\"\"); "
+                   "return __nexa_result<long long>::make_ok(v); }\n";
         }
         if (hasIo() && usage.ioParseFloat) {
             // A NaN or infinity is a number strtod reads but not one a program asked for.
@@ -2324,7 +2337,7 @@ static void __nexa_notify_wait() { while (__nexa_notify_live > 0) Sleep(20); }
             out += socketPlatformCpp();
         }
         if (hasTcp() && usage.tcp) {
-            out += tcpRuntimeCpp(usage.tcpConnect, usage.tcpListen);
+            out += tcpRuntimeCpp(usage.tcpConnect, usage.tcpListen, usage.tcpTimeout);
         }
         if (hasUdp() && usage.udp) {
             out += udpRuntimeCpp(usage.udpSender, usage.thread);

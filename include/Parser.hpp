@@ -4888,7 +4888,7 @@ private:
             if (method == "eof") return parseIoEofExpr();
             if (method == "getline") return applyIndexAndDotPostfix(parseIoGetlineExpr());
             if (method == "to_int" || method == "to_float" || method == "parse_int" ||
-                method == "parse_float") return applyIndexAndDotPostfix(parseIoToIntExpr());
+                method == "parse_long" || method == "parse_float") return applyIndexAndDotPostfix(parseIoToIntExpr());
             if (method == "trim") return applyIndexAndDotPostfix(parseIoTrimExpr());
             // Any other io.<method>(...) call would fall through to the plain
             // identifier path and die as "Undefined variable 'io'", which
@@ -5222,7 +5222,7 @@ private:
     static std::string ioSuggest(const std::string& m) {
         NexaSuggest near(m, "io.");
         near.considerList("print, println, eprint, eprintln, flush, readln, read_line, read_int, eof, getline, "
-                          "to_int, to_float, parse_int, parse_float, trim");
+                          "to_int, to_float, parse_int, parse_long, parse_float, trim");
         return near.text();
     }
     static std::string osSuggest(const std::string& m) {
@@ -5245,6 +5245,7 @@ private:
         if (m == "to_int") return "io.to_int(s) turns the text into an int";
         if (m == "to_float") return "io.to_float(s) turns the text into a float";
         if (m == "parse_int") return "io.parse_int(s) turns the text into a Result[int]";
+        if (m == "parse_long") return "io.parse_long(s) turns the text into a Result[long]";
         if (m == "parse_float") return "io.parse_float(s) turns the text into a Result[float]";
         if (m == "trim") return "io.trim(s) trims the whitespace off";
         return std::string();
@@ -6122,7 +6123,7 @@ private:
 
     static std::string fileSuggest(const std::string& m) {
         NexaSuggest near(m, "file.");
-        near.considerList("read, write, append, exists, mkdir, remove, remove_all, rename, copy, list, isdir, "
+        near.considerList("read, write, write_at, append, exists, mkdir, remove, remove_all, rename, copy, list, isdir, "
                           "isfile, size, cwd, chdir, abspath, join, dirname, basename, extension, stem, modified, "
                           "lines, walk");
         return near.text();
@@ -6137,9 +6138,20 @@ private:
             "remove", "remove_all", "rename", "copy", "list",
             "isdir", "isfile", "size", "cwd", "chdir",
             "abspath", "join", "dirname", "basename", "extension",
-            "stem", "modified", "lines", "walk"
+            "stem", "modified", "lines", "walk", "write_at"
         };
         return m.count(method) > 0;
+    }
+
+    // file.write_at(path, data, offset): the two arguments after the path.
+    void parseFileWriteAtRest(AstNode& node) {
+        for (int i = 0; i < 2; ++i) {
+            if (!match(TokenType::Comma)) {
+                throw std::runtime_error("Expected ',' in file.write_at(path, data, offset) at line " +
+                                         std::to_string(peek().line));
+            }
+            node.children.push_back(parseValueExpr());
+        }
     }
 
     AstNode parseFileExpr() {
@@ -6195,6 +6207,7 @@ private:
             }
             node.children.push_back(parseValueExpr());
         }
+        if (method == "write_at") parseFileWriteAtRest(node);
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' after file." + method + "(...) at line " + std::to_string(peek().line));
         }
@@ -6248,6 +6261,7 @@ private:
                 }
                 node.children.push_back(parseValueExpr());
             }
+            if (method == "write_at") parseFileWriteAtRest(node);
         }
         if (!match(TokenType::RParen)) {
             throw std::runtime_error("Expected ')' at line " + std::to_string(peek().line));
@@ -6731,8 +6745,9 @@ private:
         int fixed;
         bool optTail = false;
         std::string shape, tail;
-        if (method == "connect") { fixed = 2; shape = "host, port"; }
+        if (method == "connect") { fixed = 2; optTail = true; shape = "host, port"; tail = "[, ms]"; }
         else if (method == "listen") { fixed = 1; shape = "port"; }
+        else if (method == "timeout") { fixed = 2; shape = "handle, ms"; }
         else if (method == "accept") { fixed = 1; shape = "listener"; }
         else if (method == "send") { fixed = 2; shape = "handle, data"; }
         else if (method == "recv") { fixed = 1; optTail = true; shape = "handle"; tail = "[, max]"; }
@@ -6740,7 +6755,7 @@ private:
         else {
             throw std::runtime_error(nexaSuggestFromUse("Unknown tcp function 'tcp." + method +
                 "' at line " + std::to_string(methodTok.line) +
-                " (use connect, listen, accept, send, recv, port, close)", method, "tcp."));
+                " (use connect, listen, accept, send, recv, timeout, port, close)", method, "tcp."));
         }
         if (!match(TokenType::LParen)) {
             throw std::runtime_error("Expected '(' after tcp." + method + " at line " + std::to_string(peek().line));

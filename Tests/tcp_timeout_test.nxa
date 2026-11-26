@@ -1,0 +1,42 @@
+// tcp.connect(host, port, ms) and tcp.timeout(handle, ms): both ends in one
+// program, as tcp_server_test does. Run by Tests/tcp_cases.sh (the timeout
+// layer); the bounds are wide so a loaded machine does not fail them.
+#include <std/io>
+#include <std/network>
+#include <std/time>
+
+fn main() {
+    let l = tcp.listen(0);
+    let s = tcp.connect("127.0.0.1", tcp.port(l), 2000);
+    io.println("connected: ", s != 0);
+    let peer = tcp.accept(l);
+
+    // The time limit connect was given is the socket's for its reads too.
+    let t0 = time.now_ms();
+    let got = tcp.recv(s);
+    let w0 = time.now_ms() - t0;
+    io.println("silent peer, connect's limit: [", got, "] ", w0 >= 1500 && w0 < 8000);
+
+    io.println("timeout set: ", tcp.timeout(s, 200));
+    let t1 = time.now_ms();
+    tcp.recv(s);
+    let w1 = time.now_ms() - t1;
+    io.println("silent peer, 200ms: ", w1 >= 150 && w1 < 3000);
+
+    // A timed-out read is not a broken socket: the next one still reads.
+    tcp.send(peer, "hello");
+    io.println("then data: ", tcp.recv(s));
+
+    // 0 takes the limit off again.
+    io.println("no limit: ", tcp.timeout(s, 0));
+    tcp.send(peer, "again");
+    io.println("still reads: ", tcp.recv(s));
+    tcp.close(peer);
+    tcp.close(s);
+    tcp.close(l);
+
+    // Nothing listens on port 1: refused, and quickly.
+    let t2 = time.now_ms();
+    let refused = tcp.connect("127.0.0.1", 1, 3000);
+    io.println("refused: ", refused, " ", time.now_ms() - t2 < 5000);
+}

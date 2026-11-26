@@ -343,8 +343,9 @@ public:
                     if (n.value.empty()) cppUsage.ioToInt = true;
                     else if (n.value == "to_float") cppUsage.ioToFloat = true;
                     else if (n.value == "parse_int") cppUsage.ioParseInt = true;
+                    else if (n.value == "parse_long") cppUsage.ioParseLong = true;
                     else if (n.value == "parse_float") cppUsage.ioParseFloat = true;
-                    if (n.value == "parse_int" || n.value == "parse_float") cppUsage.result = true;
+                    if (n.value == "parse_int" || n.value == "parse_long" || n.value == "parse_float") cppUsage.result = true;
                     break;
                 case AstNode::Type::OsSystem: cppUsage.osSystem = true; break;
                 case AstNode::Type::OsExec: cppUsage.osExec = true; break;
@@ -413,6 +414,8 @@ public:
                 case AstNode::Type::FileExists:
                 case AstNode::Type::FileMkdir:
                 case AstNode::Type::FileCall:
+                    // Plain stdio, so none of the path helpers come with it.
+                    if (n.value == "write_at") { cppUsage.fileWriteAt = true; break; }
                     cppUsage.fileFs = true;
                     if (n.value == "size") cppUsage.fileSize64 = true;
                     if (n.value == "modified") cppUsage.fileModified = true;
@@ -504,6 +507,7 @@ public:
                     cppUsage.tcp = true;
                     if (n.value == "connect") cppUsage.tcpConnect = true;
                     else if (n.value == "listen" || n.value == "accept") cppUsage.tcpListen = true;
+                    if (n.value == "timeout" || (n.value == "connect" && n.children.size() > 2)) cppUsage.tcpTimeout = true;
                     break;
                 case AstNode::Type::UdpCall:
                     cppUsage.udp = true;
@@ -5037,7 +5041,18 @@ private:
 
     std::string inferExprNexaType(const AstNode& e) const {
         switch (e.type) {
-            case AstNode::Type::ExprIntLiteral: return "int";
+            case AstNode::Type::ExprIntLiteral: {
+                // A literal an int cannot hold is a long, as C++ types it: `let n =
+                // 5000000000` was an int and printed 705032704. Hex and octal up to 32 bits
+                // stay int (the bit pattern of an unsigned int, see nexaIntTypeRange).
+                const IntLiteralText lit = parseIntLiteralText(e.value);
+                if (lit.valid) {
+                    const unsigned long long cap = lit.base == 10 ? (lit.negative ? 2147483648ULL : 2147483647ULL)
+                                                                  : 0xFFFFFFFFULL;
+                    if (lit.magnitude > cap) return "long";
+                }
+                return "int";
+            }
             case AstNode::Type::ExprFloatLiteral: return "float";
             case AstNode::Type::ExprCharLiteral: return "char";
             case AstNode::Type::ExprBoolLiteral: return "bool";
@@ -5333,6 +5348,7 @@ private:
             case AstNode::Type::IoToInt:
                 if (e.value == "to_float") return "float";
                 if (e.value == "parse_int") return nexaMakeResultType("int");
+                if (e.value == "parse_long") return nexaMakeResultType("long");
                 if (e.value == "parse_float") return nexaMakeResultType("float");
                 return "int";
             case AstNode::Type::IoEof: return "bool";
@@ -8717,7 +8733,8 @@ private:
     // std/network, the tcp half: an int handle everywhere, bytes as text.
     static const BuiltinArgRow* tcpArgRows() {
         static const BuiltinArgRow rows[] = {
-            {"connect", "tcp.connect(host, port)",   "tn"},
+            {"connect", "tcp.connect(host, port[, ms])", "tnn"},
+            {"timeout", "tcp.timeout(handle, ms)",   "nn"},
             {"listen",  "tcp.listen(port)",          "n"},
             {"accept",  "tcp.accept(listener)",      "n"},
             {"send",    "tcp.send(handle, data)",    "nt"},
@@ -8766,6 +8783,7 @@ private:
             {"rename",     "file.rename(from, to)",  "tt"},
             {"copy",       "file.copy(from, to)",    "tt"},
             {"join",       "file.join(a, b)",        "tt"},
+            {"write_at",   "file.write_at(path, data, offset)", "ttn"},
             {"", nullptr, nullptr},
         };
         return rows;
@@ -14096,6 +14114,7 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 std::string s = emitExpr(e.children[0], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 if (e.value == "to_float") return "__nexa_to_float(" + s + ")";
                 if (e.value == "parse_int") return "__nexa_parse_int(" + s + ")";
+                if (e.value == "parse_long") return "__nexa_parse_long(" + s + ")";
                 if (e.value == "parse_float") return "__nexa_parse_float(" + s + ")";
                 return "__nexa_to_int(" + s + ")";
             }
@@ -14137,6 +14156,11 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 if (fn == "dirname") return "__nexa_file_dirname(" + a0 + ")";
                 if (fn == "basename") return "__nexa_file_basename(" + a0 + ")";
                 if (fn == "extension") return "__nexa_file_extension(" + a0 + ")";
+                if (fn == "write_at") {
+                    std::string data = emitExpr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    std::string off = emitExpr(e.children[2], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
+                    return "__nexa_file_write_at(" + a0 + ", " + asCppStdString(data) + ", (long long)(" + off + "))";
+                }
                 if (fn == "rename" || fn == "copy" || fn == "join") {
                     std::string a1 = emitFilePathCStr(e.children[1], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                     if (fn == "rename") return "__nexa_file_rename(" + a0 + ", " + a1 + ")";
@@ -14435,7 +14459,10 @@ static std::string __nexa_show(const std::map<K, V>& m) {
                 auto arg = [&](size_t i) {
                     return emitExpr(e.children[i], varMap, varIsString, varIsFloat, varIsChar, varIsBool);
                 };
+                if (fn == "connect" && e.children.size() > 2)
+                    return "__nexa_tcp_connect_ms(" + arg(0) + ", " + arg(1) + ", " + arg(2) + ")";
                 if (fn == "connect") return "__nexa_tcp_connect(" + arg(0) + ", " + arg(1) + ")";
+                if (fn == "timeout") return "__nexa_tcp_timeout(" + arg(0) + ", " + arg(1) + ")";
                 if (fn == "listen") return "__nexa_tcp_listen(" + arg(0) + ")";
                 if (fn == "accept") return "__nexa_tcp_accept(" + arg(0) + ")";
                 if (fn == "send") return "__nexa_tcp_send(" + arg(0) + ", " + arg(1) + ")";

@@ -13,7 +13,7 @@ MODULE INCLUDES (angle brackets)
   #include <std/thread>
   #include <std/network>  - The whole wire, one include; the prefix says which protocol
                             http.get/post/put/patch/delete/request, http.localhost/accept/reply
-                            tcp.connect/listen/accept/send/recv/port/close
+                            tcp.connect/listen/accept/send/recv/timeout/port/close
                             udp.open/port/send/recv/sender/sender_port/close
                             (http.* is a protocol; tcp.* and udp.* are the wire under it)
                             Replaces std/http and std/tcp, which are retired

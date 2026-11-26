@@ -32,6 +32,11 @@ struct __nexa_result {
     T _value{};
     std::string _error;
 
+    __nexa_result() = default;
+    // ok(n) with an int, returned as a Result[long] (or [float]): the value widens.
+    template <typename U, typename = decltype(T(std::declval<const U&>()))>
+    __nexa_result(const __nexa_result<U>& __o) : _ok(__o._ok), _value(__o._ok ? T(__o._value) : T{}), _error(__o._error) {}
+
     bool ok() const { return _ok; }
     const T& value() const& {
         if (!_ok) __nexa_result_fail(_error);
