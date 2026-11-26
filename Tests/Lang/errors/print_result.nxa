@@ -1,0 +1,10 @@
+// A Result has no printed form: its value or its error is printed instead.
+#include <std/io>
+
+fn load(): Result[int] {
+    return ok(3);
+}
+
+fn main() {
+    io.println(load());
+}

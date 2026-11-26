@@ -1,0 +1,2 @@
+enum Shape has cases with fields, so it has no printed form -- match it
+at line 10

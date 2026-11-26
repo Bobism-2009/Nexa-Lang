@@ -1,0 +1,12 @@
+// An Option has no printed form, nor does a list of them.
+#include <std/io>
+
+fn find(n: int): Option[int] {
+    if (n > 0) { return Some(n); }
+    return None;
+}
+
+fn main() {
+    let xs = [find(1), find(0)];
+    io.println("found ", xs);
+}

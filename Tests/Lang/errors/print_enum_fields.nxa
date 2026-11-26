@@ -1,0 +1,11 @@
+// An enum whose cases hold fields has no printed form; a plain enum prints.
+#include <std/io>
+
+enum Shape {
+    Circle { r: int; };
+    Dot;
+}
+
+fn main() {
+    io.println(Shape.Dot);
+}

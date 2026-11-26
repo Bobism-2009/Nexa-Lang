@@ -7858,10 +7858,8 @@ private:
                 // form of its own to print in.
                 for (const AstNode& c : s.children) {
                     semExpr(c);
-                    const std::string t = inferExprNexaType(c);
-                    if (isStructDeclType(t)) {
-                        semError(c, "a " + structNameFromDecl(t) + " struct has no printed form -- print its fields");
-                    }
+                    const std::string why = semNoPrintedForm(inferExprNexaType(c));
+                    if (!why.empty()) semError(c, why);
                 }
                 break;
             // What a catch receives is the thrown string; anything else arrives as "".
@@ -8266,7 +8264,14 @@ private:
                 semError(e.children[i], "a " + structNameFromDecl(t) +
                                             " struct has no text form to join to a string -- use its fields");
             }
-            if (nexaIsSliceType(t) || nexaIsMapType(t) || nexaIsResultType(t) || nexaIsFnType(t)) {
+            if (nexaIsResultType(t)) {
+                semError(e.children[i], "a Result has no text form to join to a string -- use r.value() or r.error()");
+            }
+            if (t.rfind("enum:", 0) == 0) {
+                const std::string why = semNoPrintedForm(t);
+                if (!why.empty()) semError(e.children[i], why);
+            }
+            if (nexaIsSliceType(t) || nexaIsMapType(t) || nexaIsFnType(t)) {
                 semError(e.children[i], "a " + t + " has no text form to join to a string -- use its elements" +
                                             std::string(t == "[]string" ? ", or .join(\", \")" : ""));
             }
@@ -9279,6 +9284,35 @@ private:
             for (const auto& kv : methods->second) offer(kv.first);
         }
         semError(e, "Struct '" + sname + "' has no field '" + e.value + "'" + near.text());
+    }
+
+    // Why a value of type t cannot be printed, or "" when it can. Slices and maps print as
+    // [1, 2] and {"a": 1}, a plain enum as its case; a struct, a Result, an Option or an
+    // enum with fields has no form of its own, nor a list or map holding one. Said here:
+    // what reached clang instead was a C++ error about the printing code.
+    std::string semNoPrintedForm(const std::string& t) const {
+        if (t.empty()) return std::string();
+        if (isStructDeclType(t)) return "a " + structNameFromDecl(t) + " struct has no printed form -- print its fields";
+        if (nexaIsResultType(t)) return "a Result has no printed form -- print r.value() or r.error() (r.ok() says which)";
+        if (t.rfind("enum:", 0) == 0) {
+            const std::string en = t.substr(5);
+            if (en.rfind("Option[", 0) == 0 || en == "Option") {
+                return "an Option has no printed form -- print o.value() or o.or(fallback) (o.is_some() says which), or match it";
+            }
+            auto it = enumPayload_.find(en);
+            if (it != enumPayload_.end() && !it->second.empty()) {
+                return "enum " + en + " has cases with fields, so it has no printed form -- match it and print the fields";
+            }
+            return std::string();
+        }
+        if (nexaIsSliceType(t)) return semNoPrintedForm(nexaSliceElem(t));
+        if (nexaIsMapType(t)) {
+            std::string k, v;
+            if (!nexaSplitMapType(t, k, v)) return std::string();
+            std::string why = semNoPrintedForm(k);
+            return why.empty() ? semNoPrintedForm(v) : why;
+        }
+        return std::string();
     }
 
     // Coarse type category used only for the "clearly incompatible" initializer check.

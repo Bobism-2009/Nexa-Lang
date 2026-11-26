@@ -1,0 +1,10 @@
+// A Result joined to a string has no text either.
+#include <std/io>
+
+fn load(): Result[int] {
+    return ok(3);
+}
+
+fn main() {
+    io.println("got " + load());
+}
