@@ -5537,7 +5537,10 @@ static std::map<unsigned long long, __nexa_ui_Glyph> __nexa_ui_glyphs;
 static void __nexa_ui_fonts_init() {
     if (__nexa_ui_fonts_ready) return;
     __nexa_ui_fonts_ready = 1;
-    const unsigned char* data[2] = {__nexa_ui_font_regular, __nexa_ui_font_semibold};
+    const unsigned char* semibold = nullptr;
+    const unsigned char* regular = __nexa_ui_fonts_unpack(&semibold);
+    if (!regular) return;
+    const unsigned char* data[2] = {regular, semibold};
     for (int i = 0; i < 2; i++) {
         __nexa_ui_Font& f = __nexa_ui_fonts[i];
         f.ok = stbtt_InitFont(&f.info, data[i], stbtt_GetFontOffsetForIndex(data[i], 0));

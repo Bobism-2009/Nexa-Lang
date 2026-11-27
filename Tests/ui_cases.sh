@@ -92,7 +92,7 @@ if ! "$NEXAC" "$WORK/all.nxa" --source "$WORK/all.cpp" > "$WORK/emit.log" 2>&1; 
     exit 1
 fi
 for want in "__nexa_ui_after_poll();" "__nexa_ui_before_present();" "STB_TRUETYPE_IMPLEMENTATION" \
-            "__nexa_ui_font_regular" "__nexa_ui_font_semibold" "SIL Open Font License" \
+            "__nexa_ui_font_z" "__nexa_ui_fonts_unpack(" "__nexa_inflate(" "SIL Open Font License" \
             "__nexa_ui_dropdown(" "__nexa_ui_evq" "__nexa_ui_style_set("; do
     if grep -qF "$want" "$WORK/all.cpp"; then
         say_ok "emit: the ui program carries $want"

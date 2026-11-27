@@ -458,6 +458,26 @@ if [ "$SLIM" = 1 ] && [ -f "$WORK/uncaught$EXE" ]; then
     if [ "$size" -lt 16384 ]; then ok "uncaught_size ($size bytes)"; else bad uncaught_size "$size bytes, over 16KB"; fi
 fi
 
+# std/ui's two fonts and std/gfx3d's SPIR-V are baked in DEFLATEd. Raw, they
+# were 94KB and 54KB of every ui and every 3D program: a button was 165KB on
+# Windows, one cube 141KB. Built here and not run, since both open a window.
+size_guard() {
+    name=$1; limit=$2; src=$3
+    if "$NEXAC" "$src" -o "$WORK/$name$EXE" > "$WORK/$name.log" 2>&1; then
+        size=$(wc -c < "$WORK/$name$EXE" | tr -d ' ')
+        if [ "$size" -ge "$limit" ]; then bad "$name" "$size bytes, $limit or more"
+        else ok "$name ($size bytes)"; fi
+    else
+        bad "$name" "build failed: $(tail -3 "$WORK/$name.log")"
+    fi
+}
+if [ "$WINDOWS" = 1 ]; then
+    printf '#include <std/ui>\nfn main() {\n    if (ui.open("u", 200, 100) == 0) { return; }\n    while (!gfx.closed()) {\n        gfx.poll();\n        ui.background();\n        if (ui.button(10, 10, 80, 24, "OK")) { break; }\n        gfx.present();\n    }\n}\n' > "$WORK/ui_button.nxa"
+    size_guard ui_button 114688 "$WORK/ui_button.nxa"
+    printf '#include <std/gfx3d>\nfn main() {\n    if (gfx3d.open("c", 200, 100) != 1) { return; }\n    while (gfx3d.closed() != 1) {\n        gfx3d.poll();\n        gfx3d.clear(0, 0, 0);\n        gfx3d.cube(0.0, 0.0, 0.0, 1.0, 200, 80, 40);\n        gfx3d.present();\n    }\n}\n' > "$WORK/gfx3d_cube.nxa"
+    size_guard gfx3d_cube 110592 "$WORK/gfx3d_cube.nxa"
+fi
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

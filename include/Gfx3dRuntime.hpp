@@ -649,6 +649,7 @@ static double __nexa_g3_now_ms(void) {
 // events, swap its buffers, tear it down -- so that adding a third platform
 // is filling in those four and nothing else.
 #include "nexa_vk14_embed.inc"
+#include "InflateRuntime.hpp"
 
 inline void gfx3dApplyAa(std::string& s) {
     auto put = [&](const std::string& from, const std::string& to) {
@@ -4067,7 +4068,9 @@ static void __nexa_g3_batch_submit(void) {
                 }
             }
         }
-        s.replace(at, mark.size(), vk);
+        // The renderer's shaders are DEFLATEd (nexa_vk14_spv.inc), so the
+        // decoder goes in ahead of it.
+        s.replace(at, mark.size(), inflateRuntimeCpp() + vk);
     }
     if (aa) gfx3dApplyAa(s);
     if (fog) gfx3dApplyFog(s);

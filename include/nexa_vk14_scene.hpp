@@ -562,9 +562,8 @@ inline void prime_mesh_sets(Dev& d);
 inline int scene_boot(Dev& d) {
     Gpu& g = gpu();
     if (g.booted) return 1;
-    const uint32_t* words[13] = { kSpvMeshVs, kSpvMeshFs, kSpvDepthVs, kSpvMatVs, kSpvMatFs, kSpvSkyVs, kSpvSkyFs, kSpvPartVs, kSpvPartFs, kSpvBlitVs, kSpvBlitFs, kSpvTexVs, kSpvTexFs };
-    const size_t bytes[13] = { sizeof(kSpvMeshVs), sizeof(kSpvMeshFs), sizeof(kSpvDepthVs), sizeof(kSpvMatVs), sizeof(kSpvMatFs), sizeof(kSpvSkyVs), sizeof(kSpvSkyFs), sizeof(kSpvPartVs), sizeof(kSpvPartFs), sizeof(kSpvBlitVs), sizeof(kSpvBlitFs), sizeof(kSpvTexVs), sizeof(kSpvTexFs) };
-    for (int i = 0; i < 13; ++i) if (!shader_mod(d, words[i], bytes[i] / 4, &g.sh[i])) { fail("scene shader"); scene_down(d); return 0; }
+    // The first thirteen of nexa_vk14_spv.inc, kSpvMeshVs to kSpvTexFs, in g.sh's order.
+    for (int i = 0; i < 13; ++i) if (!shader_mod(d, spv(kSpvMeshVs + i), spv_words(kSpvMeshVs + i), &g.sh[i])) { fail("scene shader"); scene_down(d); return 0; }
     auto samp = [&](uint64_t* out, uint32_t filter, uint32_t addr, uint32_t border) {
         struct Samp { uint32_t sType; const void* pNext; uint32_t flags; uint32_t mag, minf, mip, u, v, w; float bias; uint32_t anisoEn; float maxAniso; uint32_t cmpEn, cmp; float minLod, maxLod; uint32_t border, unnorm; } s{};
         s.sType = 31; s.mag = s.minf = filter; s.mip = filter ? 1u : 0u; s.u = s.v = s.w = addr; s.border = border;
