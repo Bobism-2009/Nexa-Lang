@@ -1082,6 +1082,15 @@ inline void buildProgram(const Spec& s, const std::string& cppPath, const std::s
     if (!o.exceptions) cc.push_back("-fno-exceptions");
     if (!o.rtti) cc.push_back("-fno-rtti");
     for (const std::string& f : o.extraFlags) cc.push_back(f);
+    // A Linux window speaks to the X server through NexaC's own client
+    // (X11WireRuntime.hpp), as it does on the host: a target that still
+    // carries an Xlib to build has it built and then left out of the link,
+    // since nothing calls it.
+    if (s.os == "linux") {
+        for (const std::string& m : o.modules) {
+            if (m == "std/gfx" || m == "std/ui") { cc.push_back("-DNEXA_X11_WIRE"); break; }
+        }
+    }
     cc.push_back("-ffunction-sections");
     cc.push_back("-fdata-sections");
     cc.push_back("-c");

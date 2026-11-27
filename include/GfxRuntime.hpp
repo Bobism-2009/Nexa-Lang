@@ -2,6 +2,8 @@
 
 #include <string>
 
+#include "X11WireRuntime.hpp"
+
 namespace nexa {
 
 // Which gfx helpers to emit. The runtime is ~2,800 lines and a program that
@@ -405,7 +407,15 @@ static void __nexa_gfx_mix_pump() {
 // along on every slice because the Cocoa drawRect premultiplies through one.
 // That is a line, and knowing the target here would cost threading it through
 // every runtime block to save it.
-inline std::string gfxStdHeadersFor(const std::string& body) {
+inline std::string gfxStdHeadersFor(const std::string& text) {
+    // NexaC's own X11 client is read past: it includes what it uses itself,
+    // and the program's own headers are the runtime's business.
+    std::string body = text;
+    const size_t wire = body.find("#if defined(NEXA_X11_WIRE)\n");
+    if (wire != std::string::npos) {
+        const size_t xlib = body.find("#else\n#include <X11/Xlib.h>", wire);
+        if (xlib != std::string::npos) body.erase(wire, xlib - wire);
+    }
     struct StdHeader {
         const char* header;
         const char* symbols[8];
@@ -736,7 +746,13 @@ inline std::string gfxRuntimeCpp(const GfxNeed& need) {
     // CGImageSource, which is how gfx.image decodes on macOS. Cocoa does not
     // bring ImageIO in, so a program that decodes needs it named.
     if (need.imageLoad) out += "#include <ImageIO/ImageIO.h>\n";
-    out += R"NEXA_GFX(#elif defined(__linux__)
+    // NexaC's own X11 client (X11WireRuntime.hpp) when NexaC builds the
+    // executable itself and the project has not asked for the system's libX11;
+    // Xlib's headers otherwise -- "x11": "system", a shared library, and a
+    // program compiled from --source, as the test suites compile it.
+    out += "#elif defined(__linux__)\n#if defined(NEXA_X11_WIRE)\n";
+    out += x11WireRuntimeCpp();
+    out += R"NEXA_GFX(#else
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/Xatom.h>
@@ -746,6 +762,7 @@ inline std::string gfxRuntimeCpp(const GfxNeed& need) {
     // a key, so it does not bring this in.
     if (need.keys || need.ui) out += "#include <X11/keysym.h>\n";
     out += R"NEXA_GFX(#endif
+#endif
 )NEXA_GFX";
     // The frame limiter reads a monotonic clock and waits on it. Windows has
     // both in windows.h and Emscripten has both in emscripten.h, already

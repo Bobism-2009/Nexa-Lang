@@ -586,12 +586,15 @@ ARGUMENT TYPES
 
 #include <std/gfx>
   Pixel window (Win32, Cocoa, X11, or Emscripten canvas). No extra libraries on Windows.
-  macOS links Cocoa automatically. Linux executables embed X11 statically
-  (need libx11-dev / libxcb1-dev on the *build* machine). The binary does not
-  need libX11.so at runtime. libc stays dynamic (present on every Linux).
-  That embedded X11 is about 1.1MB. A project that would rather link the
-  shared libX11, as std/gfx3d does, and ship about 23KB instead sets
-  "x11": "system" in its nexapkg.json -- see the std/nexapkg section.
+  macOS links Cocoa automatically. On Linux the program speaks to the X server
+  itself, through an X11 client NexaC compiles into it: nothing is linked, the
+  build machine needs no X11 packages, and the program needs no libX11.so
+  where it runs. libc stays dynamic (present on every Linux). A window that
+  draws comes to about 30KB. Key presses are translated as libX11 translates
+  them -- XKB levels, AltGr, a second layout -- into Latin-1 text for
+  gfx.typed(). A project that would rather link the shared libX11, as
+  std/gfx3d does, sets "x11": "system" in its nexapkg.json (about 16KB smaller,
+  and libX11.so then has to be there) -- see the std/nexapkg section.
   gfx.open(title, w, h[, scale]) - create a w*h framebuffer scaled up (default scale 12); 1/0
                                    w,h clamp into 1..4096 and scale into 1..64 rather than
                                    failing; a scale below 1 means the default
@@ -991,8 +994,9 @@ ARGUMENT TYPES
 
   What such a program still carries is the window code it is not using -- about
   7KB on Windows, 48KB on a static Linux cross build. On a Linux build for the
-  machine it is built on it also links X11, baked in by default (around 1.1MB,
-  or 23KB with "x11": "system" in nexapkg.json -- see std/nexapkg). The mixer is
+  machine it is built on it also carries NexaC's X11 client (about 16KB, or
+  the shared libX11 instead with "x11": "system" in nexapkg.json -- see
+  std/nexapkg). The mixer is
   one block shared between std/gfx and std/gfx3d, so including either gives the
   whole of sound, and there is no smaller door onto it than this.
   gfx.image(path)                - load PNG/JPEG/BMP/GIF (and OS formats); handle, or 0
@@ -2424,18 +2428,18 @@ PACKAGES (nexapkg)
                       gets Xlib. Build settings live in the manifest rather than
                       behind command-line options, so how a project is built
                       travels with the project.
-                        "embed"  (the default) bakes a static X11 into the binary,
-                                 so it runs on a machine with no libX11.so at all --
-                                 a container, an appliance image, a box with no
-                                 desktop. About 1.1MB.
+                        "embed"  (the default) compiles NexaC's own X11 client
+                                 into the binary, so it runs on a machine with no
+                                 libX11.so at all -- a container, an appliance
+                                 image, a box with no desktop. About 16KB. (Until
+                                 0.1.17 this baked a static libX11 in: 1.1MB.)
                         "system" links the shared libX11, the way std/gfx3d always
-                                 has. About 23KB instead, and libX11.so has to be
+                                 has. About 16KB smaller, and libX11.so has to be
                                  there when it runs.
                       It applies to a build for the machine NexaC is running on.
-                      A cross build named in "targets" brings its own X11 -- the
-                      arm64-linux target, for one, compiles it from source -- so
-                      this setting does not reach those and is not consulted for
-                      them.
+                      A cross build named in "targets" always gets the client --
+                      the arm64-linux target is a static program -- so this
+                      setting is not consulted for those.
                       "embed" is the default on purpose: Nexa is meant to run on
                       anything, and a small binary that will not start where
                       there is no libX11.so is not that. The small build is the

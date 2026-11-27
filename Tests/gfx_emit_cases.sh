@@ -116,7 +116,22 @@ transpile() {
         fails=$((fails + 1))
         return 1
     fi
+    strip_x11_client "$WORK/$name.cpp"
     return 0
+}
+
+# A Linux gfx program carries NexaC's own X11 client (X11WireRuntime.hpp) for
+# the build NexaC makes itself, next to Xlib's headers for everything else. It
+# defines every Xlib name the runtime could call, whichever the program does,
+# so what these cases ask -- which calls, which masks, which window -- is asked
+# of the runtime with the client's body taken out. The #if and #else stay, so
+# the file still compiles as it did.
+strip_x11_client() {
+    sed '/^#if defined(NEXA_X11_WIRE)$/,/^#else$/{
+/^#if defined(NEXA_X11_WIRE)$/b
+/^#else$/b
+d
+}' "$1" > "$1.stripped" && mv "$1.stripped" "$1"
 }
 
 # --- decoder: which gfx programs carry stb_image ----------------------------
@@ -859,6 +874,7 @@ size_under "window_only_stays_small" "$WORK/window_only.cpp" 600
 # lines bigger, which is a difference between platforms and not growth.
 if "$NEXAC" "$ROOT/Examples/paint_demo.nxa" $LINUX_EMIT --source "$WORK/paint_demo.cpp" \
         > "$WORK/paint_demo.log" 2>&1; then
+    strip_x11_client "$WORK/paint_demo.cpp"
     size_under "paint_demo_stays_small" "$WORK/paint_demo.cpp" 1650
 else
     echo "FAIL paint_demo_stays_small: NexaC could not transpile it"

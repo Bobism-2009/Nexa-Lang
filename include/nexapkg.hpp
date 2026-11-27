@@ -175,17 +175,18 @@ struct Manifest {
     // happened to type.
     //
     // x11 -- what a Linux std/gfx or std/ui executable does about Xlib:
-    //   "embed"  (the default) bakes a static X11 in, so the program runs on a
-    //            machine with no libX11.so at all: a container, an appliance
-    //            image, a box with no desktop. Costs roughly 1.1MB.
-    //   "system" links the system libX11, as std/gfx3d always has. Around 23KB
-    //            instead, and libX11.so has to be there when it runs.
+    //   "embed"  (the default) compiles NexaC's own X11 client in
+    //            (X11WireRuntime.hpp), so the program runs on a machine with no
+    //            libX11.so at all: a container, an appliance image, a box with
+    //            no desktop. Costs roughly 16KB; until 0.1.17 it was a static
+    //            libX11 baked in, and 1.1MB.
+    //   "system" links the system libX11, as std/gfx3d always has. About 16KB
+    //            smaller, and libX11.so has to be there when it runs.
     // Empty means unset, which reads as "embed".
     //
     // Only for a build aimed at the machine NexaC is running on. A cross build
-    // from "targets" goes through nexa::target::buildProgram, which links what
-    // the target package carries -- arm64-linux compiles X11 from source -- so
-    // this is not consulted there.
+    // from "targets" goes through nexa::target::buildProgram, which always
+    // uses the client, so this is not consulted there.
     //
     // "embed" is the default on purpose, and not merely because it is what
     // NexaC did first: Nexa is advertised as running on anything, and a 23KB

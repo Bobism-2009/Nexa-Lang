@@ -32,10 +32,11 @@
 
 - **Windows:** a **MinGW-targeted** `clang++` on your `PATH` — preferably [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) (`MartinStorsjo.LLVM-MinGW.UCRT` via winget). Official MSVC-target LLVM alone is not enough. The installer installs llvm-mingw when that MinGW clang++ is missing, and will not upgrade tools you already have.
 - **Linux:** `clang++` (or `g++`) and normal build tools. The installer / `make install-deps`
-  installs compile-time packages only (compiler, git, X11 *headers/static libs*
-  for `std/gfx`). It does **not** install the wasm toolchain. Executables embed
-  libstdc++, libgcc, and static X11; the resulting binary does not need
-  `libX11.so`. libc stays dynamic. HTTPS uses the system `libssl.so` at run time
+  installs compile-time packages only (compiler, git, X11 headers for `std/gfx3d`).
+  It does **not** install the wasm toolchain. Executables embed libstdc++ and
+  libgcc, and a `std/gfx` or `std/ui` window speaks X11 through a client NexaC
+  compiles into the program, so the binary does not need `libX11.so`. libc stays
+  dynamic. HTTPS uses the system `libssl.so` at run time
   (`dlopen`), so no OpenSSL headers are required to compile.
 - **macOS:** Apple Command Line Tools (`xcode-select --install`); see [`MACOS.md`](MACOS.md).
 
@@ -284,9 +285,10 @@ re-copied on every install so edits propagate during development.
 
 `targets` names extra platforms `NexaC build` should produce as well as this machine's
 (`"windows"`, `"wasm"`, or a name from `nexapkg target list`). `x11` is Linux-only and
-says how a `std/gfx` or `std/ui` executable gets Xlib: `"embed"` (the default, a static
-X11, about 1.1MB, no `libX11.so` needed) or `"system"` (about 23KB, and `libX11.so` must
-be there at run time). Full field reference: [`SYNTAX/Modules.txt`](SYNTAX/Modules.txt) (PACKAGES).
+says how a `std/gfx` or `std/ui` executable speaks X11: `"embed"` (the default, NexaC's own
+client compiled in, about 16KB, no `libX11.so` needed) or `"system"` (the shared libX11, about
+16KB smaller, and `libX11.so` must be there at run time). Full field reference:
+[`SYNTAX/Modules.txt`](SYNTAX/Modules.txt) (PACKAGES).
 
 ---
 

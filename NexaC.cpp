@@ -754,8 +754,8 @@ static bool nexaEnsureHostTool(const std::string& cmd, const char* wingetId, con
 // manifest itself, which is why "NexaC build" needs no new argument to pass
 // one down to the compile it spawns.
 //
-// "x11": what a Linux std/gfx or std/ui executable does about Xlib -- "embed"
-// (the default) bakes a static one in, "system" links the shared libX11.
+// "x11": what a Linux std/gfx or std/ui executable speaks X11 with -- "embed"
+// (the default) is NexaC's own client compiled in, "system" the shared libX11.
 // Empty is unset. Read on every platform, so a typo is an error on the machine
 // the author is sitting at rather than only on Linux.
 static std::string nexaProjectX11;
@@ -785,7 +785,7 @@ static void nexaLoadProjectSettings(const std::string& sourceFile) {
 static bool nexaCheckProjectSettings() {
     if (nexaProjectX11.empty() || nexaProjectX11 == "embed" || nexaProjectX11 == "system") return true;
     std::cerr << "[Nexa] Error: nexapkg.json \"x11\" is \"" << nexaProjectX11
-              << "\"; it takes \"embed\" (a static X11 baked in, the default) or "
+              << "\"; it takes \"embed\" (NexaC's own X11 client, the default) or "
                  "\"system\" (the shared libX11)\n";
     return false;
 }
@@ -813,78 +813,6 @@ static bool nexaLinkInputsAreResourcesOnly(const std::vector<std::string>& input
     return true;
 }
 
-#if !defined(_WIN32) && !defined(__APPLE__)
-static std::string nexaPopenTrim(const std::string& cmd) {
-    FILE* f = popen(cmd.c_str(), "r");
-    if (!f) return "";
-    char buf[1024];
-    std::string s;
-    if (fgets(buf, sizeof(buf), f)) s = buf;
-    pclose(f);
-    while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ' || s.back() == '\t')) {
-        s.pop_back();
-    }
-    return s;
-}
-
-static void nexaLinuxCollectLibDirs(std::vector<std::string>& dirs) {
-    auto add = [&](const std::string& d) {
-        if (d.empty()) return;
-        for (const auto& e : dirs) {
-            if (e == d) return;
-        }
-        if (nexaPathExists(d)) dirs.push_back(d);
-    };
-    std::string ma = nexaPopenTrim("gcc -print-multiarch 2>/dev/null");
-    if (ma.empty()) ma = nexaPopenTrim("clang -print-multiarch 2>/dev/null");
-    if (!ma.empty()) {
-        add("/usr/lib/" + ma);
-        add("/lib/" + ma);
-    }
-    add(nexaPopenTrim("pkg-config --variable=libdir x11 2>/dev/null"));
-    add("/usr/lib/x86_64-linux-gnu");
-    add("/usr/lib/aarch64-linux-gnu");
-    add("/usr/lib/arm-linux-gnueabihf");
-    add("/usr/lib64");
-    add("/usr/lib");
-    add("/usr/local/lib");
-}
-
-static std::string nexaFindStaticLib(const std::string& name, const std::vector<std::string>& dirs) {
-    const std::string fn = "lib" + name + ".a";
-    for (const auto& d : dirs) {
-        std::string p = d + "/" + fn;
-        if (nexaPathExists(p)) return p;
-    }
-    return "";
-}
-
-// Embed X11 into a Linux ELF executable (portable; no libX11.so on the target).
-// libc/libpthread/libdl stay dynamic — those are on every Linux.
-static std::string nexaLinuxGfxEmbedFlags() {
-    std::vector<std::string> dirs;
-    nexaLinuxCollectLibDirs(dirs);
-    const char* names[] = {"X11", "xcb", "Xau", "Xdmcp"};
-    std::string out;
-    bool allFound = true;
-    for (const char* n : names) {
-        std::string p = nexaFindStaticLib(n, dirs);
-        if (p.empty()) {
-            allFound = false;
-            break;
-        }
-        out += " \"";
-        out += p;
-        out += "\"";
-    }
-    if (!allFound) {
-        // Linker still prefers .a when -Bstatic is set, if the archives are on -L paths.
-        out = " -Wl,-Bstatic -lX11 -lxcb -lXau -lXdmcp -Wl,-Bdynamic";
-    }
-    out += " -lpthread -ldl";
-    return out;
-}
-#endif
 
 static WasmTool findWasmCxx() {
     WasmTool w;
@@ -2727,17 +2655,15 @@ static std::string nexaBuildCompileCmd(
         cmd += " -lX11";
     } else if (linkGfx) {
         const bool elfExe = !buildWin && !buildDll && !buildShared;
-        // "system" in the project's nexapkg.json asks for the shared libX11
-        // std/gfx3d always uses: roughly 23KB of program instead of 1.1MB, in
-        // exchange for needing libX11.so wherever it runs. Unset bakes it in,
-        // which is what every build did before the setting existed.
+        // Unset (or "embed") is NexaC's own X11 client, compiled into the
+        // program (include/X11WireRuntime.hpp): nothing to link and nothing to
+        // install, where the static libX11 this used to bake in was 1.1MB of
+        // every program. "system" in the project's nexapkg.json asks for the
+        // shared libX11 instead, and a library always gets it.
         if (elfExe && nexaProjectX11 != "system") {
-            // Bake X11 into the binary so the program runs without libX11.so.
-            cmd += nexaLinuxGfxEmbedFlags();
+            cmd += " -DNEXA_X11_WIRE";
         } else {
             cmd += " -lX11";
-            // nexaLinuxGfxEmbedFlags ends with these, and the shared Xlib
-            // wants them just as the embedded one does.
             if (elfExe) cmd += " -lpthread -ldl";
         }
     }
